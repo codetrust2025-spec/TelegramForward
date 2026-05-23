@@ -15,6 +15,10 @@
     h2 { font-size: 1rem; margin: 0 0 12px; color: #93c5fd; }
     p, li { color: var(--muted); font-size: 0.95rem; }
     li { margin: 6px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 10px 0; }
+    td, th { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--muted); }
+    th { color: #93c5fd; font-weight: 600; }
+    td code { color: #c9d6e8; }
     .box { position: relative; background: #0a0e14; border: 1px solid var(--border); border-radius: 8px; padding: 14px 14px 14px 14px; margin: 10px 0; overflow-x: auto; }
     pre { margin: 0; font-family: ui-monospace, Consolas, monospace; font-size: 0.85rem; white-space: pre-wrap; word-break: break-all; color: #c9d6e8; }
     .copy { position: absolute; top: 8px; right: 8px; background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 6px 12px; font-size: 0.75rem; cursor: pointer; }
@@ -23,109 +27,142 @@
     .tag { display: inline-block; background: #1e3a5f; color: #93c5fd; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin-right: 6px; }
     a { color: #60a5fa; }
     .warn { color: #fbbf24; }
+    .ok-text { color: #86efac; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>TelegramForward — Production Update</h1>
     <p class="sub">
-      Server: <a href="http://187.127.169.159" target="_blank">http://187.127.169.159</a>
-      · Click <strong>Copy</strong> on any box, then paste in your SSH terminal.
+      Live site: <a href="http://187.127.169.159" target="_blank">http://187.127.169.159</a>
+      · Click <strong>Copy</strong> on any box, then paste in PowerShell or SSH.
     </p>
 
     <div class="card">
-      <h2>Step 1 — Connect to VPS (from your PC)</h2>
-      <p>Try <span class="tag">root</span> first. If it fails, try <span class="tag">ubuntu</span>.</p>
-      <div class="box">
-        <button class="copy" onclick="copy(this)">Copy</button>
-        <pre id="c1">ssh root@187.127.169.159</pre>
-      </div>
-      <div class="box">
-        <button class="copy" onclick="copy(this)">Copy</button>
-        <pre id="c1b">ssh ubuntu@187.127.169.159</pre>
-      </div>
+      <h2>Your server (confirmed from old project)</h2>
+      <table>
+        <tr><th>Setting</th><th>Value</th></tr>
+        <tr><td>SSH user</td><td><code>root</code></td></tr>
+        <tr><td>SSH command</td><td><code>ssh root@187.127.169.159</code></td></tr>
+        <tr><td>Project path</td><td><code>/opt/telegramforward</code></td></tr>
+        <tr><td>Old PM2 name</td><td><code>telegramforward</code> (current live UI)</td></tr>
+        <tr><td>New PM2 name</td><td><code>telegram-backend</code> (after update)</td></tr>
+        <tr><td>Backend port</td><td><code>8000</code> (Nginx → port 80)</td></tr>
+      </table>
+      <p class="ok-text">Do not delete session files or groups list during update.</p>
     </div>
 
     <div class="card">
-      <h2>Step 2 — Find project folder (run on VPS)</h2>
-      <div class="box">
-        <button class="copy" onclick="copy(this)">Copy</button>
-        <pre id="c2">echo "USER=$(whoami)" && echo "HOME=$HOME" && pm2 list && for d in /opt/telegramforward ~/TelegramForward /root/TelegramForward; do [ -f "$d/server.py" ] && echo "FOUND=$d"; done</pre>
-      </div>
-      <p>Paste the output back to support if <code>FOUND=</code> is missing.</p>
+      <h2>Files kept safe on VPS</h2>
+      <ul>
+        <li><code>/opt/telegramforward/session_account1.session</code></li>
+        <li><code>/opt/telegramforward/session_account2.session</code> (Shiva)</li>
+        <li><code>/opt/telegramforward/groups_list.json</code> or <code>data/groups_list.json</code></li>
+        <li><code>/opt/telegramforward/custom_message.txt</code> or <code>data/custom_message.txt</code></li>
+        <li><code>/opt/telegramforward/data/</code> (if present)</li>
+      </ul>
     </div>
 
     <div class="card">
-      <h2>Step 3 — Safe update (run on VPS)</h2>
-      <p class="warn">Replace the path if Step 2 showed a different folder.</p>
+      <h2>Step 1 — Connect (from your PC, PowerShell)</h2>
       <div class="box">
         <button class="copy" onclick="copy(this)">Copy</button>
-        <pre id="c3">cd /opt/telegramforward
+        <pre>ssh root@187.127.169.159</pre>
+      </div>
+      <p>Enter your Hostinger VPS root password when prompted.</p>
+    </div>
+
+    <div class="card">
+      <h2>Step 2 — Verify (optional, on VPS)</h2>
+      <div class="box">
+        <button class="copy" onclick="copy(this)">Copy</button>
+        <pre>cd /opt/telegramforward
+whoami
+pm2 list
+ls -la session_account*.session* 2>/dev/null
+ls -la groups_list.json data/groups_list.json 2>/dev/null</pre>
+      </div>
+      <p>You should see <code>FOUND=/opt/telegramforward</code> and PM2 app <code>telegramforward</code>.</p>
+    </div>
+
+    <div class="card">
+      <h2>Step 3A — Update (if git already set up on VPS)</h2>
+      <div class="box">
+        <button class="copy" onclick="copy(this)">Copy</button>
+        <pre>cd /opt/telegramforward
 git pull origin main
 bash scripts/production_update.sh</pre>
       </div>
+      <p>Script stops old <code>telegramforward</code>, backs up data, rebuilds UI, starts <code>telegram-backend</code>.</p>
     </div>
 
     <div class="card">
-      <h2>If folder is ~/TelegramForward instead</h2>
+      <h2>Step 3B — First migrate (old install, no git yet)</h2>
+      <p class="warn">Use this if <code>git pull</code> fails with "not a git repository".</p>
       <div class="box">
         <button class="copy" onclick="copy(this)">Copy</button>
-        <pre id="c4">cd ~/TelegramForward
-git pull origin main
-bash scripts/production_update.sh</pre>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>If NOT a git repo yet (first-time migrate)</h2>
-      <div class="box">
-        <button class="copy" onclick="copy(this)">Copy</button>
-        <pre id="c5">OLD=/opt/telegramforward
-BACKUP=/opt/telegramforward_backup_$(date +%Y%m%d)
-cp -a "$OLD" "$BACKUP"
+        <pre>OLD=/opt/telegramforward
+STAMP=$(date +%Y%m%d)
+cp -a "$OLD" "/opt/telegramforward_backup_$STAMP"
 git clone https://github.com/codetrust2025-spec/TelegramForward.git /opt/telegramforward_new
-cp -a "$BACKUP/data" /opt/telegramforward_new/ 2>/dev/null || true
-cp -a "$BACKUP"/session_*.session* /opt/telegramforward_new/ 2>/dev/null || true
-cd /opt/telegramforward_new
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cd dashboard && npm install && npm run build && cd ..
-pm2 delete all 2>/dev/null || true
-pm2 start ecosystem.production.cjs
-pm2 save</pre>
+mkdir -p /opt/telegramforward_new/data
+cp -a "$OLD"/session_*.session* /opt/telegramforward_new/ 2>/dev/null || true
+cp -a "$OLD/data"/* /opt/telegramforward_new/data/ 2>/dev/null || true
+cp -a "$OLD/groups_list.json" /opt/telegramforward_new/data/ 2>/dev/null || true
+cp -a "$OLD/custom_message.txt" /opt/telegramforward_new/data/ 2>/dev/null || true
+mv "$OLD" "/opt/telegramforward_old_$STAMP"
+mv /opt/telegramforward_new /opt/telegramforward
+cd /opt/telegramforward
+bash scripts/production_update.sh</pre>
       </div>
     </div>
 
     <div class="card">
-      <h2>After update — browser</h2>
+      <h2>Step 4 — After update (browser)</h2>
       <ol>
         <li>Open <a href="http://187.127.169.159" target="_blank">http://187.127.169.159</a></li>
         <li>Hard refresh: <strong>Ctrl + Shift + R</strong></li>
-        <li>Log in accounts if needed, then Start workers</li>
+        <li>New UI: fleet grid, CRM, Total List (not old "Start Auto" screen)</li>
+        <li>Log in accounts if needed — sessions are preserved</li>
+        <li>Start workers from dashboard</li>
       </ol>
     </div>
 
     <div class="card">
-      <h2>Useful VPS commands</h2>
+      <h2>Useful commands (on VPS)</h2>
       <div class="box">
         <button class="copy" onclick="copy(this)">Copy</button>
-        <pre id="c6">pm2 logs telegram-backend
-pm2 status
+        <pre>pm2 status
+pm2 logs telegram-backend
 curl http://127.0.0.1:8000/health</pre>
       </div>
+      <p>Old logs (before update): <code>pm2 logs telegramforward</code></p>
     </div>
 
     <div class="card">
-      <h2>Rollback (if something breaks)</h2>
+      <h2>Rollback — restore old UI (if update breaks)</h2>
       <div class="box">
         <button class="copy" onclick="copy(this)">Copy</button>
-        <pre id="c7">cd /opt/telegramforward
+        <pre>pm2 stop telegram-backend 2>/dev/null || true
+pm2 delete telegram-backend 2>/dev/null || true
+cd /opt
+mv telegramforward telegramforward_failed
+mv telegramforward_old_YYYYMMDD telegramforward
+cd /opt/telegramforward
+source venv/bin/activate
+pm2 start "venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000" --name telegramforward
+pm2 save</pre>
+      </div>
+      <p>Replace <code>telegramforward_old_YYYYMMDD</code> with your backup folder name from Step 3B.</p>
+      <p>Or restore from update backup:</p>
+      <div class="box">
+        <button class="copy" onclick="copy(this)">Copy</button>
+        <pre>cd /opt/telegramforward
 pm2 stop telegram-backend
 cp -a backups/pre_update_YYYYMMDD_HHMMSS/data .
 cp -a backups/pre_update_YYYYMMDD_HHMMSS/session_*.session* .
 pm2 start ecosystem.production.cjs</pre>
       </div>
-      <p>Replace <code>pre_update_YYYYMMDD_HHMMSS</code> with your actual backup folder name.</p>
     </div>
   </div>
 
