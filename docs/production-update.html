@@ -82,11 +82,21 @@ pm2 list
 ls -la session_account*.session* 2>/dev/null
 ls -la groups_list.json data/groups_list.json 2>/dev/null</pre>
       </div>
-      <p>You should see <code>FOUND=/opt/telegramforward</code> and PM2 app <code>telegramforward</code>.</p>
+      <p>You should see <code>root</code>, PM2 app <code>telegramforward</code>, and your <code>session_account*.session</code> files.</p>
     </div>
 
     <div class="card">
-      <h2>Step 3A — Update (if git already set up on VPS)</h2>
+      <h2>Step 3 — One command update (easiest)</h2>
+      <p>Paste this <strong>single line</strong> in Hostinger <strong>Browser terminal</strong>:</p>
+      <div class="box">
+        <button class="copy" onclick="copy(this)">Copy</button>
+        <pre>curl -fsSL https://raw.githubusercontent.com/codetrust2025-spec/TelegramForward/main/scripts/hostinger_one_shot.sh | bash</pre>
+      </div>
+      <p>Wait 5–15 min for <code>=== ALL DONE ===</code>, then hard refresh the browser.</p>
+    </div>
+
+    <div class="card">
+      <h2>Step 3A — Manual update (if curl fails)</h2>
       <div class="box">
         <button class="copy" onclick="copy(this)">Copy</button>
         <pre>cd /opt/telegramforward
