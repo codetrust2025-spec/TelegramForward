@@ -52,15 +52,14 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 echo "      Backup saved to $BACKUP_DIR"
 
-# ── 3. Pull latest code ──────────────────────────────────────
-echo "[3/7] Pulling from git..."
-if [ ! -d "$PROJECT_DIR/.git" ]; then
-  echo "ERROR: $PROJECT_DIR is not a git repo. Clone from GitHub first:"
-  echo "  git clone https://github.com/codetrust2025-spec/TelegramForward.git /opt/telegramforward"
-  exit 1
+# ── 3. Pull latest code (skip if uploaded directly, no .git) ─
+echo "[3/7] Updating code..."
+if [ -d "$PROJECT_DIR/.git" ]; then
+  git fetch origin main
+  git pull origin main
+else
+  echo "      Skipping git pull — using code already on disk"
 fi
-git fetch origin main
-git pull origin main
 
 # ── 4. Python deps ───────────────────────────────────────────
 echo "[4/7] Installing Python dependencies..."
@@ -93,7 +92,15 @@ fi
 echo "[6/7] Starting backend (production mode)..."
 pm2 delete telegram-dashboard 2>/dev/null || true
 pm2 delete telegramforward 2>/dev/null || true
-HOST=0.0.0.0 PORT="$PORT" NO_RELOAD=1 pm2 start ecosystem.production.cjs
+pm2 delete telegram-backend 2>/dev/null || true
+pm2 delete ecosystem.production 2>/dev/null || true
+PYTHON_BIN="$PROJECT_DIR/venv/bin/python"
+if [ ! -x "$PYTHON_BIN" ]; then
+  PYTHON_BIN="$(command -v python3)"
+fi
+cd "$PROJECT_DIR"
+HOST=0.0.0.0 PORT="$PORT" NO_RELOAD=1 PYTHONUNBUFFERED=1 \
+  pm2 start scripts/uvicorn_reload.py --name telegram-backend --interpreter "$PYTHON_BIN"
 pm2 save
 
 # ── 7. Health check ────────────────────────────────────────────
