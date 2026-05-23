@@ -28,11 +28,11 @@ npm install --silent
 npm run build
 cd ..
 
-# 4. PM2 — auto-reload on code change (uvicorn watch via uvicorn_reload.py)
-echo "[4/6] Setting up PM2 (watch + auto-restart)..."
+# 4. PM2 — production backend only (built static/, no dev server)
+echo "[4/6] Setting up PM2 (production)..."
 npm install -g pm2 --silent
 pm2 delete all 2>/dev/null || true
-HOST=0.0.0.0 PORT=8000 RELOAD_DELAY=1.5 pm2 start ecosystem.config.cjs
+HOST=0.0.0.0 PORT=8000 NO_RELOAD=1 pm2 start ecosystem.production.cjs
 pm2 save
 pm2 startup | tail -1 | bash
 
@@ -68,6 +68,7 @@ echo "=== Deployment Complete ==="
 echo "Dashboard: http://$(curl -s ifconfig.me)"
 echo ""
 echo "Useful commands:"
-echo "  pm2 logs telegramforward     — view live logs"
-echo "  pm2 restart telegramforward  — restart server"
-echo "  pm2 stop telegramforward     — stop server"
+echo "  pm2 logs telegram-backend      — view live logs"
+echo "  pm2 restart telegram-backend   — restart server"
+echo "  pm2 stop telegram-backend      — stop server"
+echo "  bash scripts/production_update.sh — safe git pull + rebuild"
