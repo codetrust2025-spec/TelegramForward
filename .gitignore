@@ -14,3 +14,4 @@ data/*
 !data/accounts_config.json.example
 data/.running_workers.json
 data/reload.log
+scripts/_remote_deploy_once.py
