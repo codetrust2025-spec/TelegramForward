@@ -28,13 +28,11 @@ npm install --silent
 npm run build
 cd ..
 
-# 4. PM2 for process management
-echo "[4/6] Setting up PM2..."
+# 4. PM2 — auto-reload on code change (uvicorn watch via uvicorn_reload.py)
+echo "[4/6] Setting up PM2 (watch + auto-restart)..."
 npm install -g pm2 --silent
-pm2 delete telegramforward 2>/dev/null || true
-pm2 start "venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000" \
-    --name telegramforward \
-    --restart-delay 5000
+pm2 delete all 2>/dev/null || true
+HOST=0.0.0.0 PORT=8000 RELOAD_DELAY=1.5 pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup | tail -1 | bash
 

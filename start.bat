@@ -1,14 +1,23 @@
 @echo off
-echo Starting Telegram Forwarder Dashboard...
+title TelegramForward
+cd /d "%~dp0"
+
+echo.
+echo  TelegramForward - starting (one server only)
+echo  -------------------------------------------
+echo  URL: http://127.0.0.1:8000
 echo.
 
-start "Backend - FastAPI" cmd /k "python -m uvicorn server:app --reload --port 8000"
+REM Stop duplicate servers that cause "database is locked" and connection errors
+echo  Stopping old servers on port 8000...
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8000" ^| findstr LISTENING') do (
+  taskkill /F /PID %%a >nul 2>&1
+)
 timeout /t 2 /nobreak >nul
-start "Frontend - React" cmd /k "cd dashboard && npm run dev"
+
+echo  Starting keep-alive...
+python scripts\keep_alive.py
 
 echo.
-echo Backend running at: http://localhost:8000
-echo Frontend running at: http://localhost:3000
-echo.
-echo Open your browser at http://localhost:3000
+echo  Server stopped.
 pause

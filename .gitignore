@@ -1,5 +1,7 @@
 *.session
 *.session-journal
+*.session-shm
+*.session-wal
 __pycache__/
 *.pyc
 .env
@@ -8,3 +10,7 @@ dashboard/dist/
 last_seen_ids.json
 groups_list.json
 custom_message.txt
+data/*
+!data/accounts_config.json.example
+data/.running_workers.json
+data/reload.log
