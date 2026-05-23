@@ -1,0 +1,19 @@
+/** API base — Vite dev uses the dev-server proxy configured in vite.config.js. */
+export const isDevFrontend = import.meta.env.DEV || window.location.port === '3000'
+export const API = isDevFrontend
+  ? ''
+  : `${window.location.protocol}//${window.location.host}`
+export const WS = isDevFrontend
+  ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
+  : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
+
+export const COUNTRY_CODES = ['+91', '+1', '+44', '+971', '+61', '+65', '+60']
+export const SAVED_PHONES = [
+  '+916304215610',
+  '+919000000001',
+  '+919000000001',
+  '+918919515419',
+  '+919000000005',
+  '+917893898866',
+  '+917075074573',
+]

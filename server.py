@@ -1,747 +1,1508 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from telethon import TelegramClient
-from telethon.errors import (
-    FloodWaitError, ChatWriteForbiddenError, UserBannedInChannelError,
-    UsernameNotOccupiedError, UsernameInvalidError, ChannelPrivateError,
-    ChatRestrictedError,
-)
-from telethon.tl.functions.channels import JoinChannelRequest
+"""
+FastAPI entrypoint — thin API layer.
+Execution lives in workers/ and features/ only.
+Accounts run independently; no rotation scheduler.
+"""
+
 import asyncio
 import json
 import os
-from typing import List, Dict
+import shutil
+from datetime import datetime
+
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+from core import broadcast
+from core.config import ACCOUNTS, ACCOUNT_SLOTS, BASE_DIR, DATA_DIR, GROUPS_FILE, MESSAGE_FILE
+from core.groups_store import (
+    _normalize_group_name,
+    build_group_lists,
+    collect_all_dead_for_upload,
+    ensure_groups_loaded,
+    ensure_invalid_registry_backfill,
+    is_valid_group_username,
+    load_account_dead,
+    load_master_groups,
+    normalize_upload_username,
+    save_master_groups,
+)
+from core.config import MESSAGE_REWRITE_ENABLED
+from core.message_rewrite import preview_cycle_message
+from core.message_store import (
+    load_message,
+    load_message_for_account,
+    save_message,
+    save_message_for_account,
+)
+from core import telegram_client
+from telethon import TelegramClient
+from core.account_info_store import clear_account_info, load_account_info, save_account_info
+from core.login_pending import clear_pending, load_pending, save_pending
+from core.worker_persistence import log_reload_event
+from services.account_manager import manager
+from events.event_bus import event_bus
+from events.event_types import EventType
+
+registry = manager  # backward-compatible alias
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-
-API_ID   = REMOVED_TELEGRAM_API_ID
-API_HASH = 'REMOVED_TELEGRAM_API_HASH'
-MESSAGE_FILE = 'custom_message.txt'
-GROUPS_FILE  = 'groups_list.json'
-
-ACCOUNTS = {
-    "account1": "session_account1",
-    "account2": "session_account2",
+# Per-slot login state — no cross-account coupling
+login_state: dict[str, dict] = {
+    slot: {"phone": None, "phone_code_hash": None} for slot in ACCOUNTS
 }
 
-DEFAULT_MESSAGE = """🚀 IT Career Support | Java | React | Python | Power BI | Salesforce & more
 
-Struggling to crack interviews or switch tech domains? We've got you covered.
-
-Services:
-• End-to-end Interview Support (till you get the job)
-• ATS-friendly Resume Building
-• Real-time Work & Project Support
-• MNC-level Interview Prep
-
-DM or WhatsApp: 9000000001
-(Serious candidates only)"""
-
-# ── File helpers ──────────────────────────────────────────────────────────────
-
-def load_groups() -> list:
-    if os.path.exists(GROUPS_FILE):
-        try:
-            with open(GROUPS_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                if isinstance(data, list) and data:
-                    return data
-        except Exception:
-            pass
-    return []
-
-def save_groups(groups: list):
-    with open(GROUPS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(groups, f, indent=2)
-
-def load_custom_message() -> str:
-    if os.path.exists(MESSAGE_FILE):
-        try:
-            with open(MESSAGE_FILE, 'r', encoding='utf-8') as f:
-                return f.read().strip()
-        except Exception:
-            pass
-    return DEFAULT_MESSAGE
-
-def save_custom_message(text: str):
-    with open(MESSAGE_FILE, 'w', encoding='utf-8') as f:
-        f.write(text)
-
-# ── Runtime state ─────────────────────────────────────────────────────────────
-
-TARGET_GROUPS: list = load_groups()
-
-# Permanently dead groups — never retried
-invalid_groups: set = {'AiredTech', 'etl_test'}
-blocked_groups: set = {'SAP_USA_job', 'hireweb3', 'rahulshettyacademy',
-                       'sapremotejobs', 'web_dev_support', 'awsazurelearners'}
-
-# Per-account runtime state
-account_state: Dict[str, dict] = {
-    "account1": {
-        "running": False, "cycle": 0, "success": 0, "failed": 0,
-        "current_group": "", "success_list": [], "failed_list": [],
-        "logs": [], "active_groups": 0, "status": "idle",
-        "my_groups": [], "next_cycle_in": 0,
-    },
-    "account2": {
-        "running": False, "cycle": 0, "success": 0, "failed": 0,
-        "current_group": "", "success_list": [], "failed_list": [],
-        "logs": [], "active_groups": 0, "status": "idle",
-        "my_groups": [], "next_cycle_in": 0,
-    },
-}
-
-# Shared UI state (combined view)
-forwarding_state = {
-    "running": False,
-    "total": len(TARGET_GROUPS),
-    "success": 0, "failed": 0,
-    "current_group": "",
-    "success_list": [], "failed_list": [],
-    "logs": [],
-    "message_id": None,
-    "cycle": 0,
-    "active_groups": 0,
-    "active_account": None,
-    "account_info": {},
-    "custom_message": load_custom_message(),
-    "account_states": account_state,
-}
-
-telegram_clients = {"account1": None, "account2": None}
-login_state = {"phone": None, "phone_code_hash": None, "slot": None}
-active_connections: List[WebSocket] = []
-
-# ── Broadcast helpers ─────────────────────────────────────────────────────────
-
-async def broadcast(data: dict):
-    dead = []
-    for ws in active_connections:
-        try:
-            await ws.send_json(data)
-        except Exception:
-            dead.append(ws)
-    for ws in dead:
-        if ws in active_connections:
-            active_connections.remove(ws)
-
-async def log_global(msg: str, level: str = "info"):
-    entry = {"msg": msg, "level": level}
-    forwarding_state["logs"].append(entry)
-    if len(forwarding_state["logs"]) > 1000:
-        forwarding_state["logs"] = forwarding_state["logs"][-1000:]
-    await broadcast({"type": "state", **forwarding_state})
-
-async def log_account(slot: str, msg: str, level: str = "info"):
-    """Log to both account-specific and global log."""
-    prefixed = f"[{slot}] {msg}"
-    entry = {"msg": prefixed, "level": level}
-    account_state[slot]["logs"].append(entry)
-    if len(account_state[slot]["logs"]) > 500:
-        account_state[slot]["logs"] = account_state[slot]["logs"][-500:]
-    forwarding_state["logs"].append(entry)
-    if len(forwarding_state["logs"]) > 1000:
-        forwarding_state["logs"] = forwarding_state["logs"][-1000:]
-    await broadcast({"type": "state", **forwarding_state})
-
-# ── Telegram client helpers ───────────────────────────────────────────────────
-
-async def get_or_create_client(slot: str) -> TelegramClient:
-    client = telegram_clients.get(slot)
-    if client is None or not client.is_connected():
-        client = TelegramClient(ACCOUNTS[slot], API_ID, API_HASH)
-        await client.connect()
-        telegram_clients[slot] = client
-    return client
-
-async def refresh_account_info():
-    info = {}
+def _sync_login_state_slots() -> None:
+    """Ensure login_state has an entry for every configured account slot."""
     for slot in ACCOUNTS:
-        try:
-            client = await get_or_create_client(slot)
-            if await client.is_user_authorized():
-                me = await client.get_me()
-                info[slot] = {"name": me.first_name, "phone": me.phone}
-            else:
-                info[slot] = None
-        except Exception:
-            info[slot] = None
-    forwarding_state["account_info"] = info
-    if forwarding_state["active_account"] is None:
-        for slot in ["account1", "account2"]:
-            if info.get(slot):
-                forwarding_state["active_account"] = slot
-                break
-    await broadcast({"type": "state", **forwarding_state})
+        login_state.setdefault(slot, {"phone": None, "phone_code_hash": None})
 
-# ── Group splitting ───────────────────────────────────────────────────────────
 
-def get_active_slots() -> list:
-    """Return list of logged-in account slots."""
-    return [s for s in ["account1", "account2"]
-            if forwarding_state["account_info"].get(s)]
+def _slot_valid(slot: str) -> bool:
+    return slot in ACCOUNTS
 
-# ── Smart send ────────────────────────────────────────────────────────────────
 
-async def send_to_group(client, slot: str, group: str, text: str) -> str:
-    try:
-        await client.send_message(group, text)
-        return 'ok'
+def _get_login_pending(slot: str) -> dict | None:
+    """Memory first, then disk — survives uvicorn auto-reload between send & verify."""
+    ls = login_state.get(slot) or {}
+    if ls.get("phone") and ls.get("phone_code_hash"):
+        return ls
+    disk = load_pending(slot)
+    if disk:
+        login_state[slot] = disk
+        return disk
+    return None
 
-    except FloodWaitError as e:
-        if e.seconds > 60:
-            await log_account(slot, f"⚠ FloodWait {group}: {e.seconds}s — skip cycle", "warning")
-            return 'flood'
-        await log_account(slot, f"⚠ FloodWait {group}: waiting {e.seconds}s...", "warning")
-        await asyncio.sleep(e.seconds + 5)
-        try:
-            await client.send_message(group, text)
-            return 'ok'
-        except Exception:
-            return 'flood'
 
-    except (UsernameNotOccupiedError, UsernameInvalidError):
-        return 'invalid'
+async def _ensure_login_client(slot: str) -> TelegramClient:
+    """Login/verify client — never opens a second SQLite session while one exists."""
+    telegram_client.set_login_exclusive(slot, True)
+    return await telegram_client.get_login_client(slot)
 
-    except (ChannelPrivateError, UserBannedInChannelError):
-        return 'blocked'
 
-    except ChatRestrictedError:
-        return 'blocked'
+async def _prepare_login_slot(slot: str) -> None:
+    """Stop worker and clear session files; OTP uses in-memory StringSession only."""
+    await telegram_client.quiesce_slot_for_login(slot)
 
-    except ChatWriteForbiddenError:
-        await log_account(slot, f"🔗 {group}: not joined — attempting join...", "info")
-        try:
-            await client(JoinChannelRequest(group))
-            await asyncio.sleep(3)
-            try:
-                await client.send_message(group, text)
-                return 'ok'
-            except ChatWriteForbiddenError:
-                # Joined but still can't write = broadcast channel — log once here
-                await log_account(slot, f"🚫 {group}: broadcast channel — removed", "warning")
-                return 'blocked'
-        except FloodWaitError as e:
-            if e.seconds > 60:
-                await log_account(slot, f"⚠ FloodWait joining {group}: {e.seconds}s — skip", "warning")
-                return 'flood'
-            await log_account(slot, f"⚠ FloodWait joining {group}: waiting {e.seconds}s...", "warning")
-            await asyncio.sleep(e.seconds + 5)
-            try:
-                await client(JoinChannelRequest(group))
-                await asyncio.sleep(3)
-                await client.send_message(group, text)
-                return 'ok'
-            except Exception:
-                return 'flood'
-        except (ChannelPrivateError, UserBannedInChannelError):
-            return 'blocked'
-        except Exception as join_err:
-            err = str(join_err).lower()
-            if 'private' in err or 'banned' in err:
-                return 'blocked'
-            if 'requested to join' in err or 'request' in err:
-                # Private group requiring admin approval — treat as blocked
-                await log_account(slot, f"🚫 {group}: requires admin approval — removed", "warning")
-                return 'blocked'
-            if "can't write" in err or 'forbidden' in err or 'write' in err:
-                # Broadcast channel — nobody can post
-                await log_account(slot, f"🚫 {group}: broadcast channel — removed", "warning")
-                return 'blocked'
-            await log_account(slot, f"✗ {group}: join failed — {join_err}", "error")
-            return 'cant_write'
 
-    except Exception as e:
-        err = str(e).lower()
-        if 'private' in err or 'banned' in err:
-            return 'blocked'
-        if 'username' in err or 'no user' in err:
-            return 'invalid'
-        if 'topic_closed' in err or 'restricted' in err or 'discussion' in err:
-            return 'blocked'
-        await log_account(slot, f"✗ {group}: {e}", "error")
-        return 'error'
+def _first_logged_in_slot(exclude: str | None = None) -> str | None:
+    for slot in ACCOUNT_SLOTS:
+        if exclude and slot == exclude:
+            continue
+        if registry.get_worker(slot).state.account_info:
+            return slot
+    return None
 
-# ── Per-account forwarding worker ─────────────────────────────────────────────
 
-async def run_account(slot: str, groups: list, msg_text: str, one_shot: bool) -> str:
-    """
-    Runs one cycle for the given account.
-    Returns: 'done' | 'flood_banned' | 'not_logged_in' | 'error'
-    """
-    global TARGET_GROUPS, invalid_groups, blocked_groups
+def _migrate_legacy_files() -> None:
+    """One-time copy of root-level data files into data/."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    legacy_groups = os.path.join(BASE_DIR, "groups_list.json")
+    legacy_msg = os.path.join(BASE_DIR, "custom_message.txt")
+    if os.path.exists(legacy_groups) and not os.path.exists(GROUPS_FILE):
+        shutil.copy2(legacy_groups, GROUPS_FILE)
+    if os.path.exists(legacy_msg) and not os.path.exists(MESSAGE_FILE):
+        shutil.copy2(legacy_msg, MESSAGE_FILE)
+    ensure_groups_loaded()
 
-    st = account_state[slot]
-    st.update({
-        "running": True, "cycle": 0,
-        "current_group": "", "logs": [],
-        "active_groups": 0, "status": "starting",
-        "my_groups": groups,
-        # Keep last cycle's success/failed/lists visible — don't reset here
-    })
-    await broadcast({"type": "state", **forwarding_state})
 
-    try:
-        client = await get_or_create_client(slot)
-        if not await client.is_user_authorized():
-            await log_account(slot, f"Not logged in — skipping", "error")
-            return 'not_logged_in'
+async def _push_state() -> None:
+    await broadcast.broadcast({"type": "state", **registry.build_ui_state()})
 
-        await log_account(slot, f"Connected ✓", "success")
-
-        # Flood-ban check
-        try:
-            await client.get_messages('telegram', limit=1)
-            await log_account(slot, "Account healthy ✓", "success")
-        except FloodWaitError as e:
-            h, m = e.seconds // 3600, (e.seconds % 3600) // 60
-            await log_account(slot, f"⛔ Flood-banned {h}h {m}m — stopping this account", "error")
-            st["status"] = "flood_banned"
-            return 'flood_banned'
-
-        me = await client.get_me()
-        my_id = me.id
-
-        while st["running"]:
-            st["cycle"] += 1
-            await log_account(slot, f"--- Cycle {st['cycle']} ({len(groups)} groups) ---")
-
-            # Scan: find groups where our message is not last
-            needs_send = []
-            await log_account(slot, f"Scanning {len(groups)} groups...")
-            for group in groups:
-                if not st["running"]:
-                    break
-                try:
-                    messages = await client.get_messages(group, limit=1)
-                    if messages:
-                        sender_id = getattr(messages[0], 'sender_id', None) \
-                                    or getattr(messages[0], 'from_id', None)
-                        if sender_id != my_id:
-                            needs_send.append(group)
-                        else:
-                            await log_account(slot, f"↷ {group}: our msg is last", "info")
-                except Exception:
-                    needs_send.append(group)
-
-            st["active_groups"] = len(needs_send)
-            await broadcast({"type": "state", **forwarding_state})
-
-            if not needs_send:
-                await log_account(slot, "✓ Our message is last in all assigned groups.")
-            else:
-                await log_account(slot, f"{len(needs_send)} groups need re-send...", "success")
-                # Reset stats only when we're about to send — keeps last results visible during wait
-                st["success"] = 0
-                st["failed"] = 0
-                st["success_list"] = []
-                st["failed_list"] = []
-                cycle_invalid, cycle_blocked = [], []
-
-                for group in needs_send:
-                    if not st["running"]:
-                        break
-                    st["current_group"] = group
-                    await broadcast({"type": "state", **forwarding_state})
-
-                    result = await send_to_group(client, slot, group, msg_text)
-
-                    if result == 'ok':
-                        st["success"] += 1
-                        st["success_list"].append(group)
-                        await log_account(slot, f"✓ {group}", "success")
-
-                    elif result == 'invalid':
-                        invalid_groups.add(group)
-                        cycle_invalid.append(group)
-                        groups = [g for g in groups if g != group]
-                        TARGET_GROUPS = [g for g in TARGET_GROUPS if g != group]
-                        st["failed"] += 1
-                        st["failed_list"].append({"group": group, "reason": "Invalid — removed"})
-                        await log_account(slot, f"🗑 {group}: invalid — removed", "warning")
-
-                    elif result == 'blocked':
-                        blocked_groups.add(group)
-                        cycle_blocked.append(group)
-                        groups = [g for g in groups if g != group]
-                        TARGET_GROUPS = [g for g in TARGET_GROUPS if g != group]
-                        st["failed"] += 1
-                        st["failed_list"].append({"group": group, "reason": "Blocked — removed"})
-
-                    else:
-                        st["failed"] += 1
-                        st["failed_list"].append({"group": group, "reason": result})
-
-                    await asyncio.sleep(10)
-
-                # Post-cycle: clean and save
-                seen = set()
-                merged = []
-                for g in TARGET_GROUPS:
-                    if g not in invalid_groups and g not in blocked_groups and g not in seen:
-                        seen.add(g)
-                        merged.append(g)
-                TARGET_GROUPS = merged
-                forwarding_state["total"] = len(TARGET_GROUPS)
-                save_groups(TARGET_GROUPS)
-
-                total = st["success"] + st["failed"]
-                rate  = round(st["success"] / total * 100, 1) if total > 0 else 0
-                await log_account(
-                    slot,
-                    f"Cycle {st['cycle']} done — ✓ {st['success']} ✗ {st['failed']} ({rate}%)",
-                    "success"
-                )
-
-            if one_shot:
-                break
-            if st["running"]:
-                total = st["success"] + st["failed"]
-                rate  = round(st["success"] / total * 100, 1) if total > 0 else 0
-                await log_account(
-                    slot,
-                    f"⏳ Waiting 15 min — last cycle: ✓ {st['success']} ✗ {st['failed']} ({rate}%)",
-                    "info"
-                )
-                # Live countdown — broadcasts every 5 seconds
-                wait_seconds = 900
-                st["next_cycle_in"] = wait_seconds
-                await broadcast({"type": "state", **forwarding_state})
-                while st["running"] and wait_seconds > 0:
-                    await asyncio.sleep(1)
-                    wait_seconds -= 1
-                    st["next_cycle_in"] = wait_seconds
-                    if wait_seconds % 5 == 0:
-                        await broadcast({"type": "state", **forwarding_state})
-                st["next_cycle_in"] = 0
-                await broadcast({"type": "state", **forwarding_state})
-
-        return 'done'
-
-    except Exception as e:
-        await log_account(slot, f"Fatal error: {e}", "error")
-        return 'error'
-    finally:
-        st["running"] = False
-        st["current_group"] = ""
-        st["status"] = "idle"
-        # Update global running flag
-        forwarding_state["running"] = any(
-            account_state[s]["running"] for s in ACCOUNTS
-        )
-        await broadcast({"type": "state", **forwarding_state})
-
-# ── Rotation forwarding launcher ─────────────────────────────────────────────
-
-async def run_forwarding(one_shot: bool = False):
-    """
-    Rotation mode: accounts take turns each cycle.
-    Cycle 1 → Account 1 sends to ALL groups
-    Cycle 2 → Account 2 sends to ALL groups
-    Cycle 3 → Account 1 sends to ALL groups
-    ...
-    If active account is flood-banned → automatically switches to the other.
-    If only one account is logged in → it handles every cycle.
-    """
-    global forwarding_state
-
-    active_slots = get_active_slots()
-    if not active_slots:
-        await log_global("No logged-in accounts. Please log in first.", "error")
-        return
-
-    forwarding_state.update({
-        "running": True, "success": 0, "failed": 0,
-        "success_list": [], "failed_list": [], "logs": [],
-        "current_group": "", "message_id": None, "cycle": 0, "active_groups": 0,
-    })
-    await broadcast({"type": "state", **forwarding_state})
-
-    msg_text = load_custom_message()
-    forwarding_state["custom_message"] = msg_text
-
-    rotation_index = 0  # which slot in active_slots to use next
-
-    await log_global(
-        f"Rotation mode started — {len(active_slots)} account(s): "
-        f"{', '.join(active_slots)}",
-        "success"
-    )
-
-    while forwarding_state["running"]:
-        # Pick the current account in rotation
-        slot = active_slots[rotation_index % len(active_slots)]
-        forwarding_state["cycle"] += 1
-
-        await log_global(
-            f"=== Cycle {forwarding_state['cycle']} — using {slot} ===",
-            "success"
-        )
-
-        # Run one cycle with this account
-        completed = await run_account(slot, list(TARGET_GROUPS), msg_text, one_shot=True)
-
-        if completed == 'flood_banned':
-            # This account is banned — try the other one next cycle immediately
-            await log_global(
-                f"⚠ {slot} is flood-banned — switching to other account next cycle",
-                "warning"
-            )
-            # Don't advance rotation — try next slot right away
-            active_slots_now = get_active_slots()
-            if len(active_slots_now) > 1:
-                # Move to the other account
-                rotation_index = (rotation_index + 1) % len(active_slots)
-                await log_global("Switching account — retrying in 1 minute...", "info")
-                await asyncio.sleep(60)
-            else:
-                await log_global("No other account available. Waiting 15 minutes...", "warning")
-                await asyncio.sleep(900)
-        else:
-            # Advance to next account in rotation
-            rotation_index = (rotation_index + 1) % len(active_slots)
-
-        if one_shot:
-            break
-
-        if forwarding_state["running"]:
-            await log_global("Waiting 15 minutes before next cycle...")
-            await asyncio.sleep(900)
-
-    forwarding_state["running"] = False
-    await broadcast({"type": "state", **forwarding_state})
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    active_connections.append(websocket)
-    await websocket.send_json({"type": "state", **forwarding_state})
+    broadcast.active_connections.append(websocket)
+    await websocket.send_json({"type": "state", **registry.build_ui_state()})
+    if _membership_scheduler is not None:
+        _membership_scheduler.schedule_stale_refresh(reason="dashboard_open")
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        if websocket in active_connections:
-            active_connections.remove(websocket)
+        if websocket in broadcast.active_connections:
+            broadcast.active_connections.remove(websocket)
 
-# ── Startup ───────────────────────────────────────────────────────────────────
+
+CODE_VERSION = "2026-05-23-account-isolation"
+_persist_running_task: asyncio.Task | None = None
+_health_monitor = None
+_membership_scheduler = None
+_start_all_task: asyncio.Task | None = None
+
+
+async def _bootstrap_missing_joined_counts() -> None:
+    """First login / stale membership: queue joined-count scan when needed."""
+    from core.account_info_store import load_account_info
+    from core.join_cycle import load_join_state
+    from datetime import datetime, timezone
+
+    def _needs_membership_rescan(slot: str, info: dict) -> bool:
+        if info.get("joined_total") is None:
+            return True
+        js = load_join_state(slot)
+        last_join = js.get("last_new_join_at")
+        if not last_join:
+            return False
+        updated = info.get("joined_updated_at")
+        if not updated:
+            return True
+        try:
+            lj = datetime.fromisoformat(str(last_join).replace("Z", "+00:00"))
+            up = datetime.strptime(str(updated), "%Y-%m-%d %H:%M UTC").replace(
+                tzinfo=timezone.utc
+            )
+            return lj > up
+        except Exception:
+            return False
+
+    await asyncio.sleep(8.0)
+    for slot in ACCOUNTS:
+        if telegram_client.any_login_exclusive():
+            return
+        w = registry.get_worker(slot)
+        info = w.state.account_info or load_account_info(slot)
+        if not info or not info.get("phone"):
+            continue
+        if not _needs_membership_rescan(slot, info):
+            continue
+        if w.state.running:
+            w.request_joined_scan()
+            continue
+        try:
+            await registry.refresh_joined_counts(slot)
+            await _push_state()
+        except Exception:
+            pass
+        await asyncio.sleep(6.0)
+
+
+async def _persist_running_workers_loop() -> None:
+    """Heartbeat: save running workers so reload survives abrupt shutdown."""
+    from core.worker_persistence import save_running_slots
+
+    while True:
+        try:
+            await asyncio.sleep(30)
+            running = [
+                s
+                for s, runtime in registry.all_runtimes().items()
+                if runtime.worker.state.running
+            ]
+            if running:
+                save_running_slots(running)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            pass
+
+
+async def _startup_background() -> None:
+    """Telethon refresh + worker resume — must not block HTTP/WebSocket."""
+    from core.worker_persistence import log_reload_event
+
+    try:
+        await _push_state()
+        await registry.refresh_all_info()
+        await _push_state()
+        await asyncio.sleep(1.0)
+        resumed = await registry.resume_persisted_workers()
+        if resumed:
+            log_reload_event(f"Auto-resumed workers after reload: {', '.join(resumed)}")
+            await _push_state()
+        asyncio.create_task(_bootstrap_missing_joined_counts())
+        from services.dm_inbox_service import ensure_inbox_listeners
+
+        async def _inbox_listeners_after_workers() -> None:
+            await asyncio.sleep(3.0)
+            await ensure_inbox_listeners()
+
+        asyncio.create_task(_inbox_listeners_after_workers())
+
+        async def _inbox_periodic_sync() -> None:
+            from core.config import ACCOUNTS
+            from services.dm_inbox_service import (
+                ensure_inbox_listener,
+                sync_stored_conversations,
+            )
+
+            await asyncio.sleep(12.0)
+            while True:
+                if telegram_client.any_login_exclusive():
+                    await asyncio.sleep(5.0)
+                    continue
+                for slot in ACCOUNTS:
+                    try:
+                        await ensure_inbox_listener(slot)
+                        await sync_stored_conversations(
+                            slot, per_chat_limit=12, max_chats=6
+                        )
+                    except Exception:
+                        pass
+                    await asyncio.sleep(2.0)
+                await asyncio.sleep(30.0)
+
+        asyncio.create_task(_inbox_periodic_sync())
+    except Exception as e:
+        log_reload_event(f"Startup background task error: {type(e).__name__}: {e}")
+
 
 @app.on_event("startup")
 async def startup():
-    asyncio.create_task(refresh_account_info())
+    global _persist_running_task, _health_monitor, _membership_scheduler
+    _sync_login_state_slots()
+    telegram_client.sync_slots()
+    _migrate_legacy_files()
+    manager.set_on_change(_push_state)
+    event_bus.set_state_push(_push_state)
 
-# ── Forwarding control ────────────────────────────────────────────────────────
+    from events.subscribers import register_event_subscribers
+
+    register_event_subscribers()
+
+    from core.auto_reload import log_process_start
+
+    log_process_start(version=CODE_VERSION)
+
+    for slot in ACCOUNTS:
+        cached = load_account_info(slot)
+        if cached:
+            registry.get_worker(slot).state.account_info = cached
+
+    _persist_running_task = asyncio.create_task(_persist_running_workers_loop())
+    asyncio.create_task(_startup_background())
+
+    from core.health_monitor import HealthMonitor
+
+    _health_monitor = HealthMonitor(manager)
+    manager.set_health_monitor(_health_monitor)
+    _health_monitor.start()
+
+    from core.joined_membership_scheduler import JoinedMembershipScheduler
+
+    _membership_scheduler = JoinedMembershipScheduler(manager, _push_state)
+    _membership_scheduler.start()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Graceful shutdown — persist workers, disconnect Telethon, resume after reload."""
+    global _persist_running_task, _health_monitor, _membership_scheduler
+
+    if _membership_scheduler is not None:
+        await _membership_scheduler.stop()
+        _membership_scheduler = None
+
+    if _health_monitor is not None:
+        await _health_monitor.stop()
+        _health_monitor = None
+
+    if _persist_running_task is not None:
+        _persist_running_task.cancel()
+        try:
+            await _persist_running_task
+        except asyncio.CancelledError:
+            pass
+        _persist_running_task = None
+
+    from core.auto_reload import log_process_shutdown, reload_enabled
+    from core.system_lifecycle import graceful_shutdown
+
+    running = await graceful_shutdown(registry)
+    if reload_enabled():
+        log_process_shutdown(running_workers=running)
+
+
+# ── Forwarding control (per-account independent) ──────────────────────────────
+
+async def _start_all_background(one_shot: bool = False) -> None:
+    global _start_all_task
+    try:
+        started = await registry.start_all_logged_in(one_shot=one_shot)
+        if started:
+            await _push_state()
+    finally:
+        _start_all_task = None
+
 
 @app.post("/start")
-async def start_forwarding():
-    if forwarding_state["running"]:
-        return {"status": "already_running"}
-    asyncio.create_task(run_forwarding(one_shot=False))
-    return {"status": "started"}
+async def start_all():
+    """Queue start for every logged-in account; return immediately for UI responsiveness."""
+    global _start_all_task
+    if _start_all_task is not None and not _start_all_task.done():
+        return {"status": "queued", "accounts": [], "message": "Start all already in progress"}
+    if not any(registry.get_runtime(slot).has_login() for slot in ACCOUNTS):
+        return {"status": "error", "accounts": [], "message": "No logged-in accounts"}
+    _start_all_task = asyncio.create_task(_start_all_background(one_shot=False))
+    return {"status": "queued", "accounts": [], "message": "Starting logged-in accounts in background"}
+
 
 @app.post("/start-test")
-async def start_test():
-    if forwarding_state["running"]:
-        return {"status": "already_running"}
-    asyncio.create_task(run_forwarding(one_shot=True))
-    return {"status": "started"}
+async def start_test_all():
+    global _start_all_task
+    if _start_all_task is not None and not _start_all_task.done():
+        return {"status": "queued", "accounts": [], "message": "Start all already in progress"}
+    if not any(registry.get_runtime(slot).has_login() for slot in ACCOUNTS):
+        return {"status": "error", "accounts": [], "message": "No logged-in accounts"}
+    _start_all_task = asyncio.create_task(_start_all_background(one_shot=True))
+    return {"status": "queued", "accounts": [], "message": "Starting one test cycle in background"}
+
 
 @app.post("/stop")
-async def stop_forwarding():
-    forwarding_state["running"] = False
-    for slot in ACCOUNTS:
-        account_state[slot]["running"] = False
-    await broadcast({"type": "state", **forwarding_state})
-    return {"status": "stopped"}
+async def stop_all():
+    registry.stop_all()
+    await _push_state()
+    return {"status": "stopped", **registry.build_ui_state()}
+
+
+@app.post("/account/{slot}/start")
+async def start_account(slot: str, one_shot: bool = Query(False)):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    if not await registry.start_account(slot, one_shot=one_shot):
+        w = registry.get_worker(slot)
+        if not w.state.account_info:
+            return {"status": "error", "message": f"{slot} not logged in"}
+        return {"status": "already_running"}
+    await _push_state()
+    return {"status": "started", "slot": slot}
+
+
+@app.post("/account/{slot}/stop")
+async def stop_account(slot: str):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    await registry.stop_account(slot)
+    await _push_state()
+    return {"status": "stopped", "slot": slot, **registry.build_ui_state()}
+
+
+@app.post("/account/{slot}/restart")
+async def restart_account(slot: str):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    ok = await manager.restart_account(slot)
+    await _push_state()
+    return {"status": "restarted" if ok else "error", "slot": slot, **registry.build_ui_state()}
+
+
+@app.post("/account/{slot}/clear-logs")
+async def clear_account_logs(slot: str):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    await registry.clear_logs(slot)
+    await _push_state()
+    return {"status": "cleared", "slot": slot, **registry.build_ui_state()}
+
 
 @app.get("/state")
 async def get_state():
-    return forwarding_state
+    return registry.build_ui_state()
+
+
+@app.get("/account/{slot}/status")
+async def account_status(slot: str):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    return {"status": "ok", **manager.get_status(slot)}
+
+
+@app.get("/metrics")
+async def fleet_metrics():
+    from core.fleet_rate_coordinator import fleet_rate_coordinator
+    from core.observability.account_metrics import metrics_store
+
+    return {
+        "status": "ok",
+        "metrics": metrics_store.all_snapshots(),
+        "fleet_rate": fleet_rate_coordinator.snapshot(),
+    }
+
+
+@app.get("/metrics/{slot}")
+async def account_metrics(slot: str):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from core.observability.account_metrics import metrics_store
+
+    return {"status": "ok", "metrics": metrics_store.snapshot(slot)}
+
+
+@app.get("/alerts")
+async def fleet_alerts(limit: int = Query(50, ge=1, le=200)):
+    from core.observability.alerts import alert_store
+
+    return {"status": "ok", "alerts": alert_store.recent(limit=limit)}
+
+
+@app.get("/stats/daily")
+async def get_daily_stats():
+    from core.daily_stats import compute_daily_stats
+
+    return {"status": "ok", "daily_stats": compute_daily_stats(list(ACCOUNTS))}
+
+
+@app.post("/stats/reset")
+async def reset_stats(payload: dict | None = None):
+    """Reset daily stat counters from now. Stats-only — no chat/message data deleted."""
+    return await _perform_stats_reset(payload or {})
+
+
+@app.post("/stats/reset-24h")
+async def reset_daily_stats_24h():
+    """Alias for global stats reset (backward compatible)."""
+    return await _perform_stats_reset({})
+
+
+async def _perform_stats_reset(payload: dict):
+    from core.daily_stats import compute_daily_stats
+    from core.send_stats import invalidate_cache
+    from core.stats_reset import (
+        StatsResetDebounced,
+        get_reset_at_iso,
+        set_reset_timestamp,
+    )
+    from core.join_cycle import daily_join_count_for_reset
+    import services.crm_service as crm_service
+
+    scope = (payload.get("scope") or "global").strip().lower()
+    account_id = payload.get("account_id")
+
+    if scope == "account":
+        if not account_id or account_id not in ACCOUNTS:
+            return {"status": "error", "error": "invalid_account"}
+    else:
+        account_id = None
+
+    reset_slots = [account_id] if account_id else list(ACCOUNTS)
+    join_baselines = {
+        slot: daily_join_count_for_reset(slot)
+        for slot in reset_slots
+        if slot
+    }
+
+    try:
+        ts = set_reset_timestamp(account_id=account_id, join_baselines=join_baselines)
+    except StatsResetDebounced:
+        return {
+            "status": "error",
+            "error": "reset_too_soon",
+            "message": "Please wait before resetting stats again.",
+        }
+
+    invalidate_cache(account_id)
+    fresh_stats = compute_daily_stats(list(ACCOUNTS))
+    reset_scope = account_id or "global"
+
+    await event_bus.publish(
+        EventType.STATS_RESET,
+        reset_scope,
+        {
+            "reset_timestamp": ts,
+            "reset_at": get_reset_at_iso(account_id),
+            "account_id": account_id,
+            "scope": "account" if account_id else "global",
+            "daily_stats": fresh_stats,
+        },
+        push_state=True,
+        broadcast_ws=True,
+    )
+
+    await broadcast.broadcast({"type": "daily_stats", "daily_stats": fresh_stats})
+    await broadcast.broadcast({"type": "crm", "crm": crm_service.build_crm_payload()})
+
+    return {
+        "status": "ok",
+        "reset_timestamp": ts,
+        "reset_at": get_reset_at_iso(account_id),
+        "scope": reset_scope,
+        "daily_stats": fresh_stats,
+        **registry.build_ui_state(),
+    }
+
+
+@app.get("/accounts")
+async def list_accounts():
+    """Account slots configured on this server (use for dashboard before WebSocket connects)."""
+    from core.account_info_store import load_account_info
+    from core.subscription_accounts import compute_subscription_slots, enrich_account_info
+
+    info_map = {
+        s: enrich_account_info(s, load_account_info(s))
+        for s in ACCOUNTS
+    }
+
+    return {
+        "account_slots": list(ACCOUNT_SLOTS),
+        "subscription_slots": compute_subscription_slots(info_map),
+        "count": len(ACCOUNT_SLOTS),
+        "code_version": CODE_VERSION,
+    }
+
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
-# ── Groups management ─────────────────────────────────────────────────────────
+
+# ── Groups (API-only writes to master list) ─────────────────────────────────
 
 @app.get("/groups")
 async def get_groups():
-    return {"groups": TARGET_GROUPS, "total": len(TARGET_GROUPS)}
+    groups = load_master_groups()
+    return {"groups": groups, "total": len(groups)}
+
 
 @app.get("/groups/removed")
 async def get_removed_groups():
+    invalid, blocked = set(), set()
+    for slot in ACCOUNTS:
+        inv, blk = load_account_dead(slot)
+        invalid |= inv
+        blocked |= blk
+    return {"invalid": sorted(invalid), "blocked": sorted(blocked)}
+
+
+@app.get("/groups/lists")
+async def get_group_lists(slot: str | None = None):
+    """
+    Per-account dead (invalid/blocked) and good (active) group lists.
+    cycle_success = groups that succeeded in the current/last worker cycle.
+    """
+    target = slot if slot in ACCOUNTS else registry.active_account
+    if target not in ACCOUNTS:
+        target = ACCOUNT_SLOTS[0]
+
+    lists = build_group_lists(target)
+    w = registry.get_worker(target)
+    st = w.state
+    cycle_success = list(st.success_list)
+    cycle_failed = [
+        {"group": x.get("group", ""), "reason": x.get("reason", "")}
+        for x in st.failed_list
+        if isinstance(x, dict)
+    ]
+
     return {
-        "invalid": sorted(invalid_groups),
-        "blocked": sorted(blocked_groups),
+        **lists,
+        "cycle_success": cycle_success,
+        "cycle_success_count": len(cycle_success),
+        "cycle_failed": cycle_failed,
+        "cycle_failed_count": len(cycle_failed),
     }
+
+
+@app.get("/groups/health")
+async def get_group_health(slot: str | None = None):
+    """
+    Live classification of one account's assigned groups into:
+      healthy, cooling (recently_processed), risky (risky_until), blocked, invalid.
+    Always reads fresh from disk (group_intelligence + dead lists + master).
+    """
+    from core.groups_store import build_group_health
+
+    target = slot if slot in ACCOUNTS else registry.active_account
+    if target not in ACCOUNTS:
+        target = ACCOUNT_SLOTS[0]
+    return build_group_health(target)
+
+
+@app.get("/groups/total-list")
+async def get_total_joined_list():
+    """
+    Aggregate the joined groups/channels from every logged-in account into a
+    single deduped list. Each entry includes which accounts have it joined.
+
+    Strategy: try a string-session scan first (no contention with the running
+    worker). If that fails (no string session), fall back to a worker-session
+    scan after the worker briefly releases the file lock.
+    """
+    from core.account_info_store import load_account_info
+    from core.dm_string_session import run_with_string_session
+    from core.group_assignment import active_slots
+    from core.telegram_client import release_session, run_group_operation
+    from features.telegram_joined_stats import fetch_joined_dialog_details
+
+    actives = active_slots()
+    aggregated: dict[int, dict] = {}
+    per_account: dict[str, dict] = {}
+    started_at = datetime.now()
+
+    for slot in actives:
+        info = load_account_info(slot) or {}
+        account_label = (info.get("name") or info.get("username") or info.get("phone") or slot)
+        per_account[slot] = {
+            "label": account_label,
+            "count": 0,
+            "error": None,
+            "elapsed_ms": 0,
+        }
+        slot_started = datetime.now()
+
+        async def _op(client):
+            return await fetch_joined_dialog_details(client)
+
+        details: list[dict] | None = None
+        try:
+            details = await asyncio.wait_for(
+                run_with_string_session(slot, fetch_joined_dialog_details, attempts=2),
+                timeout=200,
+            )
+        except Exception as e_ss:
+            try:
+                await release_session(slot, wait=1.5)
+                details = await asyncio.wait_for(
+                    run_group_operation(slot, _op, attempts=2),
+                    timeout=200,
+                )
+            except Exception as e_w:
+                per_account[slot]["error"] = f"string:{type(e_ss).__name__}; worker:{type(e_w).__name__}: {e_w}"
+            finally:
+                try:
+                    await release_session(slot, wait=0.3)
+                except Exception:
+                    pass
+
+        per_account[slot]["elapsed_ms"] = int((datetime.now() - slot_started).total_seconds() * 1000)
+        if not details:
+            continue
+        per_account[slot]["count"] = len(details)
+        for d in details:
+            ent_id = d.get("id")
+            if not isinstance(ent_id, int):
+                continue
+            existing = aggregated.get(ent_id)
+            if existing is None:
+                aggregated[ent_id] = {
+                    "id": ent_id,
+                    "type": d.get("type") or "",
+                    "name": d.get("name") or "",
+                    "username": d.get("username") or "",
+                    "link": d.get("link") or "",
+                    "members": d.get("members"),
+                    "accounts": [slot],
+                }
+            else:
+                if slot not in existing["accounts"]:
+                    existing["accounts"].append(slot)
+                if not existing.get("name") and d.get("name"):
+                    existing["name"] = d["name"]
+                if not existing.get("username") and d.get("username"):
+                    existing["username"] = d["username"]
+                if not existing.get("link") and d.get("link"):
+                    existing["link"] = d["link"]
+                if existing.get("members") is None and isinstance(d.get("members"), int):
+                    existing["members"] = d["members"]
+
+    items = sorted(aggregated.values(), key=lambda x: (x.get("type") or "", (x.get("name") or "").lower()))
+    groups_count = sum(1 for x in items if x.get("type") == "group")
+    channels_count = sum(1 for x in items if x.get("type") == "channel")
+    return {
+        "generated_at": started_at.strftime("%Y-%m-%d %H:%M:%S"),
+        "logged_in_accounts": actives,
+        "per_account": per_account,
+        "totals": {
+            "unique": len(items),
+            "groups": groups_count,
+            "channels": channels_count,
+        },
+        "items": items,
+    }
+
+
+@app.get("/groups/health-summary")
+async def get_group_health_summary():
+    """Fleet-wide rollup of group health across all logged-in accounts."""
+    from core.group_assignment import active_slots
+    from core.groups_store import build_group_health
+
+    totals = {"healthy": 0, "cooling": 0, "risky": 0, "blocked": 0, "invalid": 0, "assigned": 0}
+    per_slot = []
+    actives = active_slots()
+    for slot in ACCOUNT_SLOTS:
+        snap = build_group_health(slot)
+        c = snap.get("counts", {})
+        for k in totals:
+            totals[k] += int(c.get(k, 0))
+        per_slot.append({
+            "slot": slot,
+            "logged_in": slot in actives,
+            "counts": c,
+        })
+    healthy_pct = round(totals["healthy"] / totals["assigned"] * 100, 1) if totals["assigned"] else 0.0
+    return {
+        "totals": totals,
+        "healthy_pct": healthy_pct,
+        "logged_in_accounts": len(actives),
+        "per_slot": per_slot,
+    }
+
+
+def _parse_uploaded_groups(raw: list) -> tuple[list[str], int]:
+    uploaded, seen = [], set()
+    skipped_invalid_format = 0
+    for g in raw:
+        norm = normalize_upload_username(str(g))
+        if not norm:
+            skipped_invalid_format += 1
+            continue
+        if not is_valid_group_username(norm):
+            skipped_invalid_format += 1
+            continue
+        key = _normalize_group_name(norm)
+        if key not in seen:
+            seen.add(key)
+            uploaded.append(norm)
+    return uploaded, skipped_invalid_format
+
 
 @app.post("/groups/update")
 async def update_groups(payload: dict):
-    global TARGET_GROUPS
     raw = payload.get("groups", [])
-    uploaded, seen_upload = [], set()
-    for g in raw:
-        g = str(g).strip().lstrip('@')
-        if '/' in g or not g:
-            continue
-        if g in invalid_groups or g in blocked_groups:
-            continue
-        if g not in seen_upload:
-            seen_upload.add(g)
-            uploaded.append(g)
+    mode = (str(payload.get("mode") or "merge")).strip().lower()
+    if mode not in ("merge", "replace"):
+        mode = "merge"
+
+    uploaded, skipped_invalid_format = _parse_uploaded_groups(raw)
     if not uploaded:
-        return {"success": False, "error": "No valid groups found"}
-    existing_set = set(TARGET_GROUPS)
-    merged = list(TARGET_GROUPS)
+        return {
+            "success": False,
+            "error": "No valid groups found",
+            "skipped_invalid_format": skipped_invalid_format,
+            "mode": mode,
+        }
+
+    ensure_invalid_registry_backfill()
+    try:
+        master = load_master_groups(strict=True)
+    except ValueError as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "skipped_invalid_format": skipped_invalid_format,
+            "mode": mode,
+        }
+    all_dead = collect_all_dead_for_upload()
+    previous_total = len(master)
+    old_set = set(master)
+
+    skipped_dead = 0
+    if mode == "replace":
+        merged = []
+        seen_keys: set[str] = set()
+        for g in uploaded:
+            key = _normalize_group_name(g)
+            if key in all_dead:
+                skipped_dead += 1
+                continue
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            merged.append(g)
+
+        backup_path = None
+        if master:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = os.path.join(
+                DATA_DIR, f"groups_list_backup_{len(master)}_{ts}.json"
+            )
+            try:
+                with open(backup_path, "w", encoding="utf-8") as f:
+                    json.dump(master, f, indent=2)
+            except Exception:
+                backup_path = None
+
+        save_master_groups(merged)
+        new_set = set(merged)
+        await _push_state()
+        return {
+            "success": True,
+            "mode": "replace",
+            "total": len(merged),
+            "previous_total": previous_total,
+            "removed_from_old": len(old_set - new_set),
+            "kept_from_old": len(old_set & new_set),
+            "added_new": len(new_set - old_set),
+            "already_existed": 0,
+            "skipped_invalid_format": skipped_invalid_format,
+            "skipped_dead": skipped_dead,
+            "backup_path": backup_path,
+            "groups": merged,
+        }
+
+    merged = list(master)
+    existing_norm = {_normalize_group_name(g): g for g in master}
     added = 0
     for g in uploaded:
-        if g not in existing_set:
-            merged.append(g)
-            existing_set.add(g)
-            added += 1
-    TARGET_GROUPS = merged
-    save_groups(TARGET_GROUPS)
-    forwarding_state["total"] = len(TARGET_GROUPS)
-    await broadcast({"type": "state", **forwarding_state})
+        if _normalize_group_name(g) in all_dead:
+            skipped_dead += 1
+            continue
+        key = _normalize_group_name(g)
+        if key in existing_norm:
+            continue
+        merged.append(g)
+        existing_norm[key] = g
+        added += 1
+
+    save_master_groups(merged)
+    await _push_state()
     return {
-        "success": True, "total": len(TARGET_GROUPS),
+        "success": True,
+        "mode": "merge",
+        "total": len(merged),
+        "previous_total": previous_total,
+        "removed_from_old": 0,
         "added_new": added,
-        "already_existed": len(uploaded) - added,
-        "skipped_dead": len(raw) - len(uploaded),
-        "groups": TARGET_GROUPS,
+        "already_existed": len(uploaded) - added - skipped_dead,
+        "skipped_invalid_format": skipped_invalid_format,
+        "skipped_dead": skipped_dead,
+        "groups": merged,
     }
 
-# ── Message editor ────────────────────────────────────────────────────────────
+
+# ── Message ───────────────────────────────────────────────────────────────────
 
 @app.get("/message")
-async def get_message():
-    return {"message": load_custom_message()}
+async def get_message(slot: str | None = None):
+    if slot and slot in ACCOUNTS:
+        return {
+            "message": load_message_for_account(slot),
+            "slot": slot,
+            "rewrite_enabled": MESSAGE_REWRITE_ENABLED,
+        }
+    return {"message": load_message(), "rewrite_enabled": MESSAGE_REWRITE_ENABLED}
+
+
+@app.get("/message/preview")
+async def message_preview(slot: str, cycle: int = 1):
+    if slot not in ACCOUNTS:
+        return {"success": False, "error": "Invalid slot"}
+    return {"success": True, **preview_cycle_message(slot, max(1, cycle))}
+
 
 @app.post("/message")
 async def update_message(payload: dict):
     text = payload.get("message", "").strip()
+    slot = payload.get("slot")
     if not text:
         return {"success": False, "error": "Message cannot be empty"}
-    save_custom_message(text)
-    forwarding_state["custom_message"] = text
-    await broadcast({"type": "state", **forwarding_state})
-    return {"success": True}
+    if slot and slot in ACCOUNTS:
+        save_message_for_account(slot, text)
+    else:
+        save_message(text)
+    await _push_state()
+    return {"success": True, "slot": slot}
 
-# ── Account management ────────────────────────────────────────────────────────
+
+# ── Account UI helpers ────────────────────────────────────────────────────────
 
 @app.post("/account/switch")
 async def switch_account(payload: dict):
     slot = payload.get("slot")
     if slot not in ACCOUNTS:
         return {"success": False, "error": "Invalid slot"}
-    forwarding_state["active_account"] = slot
-    await broadcast({"type": "state", **forwarding_state})
+    registry.active_account = slot
+    await _push_state()
     return {"success": True, "active_account": slot}
+
 
 @app.get("/account/status")
 async def account_status():
-    await refresh_account_info()
+    info = await registry.refresh_all_info()
     return {
-        "active_account": forwarding_state["active_account"],
-        "account_info":   forwarding_state["account_info"],
+        "active_account": registry.active_account,
+        "account_info": info,
     }
+
+
+@app.post("/account/refresh-joined")
+async def refresh_joined_counts(payload: dict = {}):
+    """Scan Telegram dialogs and store joined group/channel counts for one account."""
+    slot = (payload.get("slot") or registry.active_account or "").strip()
+    if slot not in ACCOUNTS:
+        return {"success": False, "error": "Invalid slot"}
+    w = registry.get_worker(slot)
+    if not w.state.account_info and not load_account_info(slot):
+        return {"success": False, "error": f"{slot} not logged in"}
+    try:
+        was_running = w.state.running
+        base_info = w.state.account_info or load_account_info(slot) or {}
+
+        async def _run_refresh() -> None:
+            result = await registry.refresh_joined_counts(slot)
+            if result:
+                await _push_state()
+
+        if was_running:
+            asyncio.create_task(_run_refresh())
+            info = base_info
+        else:
+            info = await registry.refresh_joined_counts(slot)
+            if info:
+                await _push_state()
+
+        if not info:
+            return {"success": False, "error": "Could not read joined counts"}
+        has_counts = info.get("joined_total") is not None
+        resp = {
+            "success": True,
+            "slot": slot,
+            "joined_groups": info.get("joined_groups", 0),
+            "joined_channels": info.get("joined_channels", 0),
+            "joined_total": info.get("joined_total", 0),
+            "joined_updated_at": info.get("joined_updated_at", ""),
+        }
+        if was_running:
+            resp["queued"] = True
+            resp["message"] = (
+                "Background scan started — On Telegram count updates live via WebSocket"
+            )
+        elif not has_counts:
+            resp["queued"] = True
+            resp["message"] = "Scan in progress — count appears shortly"
+        return resp
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ── Login (per-slot isolated state) ───────────────────────────────────────────
 
 @app.post("/login/send-otp")
 async def send_otp(payload: dict):
     phone = payload.get("phone", "").strip()
-    slot  = payload.get("slot", "account1")
+    slot = payload.get("slot", "account1")
     if not phone:
         return {"success": False, "error": "Phone number required"}
-    if slot not in ACCOUNTS:
-        return {"success": False, "error": "Invalid slot"}
+    _sync_login_state_slots()
+    if not _slot_valid(slot):
+        return {"success": False, "error": "Invalid slot — restart backend (python scripts/dev.py)"}
     try:
-        existing = telegram_clients.get(slot)
-        if existing:
-            try:
-                await existing.disconnect()
-            except Exception:
-                pass
-        client = TelegramClient(ACCOUNTS[slot], API_ID, API_HASH)
-        await client.connect()
-        telegram_clients[slot] = client
-        result = await client.send_code_request(phone)
-        login_state["phone"] = phone
-        login_state["phone_code_hash"] = result.phone_code_hash
-        login_state["slot"] = slot
+        await _prepare_login_slot(slot)
+
+        async def _send_code():
+            c = await telegram_client.get_login_client(slot)
+            return await c.send_code_request(phone)
+
+        result = await telegram_client.run_login_with_retry(slot, _send_code)
+        client = await telegram_client.get_login_client(slot)
+        session_string = ""
+        try:
+            session_string = client.session.save() or ""
+        except Exception:
+            pass
+        if session_string:
+            telegram_client.remember_login_session_string(slot, session_string)
+        pending = {
+            "phone": phone,
+            "phone_code_hash": result.phone_code_hash,
+        }
+        login_state[slot] = pending
+        save_pending(
+            slot,
+            phone,
+            result.phone_code_hash,
+            session_string=session_string or None,
+        )
         return {"success": True}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        clear_pending(slot)
+        await telegram_client.finalize_login_exclusive(slot)
+        err = str(e)
+        if "database is locked" in err.lower():
+            err = "Session file was busy. Wait 10 seconds, then tap Send OTP again."
+        return {"success": False, "error": err}
+
 
 @app.post("/login/verify-otp")
 async def verify_otp(payload: dict):
-    code            = payload.get("code", "").strip()
-    slot            = login_state.get("slot")
-    phone           = login_state.get("phone")
-    phone_code_hash = login_state.get("phone_code_hash")
-    if not all([code, slot, phone, phone_code_hash]):
-        return {"success": False, "error": "Missing login state"}
+    code = payload.get("code", "").strip()
+    slot = (payload.get("slot") or "").strip()
+    if not slot or slot not in ACCOUNTS:
+        return {"success": False, "error": "Invalid account slot — refresh the page and try again"}
+
+    ls = _get_login_pending(slot)
+    if not ls:
+        return {
+            "success": False,
+            "error": (
+                "Login session expired (server reloaded). "
+                "Tap ← Back, send OTP again, then verify within a few minutes."
+            ),
+        }
+
+    phone = ls.get("phone")
+    phone_code_hash = ls.get("phone_code_hash")
+    if not all([code, phone, phone_code_hash]):
+        return {"success": False, "error": "Missing login state — send OTP again"}
     try:
-        client = telegram_clients[slot]
-        await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
-        me = await client.get_me()
-        forwarding_state["account_info"][slot] = {"name": me.first_name, "phone": me.phone}
-        forwarding_state["active_account"] = slot
-        await broadcast({"type": "state", **forwarding_state})
-        return {"success": True, "name": me.first_name, "phone": me.phone, "slot": slot}
+        async def _sign_in() -> None:
+            client = await telegram_client.get_login_client(slot)
+            await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
+
+        await telegram_client.run_login_with_retry(slot, _sign_in)
+
+        client = await telegram_client.get_login_client(slot)
+        if not await client.is_user_authorized():
+            clear_pending(slot)
+            await telegram_client.finalize_login_exclusive(slot)
+            return {"success": False, "error": "Sign-in failed — send OTP again"}
+
+        async def _get_me():
+            c = await telegram_client.get_login_client(slot)
+            return await c.get_me()
+
+        me = await telegram_client.run_login_with_retry(slot, _get_me)
+        await telegram_client.commit_login_session(slot)
+        from core.account_info_store import build_info_from_me
+
+        from core.subscription_accounts import enrich_account_info
+
+        info = enrich_account_info(slot, build_info_from_me(me))
+        login_state[slot] = {"phone": None, "phone_code_hash": None}
+        clear_pending(slot)
+
+        worker_started = await registry.complete_login(slot, info)
+        await _push_state()
+
+        async def _scan_joined_background() -> None:
+            try:
+                await registry.refresh_joined_counts(slot)
+                await _push_state()
+            except Exception:
+                pass
+
+        asyncio.create_task(_scan_joined_background())
+
+        return {
+            "success": True,
+            "name": info["name"],
+            "phone": info["phone"],
+            "slot": slot,
+            "worker_started": worker_started,
+        }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        await telegram_client.finalize_login_exclusive(slot)
+        err = str(e)
+        if "database is locked" in err.lower():
+            err = (
+                "Telegram session file is busy (another account task was using it). "
+                "Wait 10 seconds, tap ← Back, send OTP again, then verify."
+            )
+        return {"success": False, "error": err}
+
 
 @app.post("/login/logout")
 async def logout(payload: dict = {}):
-    slot = payload.get("slot") or forwarding_state.get("active_account")
+    slot = (payload.get("slot") or registry.active_account or "").strip()
     if slot not in ACCOUNTS:
         return {"success": False, "error": "Invalid slot"}
+    login_state.setdefault(slot, {"phone": None, "phone_code_hash": None})
     try:
-        client = telegram_clients.get(slot)
-        if client and client.is_connected():
-            await client.log_out()
-        session_file = f"{ACCOUNTS[slot]}.session"
-        if os.path.exists(session_file):
-            os.remove(session_file)
-        telegram_clients[slot] = None
-        forwarding_state["account_info"][slot] = None
-        other = "account2" if slot == "account1" else "account1"
-        forwarding_state["active_account"] = other if forwarding_state["account_info"].get(other) else None
-        await broadcast({"type": "state", **forwarding_state})
-        return {"success": True}
+        await registry.logout_account(slot)
+        login_state[slot] = {"phone": None, "phone_code_hash": None}
+        await _push_state()
+        return {"success": True, "slot": slot}
     except Exception as e:
+        try:
+            await registry.logout_account(slot)
+            login_state[slot] = {"phone": None, "phone_code_hash": None}
+            await _push_state()
+        except Exception:
+            pass
         return {"success": False, "error": str(e)}
+
+
+# ── DM Inbox (private chats only — independent of forwarding workers) ─────────
+
+@app.post("/inbox/listeners/refresh")
+async def inbox_ensure_listeners():
+    """Re-attach Telethon DM listeners (after reload or if live messages stop)."""
+    from services.dm_inbox_service import bootstrap_listeners
+
+    await bootstrap_listeners(force=True)
+    return {"status": "ok", "message": "DM listeners re-attached"}
+
+
+@app.post("/inbox/{slot}/sync/{user_id}")
+async def inbox_force_sync(slot: str, user_id: int):
+    """Pull latest messages from Telegram for one chat (bypasses UI)."""
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from core.dm_store import get_messages
+    from services.dm_inbox_service import sync_conversation_from_telegram
+
+    added = await sync_conversation_from_telegram(slot, user_id, limit=80)
+    return {
+        "status": "ok",
+        "added": len(added),
+        "messages": get_messages(slot, user_id),
+    }
+
+
+@app.get("/inbox")
+async def inbox_all(
+    slot: str | None = Query(None),
+    combined: bool = Query(False),
+    sync: bool = Query(False),
+):
+    from services import dm_inbox_service
+
+    if sync:
+        for s in ACCOUNTS:
+            try:
+                await dm_inbox_service.sync_stored_conversations(s)
+            except Exception:
+                pass
+
+    if slot:
+        if slot not in ACCOUNTS:
+            return {"status": "error", "message": "Invalid slot"}
+        return {"status": "ok", **dm_inbox_service.build_slot_payload(slot)}
+    if combined:
+        return {
+            "status": "ok",
+            "combined": True,
+            "conversations": dm_inbox_service.get_combined_conversations(),
+        }
+    return {"status": "ok", **dm_inbox_service.build_all_inboxes()}
+
+
+@app.get("/inbox/{slot}/messages/{user_id}")
+async def inbox_messages(
+    slot: str,
+    user_id: int,
+    sync: bool = Query(True),
+):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    import asyncio
+
+    from core.dm_store import get_messages
+    from services import dm_inbox_service
+
+    from core.dm_store import load_inbox
+
+    messages = get_messages(slot, user_id)
+    if sync:
+        try:
+            await dm_inbox_service.sync_read_receipts(slot, user_id)
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(
+                dm_inbox_service.sync_conversation_from_telegram(slot, user_id),
+                timeout=15.0,
+            )
+            messages = get_messages(slot, user_id)
+        except asyncio.TimeoutError:
+            pass
+        except Exception:
+            pass
+    key = str(user_id)
+    had_unread = int(
+        load_inbox(slot).get("conversations", {}).get(key, {}).get("unread_count") or 0
+    ) > 0
+    if had_unread:
+        await dm_inbox_service.mark_read(slot, user_id)
+    return {"status": "ok", "slot": slot, "user_id": user_id, "messages": messages}
+
+
+@app.post("/inbox/{slot}/reply")
+async def inbox_reply(slot: str, body: dict):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    user_id = body.get("user_id")
+    text = body.get("text") or body.get("message") or ""
+    if user_id is None:
+        return {"status": "error", "message": "user_id required"}
+    try:
+        from messaging.message_router import message_router
+
+        result = await message_router.enqueue_dm_send(slot, int(user_id), str(text), wait=True)
+        from services.crm_service import enrich_conversation, get_lead
+
+        conv = result.get("conversation") or {}
+        uid = int(user_id)
+        summary = enrich_conversation(
+            slot,
+            {
+                "user_id": uid,
+                "username": conv.get("username") or "",
+                "name": conv.get("name") or "",
+                "last_message": conv.get("last_message") or "",
+                "last_message_at": conv.get("last_message_at"),
+                "unread_count": conv.get("unread_count") or 0,
+            },
+        )
+        lead = get_lead(slot, uid)
+        return {
+            "status": "ok",
+            "message": result.get("message"),
+            "conversation": summary,
+            "lead": lead,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/inbox/{slot}/read/{user_id}")
+async def inbox_mark_read(slot: str, user_id: int):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from services import dm_inbox_service
+
+    await dm_inbox_service.mark_read(slot, int(user_id))
+    return {"status": "ok", "slot": slot, "user_id": user_id}
+
+
+# ── CRM (lead management on top of inbox) ─────────────────────────────────────
+
+@app.get("/crm/state")
+async def crm_state():
+    from services import crm_service
+
+    crm_service.sync_leads_from_inbox()
+    return {"status": "ok", **crm_service.build_crm_payload()}
+
+
+@app.get("/crm/leads/{slot}/{user_id}")
+async def crm_get_lead(slot: str, user_id: int):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from services import crm_service
+
+    lead = crm_service.get_lead_detail(slot, user_id)
+    if not lead:
+        return {"status": "error", "message": "Lead not found"}
+    return {"status": "ok", "lead": lead}
+
+
+@app.patch("/crm/leads/{slot}/{user_id}")
+async def crm_patch_lead(slot: str, user_id: int, body: dict):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from services import crm_service
+
+    kwargs = {}
+    if "status" in body:
+        kwargs["status"] = body.get("status")
+    if "notes" in body:
+        kwargs["notes"] = body.get("notes")
+    if "reminder_timestamp" in body:
+        kwargs["reminder_timestamp"] = body.get("reminder_timestamp")
+        kwargs["_has_reminder"] = True
+    if body.get("mark_handled"):
+        kwargs["mark_handled"] = True
+    lead = await crm_service.update_lead(slot, int(user_id), **kwargs)
+    return {"status": "ok", "lead": lead, "crm": crm_service.build_crm_payload()}
+
+
+@app.post("/crm/leads/{slot}/{user_id}/mark-handled")
+async def crm_mark_handled(slot: str, user_id: int):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from services import crm_service
+
+    try:
+        lead = await crm_service.mark_reply_handled(slot, int(user_id))
+        return {"status": "ok", "lead": lead, "crm": crm_service.build_crm_payload()}
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/crm/leads/{slot}/{user_id}/follow-up")
+async def crm_follow_up(slot: str, user_id: int, body: dict):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from services import crm_service
+
+    hours = body.get("hours")
+    if hours is None and body.get("preset") == "tomorrow":
+        hours = 24.0
+    elif hours is None:
+        hours = 2.0
+    lead = await crm_service.set_follow_up(slot, int(user_id), hours=float(hours))
+    return {"status": "ok", "lead": lead, "crm": crm_service.build_crm_payload()}
+
+
+@app.get("/crm/call-now/options")
+async def crm_call_now_options(
+    account_id: str = Query(..., alias="account_id"),
+    user_id: int = Query(...),
+):
+    if account_id not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid account_id"}
+    from services import call_service
+
+    contact = call_service.resolve_contact(account_id, int(user_id))
+    return {
+        "status": "ok",
+        "contact": contact,
+        "options": call_service.build_live_call_options(contact),
+    }
+
+
+@app.post("/crm/call-now")
+async def crm_call_now(body: dict):
+    slot = body.get("account_id") or body.get("slot")
+    user_id = body.get("user_id")
+    if not slot or slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid account_id"}
+    if user_id is None:
+        return {"status": "error", "message": "user_id required"}
+    call_type = body.get("call_type") or "telegram"
+    send_message = body.get("send_message", True)
+    from services import call_service, crm_service as _crm
+
+    try:
+        result = await call_service.initiate_live_call(
+            slot,
+            int(user_id),
+            call_type=str(call_type),
+            send_message=bool(send_message),
+        )
+        lead = _crm.get_lead_detail(slot, int(user_id))
+        return {
+            "status": "ok",
+            **result,
+            "lead": lead,
+            "crm": _crm.build_crm_payload(),
+        }
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/crm/unblock")
+async def crm_unblock(body: dict):
+    slot = body.get("account_id") or body.get("slot")
+    user_id = body.get("user_id")
+    if not slot or slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid account_id"}
+    if user_id is None:
+        return {"status": "error", "message": "user_id required"}
+    from services import block_service, crm_service as _crm
+
+    try:
+        result = await block_service.unblock_lead(slot, int(user_id))
+        lead = result["lead"]
+        await _crm.broadcast_crm_update(slot, int(user_id), lead)
+        return {"status": "ok", "lead": lead, "crm": _crm.build_crm_payload()}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/crm/schedule-call")
+async def crm_schedule_call_body(body: dict):
+    """Schedule a call (flat payload: account_id, user_id, scheduled_time, call_type, notes)."""
+    slot = body.get("account_id") or body.get("slot")
+    user_id = body.get("user_id")
+    if not slot or slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid account_id"}
+    if user_id is None:
+        return {"status": "error", "message": "user_id required"}
+    return await _crm_schedule_call_impl(slot, int(user_id), body)
+
+
+async def _crm_schedule_call_impl(slot: str, user_id: int, body: dict):
+    from services import call_service, crm_service as _crm
+
+    scheduled_time = body.get("scheduled_time")
+    if not scheduled_time:
+        return {"status": "error", "message": "scheduled_time required"}
+    call_type = body.get("call_type") or "telegram"
+    notes = body.get("notes") or ""
+    try:
+        call = await call_service.schedule_lead_call(
+            slot,
+            user_id,
+            scheduled_time=str(scheduled_time),
+            call_type=str(call_type),
+            notes=str(notes),
+        )
+        lead = _crm.get_lead_detail(slot, user_id)
+        return {"status": "ok", "call": call, "lead": lead, "crm": _crm.build_crm_payload()}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/crm/leads/{slot}/{user_id}/calls")
+async def crm_schedule_call(slot: str, user_id: int, body: dict):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    return await _crm_schedule_call_impl(slot, int(user_id), body)
+
+
+@app.post("/crm/leads/{slot}/{user_id}/calls/complete")
+async def crm_complete_call(slot: str, user_id: int, body: dict):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from services import call_service, crm_service
+
+    outcome = body.get("outcome_status") or body.get("status")
+    call = await call_service.complete_lead_call(
+        slot, int(user_id), outcome_status=outcome
+    )
+    lead = crm_service.get_lead_detail(slot, int(user_id))
+    return {"status": "ok", "call": call, "lead": lead, "crm": crm_service.build_crm_payload()}
+
 
 @app.get("/login/status")
 async def login_status():
-    slot = forwarding_state.get("active_account")
+    slot = registry.active_account
     if slot:
-        info = forwarding_state["account_info"].get(slot)
+        info = registry.get_worker(slot).state.account_info
         if info:
-            return {"logged_in": True, "name": info["name"], "phone": info["phone"], "slot": slot}
+            return {
+                "logged_in": True,
+                "name": info["name"],
+                "username": info.get("username", ""),
+                "phone": info["phone"],
+                "slot": slot,
+            }
     return {"logged_in": False}
 
 
-# ── Serve frontend (production) ───────────────────────────────────────────────
+# ── Frontend (production) ───────────────────────────────────────────────────────
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(STATIC_DIR):
-    app.mount("/assets", StaticFiles(directory=os.path.join(STATIC_DIR, "assets")), name="assets")
+    app.mount(
+        "/assets",
+        StaticFiles(directory=os.path.join(STATIC_DIR, "assets")),
+        name="assets",
+    )
+
+    _NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"}
 
     @app.get("/")
     async def serve_index():
-        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+        return FileResponse(
+            os.path.join(STATIC_DIR, "index.html"),
+            headers=_NO_CACHE,
+        )
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
+        # Never serve index.html for API-like paths (avoids JSON parse errors in the UI)
+        api_roots = {"groups", "account", "accounts", "login", "message", "start", "stop", "state", "health", "ws", "inbox", "crm", "stats"}
+        first = full_path.split("/")[0] if full_path else ""
+        if first in api_roots:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Not Found")
         file_path = os.path.join(STATIC_DIR, full_path)
         if os.path.exists(file_path):
             return FileResponse(file_path)
-        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+        return FileResponse(
+            os.path.join(STATIC_DIR, "index.html"),
+            headers=_NO_CACHE,
+        )
