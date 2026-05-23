@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TelegramForward — Production Update</title>
+  <style>
+    :root { --bg:#0f1419; --card:#1a2332; --text:#e7ecf3; --muted:#8b9cb3; --accent:#3b82f6; --ok:#22c55e; --border:#2a3548; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 24px; line-height: 1.5; }
+    .wrap { max-width: 820px; margin: 0 auto; }
+    h1 { font-size: 1.5rem; margin: 0 0 8px; }
+    .sub { color: var(--muted); margin-bottom: 24px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    h2 { font-size: 1rem; margin: 0 0 12px; color: #93c5fd; }
+    p, li { color: var(--muted); font-size: 0.95rem; }
+    li { margin: 6px 0; }
+    .box { position: relative; background: #0a0e14; border: 1px solid var(--border); border-radius: 8px; padding: 14px 14px 14px 14px; margin: 10px 0; overflow-x: auto; }
+    pre { margin: 0; font-family: ui-monospace, Consolas, monospace; font-size: 0.85rem; white-space: pre-wrap; word-break: break-all; color: #c9d6e8; }
+    .copy { position: absolute; top: 8px; right: 8px; background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 6px 12px; font-size: 0.75rem; cursor: pointer; }
+    .copy:hover { filter: brightness(1.1); }
+    .copy.ok { background: var(--ok); }
+    .tag { display: inline-block; background: #1e3a5f; color: #93c5fd; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin-right: 6px; }
+    a { color: #60a5fa; }
+    .warn { color: #fbbf24; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>TelegramForward — Production Update</h1>
+    <p class="sub">
+      Server: <a href="http://187.127.169.159" target="_blank">http://187.127.169.159</a>
+      · Click <strong>Copy</strong> on any box, then paste in your SSH terminal.
+    </p>
+
+    <div class="card">
+      <h2>Step 1 — Connect to VPS (from your PC)</h2>
+      <p>Try <span class="tag">root</span> first. If it fails, try <span class="tag">ubuntu</span>.</p>
+      <div class="box">
+        <button class="copy" onclick="copy(this)">Copy</button>
+        <pre id="c1">ssh root@187.127.169.159</pre>
+      </div>
+      <div class="box">
+        <button class="copy" onclick="copy(this)">Copy</button>
+        <pre id="c1b">ssh ubuntu@187.127.169.159</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Step 2 — Find project folder (run on VPS)</h2>
+      <div class="box">
+        <button class="copy" onclick="copy(this)">Copy</button>
+        <pre id="c2">echo "USER=$(whoami)" && echo "HOME=$HOME" && pm2 list && for d in /opt/telegramforward ~/TelegramForward /root/TelegramForward; do [ -f "$d/server.py" ] && echo "FOUND=$d"; done</pre>
+      </div>
+      <p>Paste the output back to support if <code>FOUND=</code> is missing.</p>
+    </div>
+
+    <div class="card">
+      <h2>Step 3 — Safe update (run on VPS)</h2>
+      <p class="warn">Replace the path if Step 2 showed a different folder.</p>
+      <div class="box">
+        <button class="copy" onclick="copy(this)">Copy</button>
+        <pre id="c3">cd /opt/telegramforward
+git pull origin main
+bash scripts/production_update.sh</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>If folder is ~/TelegramForward instead</h2>
+      <div class="box">
+        <button class="copy" onclick="copy(this)">Copy</button>
+        <pre id="c4">cd ~/TelegramForward
+git pull origin main
+bash scripts/production_update.sh</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>If NOT a git repo yet (first-time migrate)</h2>
+      <div class="box">
+        <button class="copy" onclick="copy(this)">Copy</button>
+        <pre id="c5">OLD=/opt/telegramforward
+BACKUP=/opt/telegramforward_backup_$(date +%Y%m%d)
+cp -a "$OLD" "$BACKUP"
+git clone https://github.com/codetrust2025-spec/TelegramForward.git /opt/telegramforward_new
+cp -a "$BACKUP/data" /opt/telegramforward_new/ 2>/dev/null || true
+cp -a "$BACKUP"/session_*.session* /opt/telegramforward_new/ 2>/dev/null || true
+cd /opt/telegramforward_new
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cd dashboard && npm install && npm run build && cd ..
+pm2 delete all 2>/dev/null || true
+pm2 start ecosystem.production.cjs
+pm2 save</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>After update — browser</h2>
+      <ol>
+        <li>Open <a href="http://187.127.169.159" target="_blank">http://187.127.169.159</a></li>
+        <li>Hard refresh: <strong>Ctrl + Shift + R</strong></li>
+        <li>Log in accounts if needed, then Start workers</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h2>Useful VPS commands</h2>
+      <div class="box">
+        <button class="copy" onclick="copy(this)">Copy</button>
+        <pre id="c6">pm2 logs telegram-backend
+pm2 status
+curl http://127.0.0.1:8000/health</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Rollback (if something breaks)</h2>
+      <div class="box">
+        <button class="copy" onclick="copy(this)">Copy</button>
+        <pre id="c7">cd /opt/telegramforward
+pm2 stop telegram-backend
+cp -a backups/pre_update_YYYYMMDD_HHMMSS/data .
+cp -a backups/pre_update_YYYYMMDD_HHMMSS/session_*.session* .
+pm2 start ecosystem.production.cjs</pre>
+      </div>
+      <p>Replace <code>pre_update_YYYYMMDD_HHMMSS</code> with your actual backup folder name.</p>
+    </div>
+  </div>
+
+  <script>
+    function copy(btn) {
+      const pre = btn.parentElement.querySelector('pre');
+      const text = pre.textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'Copied!';
+        btn.classList.add('ok');
+        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('ok'); }, 2000);
+      }).catch(() => {
+        const r = document.createRange();
+        r.selectNode(pre);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(r);
+        document.execCommand('copy');
+        btn.textContent = 'Copied!';
+      });
+    }
+  </script>
+</body>
+</html>
