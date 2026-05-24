@@ -7,7 +7,7 @@ import { FleetHealthPanel } from './FleetHealthPanel.jsx'
 import { AccountPerformanceChart } from './AccountPerformanceChart.jsx'
 import { ProgressSection } from './ProgressSection.jsx'
 import { ProgressBar } from './ui/ProgressBar.jsx'
-import { accountLabel, formatCountdown } from '../utils/accountUi'
+import { accountLabel, formatCountdown, getAccountStatus } from '../utils/accountUi'
 import { buildFleetHealthRows, sortFleetHealthRows } from '../utils/fleetHealth.js'
 import { SegmentedControl } from './ui/SegmentedControl.jsx'
 
@@ -19,7 +19,14 @@ const SECTIONS = [
   { id: 'selected', label: 'Selected' },
 ]
 
-function ProgressHubPin({ fleet, globalCountdown, alertCount, activeAccountLabel }) {
+function ProgressHubPin({
+  fleet,
+  globalCountdown,
+  alertCount,
+  activeAccountLabel,
+  accountPin,
+}) {
+  const pinFleet = accountPin || fleet
   const {
     runningCount,
     sleepingCount,
@@ -27,7 +34,7 @@ function ProgressHubPin({ fleet, globalCountdown, alertCount, activeAccountLabel
     hasAnyCycle,
     progressValue,
     progressMax,
-  } = fleet
+  } = pinFleet
 
   let statusLabel = 'Idle'
   if (sending.length > 0) {
@@ -60,13 +67,17 @@ function ProgressHubPin({ fleet, globalCountdown, alertCount, activeAccountLabel
         </span>
       )}
       {activeAccountLabel && (
-        <span className="progress-hub-pin-account">{activeAccountLabel}</span>
+        <span className="progress-hub-pin-account" title={accountPin ? 'Account overview' : 'Fleet overview'}>
+          {activeAccountLabel}
+        </span>
       )}
     </div>
   )
 }
 
 export function ProgressHubPanel({
+  overviewScope = 'fleet',
+  onShowFleetOverview,
   fleet,
   globalCountdown,
   sentWindowLabel,
@@ -89,7 +100,10 @@ export function ProgressHubPanel({
   const [layout, setLayout] = useState('single')
 
   const subs = subscriptionSlots?.length ? subscriptionSlots : []
-  const activeAccountLabel = activeAccount ? accountLabel(activeAccount) : null
+  const showAccountOverview = overviewScope === 'account' && !!activeAccount
+  const activeAccountLabel = showAccountOverview && activeAccount
+    ? accountLabel(activeAccount)
+    : null
 
   const alertCount = useMemo(() => {
     const resetTs = dailyStats?.reset_timestamp ?? 0
@@ -126,7 +140,130 @@ export function ProgressHubPanel({
     </>
   )
 
+  const {
+    displaySuccess,
+    displayFailed,
+    displayActiveGroups,
+    displaySkippedPosted,
+    displaySkippedCooldown,
+    displaySkippedOther,
+    displaySent24h,
+  } = accountProgress
+
+  const accountSliceSize = activeAcctState?.my_groups?.length ?? 0
+  const accountProcessed = displaySuccess + displayFailed
+  const accountSuccessRate = accountProcessed > 0
+    ? ((displaySuccess / accountProcessed) * 100).toFixed(1)
+    : '0.0'
+  const accountProgressMax = accountSliceSize || 1
+  const accountSkipped = Math.max(0, accountSliceSize - (displayActiveGroups || 0))
+  const accountProgressValue = cycle.hasCycleRun
+    ? Math.min(accountProgressMax, accountSkipped + accountProcessed)
+    : 0
+
+  const accountChipsSecondary = (
+    <>
+      <ProgressStatChip label="Still to post" value={displayActiveGroups} title="Groups still waiting this cycle — this account" />
+      <ProgressStatChip label="Skipped (already posted)" value={displaySkippedPosted} warn title="Skipped — this account" />
+      {displaySkippedCooldown + displaySkippedOther > 0 && (
+        <ProgressStatChip
+          label="Paused to avoid spam"
+          value={displaySkippedCooldown + displaySkippedOther}
+          warn
+          icon="⏳"
+          helper="Temporary safety delay"
+          title="Groups temporarily paused due to safe messaging delay. They are delayed, not failed."
+        />
+      )}
+      <ProgressStatChip
+        label={`Sent (${sentWindowLabel.toLowerCase()})`}
+        value={displaySent24h}
+        title={`Forwards — ${sentWindowLabel.toLowerCase()} — this account`}
+      />
+    </>
+  )
+
+  const accountPin = useMemo(() => {
+    if (!showAccountOverview || !activeAcctState) return null
+    const loggedIn = !!accountInfo?.[activeAccount]
+    const status = getAccountStatus(activeAcctState, loggedIn)
+    const sending = activeAcctState?.running && activeAcctState?.current_group
+      ? [{ slot: activeAccount, group: activeAcctState.current_group }]
+      : []
+    return {
+      runningCount: status === 'running' ? 1 : 0,
+      sleepingCount: status === 'sleeping' ? 1 : 0,
+      sending,
+      hasAnyCycle: cycle.hasCycleRun,
+      progressValue: accountProgressValue,
+      progressMax: accountProgressMax,
+    }
+  }, [
+    showAccountOverview,
+    activeAcctState,
+    activeAccount,
+    accountInfo,
+    cycle.hasCycleRun,
+    accountProgressValue,
+    accountProgressMax,
+  ])
+
+  function renderOverviewScopeBar() {
+    if (!showAccountOverview) return null
+    return (
+      <div className="progress-hub-scope-bar">
+        <span className="progress-hub-scope-label">
+          Showing <strong>{activeAccountLabel}</strong>
+        </span>
+        <button
+          type="button"
+          className="btn btn--ghost btn--sm"
+          onClick={onShowFleetOverview}
+        >
+          ← All accounts
+        </button>
+      </div>
+    )
+  }
+
   function renderOverview() {
+    if (showAccountOverview) {
+      return (
+        <div className="progress-hub-section">
+          {renderOverviewScopeBar()}
+          <DailyStatsPanel
+            dailyStats={dailyStats}
+            accountSlots={accountSlots}
+            accountInfo={accountInfo}
+            accountStates={accountStates}
+            onConfirmReset={onConfirmReset}
+            onDailyStatsUpdate={onDailyStatsUpdate}
+            scopeAccount={activeAccount}
+          />
+          <ProgressStatsPanel
+            title={activeAccountLabel || 'Account cycle summary'}
+            subtitle="This account only — combined fleet totals are under All accounts"
+            helpText="Select another account in the sidebar or use ← All accounts for fleet-wide metrics."
+            totalGroups={accountSliceSize}
+            success={displaySuccess}
+            failed={displayFailed}
+            successRate={accountSuccessRate}
+            processed={accountProcessed}
+            secondary={accountChipsSecondary}
+          >
+            <ProgressBar
+              value={cycle.hasCycleRun ? accountProgressValue : 0}
+              max={accountProgressMax}
+              label={`Account progress: ${cycle.hasCycleRun ? accountProgressValue : 0} of ${accountProgressMax} groups processed this cycle`}
+              tone="success"
+              large
+              className="fleet-progress-bar"
+            />
+          </ProgressStatsPanel>
+        </div>
+      )
+    }
+
     return (
       <div className="progress-hub-section">
         <DailyStatsPanel
@@ -140,7 +277,7 @@ export function ProgressHubPanel({
         <ProgressStatsPanel
           title="Fleet cycle summary"
           subtitle="Primary metrics — all accounts combined"
-          helpText="These totals appear only here. Other tabs show health, ranking, or per-account detail."
+          helpText="Select an account in the sidebar to see its overview, or use other tabs for health and ranking."
           totalGroups={fleet.masterTotal || 0}
           success={fleet.success}
           failed={fleet.failed}
@@ -214,16 +351,6 @@ export function ProgressHubPanel({
   }
 
   function renderSelected() {
-    const {
-      displaySuccess,
-      displayFailed,
-      displayActiveGroups,
-      displaySkippedPosted,
-      displaySkippedCooldown,
-      displaySkippedOther,
-      displaySent24h,
-    } = accountProgress
-
     return (
       <div className="progress-hub-section progress-hub-section--scroll">
         <ProgressStatsPanel
@@ -312,7 +439,8 @@ export function ProgressHubPanel({
         fleet={fleet}
         globalCountdown={globalCountdown}
         alertCount={alertCount}
-        activeAccountLabel={activeAccountLabel}
+        activeAccountLabel={showAccountOverview ? activeAccountLabel : 'All accounts'}
+        accountPin={accountPin}
       />
 
       <div className="progress-hub-nav">

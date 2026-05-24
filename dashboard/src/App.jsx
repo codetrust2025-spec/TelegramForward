@@ -117,6 +117,7 @@ export default function App() {
   const [bulkActionLoading, setBulkActionLoading] = useState(null) // 'start' | 'stop'
   const [accountActionLoading, setAccountActionLoading] = useState(null) // account1:start
   const [switchingAccount, setSwitchingAccount] = useState(null)
+  const [overviewScope, setOverviewScope] = useState('fleet')
   const [mainView, setMainView] = useState('dashboard') // dashboard | inbox
   const [inboxState, setInboxState] = useState({ slots: {} })
   const [crmState, setCrmState] = useState({
@@ -603,7 +604,9 @@ export default function App() {
   }
 
   async function switchAccount(slot) {
-    if (!slot || slot === state.active_account) return
+    if (!slot) return
+    setOverviewScope('account')
+    if (slot === state.active_account) return
     setSwitchingAccount(slot)
     setState(prev => ({
       ...prev,
@@ -1113,10 +1116,16 @@ export default function App() {
         <DashboardColumn
           id="center"
           title="Progress"
-          subtitle={state.active_account ? accountLabel(state.active_account) : 'Fleet monitor'}
+          subtitle={
+            overviewScope === 'account' && state.active_account
+              ? accountLabel(state.active_account)
+              : 'All accounts'
+          }
           flush
         >
           <ProgressHubPanel
+            overviewScope={overviewScope}
+            onShowFleetOverview={() => setOverviewScope('fleet')}
             fleet={fleet}
             globalCountdown={globalCountdown}
             sentWindowLabel={sentWindowLabel}
