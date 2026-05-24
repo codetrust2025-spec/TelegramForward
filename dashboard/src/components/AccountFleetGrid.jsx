@@ -100,10 +100,6 @@ export function AccountFleetGrid({
 
   function handleSelect(slot) {
     setLocalSelected(slot)
-    if (slot === activeAccount) {
-      onAccountSelected?.(slot)
-      return
-    }
     onAccountSelected?.(slot)
     onSelectAccount?.(slot)
   }

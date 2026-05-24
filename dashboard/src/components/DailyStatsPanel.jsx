@@ -4,17 +4,18 @@ import { ButtonContent } from '../Loader.jsx'
 import { accountLabel } from '../utils/accountUi.js'
 import { MetricBlock, MetricGrid } from './ui/MetricBlock.jsx'
 
-function windowLabel(dailyStats) {
+function windowLabel(dailyStats, scopeAccount) {
+  const who = scopeAccount ? accountLabel(scopeAccount) : 'All accounts'
   if (dailyStats?.window === 'since_reset' && dailyStats?.reset_at) {
     try {
       const d = new Date(dailyStats.reset_at)
       if (!Number.isNaN(d.getTime())) {
-        return `All accounts · since reset · ${d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+        return `${who} · since reset · ${d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
       }
     } catch { /* ignore */ }
-    return 'All accounts · since last reset'
+    return `${who} · since last reset`
   }
-  return 'All accounts · rolling last 24 hours'
+  return `${who} · rolling last 24 hours`
 }
 
 /**
@@ -27,6 +28,7 @@ export function DailyStatsPanel({
   accountStates,
   onDailyStatsUpdate,
   onConfirmReset,
+  scopeAccount = null,
 }) {
   const [resetting, setResetting] = useState(null)
   const [toast, setToast] = useState(null)
@@ -37,19 +39,24 @@ export function DailyStatsPanel({
     return () => clearTimeout(id)
   }, [toast])
 
+  const scoped = scopeAccount ? (dailyStats?.per_account?.[scopeAccount] || {}) : null
   const g = dailyStats?.global || {}
-  const contacts = g.contacts ?? 0
-  const incoming = g.incoming ?? 0
-  const outgoing = g.outgoing ?? 0
-  const forwarded = g.forwarded ?? 0
-  const joinedToday = accountSlots.reduce((sum, slot) => {
-    const joinStats = accountStates?.[slot]?.join_stats
-    return sum + (Number(joinStats?.joins_today) || 0)
-  }, 0)
-  const joinLimit = accountSlots.reduce((sum, slot) => {
-    const limit = accountStates?.[slot]?.join_stats?.joins_daily_limit
-    return sum + (Number(limit) || 0)
-  }, 0)
+  const contacts = scoped ? (scoped.contacts ?? 0) : (g.contacts ?? 0)
+  const incoming = scoped ? (scoped.incoming ?? 0) : (g.incoming ?? 0)
+  const outgoing = scoped ? (scoped.outgoing ?? 0) : (g.outgoing ?? 0)
+  const forwarded = scoped ? (scoped.forwarded ?? 0) : (g.forwarded ?? 0)
+  const joinedToday = scopeAccount
+    ? (Number(accountStates?.[scopeAccount]?.join_stats?.joins_today) || 0)
+    : accountSlots.reduce((sum, slot) => {
+        const joinStats = accountStates?.[slot]?.join_stats
+        return sum + (Number(joinStats?.joins_today) || 0)
+      }, 0)
+  const joinLimit = scopeAccount
+    ? (Number(accountStates?.[scopeAccount]?.join_stats?.joins_daily_limit) || 0)
+    : accountSlots.reduce((sum, slot) => {
+        const limit = accountStates?.[slot]?.join_stats?.joins_daily_limit
+        return sum + (Number(limit) || 0)
+      }, 0)
 
   async function handleReset(scope = 'global', accountId = null) {
     const resetKey = scope === 'account' ? accountId : 'global'
@@ -99,22 +106,26 @@ export function DailyStatsPanel({
     .filter(r => (r.contacts || 0) + (r.incoming || 0) + (r.outgoing || 0) + (r.forwarded || 0) > 0)
 
   const globalResetting = resetting === 'global'
+  const accountResetting = scopeAccount && resetting === scopeAccount
+  const statsTitle = scopeAccount ? 'Today reach' : 'Fleet today reach'
 
   return (
-    <section className="daily-stats-panel" aria-label="Fleet today reach and daily counters">
+    <section className="daily-stats-panel" aria-label={scopeAccount ? 'Account today reach' : 'Fleet today reach and daily counters'}>
       <header className="daily-stats-header">
         <div>
-          <h3 className="daily-stats-title">Fleet today reach</h3>
-          <p className="daily-stats-sub">{windowLabel(dailyStats)}</p>
+          <h3 className="daily-stats-title">{statsTitle}</h3>
+          <p className="daily-stats-sub">{windowLabel(dailyStats, scopeAccount)}</p>
         </div>
         <button
           type="button"
           className="btn btn--warn btn--sm daily-stats-reset-btn"
-          onClick={() => handleReset('global')}
+          onClick={() => (scopeAccount ? handleReset('account', scopeAccount) : handleReset('global'))}
           disabled={!!resetting}
-          title="Reset all daily counters to zero from now"
+          title={scopeAccount
+            ? `Reset daily counters for ${accountLabel(scopeAccount)}`
+            : 'Reset all daily counters to zero from now'}
         >
-          <ButtonContent loading={globalResetting} loadingLabel="Resetting…">
+          <ButtonContent loading={scopeAccount ? accountResetting : globalResetting} loadingLabel="Resetting…">
             Reset 24 Hours
           </ButtonContent>
         </button>
@@ -128,13 +139,17 @@ export function DailyStatsPanel({
         <MetricBlock
           label="Joined since reset"
           value={joinedToday}
-          sub={joinLimit > 0 ? `${joinedToday}/${joinLimit} fleet daily limit` : 'All accounts combined'}
+          sub={joinLimit > 0
+            ? `${joinedToday}/${joinLimit}${scopeAccount ? ' daily limit' : ' fleet daily limit'}`
+            : (scopeAccount ? 'This account' : 'All accounts combined')}
           tone="success"
-          title="New groups joined by automation across all accounts in this stats window. This does not include old Telegram memberships."
+          title={scopeAccount
+            ? 'New groups joined by this account in this stats window.'
+            : 'New groups joined by automation across all accounts in this stats window. This does not include old Telegram memberships.'}
         />
       </MetricGrid>
 
-      {ranked.length > 0 && (
+      {!scopeAccount && ranked.length > 0 && (
         <details className="daily-stats-per-account">
           <summary>Per account breakdown</summary>
           <ul className="daily-stats-account-list">
@@ -165,7 +180,9 @@ export function DailyStatsPanel({
       )}
 
       <p className="daily-stats-footnote">
-        Fleet-wide calculated stats only — chat history and accounts are kept. New activity across all accounts counts from the reset moment.
+        {scopeAccount
+          ? 'Account counters only — chat history and sessions are kept. New activity for this account counts from the reset moment.'
+          : 'Fleet-wide calculated stats only — chat history and accounts are kept. New activity across all accounts counts from the reset moment.'}
       </p>
 
       {toast && (
