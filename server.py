@@ -10,7 +10,7 @@ import os
 import shutil
 from datetime import datetime
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -470,7 +470,7 @@ async def _perform_stats_reset(payload: dict):
         get_reset_at_iso,
         set_reset_timestamp,
     )
-    from core.join_cycle import daily_join_count_for_reset
+    from core.join_cycle import daily_join_count_for_reset, join_stats_for_ui
     import services.crm_service as crm_service
 
     scope = (payload.get("scope") or "global").strip().lower()
@@ -525,7 +525,33 @@ async def _perform_stats_reset(payload: dict):
         "reset_at": get_reset_at_iso(account_id),
         "scope": reset_scope,
         "daily_stats": fresh_stats,
-        **registry.build_ui_state(),
+        # Join counters only — do not return full UI state (would overwrite client logs).
+        "account_states": {
+            slot: {"join_stats": join_stats_for_ui(slot)}
+            for slot in reset_slots
+            if slot
+        },
+    }
+
+
+@app.post("/accounts/restore-sessions")
+async def restore_sessions():
+    """
+    Re-read Telethon .session files and rebuild account_info for every slot.
+    No OTP needed when session files are valid. Safe to call after deploy/restart.
+    """
+    info = await registry.refresh_all_info()
+    restored = [s for s, v in info.items() if v and v.get("phone")]
+    await _push_state()
+    return {
+        "success": True,
+        "restored": restored,
+        "count": len(restored),
+        "message": (
+            f"Restored {len(restored)} account(s) from session files"
+            if restored
+            else "No valid sessions found — log in with OTP for each account"
+        ),
     }
 
 
@@ -1206,12 +1232,15 @@ async def inbox_messages(
             pass
         except Exception:
             pass
-    key = str(user_id)
-    had_unread = int(
-        load_inbox(slot).get("conversations", {}).get(key, {}).get("unread_count") or 0
-    ) > 0
-    if had_unread:
-        await dm_inbox_service.mark_read(slot, user_id)
+        # Only auto-mark-read on the explicit sync path. The fast (sync=0) path
+        # is a passive preview; the front-end calls POST /inbox/{slot}/read/{user_id}
+        # once the user has actually viewed the chat.
+        key = str(user_id)
+        had_unread = int(
+            load_inbox(slot).get("conversations", {}).get(key, {}).get("unread_count") or 0
+        ) > 0
+        if had_unread:
+            await dm_inbox_service.mark_read(slot, user_id)
     return {"status": "ok", "slot": slot, "user_id": user_id, "messages": messages}
 
 
@@ -1221,12 +1250,20 @@ async def inbox_reply(slot: str, body: dict):
         return {"status": "error", "message": "Invalid slot"}
     user_id = body.get("user_id")
     text = body.get("text") or body.get("message") or ""
+    # Track who composed this outbound message: "manual" (operator typed
+    # from scratch) or "ai_approved" (operator clicked Suggest, then Send).
+    # Other values are ignored and fall back to "manual" so callers can't
+    # spoof exotic provenance.
+    sent_by_raw = (body.get("sent_by") or "manual").strip().lower()
+    sent_by = sent_by_raw if sent_by_raw in {"manual", "ai_approved"} else "manual"
     if user_id is None:
         return {"status": "error", "message": "user_id required"}
     try:
         from messaging.message_router import message_router
 
-        result = await message_router.enqueue_dm_send(slot, int(user_id), str(text), wait=True)
+        result = await message_router.enqueue_dm_send(
+            slot, int(user_id), str(text), wait=True, sent_by=sent_by,
+        )
         from services.crm_service import enrich_conversation, get_lead
 
         conv = result.get("conversation") or {}
@@ -1248,6 +1285,249 @@ async def inbox_reply(slot: str, body: dict):
             "message": result.get("message"),
             "conversation": summary,
             "lead": lead,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/ai/smart-reply/config")
+async def ai_smart_reply_get_config():
+    from core import ai_smart_reply
+    from core.ai_smart_reply_store import get_config
+
+    return {
+        "status": "ok",
+        "config": get_config(),
+        "health": ai_smart_reply.health(),
+    }
+
+
+@app.post("/ai/smart-reply/config")
+async def ai_smart_reply_update_config(body: dict):
+    from core import ai_smart_reply
+    from core.ai_smart_reply_store import update_config
+
+    patch = {k: v for k, v in (body or {}).items() if v is not None}
+    cfg = update_config(**patch)
+    return {
+        "status": "ok",
+        "config": cfg,
+        "health": ai_smart_reply.health(),
+    }
+
+
+@app.post("/ai/smart-reply/leads/{slot}/{user_id}/toggle")
+async def ai_smart_reply_lead_toggle(slot: str, user_id: int, body: dict):
+    """Enable / disable AI auto-reply for a single lead, or reset its stage."""
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from core import ai_smart_reply
+    from core.ai_smart_reply_store import (
+        STAGE_GREETING,
+        get_lead_state,
+        update_lead_state,
+    )
+
+    if "enabled" in (body or {}):
+        enabled = bool(body.get("enabled"))
+        if enabled:
+            state = ai_smart_reply.enable_for_lead(slot, int(user_id))
+        else:
+            state = ai_smart_reply.disable_for_lead(slot, int(user_id), reason="ui_toggle")
+        return {"status": "ok", "lead_state": state}
+
+    if body.get("reset_stage"):
+        state = update_lead_state(slot, int(user_id), stage=STAGE_GREETING, qualification={}, escalated=False)
+        return {"status": "ok", "lead_state": state}
+
+    return {"status": "ok", "lead_state": get_lead_state(slot, int(user_id))}
+
+
+@app.get("/ai/smart-reply/leads/{slot}/{user_id}")
+async def ai_smart_reply_lead_state(slot: str, user_id: int):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from core.ai_smart_reply_store import get_lead_state
+
+    return {"status": "ok", "lead_state": get_lead_state(slot, int(user_id))}
+
+
+@app.post("/ai/smart-reply/assess")
+async def ai_smart_reply_assess():
+    """Run Karthik through the knowledge assessment battery and persist
+    the resulting scorecard.
+
+    Heavy-ish operation: it issues ~8 LLM calls. Run when the operator
+    edits the business prompt or wants to re-verify Karthik. Returns
+    the same scorecard payload that's persisted under
+    config.last_assessment.
+    """
+    from core import ai_assessment
+    from core.ai_smart_reply_store import get_config, save_assessment
+
+    cfg = get_config()
+    try:
+        result = await ai_assessment.run_assessment(cfg)
+    except Exception as e:
+        return {"status": "error", "message": f"Assessment failed: {e}"}
+
+    if result.get("status") == "ok":
+        save_assessment(result)
+    return result
+
+
+@app.get("/ai/smart-reply/assessment")
+async def ai_smart_reply_get_assessment():
+    """Return the last persisted assessment scorecard plus the current
+    gate state (`approved`/`override`/`blocked`) so the UI can render
+    the right banner without doing the policy math itself."""
+    from core.ai_smart_reply_store import get_config, is_assessment_approved
+
+    cfg = get_config()
+    last = cfg.get("last_assessment")
+    return {
+        "status":              "ok",
+        "approved":            is_assessment_approved(),
+        "require_assessment":  cfg.get("require_assessment", True),
+        "manual_approval_at":  cfg.get("manual_approval_at"),
+        "last_assessment":     last,
+    }
+
+
+@app.post("/ai/smart-reply/manual-approval")
+async def ai_smart_reply_set_manual_approval(body: dict):
+    """Operator override. `approved=true` lets AI suggestions run even
+    when the last assessment was inconclusive. `approved=false` revokes
+    the override and re-engages the gate."""
+    from core.ai_smart_reply_store import is_assessment_approved, set_manual_approval
+
+    approved = bool(body.get("approved"))
+    cfg = set_manual_approval(approved=approved)
+    return {
+        "status":             "ok",
+        "approved":           is_assessment_approved(),
+        "manual_approval_at": cfg.get("manual_approval_at"),
+    }
+
+
+@app.post("/inbox/{slot}/ai-reply")
+@app.post("/inbox/{slot}/ai-suggestion")
+async def inbox_ai_suggestion(slot: str, body: dict):
+    """Generate an AI draft reply for the latest inbound message — but DO
+    NOT send it. The frontend fills the reply composer with the draft so
+    the operator can review, edit, and click Send themselves.
+
+    Both `/ai-reply` and `/ai-suggestion` route here; `/ai-reply` is kept
+    as an alias so older clients keep working — they too will now only
+    get a suggestion back, never an automatic send.
+
+    Response shape:
+        {
+          "status": "ok",
+          "text":   "<draft>",
+          "stage":  "...",
+          "confidence": 0.82,
+          "ai": True
+        }
+    """
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    user_id = body.get("user_id")
+    if user_id is None:
+        return {"status": "error", "message": "user_id required"}
+    from core import ai_smart_reply
+    from core.dm_store import load_inbox
+
+    conv = (load_inbox(slot).get("conversations") or {}).get(str(int(user_id))) or {}
+    msgs = list(conv.get("messages") or [])
+    last_in = next((m for m in reversed(msgs) if m.get("direction") == "in"), None)
+    if not last_in:
+        return {"status": "error", "message": "No inbound message in this chat"}
+    if not ai_smart_reply.is_enabled():
+        return {"status": "error", "message": "AI smart-reply is disabled or API key missing"}
+
+    res = await ai_smart_reply.generate_suggestion(
+        slot,
+        int(user_id),
+        user_message_id=last_in.get("id"),
+        user_text=last_in.get("text") or "",
+    )
+    if not res.get("ok"):
+        return {"status": "error", "message": res.get("error") or res.get("reason") or "ai_failed", **res}
+    return {"status": "ok", **res}
+
+
+@app.post("/inbox/{slot}/send-location")
+async def inbox_send_location(slot: str, body: dict):
+    """Send a geo location pin to a DM recipient from the given account slot.
+
+    Body: { user_id: int, latitude: float, longitude: float, accuracy?: float }
+    """
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    user_id = body.get("user_id")
+    latitude = body.get("latitude")
+    longitude = body.get("longitude")
+    accuracy = body.get("accuracy")
+    if user_id is None:
+        return {"status": "error", "message": "user_id required"}
+    if latitude is None or longitude is None:
+        return {"status": "error", "message": "latitude and longitude required"}
+    try:
+        from messaging.message_router import message_router
+
+        result = await message_router.enqueue_dm_send_location(
+            slot,
+            int(user_id),
+            float(latitude),
+            float(longitude),
+            accuracy=float(accuracy) if accuracy is not None else None,
+            wait=True,
+        )
+        from services.crm_service import enrich_conversation, get_lead
+
+        conv = result.get("conversation") or {}
+        uid = int(user_id)
+        summary = enrich_conversation(
+            slot,
+            {
+                "user_id": uid,
+                "username": conv.get("username") or "",
+                "name": conv.get("name") or "",
+                "last_message": conv.get("last_message") or "",
+                "last_message_at": conv.get("last_message_at"),
+                "unread_count": conv.get("unread_count") or 0,
+            },
+        )
+        lead = get_lead(slot, uid)
+        return {
+            "status": "ok",
+            "message": result.get("message"),
+            "conversation": summary,
+            "lead": lead,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.patch("/inbox/{slot}/messages/{user_id}/{message_id}")
+async def inbox_edit_message(slot: str, user_id: int, message_id: int, body: dict):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    text = body.get("text") or body.get("message") or ""
+    if not str(text).strip():
+        return {"status": "error", "message": "text required"}
+    try:
+        from services import dm_inbox_service
+
+        result = await dm_inbox_service.run_dm_edit(
+            slot, int(user_id), int(message_id), str(text),
+        )
+        return {
+            "status": "ok",
+            "message": result.get("message"),
+            "conversation": result.get("conversation"),
+            "unchanged": bool(result.get("unchanged")),
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -1470,6 +1750,260 @@ async def login_status():
                 "slot": slot,
             }
     return {"logged_in": False}
+
+
+# ── Candidates / Profiles tracker ───────────────────────────────────────────
+# Replaces the old "Profiles list update Form" Google Sheet. All CRUD happens
+# from the dashboard's Candidates tab and persists to data/candidates.json.
+
+@app.get("/candidates")
+async def candidates_list(
+    stage: str | None = Query(default=None),
+    task: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    month: str | None = Query(default=None),
+    pending_only: bool = Query(default=False),
+    reference: str | None = Query(default=None),
+):
+    from features import candidate_store
+
+    rows = candidate_store.list_candidates(
+        stage=stage, task=task, search=search, month=month,
+        pending_only=pending_only, reference=reference,
+    )
+    return {"status": "ok", "candidates": rows, "count": len(rows)}
+
+
+@app.get("/candidates/stats")
+async def candidates_stats(month: str | None = Query(default=None)):
+    from features import candidate_store
+
+    return {"status": "ok", "stats": candidate_store.stats(month=month)}
+
+
+@app.get("/candidates/{cid}")
+async def candidates_get(cid: str):
+    from features import candidate_store
+
+    row = candidate_store.get_candidate(cid)
+    if not row:
+        return {"status": "error", "message": "Candidate not found"}
+    return {"status": "ok", "candidate": row}
+
+
+@app.post("/candidates")
+async def candidates_create(body: dict):
+    from features import candidate_store
+
+    if not (body.get("name") or "").strip():
+        return {"status": "error", "message": "Name is required"}
+    row = candidate_store.create_candidate(body)
+    return {"status": "ok", "candidate": row}
+
+
+@app.patch("/candidates/{cid}")
+async def candidates_update(cid: str, body: dict):
+    from features import candidate_store
+
+    row = candidate_store.update_candidate(cid, body or {})
+    if not row:
+        return {"status": "error", "message": "Candidate not found"}
+    return {"status": "ok", "candidate": row}
+
+
+@app.delete("/candidates/{cid}")
+async def candidates_delete(cid: str):
+    from features import candidate_store
+
+    ok = candidate_store.delete_candidate(cid)
+    if not ok:
+        return {"status": "error", "message": "Candidate not found"}
+    return {"status": "ok"}
+
+
+# ── Payment proofs ──────────────────────────────────────────────────────────────
+
+@app.post("/candidates/{cid}/proofs")
+async def candidates_upload_proof(
+    cid: str,
+    file: UploadFile = File(...),
+    note: str = Form(default=""),
+):
+    """Attach a payment screenshot (image) to a candidate.
+
+    Multipart form fields:
+      - `file`  (required): the screenshot itself.
+      - `note`  (optional): a short caption (e.g. "₹10k UPI · 26 May").
+    """
+    from features import candidate_store
+
+    try:
+        raw = await file.read()
+        entry = candidate_store.add_proof(
+            cid,
+            data=raw,
+            original_name=file.filename or "",
+            mime_type=file.content_type or "",
+            note=note or "",
+        )
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    if entry is None:
+        return {"status": "error", "message": "Candidate not found"}
+    row = candidate_store.get_candidate(cid)
+    return {"status": "ok", "proof": entry, "candidate": row}
+
+
+@app.get("/candidates/{cid}/proofs/{pid}")
+async def candidates_serve_proof(cid: str, pid: str):
+    from features import candidate_store
+
+    hit = candidate_store.get_proof(cid, pid)
+    if hit is None:
+        return {"status": "error", "message": "Proof not found"}
+    path, entry = hit
+    return FileResponse(
+        path,
+        media_type=entry.get("mime_type") or "application/octet-stream",
+        filename=entry.get("original_name") or entry.get("filename"),
+    )
+
+
+@app.delete("/candidates/{cid}/proofs/{pid}")
+async def candidates_delete_proof(cid: str, pid: str):
+    from features import candidate_store
+
+    ok = candidate_store.delete_proof(cid, pid)
+    if not ok:
+        return {"status": "error", "message": "Proof not found"}
+    row = candidate_store.get_candidate(cid)
+    return {"status": "ok", "candidate": row}
+
+
+@app.patch("/candidates/{cid}/proofs/{pid}")
+async def candidates_update_proof_note(cid: str, pid: str, body: dict):
+    from features import candidate_store
+
+    note = (body or {}).get("note", "")
+    entry = candidate_store.update_proof_note(cid, pid, note)
+    if entry is None:
+        return {"status": "error", "message": "Proof not found"}
+    return {"status": "ok", "proof": entry}
+
+
+# ── Handler / reference expenses ────────────────────────────────────────────────
+
+@app.get("/handler-expenses")
+async def handler_expenses_list(
+    reference: str | None = Query(default=None),
+    month: str | None = Query(default=None),
+):
+    from features import handler_expenses
+
+    rows = handler_expenses.list_expenses(reference=reference, month=month)
+    total = sum(int(r.get("amount") or 0) for r in rows)
+    return {
+        "status": "ok",
+        "expenses": rows,
+        "count": len(rows),
+        "total": total,
+        "categories": handler_expenses.CATEGORY_LABELS,
+        "available_months": handler_expenses.available_months(),
+    }
+
+
+@app.post("/handler-expenses")
+async def handler_expenses_create(body: dict):
+    from features import handler_expenses
+
+    if not (body or {}).get("reference", "").strip():
+        return {"status": "error", "message": "Reference (handler name) is required"}
+    if int((body or {}).get("amount") or 0) <= 0:
+        return {"status": "error", "message": "Amount must be greater than zero"}
+    row = handler_expenses.create_expense(body or {})
+    return {"status": "ok", "expense": row}
+
+
+@app.patch("/handler-expenses/{eid}")
+async def handler_expenses_update(eid: str, body: dict):
+    from features import handler_expenses
+
+    row = handler_expenses.update_expense(eid, body or {})
+    if row is None:
+        return {"status": "error", "message": "Expense not found"}
+    return {"status": "ok", "expense": row}
+
+
+@app.delete("/handler-expenses/{eid}")
+async def handler_expenses_delete(eid: str):
+    from features import handler_expenses
+
+    ok = handler_expenses.delete_expense(eid)
+    if not ok:
+        return {"status": "error", "message": "Expense not found"}
+    return {"status": "ok"}
+
+
+@app.get("/handler-expenses/summary")
+async def handler_expenses_summary(month: str | None = Query(default=None)):
+    from features import handler_expenses
+
+    summary = handler_expenses.summary_by_handler(month=month)
+    total = sum(b["total"] for b in summary.values())
+    return {
+        "status": "ok",
+        "summary": summary,
+        "total": total,
+        "count": sum(b["count"] for b in summary.values()),
+    }
+
+
+# ── Handler base salaries (hybrid pay model) ────────────────────────────────────
+#
+# A handler can be on a fixed monthly base salary (this) PLUS their 50%
+# commission on every rupee a referred client pays (computed live from
+# the candidates table). The hybrid total is what the Handler Payouts
+# card and Top Performers chips already show.
+
+@app.get("/handler-salaries")
+async def handler_salaries_list(month: str | None = Query(default=None)):
+    from features import handler_salaries
+    rows = handler_salaries.list_salaries()
+    by_handler = handler_salaries.salary_owed_by_handler(month=month)
+    return {
+        "status": "ok",
+        "salaries": rows,
+        "by_handler": by_handler,
+        "total_for_view": handler_salaries.total_salary_owed(month=month),
+        "month": month or "all",
+    }
+
+
+@app.post("/handler-salaries")
+async def handler_salaries_upsert(body: dict):
+    """Create or update one handler's monthly salary.
+
+    Body: { reference, monthly_salary, active_from?, active_until? }
+    Passing monthly_salary <= 0 clears the entry (same as DELETE).
+    """
+    from features import handler_salaries
+    try:
+        row = handler_salaries.set_salary(
+            reference     = body.get("reference") or "",
+            monthly_salary= body.get("monthly_salary") or 0,
+            active_from   = body.get("active_from"),
+            active_until  = body.get("active_until"),
+        )
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    return {"status": "ok", "salary": row}
+
+
+@app.delete("/handler-salaries/{reference}")
+async def handler_salaries_delete(reference: str):
+    from features import handler_salaries
+    removed = handler_salaries.delete_salary(reference)
+    return {"status": "ok" if removed else "not_found", "reference": reference}
 
 
 # ── Frontend (production) ───────────────────────────────────────────────────────

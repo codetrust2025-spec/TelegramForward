@@ -25,7 +25,7 @@ import {
 } from './utils/accountUi.js'
 import { useConfirm } from './context/ConfirmContext.jsx'
 import { InboxPanel } from './components/InboxPanel.jsx'
-import { SoundQuietHoursToggle } from './components/SoundQuietHoursToggle.jsx'
+import { CandidatesPanel } from './components/CandidatesPanel.jsx'
 import {
   playNewMessageSound,
   unlockNotificationSound,
@@ -67,7 +67,13 @@ function mergeInboxWs(prev, data) {
     next.slots[slot] = { slot, conversations: [], updated_at: null }
   }
   const outboundEvents = new Set(['reply_sent', 'outgoing_message'])
-  if ((data.event === 'new_message' || outboundEvents.has(data.event)) && data.conversation) {
+  const conversationPatchEvents = new Set([
+    'new_message',
+    'reply_sent',
+    'outgoing_message',
+    'message_edited',  // last_message preview / edited flag may have changed
+  ])
+  if (conversationPatchEvents.has(data.event) && data.conversation) {
     const convs = [...(next.slots[slot].conversations || [])]
     next.slots[slot] = {
       ...next.slots[slot],
@@ -103,7 +109,7 @@ export default function App() {
   const [subscriptionSlots, setSubscriptionSlots] = useState([])
   const [connected, setConnected] = useState(false)
   const [activeTab, setActiveTab] = useState('logs')
-  const [logScope, setLogScope] = useState('account') // account | all
+  const [logScope, setLogScope] = useState('all') // account | all — default to all accounts so the operator sees the full fleet on open
   const [showGroups, setShowGroups] = useState(false)
   const [groups, setGroups] = useState([])
   const [groupsListMeta, setGroupsListMeta] = useState(null)
@@ -118,7 +124,7 @@ export default function App() {
   const [accountActionLoading, setAccountActionLoading] = useState(null) // account1:start
   const [switchingAccount, setSwitchingAccount] = useState(null)
   const [overviewScope, setOverviewScope] = useState('fleet')
-  const [mainView, setMainView] = useState('dashboard') // dashboard | inbox
+  const [mainView, setMainView] = useState('dashboard') // dashboard | inbox | candidates | logs
   const [inboxState, setInboxState] = useState({ slots: {} })
   const [crmState, setCrmState] = useState({
     leads: {},
@@ -128,7 +134,10 @@ export default function App() {
     call_reminders: [],
     past_due_calls: [],
   })
-  const [inboxLiveEvent, setInboxLiveEvent] = useState(null)
+  // Queue-based live events so rapid back-to-back WS messages aren't dropped
+  // when React batches state updates. InboxPanel drains the queue on each tick.
+  const inboxLiveQueueRef = useRef([])
+  const [inboxLiveTick, setInboxLiveTick] = useState(0)
   const [incomingCall, setIncomingCall] = useState(null)
   useEffect(() => {
     switchingAccountRef.current = switchingAccount
@@ -138,28 +147,47 @@ export default function App() {
   const [exportingKind, setExportingKind] = useState(null)
   const logsEndRef = useRef(null)  // kept for compatibility but unused
   const wsRef = useRef(null)
+  const wsBackoffRef = useRef(1500)
   const switchingAccountRef = useRef(null)
   const { confirm } = useConfirm()
   const activeAcctState = state.account_states?.[state.active_account]
   const allAccountLogs = useMemo(() => {
     const states = state.account_states || {}
-    return Object.entries(states)
-      .flatMap(([slot, acctState]) => (
-        (acctState?.logs ?? []).map(entry => ({
+    const merged = []
+    let seq = 0
+    for (const [slot, acctState] of Object.entries(states)) {
+      for (const entry of acctState?.logs || []) {
+        // Preserve original insertion order via `__seq` so entries WITHOUT a
+        // timestamp (or with an unparseable one) don't all collapse to epoch=0
+        // at the top of the sort. Stable secondary sort by sequence.
+        merged.push({
           ...entry,
           account_id: entry.account_id || slot,
-        }))
-      ))
-      .sort((a, b) => {
-        const at = Date.parse(a.timestamp || '') || 0
-        const bt = Date.parse(b.timestamp || '') || 0
-        return at - bt
-      })
+          __seq: seq++,
+        })
+      }
+    }
+    merged.sort((a, b) => {
+      const at = Date.parse(a.timestamp || '')
+      const bt = Date.parse(b.timestamp || '')
+      const ai = Number.isFinite(at) ? at : null
+      const bi = Number.isFinite(bt) ? bt : null
+      if (ai != null && bi != null && ai !== bi) return ai - bi
+      if (ai == null && bi != null) return 1   // unstamped → end
+      if (ai != null && bi == null) return -1
+      return a.__seq - b.__seq                  // stable
+    })
+    return merged
   }, [state.account_states])
   const accountLogs = activeAcctState?.logs ?? []
   const displayLogs = logScope === 'all' ? allAccountLogs : accountLogs
-  // Newest log lines at top, older below
-  const displayLogsNewestFirst = [...displayLogs].reverse()
+  // Newest log lines at top, older below. Memoized so we don't reallocate the
+  // list on every unrelated render (avoids forcing the LogPanel to diff 500
+  // bubbles on each WS tick).
+  const displayLogsNewestFirst = useMemo(
+    () => [...displayLogs].reverse(),
+    [displayLogs],
+  )
 
   const fetchInbox = React.useCallback(() => {
     fetch(`${API}/inbox?sync=0&t=${Date.now()}`, { cache: 'no-store' })
@@ -336,13 +364,23 @@ export default function App() {
     wsRef.current = ws
     ws.onopen = () => {
       setConnected(true)
+      wsBackoffRef.current = 1500  // reset backoff on healthy connect
       fetch(`${API}/state?t=${Date.now()}`, { cache: 'no-store' })
         .then(r => (r.ok ? r.json() : null))
         .then(data => { if (data) setState(prev => ({ ...prev, ...data })) })
         .catch(() => {})
       fetchInbox()
+      // Notify the inbox panel so it can re-load the currently open chat.
+      window.dispatchEvent(new CustomEvent('ws-reconnected'))
     }
-    ws.onclose = () => { setConnected(false); setTimeout(connect, 3000) }
+    ws.onclose = () => {
+      setConnected(false)
+      // Exponential backoff with jitter (cap 30s) so a long outage doesn't
+      // hammer the server. Reset to 1.5s as soon as a connect succeeds.
+      const wait = wsBackoffRef.current
+      wsBackoffRef.current = Math.min(30000, Math.floor(wait * 1.7 + Math.random() * 500))
+      setTimeout(connect, wait)
+    }
     ws.onerror = () => ws.close()
     ws.onmessage = (e) => {
       let data
@@ -420,13 +458,18 @@ export default function App() {
           })
         }
         if (data.message || data.event === 'message_read' || data.event === 'message_status') {
-          setInboxLiveEvent({
+          inboxLiveQueueRef.current.push({
             slot: data.slot,
             event: data.event,
             message: data.message,
             conversation: data.conversation,
             ts: Date.now(),
           })
+          // Cap queue at 200 events to bound memory if InboxPanel is unmounted.
+          if (inboxLiveQueueRef.current.length > 200) {
+            inboxLiveQueueRef.current.splice(0, inboxLiveQueueRef.current.length - 200)
+          }
+          setInboxLiveTick(t => t + 1)
         }
       }
       if (data.type === 'crm') {
@@ -747,6 +790,16 @@ export default function App() {
 
   async function clearLogs() {
     const slot = state.active_account || 'account1'
+    // Destructive — confirm so a stray click doesn't wipe a long activity
+    // history that the operator may still be cross-referencing.
+    const ok = await confirm({
+      title: 'Clear logs?',
+      message: `All log lines for ${accountLabel(slot)} will be removed from the dashboard. Success / Fail counters are not affected.`,
+      variant: 'danger',
+      confirmLabel: 'Clear logs',
+      cancelLabel: 'Cancel',
+    })
+    if (!ok) return
     setClearingLogs(true)
     try {
       const res = await fetch(`${API}/account/${slot}/clear-logs`, { method: 'POST' })
@@ -968,8 +1021,14 @@ export default function App() {
   const displaySkippedOther = activeAcctState?.skipped_other ?? 0
   const displaySuccessList = activeAcctState?.success_list ?? state.success_list
   const displayFailedList = activeAcctState?.failed_list ?? state.failed_list
-  const displaySuccessNewestFirst = [...displaySuccessList].reverse()
-  const displayFailedNewestFirst = [...displayFailedList].reverse()
+  const displaySuccessNewestFirst = useMemo(
+    () => [...(displaySuccessList || [])].reverse(),
+    [displaySuccessList],
+  )
+  const displayFailedNewestFirst = useMemo(
+    () => [...(displayFailedList || [])].reverse(),
+    [displayFailedList],
+  )
 
   useEffect(() => {
     const el = logsContainerRef.current
@@ -993,7 +1052,7 @@ export default function App() {
   const showBootOverlay = initialLoading && !connected
 
   return (
-    <div className={`app-shell${showBootOverlay ? ' app-shell--booting' : ''}`}>
+    <div className={`app-shell app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}>
       {showBootOverlay && (
         <div className="app-boot-overlay" role="status" aria-live="polite">
           <Spinner size={32} />
@@ -1014,10 +1073,6 @@ export default function App() {
               )}
             </p>
           </div>
-        </div>
-
-        <div className="app-header-center">
-          <SoundQuietHoursToggle />
         </div>
 
         <div className="app-header-right">
@@ -1049,6 +1104,24 @@ export default function App() {
                 </span>
               )}
             </button>
+            <button
+              type="button"
+              className={`app-view-nav-btn${mainView === 'candidates' ? ' app-view-nav-btn--active' : ''}`}
+              onClick={() => { setMainView('candidates') }}
+              aria-label="Candidates tracker"
+              title="Candidates tracker"
+            >
+              Candidates
+            </button>
+            <button
+              type="button"
+              className={`app-view-nav-btn${mainView === 'logs' ? ' app-view-nav-btn--active' : ''}`}
+              onClick={() => { setMainView('logs') }}
+              aria-label="Live activity logs"
+              title="Live activity logs"
+            >
+              Logs
+            </button>
           </nav>
           <GlobalActions
             connected={connected}
@@ -1068,12 +1141,79 @@ export default function App() {
       {mainView === 'inbox' ? (
         <InboxPanel
           inboxState={inboxState}
-          inboxLiveEvent={inboxLiveEvent}
+          inboxLiveQueueRef={inboxLiveQueueRef}
+          inboxLiveTick={inboxLiveTick}
           accountSlots={accountSlots}
           crmState={crmState}
           onInboxPatch={fetchInbox}
           onCrmUpdate={handleCrmUpdate}
         />
+      ) : mainView === 'candidates' ? (
+        <CandidatesPanel />
+      ) : mainView === 'logs' ? (
+        <div className="logs-fullpage">
+          <LogPanel
+            activeTab={activeTab}
+            activeAccount={state.active_account}
+            accountSlots={state.account_slots}
+            logScope={logScope}
+            onLogScopeChange={setLogScope}
+            displayLogs={displayLogs}
+            displaySuccessList={displaySuccessList}
+            displayFailedList={displayFailedList}
+            logsContainerRef={logsContainerRef}
+            onScroll={handleLogsScroll}
+            connected={connected}
+            toolbarActions={(
+              <LogToolbarActions
+                activeTab={activeTab}
+                displayLogs={displayLogs}
+                displayLogsNewestFirst={displayLogsNewestFirst}
+                displaySuccessNewestFirst={displaySuccessNewestFirst}
+                displayFailedNewestFirst={displayFailedNewestFirst}
+                clearingLogs={clearingLogs}
+                copied={copied}
+                clearDisabled={logScope === 'all'}
+                clearTitle={
+                  logScope === 'all'
+                    ? 'Switch to Account logs to clear the selected account'
+                    : 'Clear logs for selected account'
+                }
+                onClear={clearLogs}
+                onCopy={() => {
+                  let text = ''
+                  if (activeTab === 'logs') {
+                    text = displayLogsNewestFirst.map(e => {
+                      const line = (e.summary || e.fields?.detail || e.msg || '').trim()
+                      const lvl = (e.level || 'info').toUpperCase().padEnd(7)
+                      const acct = e.account_id ? `[${e.account_id}] ` : ''
+                      return `${formatLogTime(e.timestamp || e.time)}  ${lvl} ${acct}${line}`
+                    }).join('\n')
+                  } else if (activeTab === 'success') {
+                    text = displaySuccessNewestFirst.join('\n')
+                  } else {
+                    text = displayFailedNewestFirst.map(e => `${e.group} — ${e.reason}`).join('\n')
+                  }
+                  navigator.clipboard.writeText(text).then(() => {
+                    setCopied(true)
+                    setTimeout(() => setCopied(false), 2000)
+                  }).catch(() => {
+                    alert('Copy failed — clipboard access blocked by browser.')
+                  })
+                }}
+              />
+            )}
+            activeTabControl={(
+              <LogsToolbarTabs
+                activeTab={activeTab}
+                setActiveTab={setActiveTab}
+                logCount={displayLogs.length}
+                okCount={displaySuccessList.length}
+                failCount={displayFailedList.length}
+              />
+            )}
+          />
+        </div>
       ) : (
       <ResizableDashboardLayout
         left={(
@@ -1094,6 +1234,7 @@ export default function App() {
             refreshingJoinedSlot={refreshingJoinedSlot}
             accountActionLoading={accountActionLoading}
             switchingAccount={switchingAccount}
+            onMessageSaved={refreshAccounts}
           />
           <MessageEditor
             slot={state.active_account}
@@ -1104,6 +1245,12 @@ export default function App() {
           />
           <GroupsUpload
             currentTotal={state.total || 0}
+            fleetSliceTotal={fleet.fleetSliceTotal ?? 0}
+            activeAccountSlice={
+              state.active_account
+                ? (state.account_states?.[state.active_account]?.my_groups?.length ?? 0)
+                : null
+            }
             onUpdated={refreshAccounts}
             listSummary={groupsListMeta ? {
               active: groupsListMeta.active_count,
@@ -1144,12 +1291,26 @@ export default function App() {
               variant: 'warn',
             })}
             onDailyStatsUpdate={(stats, full) => {
-              if (full) {
-                const { type, status, daily_stats: _ds, ...rest } = full
-                setState(prev => ({ ...prev, ...rest, daily_stats: stats || full.daily_stats }))
-              } else {
-                setState(prev => ({ ...prev, daily_stats: stats }))
-              }
+              const daily = stats || full?.daily_stats
+              if (!daily) return
+              setState(prev => {
+                const next = { ...prev, daily_stats: daily }
+                // Stats reset must not replace worker logs / cycle UI from a full state snapshot.
+                const incoming = full?.account_states
+                if (incoming && prev.account_states) {
+                  const account_states = { ...prev.account_states }
+                  for (const slot of Object.keys(account_states)) {
+                    const patch = incoming[slot]
+                    if (!patch?.join_stats) continue
+                    account_states[slot] = {
+                      ...account_states[slot],
+                      join_stats: patch.join_stats,
+                    }
+                  }
+                  next.account_states = account_states
+                }
+                return next
+              })
             }}
             activeAccount={state.active_account}
             activeAcctState={activeAcctState}
@@ -1216,68 +1377,7 @@ export default function App() {
           />
         </DashboardColumn>
         )}
-        right={(
-        <DashboardColumn
-          id="right"
-          title="Live activity"
-          subtitle={logScope === 'all' ? 'All account logs' : (state.active_account ? accountLabel(state.active_account) : 'Select an account')}
-          flush
-        >
-          <LogPanel
-            activeTab={activeTab}
-            activeAccount={state.active_account}
-            accountSlots={state.account_slots}
-            logScope={logScope}
-            onLogScopeChange={setLogScope}
-            displayLogs={displayLogs}
-            displaySuccessList={displaySuccessList}
-            displayFailedList={displayFailedList}
-            logsContainerRef={logsContainerRef}
-            onScroll={handleLogsScroll}
-            toolbarActions={(
-              <LogToolbarActions
-                activeTab={activeTab}
-                displayLogs={displayLogs}
-                displayLogsNewestFirst={displayLogsNewestFirst}
-                displaySuccessNewestFirst={displaySuccessNewestFirst}
-                displayFailedNewestFirst={displayFailedNewestFirst}
-                clearingLogs={clearingLogs}
-                copied={copied}
-                clearDisabled={logScope === 'all'}
-                clearTitle={
-                  logScope === 'all'
-                    ? 'Switch to Account logs to clear the selected account'
-                    : 'Clear logs for selected account'
-                }
-                onClear={clearLogs}
-                onCopy={() => {
-                  let text = ''
-                  if (activeTab === 'logs') {
-                    text = displayLogsNewestFirst.map(e => `${formatLogTime(e.time)}  ${e.msg}`).join('\n')
-                  } else if (activeTab === 'success') {
-                    text = displaySuccessNewestFirst.join('\n')
-                  } else {
-                    text = displayFailedNewestFirst.map(e => `${e.group} — ${e.reason}`).join('\n')
-                  }
-                  navigator.clipboard.writeText(text).then(() => {
-                    setCopied(true)
-                    setTimeout(() => setCopied(false), 2000)
-                  })
-                }}
-              />
-            )}
-            activeTabControl={(
-              <LogsToolbarTabs
-                activeTab={activeTab}
-                setActiveTab={setActiveTab}
-                logCount={displayLogs.length}
-                okCount={displaySuccessList.length}
-                failCount={displayFailedList.length}
-              />
-            )}
-          />
-        </DashboardColumn>
-        )}
+        right={null}
       />
       )}
 

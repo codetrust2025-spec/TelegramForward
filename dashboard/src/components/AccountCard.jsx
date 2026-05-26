@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import { API, COUNTRY_CODES, SAVED_PHONES } from '../config.js'
 import { ButtonContent, Spinner } from '../Loader.jsx'
 import { StatusBadge } from './StatusBadge.jsx'
+import { MessageEditor } from './MessageEditor.jsx'
 import {
   accountLabel,
   accountCardTitle,
@@ -88,10 +89,16 @@ export function AccountMiniCard({
   const slotLabel = accountLabel(slot)
   const displayName = loggedIn && tgName ? tgName : (loggedIn ? slotLabel : 'Empty slot')
   const isSub = isSubscription || isSubscriptionAccount(slot, null, info)
+  const membership = formatJoinedStats(info)
+  const membershipStale = isMembershipStale(info)
 
   const title = isSub
     ? `${accountCardTitle(slot, info)} · Subscription account`
     : accountCardTitle(slot, info)
+
+  const groupsTooltip = membership
+    ? formatTelegramMembershipTooltip(membership)
+    : undefined
 
   return (
     <button
@@ -101,7 +108,7 @@ export function AccountMiniCard({
       disabled={switching}
       title={title}
       aria-current={selected ? 'true' : undefined}
-      aria-label={`${slotLabel}, ${statusLabel}${tgName ? `, ${tgName}` : ''}`}
+      aria-label={`${slotLabel}, ${statusLabel}${tgName ? `, ${tgName}` : ''}${membership ? `, ${membership.total} joined groups` : ''}`}
     >
       <span className="account-mini-top">
         <span className="account-mini-slot">{slotLabel}</span>
@@ -115,6 +122,17 @@ export function AccountMiniCard({
 
       {loggedIn && tgUser && (
         <span className="account-mini-user">{tgUser}</span>
+      )}
+
+      {loggedIn && membership && (
+        <span
+          className={`account-mini-groups${membershipStale ? ' account-mini-groups--stale' : ''}`}
+          title={groupsTooltip}
+        >
+          <span className="account-mini-groups-icon" aria-hidden>👥</span>
+          {membership.total} groups
+          {membershipStale && <span className="account-mini-groups-stale-dot" aria-hidden>·</span>}
+        </span>
       )}
 
       {!loggedIn && (
@@ -143,6 +161,8 @@ export function AccountCard({
   switchingAccount,
   statsWindow: _statsWindow,
   sentInWindow: _sentInWindow,
+  customMessage = '',
+  onMessageSaved,
 }) {
   const [step, setStep] = useState('idle')
   const [countryCode, setCountryCode] = useState('+91')
@@ -373,10 +393,19 @@ export function AccountCard({
 
           <div className="acct-v3-body" onClick={e => e.stopPropagation()}>
             <MetricGrid columns={2} className="acct-v3-grid">
+              {cycleTotal > 0 ? (
+                <MetricBlock
+                  className="acct-v3-cell"
+                  label="Send slice"
+                  value={cycleTotal}
+                  tone="neutral"
+                  title="Groups assigned to this account for posting (share of master list, minus dead names). Cycle bar uses this count."
+                />
+              ) : null}
               {membership != null || refreshingJoined ? (
                 <MetricBlock
                   className="acct-v3-cell"
-                  label="Groups"
+                  label="On Telegram"
                   value={refreshingJoined ? '…' : membership.total}
                   tone={membershipStale ? 'warn' : 'neutral'}
                   title={membershipTooltip}
@@ -480,6 +509,15 @@ export function AccountCard({
               ]}
             />
           </footer>
+
+          {/* ── Per-account message editor ── */}
+          <div className="acct-v3-message-editor" onClick={e => e.stopPropagation()}>
+            <MessageEditor
+              slot={slot}
+              customMessage={customMessage}
+              onSaved={onMessageSaved || (() => {})}
+            />
+          </div>
         </>
       ) : step === 'idle' ? (
         <div className="account-card-login">
