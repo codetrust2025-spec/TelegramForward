@@ -22,6 +22,7 @@ export function AccountPanel({
   refreshingJoinedSlot,
   accountActionLoading,
   switchingAccount,
+  onMessageSaved,
 }) {
   const accountInfo = state.account_info || {}
   const allSlots = getAccountSlots(state, configuredSlots)
@@ -111,6 +112,8 @@ export function AccountPanel({
           accountStatus={state.account_status?.[visibleActive]}
           statsWindow={state.daily_stats?.window}
           sentInWindow={state.daily_stats?.per_account?.[visibleActive]?.forwarded}
+          customMessage={state.account_messages?.[visibleActive] ?? state.custom_message ?? ''}
+          onMessageSaved={onMessageSaved}
         />
       )}
     </section>
