@@ -18,6 +18,7 @@ LOCAL_ROOT = repo_root()
 
 FILES = [
     "server.py",
+    "services/account_manager.py",
     "core/dashboard_auth.py",
     "core/dashboard_auth_api.py",
     "core/dashboard_access.py",

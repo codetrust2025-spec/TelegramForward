@@ -503,8 +503,15 @@ async def _perform_stats_reset(payload: dict):
         }
 
     invalidate_cache(account_id)
+    registry.reset_stats_display_counters(account_id)
     fresh_stats = compute_daily_stats(list(ACCOUNTS))
     reset_scope = account_id or "global"
+    ui_after_reset = registry.build_ui_state()
+    reset_account_states = {
+        slot: ui_after_reset["account_states"][slot]
+        for slot in reset_slots
+        if slot in ui_after_reset.get("account_states", {})
+    }
 
     await event_bus.publish(
         EventType.STATS_RESET,
@@ -515,6 +522,7 @@ async def _perform_stats_reset(payload: dict):
             "account_id": account_id,
             "scope": "account" if account_id else "global",
             "daily_stats": fresh_stats,
+            "account_states": reset_account_states,
         },
         push_state=True,
         broadcast_ws=True,
@@ -529,12 +537,7 @@ async def _perform_stats_reset(payload: dict):
         "reset_at": get_reset_at_iso(account_id),
         "scope": reset_scope,
         "daily_stats": fresh_stats,
-        # Join counters only — do not return full UI state (would overwrite client logs).
-        "account_states": {
-            slot: {"join_stats": join_stats_for_ui(slot)}
-            for slot in reset_slots
-            if slot
-        },
+        "account_states": reset_account_states,
     }
 
 

@@ -538,6 +538,8 @@ class AccountManager:
             st.forwarding_current_group = ""
             st.forwarding_batch = 0
             st.forwarding_batch_total = 0
+            st.forwarding_failure_counts = {}
+            st.cycle_metrics = None
             pm = load_posting_mode(slot)
             pm.forwarding.tick_pending_keys = []
             pm.forwarding.tick_group_offset = 0

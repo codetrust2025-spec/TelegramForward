@@ -1766,13 +1766,9 @@ export default function App() {
                 const incoming = full?.account_states
                 if (incoming && prev.account_states) {
                   const account_states = { ...prev.account_states }
-                  for (const slot of Object.keys(account_states)) {
-                    const patch = incoming[slot]
-                    if (!patch?.join_stats) continue
-                    account_states[slot] = {
-                      ...account_states[slot],
-                      join_stats: patch.join_stats,
-                    }
+                  for (const [slot, patch] of Object.entries(incoming)) {
+                    if (!patch || typeof patch !== 'object') continue
+                    account_states[slot] = { ...(account_states[slot] || {}), ...patch }
                   }
                   next.account_states = account_states
                 }
@@ -1990,13 +1986,9 @@ export default function App() {
                 const incoming = full?.account_states
                 if (incoming && prev.account_states) {
                   const account_states = { ...prev.account_states }
-                  for (const slot of Object.keys(account_states)) {
-                    const patch = incoming[slot]
-                    if (!patch?.join_stats) continue
-                    account_states[slot] = {
-                      ...account_states[slot],
-                      join_stats: patch.join_stats,
-                    }
+                  for (const [slot, patch] of Object.entries(incoming)) {
+                    if (!patch || typeof patch !== 'object') continue
+                    account_states[slot] = { ...(account_states[slot] || {}), ...patch }
                   }
                   next.account_states = account_states
                 }
@@ -2493,13 +2485,9 @@ export default function App() {
                 const incoming = full?.account_states
                 if (incoming && prev.account_states) {
                   const account_states = { ...prev.account_states }
-                  for (const slot of Object.keys(account_states)) {
-                    const patch = incoming[slot]
-                    if (!patch?.join_stats) continue
-                    account_states[slot] = {
-                      ...account_states[slot],
-                      join_stats: patch.join_stats,
-                    }
+                  for (const [slot, patch] of Object.entries(incoming)) {
+                    if (!patch || typeof patch !== 'object') continue
+                    account_states[slot] = { ...(account_states[slot] || {}), ...patch }
                   }
                   next.account_states = account_states
                 }
