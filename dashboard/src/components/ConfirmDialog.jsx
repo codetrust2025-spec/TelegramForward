@@ -11,12 +11,15 @@ export function ConfirmDialog({
   title,
   message,
   details = [],
+  cleared = [],
+  kept = [],
   variant = 'default',
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   onConfirm,
   onCancel,
 }) {
+  const clearedItems = cleared.length ? cleared : details
   const cancelRef = useRef(null)
 
   useEffect(() => {
@@ -49,12 +52,29 @@ export function ConfirmDialog({
             {message}
           </p>
         )}
-        {details.length > 0 && (
-          <ul className="confirm-card-details">
-            {details.map((line, i) => (
-              <li key={i}>{line}</li>
-            ))}
-          </ul>
+        {clearedItems.length > 0 && (
+          <div className="confirm-card-section">
+            <p className="confirm-card-section-title confirm-card-section-title--cleared">
+              Will be reset to zero
+            </p>
+            <ul className="confirm-card-details confirm-card-details--cleared">
+              {clearedItems.map((line, i) => (
+                <li key={`c-${i}`}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {kept.length > 0 && (
+          <div className="confirm-card-section">
+            <p className="confirm-card-section-title confirm-card-section-title--kept">
+              Not deleted — kept as-is
+            </p>
+            <ul className="confirm-card-details confirm-card-details--kept">
+              {kept.map((line, i) => (
+                <li key={`k-${i}`}>{line}</li>
+              ))}
+            </ul>
+          </div>
         )}
         <div className="confirm-card-actions">
           <Button variant="ghost" ref={cancelRef} onClick={onCancel}>

@@ -1,37 +1,38 @@
-import React, { useMemo } from 'react'
-import { ButtonContent } from '../../Loader.jsx'
-import { accountLabel } from '../../utils/accountUi.js'
-import { CallScheduledBanner } from './CallScheduledBanner.jsx'
+import React, { useState } from 'react'
 import { isBlockedLead } from '../../utils/crm.js'
-import { getReplyAlertLevel, unansweredElapsedMs } from '../../utils/replyAlert.js'
-import {
-  getDynamicQuickReplies,
-  formatWaitingLabel,
-} from '../../utils/leadUx.js'
-import { countInbound, formatInboxTime, lastInboundMessage } from '../../utils/inboxMessageUtils.js'
-import { MessageStatus } from './MessageStatus.jsx'
-
-function formatWaitingSince(conv) {
-  if (!conv) return null
-  const ms = unansweredElapsedMs(conv)
-  if (ms == null) return null
-  const mins = Math.max(1, Math.floor(ms / 60000))
-  return `Waiting since: ${mins} min${mins === 1 ? '' : 's'}`
-}
+import { getReplyAlertLevel } from '../../utils/replyAlert.js'
+import { CallScheduledBanner } from './CallScheduledBanner.jsx'
+import { ChatHeader } from '../../inbox/ChatHeader.jsx'
+import { MessageTimeline } from '../../inbox/MessageTimeline.jsx'
+import { ChatComposer } from '../../inbox/ChatComposer.jsx'
+import { CallStatusBar } from '../../inbox/CallStatusBar.jsx'
+import { voiceStatusLabel } from '../../inbox/voiceCallEvents.js'
+import { InboxMarketingMessageModal } from '../../inbox/InboxMarketingMessageModal.jsx'
 
 export function ChatWindow({
   selected,
   selectedConv,
+  accountInfo = {},
+  postingModes = {},
+  onBack,
+  onBackToDashboard,
+  onOpenDetails,
+  onRefreshChat,
+  refreshingChat = false,
+  onLoadOlderMessages,
+  loadingOlderMessages = false,
+  canLoadOlderMessages = false,
   messages,
   loadingMessages,
   replyText,
   onReplyChange,
   onSend,
+  onSendMedia,
   sending,
+  sendingMedia = false,
   error,
   showNewMessages,
   onJumpToLatest,
-  onJumpToInbound,
   messagesScrollRef,
   onMessagesScroll,
   messagesEndRef,
@@ -39,82 +40,87 @@ export function ChatWindow({
   onScheduleCall,
   onCallNow,
   onMarkSpam,
+  onKarthikScanSpam,
   onMarkHandled,
+  onDeleteChat,
+  onEditMessage,
+  onDeleteMessage,
+  replyToMessage = null,
+  onClearReply,
+  onReplyToMessage,
+  onForwardMessage,
+  onQuickReaction,
+  selectMode = false,
+  selectedMessageIds,
+  onToggleSelect,
+  onEnterSelectMode,
+  onExitSelectMode,
+  onCopySelected,
+  onDeleteSelected,
+  onExportChat,
+  exportingChat = false,
+  onAiSuggest,
+  aiSuggesting = false,
+  aiSuggestion = null,
+  onDiscardAiSuggestion,
   crmSaving,
   scheduledCall,
+  outgoingCall = null,
+  onOutgoingCallExpand,
+  onOutgoingCallEnd,
+  whatsappEnabled = false,
+  whatsappConfigured = false,
+  replyChannel = 'telegram',
+  onReplyChannelChange,
 }) {
-  const quickReplies = useMemo(
-    () => getDynamicQuickReplies(selectedConv?.crm_status),
-    [selectedConv?.crm_status],
-  )
+  const [marketingOpen, setMarketingOpen] = useState(false)
+  const postingModeConfig = selected?.slot ? postingModes[selected.slot] : null
 
   if (!selected) {
     return (
-      <section className="crm-chat-window inbox-chat-panel">
-        <div className="empty-state inbox-chat-empty">Select a lead to view the conversation.</div>
+      <section className="crm-chat-window inbox-chat-panel tg-chat-pane">
+        <div className="empty-state inbox-chat-empty tg-chat-empty">
+          Select a conversation to start messaging.
+        </div>
       </section>
     )
   }
 
   const blocked = isBlockedLead(selectedConv)
   const replyAlertLevel = getReplyAlertLevel(selectedConv)
-  const inboundCount = countInbound(messages)
-  const lastInbound = lastInboundMessage(messages)
-  const lastVisibleIsOutbound = messages.length > 0 && messages[messages.length - 1]?.direction === 'out'
-  const showScrollForInbound = !loadingMessages && inboundCount > 0 && lastVisibleIsOutbound
-  const lastMsgAt = selectedConv?.last_message_at
-  const waitingSince = formatWaitingSince(selectedConv)
-  const charCount = replyText.length
-
   return (
-    <section className="crm-chat-window inbox-chat-panel">
-      <header className="inbox-chat-header">
-        <div className="inbox-chat-header-main">
-          <strong>{selectedConv?.name || selectedConv?.username || selected.user_id}</strong>
-          <span className="inbox-chat-header-meta">
-            {selectedConv?.username && `@${String(selectedConv.username).replace(/^@/, '')} · `}
-            via {accountLabel(selected.slot)}
-          </span>
-        </div>
-        <div className="inbox-chat-header-actions">
-          {!blocked && replyAlertLevel && (
-            <button
-              type="button"
-              className="btn btn--warn btn--sm"
-              onClick={onMarkHandled}
-              disabled={crmSaving}
-              title="Stop buzzer without sending a message"
-            >
-              Mark handled
-            </button>
-          )}
-          {!blocked && (
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm crm-mark-spam-btn"
-              onClick={onMarkSpam}
-              disabled={crmSaving}
-              title="Block lead — moves to Spam / Blocked"
-            >
-              Mark as Spam
-            </button>
-          )}
-        </div>
-      </header>
+    <section className="crm-chat-window inbox-chat-panel tg-chat-pane">
+      <ChatHeader
+        selected={selected}
+        selectedConv={selectedConv}
+        accountInfo={accountInfo}
+        onBack={onBack}
+        onBackToDashboard={onBackToDashboard}
+        onOpenDetails={onOpenDetails}
+        onCallNow={onCallNow}
+        onScheduleCall={onScheduleCall}
+        onMarkSpam={onMarkSpam}
+        onKarthikScanSpam={onKarthikScanSpam}
+        onMarkHandled={onMarkHandled}
+        onDeleteChat={onDeleteChat}
+        onExportChat={onExportChat}
+        exportingChat={exportingChat}
+        onRefreshChat={onRefreshChat}
+        onOpenMarketingMessage={() => setMarketingOpen(true)}
+        refreshingChat={refreshingChat}
+        crmSaving={crmSaving}
+        blocked={blocked}
+        replyAlertLevel={replyAlertLevel}
+      />
 
-      {(lastMsgAt || waitingSince) && (
-        <div className="crm-chat-meta-bar" role="status">
-          {lastMsgAt && (
-            <span className="crm-chat-meta-item">
-              Last message: <time>{formatInboxTime(lastMsgAt)}</time>
-            </span>
-          )}
-          {waitingSince && (
-            <span className="crm-chat-meta-item crm-chat-meta-item--waiting">
-              {waitingSince}
-            </span>
-          )}
-        </div>
+      {outgoingCall?.minimized && (
+        <CallStatusBar
+          name={outgoingCall.name}
+          seed={outgoingCall.seed}
+          statusLabel={voiceStatusLabel(outgoingCall.status, { error: outgoingCall.error })}
+          onExpand={onOutgoingCallExpand}
+          onEnd={onOutgoingCallEnd}
+        />
       )}
 
       {replyAlertLevel && !blocked && (
@@ -129,71 +135,56 @@ export function ChatWindow({
 
       <CallScheduledBanner call={scheduledCall || selectedConv?.crm_scheduled_call} />
 
-      {showScrollForInbound && lastInbound && (
-        <div className="crm-inbound-hint" role="status">
-          <span>
-            Candidate sent {inboundCount} message{inboundCount === 1 ? '' : 's'} — latest: “
-            {(lastInbound.text || '').slice(0, 80)}
-            ” ({formatInboxTime(lastInbound.timestamp)}).
-          </span>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            onClick={onJumpToInbound}
-          >
-            Show candidate messages
-          </button>
-        </div>
-      )}
-
-      <div className="inbox-chat-messages-wrap">
+      <div className="inbox-chat-messages-wrap tg-chat-body">
         {showNewMessages && (
           <button
             type="button"
-            className="inbox-new-messages-pill"
+            className="inbox-new-messages-pill tg-scroll-down"
             onClick={onJumpToLatest}
             aria-label="Scroll to new messages"
           >
-            ⬇ New messages
+            ↓
           </button>
         )}
         <div
-          className="inbox-messages chat-container"
+          className="inbox-messages chat-container tg-messages-scroll"
           ref={messagesScrollRef}
           onScroll={onMessagesScroll}
           role="log"
           aria-live="polite"
         >
-          <div className="inbox-messages-inner">
-            {loadingMessages && <div className="empty-state">Loading…</div>}
-            {!loadingMessages && messages.length === 0 && (
-              <div className="empty-state">No messages stored yet.</div>
-            )}
-            {!loadingMessages && messages.map((m, i) => {
-              if (m.direction === 'system') {
-                return (
-                  <div key={`${m.id}-${i}`} className="inbox-system-message" role="status">
-                    {m.text}
-                  </div>
-                )
-              }
-              return (
-                <div
-                  key={`${m.id}-${i}`}
-                  className={`inbox-bubble inbox-bubble--${m.direction === 'out' ? 'out' : 'in'}${m.status === 'failed' ? ' inbox-bubble--failed' : ''}${m.status === 'sending' ? ' inbox-bubble--sending' : ''}`}
+          <div className="inbox-messages-inner tg-messages-inner">
+            {canLoadOlderMessages && !loadingMessages && (
+              <div className="inbox-load-older-wrap">
+                <button
+                  type="button"
+                  className="inbox-load-older-btn"
+                  onClick={onLoadOlderMessages}
+                  disabled={loadingOlderMessages || !onLoadOlderMessages}
                 >
-                  <div className="inbox-bubble-text">{m.text || (m.media ? '[media]' : '')}</div>
-                  <div className="inbox-bubble-meta">
-                    <time>{formatInboxTime(m.timestamp)}</time>
-                    <MessageStatus
-                      direction={m.direction}
-                      status={m.status || (m.direction === 'out' ? 'delivered' : 'received')}
-                    />
-                  </div>
-                </div>
-              )
-            })}
-            <div className="inbox-messages-anchor" ref={messagesEndRef} aria-hidden />
+                  {loadingOlderMessages ? 'Loading previous…' : 'Load previous messages'}
+                </button>
+              </div>
+            )}
+            <MessageTimeline
+              messages={messages}
+              loadingMessages={loadingMessages}
+              messagesEndRef={messagesEndRef}
+              chatSlot={selected.slot}
+              chatUserId={selected.user_id}
+              selectedConv={selectedConv}
+              whatsappEnabled={whatsappEnabled}
+              blocked={blocked}
+              onEditMessage={onEditMessage}
+              onDeleteMessage={onDeleteMessage}
+              onReplyToMessage={onReplyToMessage}
+              onForwardMessage={onForwardMessage}
+              onQuickReaction={onQuickReaction}
+              selectMode={selectMode}
+              selectedMessageIds={selectedMessageIds}
+              onToggleSelect={onToggleSelect}
+              onEnterSelectMode={onEnterSelectMode}
+            />
           </div>
         </div>
       </div>
@@ -204,74 +195,69 @@ export function ChatWindow({
         </div>
       )}
 
-      <footer className="inbox-compose reply-box crm-compose">
-        {error && <p className="inbox-error inbox-error--compose" role="alert">{error}</p>}
-
-        {!blocked && (
-          <div className="crm-compose-actions">
-            <div className="crm-compose-primary">
-              <button
-                type="button"
-                className="btn btn--call-now crm-call-now-btn--hero"
-                onClick={() => typeof onCallNow === 'function' && onCallNow()}
-                disabled={crmSaving}
-                title="Start a live call now"
-              >
-                📞 Call Now
-              </button>
-              <button
-                type="button"
-                className="btn btn--primary crm-send-btn"
-                onClick={onSend}
-                disabled={sending || !replyText.trim()}
-              >
-                <ButtonContent loading={sending} loadingLabel="Sending…">Send</ButtonContent>
-              </button>
-            </div>
-            <div className="crm-compose-secondary">
-              {quickReplies.map(q => (
-                <button
-                  key={q.id}
-                  type="button"
-                  className={`btn btn--sm btn--ghost crm-quick-chip${q.id === 'smart' ? ' crm-quick-chip--smart' : ''}`}
-                  onClick={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    if (q.action === 'schedule_call') {
-                      if (typeof onScheduleCall === 'function') onScheduleCall()
-                      return
-                    }
-                    if (q.text) onQuickReply(q.text)
-                  }}
-                  disabled={sending}
-                >
-                  {q.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="crm-compose-input-row">
-          <textarea
-            className="input input--textarea inbox-reply-input crm-reply-input"
-            rows={4}
-            placeholder={blocked ? 'Unblock to reply…' : 'Type reply… (Enter to send)'}
-            value={replyText}
-            onChange={e => onReplyChange(e.target.value)}
-            disabled={blocked}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                if (!sending && !blocked) onSend()
-              }
-            }}
-          />
-          {!blocked && charCount > 0 && (
-            <span className="crm-char-count" aria-live="polite">{charCount}</span>
-          )}
+      {aiSuggestion && !blocked && (
+        <div className="crm-ai-suggestion-banner" role="status">
+          <span className="crm-ai-suggestion-badge">Karthik draft</span>
+          <span className="crm-ai-suggestion-text">
+            {aiSuggestion.stage ? `${aiSuggestion.stage} · ` : ''}
+            {typeof aiSuggestion.confidence === 'number'
+              ? `${Math.round(aiSuggestion.confidence * 100)}% confidence · `
+              : ''}
+            Review and edit before sending.
+          </span>
+          <button
+            type="button"
+            className="crm-ai-suggestion-discard"
+            onClick={onDiscardAiSuggestion}
+          >
+            Dismiss
+          </button>
         </div>
-      </footer>
+      )}
+
+      {selectMode && (
+        <div className="tg-select-bar" role="toolbar" aria-label="Message selection">
+          <span className="tg-select-bar-count">
+            {(selectedMessageIds?.size ?? 0)} selected
+          </span>
+          <div className="tg-select-bar-actions">
+            <button type="button" className="btn btn--ghost btn--sm" onClick={onCopySelected}>
+              Copy
+            </button>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={onDeleteSelected}>
+              Delete
+            </button>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={onExitSelectMode}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      <ChatComposer
+        replyText={replyText}
+        onReplyChange={onReplyChange}
+        onSend={onSend}
+        onSendMedia={onSendMedia}
+        sending={sending}
+        sendingMedia={sendingMedia}
+        blocked={blocked}
+        error={error}
+        replyToMessage={replyToMessage}
+        onClearReply={onClearReply}
+        whatsappEnabled={whatsappEnabled}
+        whatsappConfigured={whatsappConfigured}
+        selectedConv={selectedConv}
+        replyChannel={replyChannel}
+        onReplyChannelChange={onReplyChannelChange}
+      />
+
+      <InboxMarketingMessageModal
+        open={marketingOpen}
+        onClose={() => setMarketingOpen(false)}
+        slot={selected.slot}
+        postingModeConfig={postingModeConfig}
+      />
     </section>
   )
 }

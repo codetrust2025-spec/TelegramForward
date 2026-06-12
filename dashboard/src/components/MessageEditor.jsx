@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { API } from '../config.js'
 import { ButtonContent, OverlayLoader } from '../Loader.jsx'
+import { accountLabel } from '../utils/accountUi.js'
 
 export function MessageEditor({ customMessage, slot, onSaved, rewriteEnabled, cyclePreview }) {
   const [text, setText] = useState(customMessage || '')
@@ -47,7 +48,11 @@ export function MessageEditor({ customMessage, slot, onSaved, rewriteEnabled, cy
       <button type="button" className="panel-toggle panel-toggle--message" onClick={() => setOpen(o => !o)} aria-expanded={open}>
         <div className="panel-toggle-leading">
           <span className="panel-toggle-title">Message to send</span>
-          {slot && <span className="panel-toggle-slot">{slot}</span>}
+          {slot && (
+            <span className="panel-toggle-slot" title="Saved only for this account">
+              {accountLabel(slot)}
+            </span>
+          )}
           {!open && text.trim() && (
             <span className="panel-toggle-snippet">{text.split('\n')[0].slice(0, 72)}{text.length > 72 ? '…' : ''}</span>
           )}
@@ -66,7 +71,7 @@ export function MessageEditor({ customMessage, slot, onSaved, rewriteEnabled, cy
               onChange={e => setText(e.target.value)}
               rows={textareaRows}
               spellCheck={false}
-              placeholder="Your forwarding message template…"
+              placeholder={`Template for ${slot ? accountLabel(slot) : 'this account'} — other accounts keep their own message…`}
               aria-label="Message to send"
             />
           </div>

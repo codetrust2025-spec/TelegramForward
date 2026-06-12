@@ -7,8 +7,14 @@ import { FleetHealthPanel } from './FleetHealthPanel.jsx'
 import { AccountPerformanceChart } from './AccountPerformanceChart.jsx'
 import { ProgressSection } from './ProgressSection.jsx'
 import { ProgressBar } from './ui/ProgressBar.jsx'
-import { accountLabel, formatCountdown, getAccountStatus } from '../utils/accountUi'
-import { buildFleetHealthRows, sortFleetHealthRows } from '../utils/fleetHealth.js'
+import {
+  accountLabel,
+  formatCountdown,
+  getAccountStatus,
+  setupViewForAccountsFilter,
+} from '../utils/accountUi'
+import { buildFleetHealthRows, dailyStatsCutoff, sortFleetHealthRows } from '../utils/fleetHealth.js'
+import { fleetDisplaySuccessRate } from '../utils/globalStats.js'
 import { SegmentedControl } from './ui/SegmentedControl.jsx'
 
 const SECTIONS = [
@@ -77,6 +83,7 @@ function ProgressHubPin({
 
 export function ProgressHubPanel({
   overviewScope = 'fleet',
+  accountsModeFilter = 'all',
   onShowFleetOverview,
   fleet,
   globalCountdown,
@@ -89,7 +96,10 @@ export function ProgressHubPanel({
   onConfirmReset,
   activeAccount,
   activeAcctState,
+  accountStatus,
+  accountShutdown,
   accountStates,
+  postingModes = {},
   onSelectAccount,
   switchingAccount,
   accountProgress,
@@ -107,20 +117,28 @@ export function ProgressHubPanel({
 
   const alertCount = useMemo(() => {
     const resetTs = dailyStats?.reset_timestamp ?? 0
+    const cutoffTs = dailyStatsCutoff(dailyStats)
     const rows = sortFleetHealthRows(
       buildFleetHealthRows(
         fleet.perAccount,
         accountInfo,
         dailyStats?.window,
         resetTs,
+        { postingModes, accountStates, cutoffTimestamp: cutoffTs },
       ),
     )
     return rows.filter(r => r.attention).length
-  }, [fleet.perAccount, accountInfo, dailyStats?.window, dailyStats?.reset_timestamp])
+  }, [fleet.perAccount, accountInfo, dailyStats, postingModes, accountStates])
 
   const fleetChipsSecondary = (
     <>
-      <ProgressStatChip label="Still to post" value={fleet.needResend} title="Groups still waiting across all accounts" />
+      <ProgressStatChip
+        label={accountsModeFilter === 'forwarding' ? 'Remaining this tick' : 'Still to post'}
+        value={fleet.needResend}
+        title={accountsModeFilter === 'forwarding'
+          ? 'Groups left in the current forward batch'
+          : 'Groups still waiting across all accounts'}
+      />
       <ProgressStatChip label="Skipped (already posted)" value={fleet.skippedAlreadyPosted} warn title="Skipped — all accounts" />
       {fleet.skippedCooldown + fleet.skippedOther > 0 && (
         <ProgressStatChip
@@ -133,9 +151,13 @@ export function ProgressHubPanel({
         />
       )}
       <ProgressStatChip
-        label={`Sent (${sentWindowLabel.toLowerCase()})`}
+        label={accountsModeFilter === 'forwarding'
+          ? `Forward posts (${sentWindowLabel.toLowerCase()})`
+          : `Sent (${sentWindowLabel.toLowerCase()})`}
         value={fleet.messagesSent24h}
-        title={`Forwards — ${sentWindowLabel.toLowerCase()} — all accounts`}
+        title={accountsModeFilter === 'forwarding'
+          ? `Successful forwards since reset — cumulative, not this tick`
+          : `Forwards — ${sentWindowLabel.toLowerCase()} — all accounts`}
       />
     </>
   )
@@ -144,24 +166,60 @@ export function ProgressHubPanel({
     displaySuccess,
     displayFailed,
     displayActiveGroups,
+    displayTickTotal,
+    displayTickRemaining,
     displaySkippedPosted,
     displaySkippedCooldown,
     displaySkippedOther,
     displaySent24h,
   } = accountProgress
 
+  const accountProgressView = setupViewForAccountsFilter(
+    accountsModeFilter,
+    activeAccount,
+    accountStates,
+    postingModes,
+  )
+  const isForwardAccountProgress = accountProgressView === 'forwarding' && showAccountOverview
+
   const accountSliceSize = activeAcctState?.my_groups?.length ?? 0
-  const accountProcessed = displaySuccess + displayFailed
+  const accountProcessed = isForwardAccountProgress
+    ? (displaySuccess + displayFailed + displaySkippedPosted)
+    : (displaySuccess + displayFailed)
   const accountSuccessRate = accountProcessed > 0
     ? ((displaySuccess / accountProcessed) * 100).toFixed(1)
     : '0.0'
-  const accountProgressMax = accountSliceSize || 1
+  const accountProgressMax = isForwardAccountProgress
+    ? (displayTickTotal || displayActiveGroups || activeAcctState?.forward_batch_size || 100)
+    : (accountSliceSize || 1)
   const accountSkipped = Math.max(0, accountSliceSize - (displayActiveGroups || 0))
-  const accountProgressValue = cycle.hasCycleRun
-    ? Math.min(accountProgressMax, accountSkipped + accountProcessed)
-    : 0
+  const accountProgressValue = isForwardAccountProgress
+    ? (activeAcctState?.running || cycle.hasCycleRun ? accountProcessed : 0)
+    : (cycle.hasCycleRun
+      ? Math.min(accountProgressMax, accountSkipped + accountProcessed)
+      : 0)
 
-  const accountChipsSecondary = (
+  const accountChipsSecondary = isForwardAccountProgress ? (
+    <>
+      <ProgressStatChip
+        label="Remaining this tick"
+        value={displayTickRemaining ?? Math.max(0, (displayTickTotal || displayActiveGroups || 0) - accountProcessed)}
+        title="Groups not yet attempted in the current forward batch"
+      />
+      <ProgressStatChip
+        label="Skipped (already posted)"
+        value={displaySkippedPosted}
+        warn
+        title="Skipped this forward tick — already posted"
+      />
+      <ProgressStatChip label="Failed" value={displayFailed} warn title="Failed forwards this tick" />
+      <ProgressStatChip
+        label={`Forward posts (${sentWindowLabel.toLowerCase()})`}
+        value={displaySent24h}
+        title={`Successful forwards since reset — cumulative, not this tick`}
+      />
+    </>
+  ) : (
     <>
       <ProgressStatChip label="Still to post" value={displayActiveGroups} title="Groups still waiting this cycle — this account" />
       <ProgressStatChip label="Skipped (already posted)" value={displaySkippedPosted} warn title="Skipped — this account" />
@@ -178,7 +236,7 @@ export function ProgressHubPanel({
       <ProgressStatChip
         label={`Sent (${sentWindowLabel.toLowerCase()})`}
         value={displaySent24h}
-        title={`Forwards — ${sentWindowLabel.toLowerCase()} — this account`}
+        title={`Posts — ${sentWindowLabel.toLowerCase()} — this account`}
       />
     </>
   )
@@ -186,7 +244,13 @@ export function ProgressHubPanel({
   const accountPin = useMemo(() => {
     if (!showAccountOverview || !activeAcctState) return null
     const loggedIn = !!accountInfo?.[activeAccount]
-    const status = getAccountStatus(activeAcctState, loggedIn)
+    const status = getAccountStatus(
+      activeAcctState,
+      loggedIn,
+      accountStatus?.[activeAccount],
+      accountShutdown,
+      activeAccount,
+    )
     const sending = activeAcctState?.running && activeAcctState?.current_group
       ? [{ slot: activeAccount, group: activeAcctState.current_group }]
       : []
@@ -203,6 +267,8 @@ export function ProgressHubPanel({
     activeAcctState,
     activeAccount,
     accountInfo,
+    accountStatus,
+    accountShutdown,
     cycle.hasCycleRun,
     accountProgressValue,
     accountProgressMax,
@@ -239,22 +305,43 @@ export function ProgressHubPanel({
             onConfirmReset={onConfirmReset}
             onDailyStatsUpdate={onDailyStatsUpdate}
             scopeAccount={activeAccount}
+            accountsModeFilter={accountsModeFilter}
+            postingModes={postingModes}
           />
           <ProgressStatsPanel
-            title={activeAccountLabel || 'Account cycle summary'}
-            subtitle="This account only — combined fleet totals are under All accounts"
-            helpText="Select another account in the sidebar or use ← All accounts for fleet-wide metrics."
-            totalGroups={accountSliceSize}
+            title={isForwardAccountProgress
+              ? (activeAccountLabel ? `${activeAccountLabel} · forward tick` : 'Forward tick summary')
+              : (activeAccountLabel || 'Account cycle summary')}
+            subtitle={isForwardAccountProgress
+              ? 'This tick only. Cumulative “Forward posts (since reset)” is in Fleet today reach.'
+              : 'This account only — combined fleet totals are under All accounts'}
+            helpText={isForwardAccountProgress
+              ? 'Sent / skipped / failed are for the active forward batch only. Success rate includes skipped groups in the denominator.'
+              : 'Select another account in the sidebar or use ← All accounts for fleet-wide metrics.'}
+            totalGroups={isForwardAccountProgress
+              ? (displayTickTotal || displayActiveGroups || 0)
+              : accountSliceSize}
             success={displaySuccess}
             failed={displayFailed}
             successRate={accountSuccessRate}
             processed={accountProcessed}
             secondary={accountChipsSecondary}
+            successLabel={isForwardAccountProgress ? 'Sent this tick' : 'Posted OK'}
+            processedHint={isForwardAccountProgress ? 'groups this tick' : 'tried this cycle'}
+            groupsLabel={isForwardAccountProgress ? 'Groups this tick' : 'Groups in list'}
+            successTitle={isForwardAccountProgress
+              ? 'Successful forwards in the current batch only'
+              : 'Messages posted successfully this cycle'}
+            rateTitle={isForwardAccountProgress
+              ? 'Sent ÷ (sent + skipped + failed) for this tick'
+              : 'Share of attempts that succeeded (posted OK ÷ tried)'}
           >
             <ProgressBar
               value={cycle.hasCycleRun ? accountProgressValue : 0}
               max={accountProgressMax}
-              label={`Account progress: ${cycle.hasCycleRun ? accountProgressValue : 0} of ${accountProgressMax} groups processed this cycle`}
+              label={isForwardAccountProgress
+                ? `Forward tick: ${accountProgressValue} of ${accountProgressMax} groups`
+                : `Account progress: ${cycle.hasCycleRun ? accountProgressValue : 0} of ${accountProgressMax} groups processed this cycle`}
               tone="success"
               large
               className="fleet-progress-bar"
@@ -273,22 +360,43 @@ export function ProgressHubPanel({
           accountStates={accountStates}
           onConfirmReset={onConfirmReset}
           onDailyStatsUpdate={onDailyStatsUpdate}
+          accountsModeFilter={accountsModeFilter}
         />
         <ProgressStatsPanel
-          title="Fleet cycle summary"
-          subtitle="Primary metrics — all accounts combined"
-          helpText="Select an account in the sidebar to see its overview, or use other tabs for health and ranking."
-          totalGroups={fleet.masterTotal || 0}
+          title={accountsModeFilter === 'forwarding' ? 'Forward tick summary' : 'Fleet cycle summary'}
+          subtitle={accountsModeFilter === 'forwarding'
+            ? 'This tick only — forwarding accounts. Cumulative totals are in Fleet today reach above.'
+            : 'Primary metrics — all accounts combined'}
+          helpText={accountsModeFilter === 'forwarding'
+            ? 'Posted OK / Failed / Success rate reflect the current forward batch only. “Forward posts (since reset)” in the reach panel is the running total.'
+            : 'Select an account in the sidebar to see its overview, or use other tabs for health and ranking.'}
+          totalGroups={accountsModeFilter === 'forwarding' ? fleet.progressMax : (fleet.masterTotal || 0)}
           success={fleet.success}
           failed={fleet.failed}
-          successRate={fleet.successRate}
+          successRate={fleetDisplaySuccessRate(fleet)}
           processed={fleet.processed}
           secondary={fleetChipsSecondary}
+          successLabel={accountsModeFilter === 'forwarding' ? 'Sent this tick' : 'Posted OK'}
+          failedLabel="Failed"
+          successRateLabel="Success rate"
+          processedHint={accountsModeFilter === 'forwarding' ? 'groups this tick' : 'tried this cycle'}
+          groupsLabel={accountsModeFilter === 'forwarding' ? 'Groups this tick' : 'Groups in list'}
+          successTitle={accountsModeFilter === 'forwarding'
+            ? 'Successful forwards in the current batch only'
+            : 'Messages posted successfully this cycle'}
+          failedTitle={accountsModeFilter === 'forwarding'
+            ? 'Failed forwards in the current batch only'
+            : 'Groups where posting failed this cycle'}
+          rateTitle={accountsModeFilter === 'forwarding'
+            ? 'Sent ÷ (sent + skipped + failed) for this tick'
+            : 'Share of attempts that succeeded (posted OK ÷ tried)'}
         >
           <ProgressBar
             value={fleet.hasAnyCycle ? fleet.progressValue : 0}
             max={fleet.progressMax}
-            label={`Fleet progress: ${fleet.hasAnyCycle ? fleet.progressValue : 0} of ${fleet.progressMax} groups processed this cycle`}
+            label={accountsModeFilter === 'forwarding'
+              ? `Forward tick: ${fleet.hasAnyCycle ? fleet.progressValue : 0} of ${fleet.progressMax} groups`
+              : `Fleet progress: ${fleet.hasAnyCycle ? fleet.progressValue : 0} of ${fleet.progressMax} groups processed this cycle`}
             tone="success"
             large
             className="fleet-progress-bar"
@@ -307,6 +415,8 @@ export function ProgressHubPanel({
             accountInfo={accountInfo}
             statsWindow={dailyStats?.window}
             dailyStats={dailyStats}
+            postingModes={postingModes}
+            accountStates={accountStates}
           />
         ) : (
           <p className="stat-hint">No logged-in accounts to show fleet health.</p>
@@ -324,6 +434,7 @@ export function ProgressHubPanel({
             accountInfo={accountInfo}
             statsWindow={dailyStats?.window}
             subscriptionSlots={subs}
+            modeFilter={accountsModeFilter}
             rankingOnly
           />
         ) : (
@@ -359,9 +470,23 @@ export function ProgressHubPanel({
           hideGrid
           secondary={(
             <>
-              <ProgressStatChip label="Posted OK" value={displaySuccess} title="Sent this cycle — this account only" />
+              <ProgressStatChip
+                label={isForwardAccountProgress ? 'Sent this tick' : 'Posted OK'}
+                value={displaySuccess}
+                title={isForwardAccountProgress
+                  ? 'Successful forwards this tick — this account only'
+                  : 'Sent this cycle — this account only'}
+              />
               <ProgressStatChip label="Failed" value={displayFailed} title="Failed this cycle — this account only" />
-              <ProgressStatChip label="Still to post" value={displayActiveGroups} title="Groups waiting this cycle" />
+              <ProgressStatChip
+                label={isForwardAccountProgress ? 'Remaining this tick' : 'Still to post'}
+                value={isForwardAccountProgress
+                  ? (displayTickRemaining ?? Math.max(0, (displayTickTotal || displayActiveGroups || 0) - (displaySuccess + displayFailed + displaySkippedPosted)))
+                  : displayActiveGroups}
+                title={isForwardAccountProgress
+                  ? 'Groups not yet attempted in the current forward batch'
+                  : 'Groups waiting this cycle'}
+              />
               <ProgressStatChip label="Already in chat" value={displaySkippedPosted} warn title="Skipped — already posted" />
               {displaySkippedCooldown + displaySkippedOther > 0 && (
                 <ProgressStatChip

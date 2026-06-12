@@ -14,6 +14,31 @@ export function formatInboxTime(iso) {
   }
 }
 
+/** Compact time for chat list rows (Telegram-style). */
+export function formatInboxListTime(iso) {
+  if (!iso) return ''
+  try {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return ''
+    const now = new Date()
+    if (d.toDateString() === now.toDateString()) {
+      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    }
+    const yesterday = new Date(now)
+    yesterday.setDate(now.getDate() - 1)
+    if (d.toDateString() === yesterday.toDateString()) {
+      return 'Yesterday'
+    }
+    const days = (now - d) / 86400000
+    if (days < 7) {
+      return d.toLocaleDateString([], { weekday: 'short' })
+    }
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  } catch {
+    return ''
+  }
+}
+
 export function slotTag(slot) {
   const m = String(slot).match(/^account(\d+)$/i)
   return m ? `A${m[1]}` : slot
@@ -46,6 +71,17 @@ export function appendMessageDeduped(prev, message) {
   if (!message) return prev
   if (prev.some(m => m.id === message.id)) return prev
   return [...prev, message]
+}
+
+/** Smallest positive Telegram message id in a thread (excludes pending-* placeholders). */
+export function oldestTelegramMessageId(messages) {
+  let min = null
+  for (const m of messages || []) {
+    const id = Number(m?.id)
+    if (!Number.isFinite(id) || id <= 0) continue
+    if (min == null || id < min) min = id
+  }
+  return min
 }
 
 export function mergeMessageLists(loaded, pending) {
@@ -160,4 +196,20 @@ export function lastInboundMessage(messages) {
 
 export function countInbound(messages) {
   return (messages || []).filter(m => m?.direction === 'in').length
+}
+
+export function canDeleteOutboundMessage(message, { blocked = false } = {}) {
+  if (!message || message.direction !== 'out' || blocked) return false
+  if (message.status === 'sending') return false
+  return true
+}
+
+export function canEditOutboundMessage(message, { blocked = false } = {}) {
+  if (!canDeleteOutboundMessage(message, { blocked })) return false
+  if (message.media_type || message.has_media) return false
+  return Boolean((message.text || '').trim())
+}
+
+export function removeMessageById(messages, messageId) {
+  return (messages || []).filter(m => String(m.id) !== String(messageId))
 }

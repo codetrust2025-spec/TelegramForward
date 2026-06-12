@@ -37,6 +37,7 @@ from core.config import (
     JOIN_RECENT_WINDOW_SECONDS,
     STATE_DIR,
 )
+from core.ist_time import ist_date_str
 
 _join_state_locks: dict[str, threading.Lock] = {}
 _join_state_locks_guard = threading.Lock()
@@ -79,13 +80,13 @@ def _parse_iso(raw: str | None) -> float | None:
         return None
 
 
-def _today_utc() -> str:
-    return _utc_now().strftime("%Y-%m-%d")
+def _today_key() -> str:
+    return ist_date_str()
 
 
 def _default_state() -> dict:
     return {
-        "daily_date": _today_utc(),
+        "daily_date": _today_key(),
         "daily_new_joins": 0,
         "recent_new_join_ts": [],
         "last_new_join_at": None,
@@ -142,7 +143,7 @@ def _prune_recent(state: dict) -> list[float]:
 
 
 def _reset_daily_if_needed(state: dict) -> None:
-    today = _today_utc()
+    today = _today_key()
     if state.get("daily_date") != today:
         state["daily_date"] = today
         state["daily_new_joins"] = 0
@@ -176,7 +177,7 @@ def restriction_remaining_seconds(slot: str) -> int:
 def daily_join_count_for_reset(slot: str) -> int:
     """Raw automation join counter used as a display baseline during stats reset."""
     state = load_join_state(slot)
-    if state.get("daily_date") != _today_utc():
+    if state.get("daily_date") != _today_key():
         return 0
     try:
         return max(0, int(state.get("daily_new_joins") or 0))
@@ -189,7 +190,7 @@ def join_stats_for_ui(slot: str) -> dict:
     from core.account_profile import get_join_daily_limit
 
     state = load_join_state(slot)
-    today = _today_utc()
+    today = _today_key()
     daily = int(state.get("daily_new_joins") or 0)
     if state.get("daily_date") != today:
         daily = 0

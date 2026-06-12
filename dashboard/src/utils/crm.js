@@ -29,6 +29,27 @@ export function isBlockedLead(convOrLead) {
   return Boolean(convOrLead.crm_blocked) || convOrLead.status === CRM_STATUS_SPAM || isSpamStatus(convOrLead.crm_status)
 }
 
+/** True if slot:user_id is on the CRM block list or lead status is spam. */
+export function isBlockedInCrmState(crmState, slot, userId) {
+  if (!crmState || !slot || userId == null) return false
+  const key = leadKey(slot, userId)
+  if (crmState.block_list?.[key]) return true
+  const lead = crmState.leads?.[key]
+  return isBlockedLead(lead)
+}
+
+export function applyCrmBlockFlags(conv, crmState) {
+  if (!conv || !crmState) return conv
+  const slot = conv.account_id || conv.slot
+  const uid = conv.user_id
+  if (!isBlockedInCrmState(crmState, slot, uid)) return conv
+  return {
+    ...conv,
+    crm_blocked: true,
+    crm_status: CRM_STATUS_SPAM,
+  }
+}
+
 export async function markReplyHandled(slot, userId) {
   const res = await fetch(`${API}/crm/leads/${encodeURIComponent(slot)}/${userId}/mark-handled`, {
     method: 'POST',
@@ -118,15 +139,19 @@ export async function scheduleFollowUp(slot, userId, hours) {
   return data
 }
 
-export function mergeCrmIntoConversation(conv, leadsMap) {
+export function mergeCrmIntoConversation(conv, leadsMap, blockList) {
   const key = leadKey(conv.account_id || conv.slot, conv.user_id)
   const lead = leadsMap?.[key]
-  if (!lead) return conv
-  return {
-    ...conv,
-    crm_status: lead.status || conv.crm_status || 'new',
-    crm_notes: lead.notes ?? conv.crm_notes ?? '',
-    crm_reminder_timestamp: lead.reminder_timestamp,
-    crm_reminder_due: lead.reminder_due,
-  }
+  const blocked = Boolean(blockList?.[key]) || isBlockedLead(lead)
+  const base = lead
+    ? {
+        ...conv,
+        crm_status: lead.status || conv.crm_status || 'new',
+        crm_notes: lead.notes ?? conv.crm_notes ?? '',
+        crm_reminder_timestamp: lead.reminder_timestamp,
+        crm_reminder_due: lead.reminder_due,
+      }
+    : conv
+  if (!blocked) return base
+  return { ...base, crm_blocked: true, crm_status: CRM_STATUS_SPAM }
 }
