@@ -56,6 +56,7 @@ import {
 import { useConfirm } from './context/ConfirmContext.jsx'
 import { statsResetConfirmOptions } from './utils/statsResetConfirm.js'
 import { useAuth } from './context/AuthContext.jsx'
+import { ChangePasswordModal } from './components/ChangePasswordModal.jsx'
 import {
   clearOpenChatUrlParams,
   parseOpenChatFromUrl,
@@ -167,8 +168,10 @@ export default function App() {
     enabled: authEnabled,
     authenticated: authAuthenticated,
     username: authUsername,
+    role: authRole,
     logout: authLogout,
   } = useAuth()
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false)
   const [openChatTarget, setOpenChatTarget] = useState(() => parseOpenChatFromUrl())
   const [state, setState] = useState({
     running: false, total: 40, success: 0, failed: 0,
@@ -1646,7 +1649,9 @@ export default function App() {
           onTotalList={buildTotalList}
           authEnabled={authEnabled}
           authUsername={authUsername}
+          authRole={authRole}
           authLogout={authLogout}
+          onChangePassword={authRole === 'handler' ? () => setChangePasswordOpen(true) : undefined}
           fleet={fleet}
           globalCountdown={globalCountdown}
           sentWindowLabel={sentWindowLabel}
@@ -1867,8 +1872,10 @@ export default function App() {
           totalListLoading={totalListLoading}
           onTotalList={buildTotalList}
           authUsername={authUsername}
+          authRole={authRole}
           authEnabled={authEnabled}
           authLogout={authLogout}
+          onChangePassword={authRole === 'handler' ? () => setChangePasswordOpen(true) : undefined}
           fleet={fleet}
           globalCountdown={globalCountdown}
           sentWindowLabel={sentWindowLabel}
@@ -2143,6 +2150,15 @@ export default function App() {
                 </span>
                 <span className="app-header-auth-name">{authUsername || 'operator'}</span>
               </div>
+              {authRole === 'handler' && (
+                <button
+                  type="button"
+                  className="app-header-auth-password"
+                  onClick={() => setChangePasswordOpen(true)}
+                >
+                  Password
+                </button>
+              )}
               <button
                 type="button"
                 className="app-header-auth-signout"
@@ -2583,6 +2599,11 @@ export default function App() {
           stopIncomingCallRing()
           setIncomingCall(null)
         }}
+      />
+
+      <ChangePasswordModal
+        open={changePasswordOpen}
+        onClose={() => setChangePasswordOpen(false)}
       />
 
     </div>

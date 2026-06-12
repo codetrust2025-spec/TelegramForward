@@ -19,8 +19,10 @@ export function DesktopSidebar({
   inboxUnreadTotal,
   connected,
   authUsername,
+  authRole,
   authEnabled,
   authLogout,
+  onChangePassword,
 }) {
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const userMenuRef = useRef(null)
@@ -96,6 +98,19 @@ export function DesktopSidebar({
           </button>
           {userMenuOpen && (
             <div className="desk-user-menu desk-user-menu--sidebar" role="menu">
+              {authRole === 'handler' && onChangePassword && (
+                <button
+                  type="button"
+                  className="desk-user-menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    setUserMenuOpen(false)
+                    onChangePassword()
+                  }}
+                >
+                  Change password
+                </button>
+              )}
               <button
                 type="button"
                 className="desk-user-menu__item desk-user-menu__item--danger"

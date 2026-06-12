@@ -26,8 +26,10 @@ export function DesktopHeader({
   inboxUnreadBadge,
   onOpenInbox,
   authUsername,
+  authRole,
   authEnabled,
   authLogout,
+  onChangePassword,
   connected,
 }) {
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -253,6 +255,19 @@ export function DesktopHeader({
             <div className="desk-user-menu" role="menu">
               <p className="desk-user-menu__label">Signed in as</p>
               <p className="desk-user-menu__name">{authUsername || 'Administrator'}</p>
+              {authRole === 'handler' && onChangePassword && (
+                <button
+                  type="button"
+                  className="desk-user-menu__item"
+                  role="menuitem"
+                  onClick={() => {
+                    setUserMenuOpen(false)
+                    onChangePassword()
+                  }}
+                >
+                  Change password
+                </button>
+              )}
               <button
                 type="button"
                 className="desk-user-menu__item desk-user-menu__item--danger"

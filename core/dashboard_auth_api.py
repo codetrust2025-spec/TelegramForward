@@ -102,6 +102,44 @@ def install_dashboard_auth(app: FastAPI) -> None:
             return {"status": "ok", "verified": True}
         return _json({"detail": "Incorrect password"}, status=401)
 
+    @app.post("/auth/change-password")
+    async def auth_change_password(request: Request, body: dict | None = None):
+        """Logged-in handlers can update their dashboard password."""
+        if not auth.auth_enabled():
+            return {"status": "ok", "message": "Auth disabled — no password to change"}
+
+        profile = auth.operator_profile_from_cookies(dict(request.cookies))
+        if not profile.get("username"):
+            return _json({"detail": "Authentication required"}, status=401)
+        if profile.get("role") != "handler":
+            return _json({"detail": "Only referrer/handler logins can change password here"}, status=403)
+
+        payload = body or {}
+        err = auth.change_handler_password(
+            profile["username"],
+            str(payload.get("current_password") or ""),
+            str(payload.get("new_password") or ""),
+        )
+        if err:
+            return _json({"detail": err}, status=400)
+        return {"status": "ok", "message": "Password updated"}
+
+    @app.post("/auth/reset-password")
+    async def auth_reset_password(body: dict | None = None):
+        """Forgot password — reset with username + reference (referrer name)."""
+        if not auth.auth_enabled():
+            return _json({"detail": "Auth is disabled on this server"}, status=400)
+
+        payload = body or {}
+        err = auth.reset_handler_password_forgot(
+            str(payload.get("username") or ""),
+            str(payload.get("reference") or ""),
+            str(payload.get("new_password") or ""),
+        )
+        if err:
+            return _json({"detail": err}, status=400)
+        return {"status": "ok", "message": "Password reset — you can sign in now"}
+
     class DashboardAuthMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
             from core.dashboard_access import is_ops_request_authorized

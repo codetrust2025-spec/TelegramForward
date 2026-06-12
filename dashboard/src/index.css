@@ -10106,3 +10106,57 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   font-size: 0.8rem;
   min-height: 120px;
 }
+
+.auth-forgot {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auth-forgot-lead {
+  font-size: 0.88rem;
+  color: #94a3b8;
+  line-height: 1.45;
+}
+
+.auth-forgot-link {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #818cf8;
+  font-size: 0.88rem;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.auth-forgot-link:hover:not(:disabled) {
+  color: #a5b4fc;
+}
+
+.auth-forgot-back {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.auth-success {
+  color: #4ade80;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.app-header-auth-password {
+  padding: 6px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.5);
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.app-header-auth-password:hover {
+  border-color: rgba(129, 140, 248, 0.45);
+  color: #e2e8f0;
+}
