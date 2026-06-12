@@ -161,7 +161,14 @@ export function buildDeskDashSummary({
     }
     if (isCampaignEnabled(state.account_states, slot, postingModes)) {
       const camp = featureRuntime(acct, 'campaign')
-      if (camp.running || camp.status === 'sleeping') campRunning += 1
+      if (
+        camp.running
+        || camp.status === 'sleeping'
+        || status === 'running'
+        || status === 'sleeping'
+      ) {
+        campRunning += 1
+      }
     }
     if (status === 'running' || status === 'sleeping') runningAccounts += 1
     else if (status === 'idle' || status === 'stopped' || status === 'sleeping') restingAccounts += 1

@@ -99,6 +99,7 @@ export function DesktopDashboardHome({
   const postsToday = summary.postsToday ?? summary.messagesSent24h ?? 0
   const accountsTotal = mode.isFleet ? summary.totalAccounts : summary.modeEnabledCount
   const runningNow = mode.isCampaign ? summary.campRunning : summary.fwdRunning
+  const showBothRunCounts = mode.isFleet
   const busy =
     anyProcessRunning
     || accountRows.some(row => row.running)
@@ -122,7 +123,16 @@ export function DesktopDashboardHome({
           </div>
           <div className="desk-kpi-card__value desk-kpi-card__value--green">{accountsTotal}</div>
           <div className="desk-kpi-card__sub">
-            {summary.displayRunning} running · {summary.displayResting} resting
+            {showBothRunCounts ? (
+              <>
+                {summary.runningAccounts} running · {summary.fwdRunning} forwarding ·{' '}
+                {summary.campRunning} campaign
+              </>
+            ) : (
+              <>
+                {summary.displayRunning} running · {summary.displayResting} resting
+              </>
+            )}
           </div>
           <DeskKpiBar color="#22c55e" />
         </div>
@@ -136,6 +146,18 @@ export function DesktopDashboardHome({
           <div className="desk-kpi-card__sub">{(sentWindowLabel || 'since reset').toLowerCase()}</div>
           <DeskKpiBar color={mode.isCampaign ? '#f97316' : '#3b82f6'} />
         </div>
+
+        {showBothRunCounts && (
+          <div className="desk-kpi-card">
+            <div className="desk-kpi-card__head">
+              <span className="desk-kpi-card__icon" aria-hidden>✈</span>
+              <span className="desk-kpi-card__label">Forwarding</span>
+            </div>
+            <div className="desk-kpi-card__value desk-kpi-card__value--blue">{summary.fwdRunning}</div>
+            <div className="desk-kpi-card__sub">accounts active</div>
+            <DeskKpiBar color="#3b82f6" />
+          </div>
+        )}
 
         <div className="desk-kpi-card">
           <div className="desk-kpi-card__head">
@@ -311,15 +333,41 @@ export function DesktopDashboardHome({
               ↻ Reset today
             </button>
           </div>
-          <div className="desk-reach-metrics desk-reach-metrics--compact">
+          <div
+            className={`desk-reach-metrics desk-reach-metrics--compact${showBothRunCounts ? ' desk-reach-metrics--fleet' : ''}`}
+          >
             <div>
               <div className="desk-overview__stat-label">{mode.postsTodayLabel}</div>
               <div className="desk-overview__stat-value" style={{ color: '#4ade80' }}>{postsToday}</div>
             </div>
-            <div>
-              <div className="desk-overview__stat-label">{mode.runningNowLabel}</div>
-              <div className="desk-overview__stat-value" style={{ color: '#60a5fa' }}>{runningNow}</div>
-            </div>
+            {showBothRunCounts ? (
+              <>
+                <div>
+                  <div className="desk-overview__stat-label">Forwarding now</div>
+                  <div className="desk-overview__stat-value" style={{ color: '#60a5fa' }}>
+                    {summary.fwdRunning}
+                  </div>
+                </div>
+                <div>
+                  <div className="desk-overview__stat-label">Campaigns running</div>
+                  <div className="desk-overview__stat-value" style={{ color: '#f97316' }}>
+                    {summary.campRunning}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div>
+                <div className="desk-overview__stat-label">{mode.runningNowLabel}</div>
+                <div className="desk-overview__stat-value" style={{ color: '#60a5fa' }}>{runningNow}</div>
+                {!mode.isFleet && (summary.fwdRunning > 0 || summary.campRunning > 0) && (
+                  <div className="desk-overview__stat-hint">
+                    {summary.fwdRunning > 0 && `${summary.fwdRunning} forwarding`}
+                    {summary.fwdRunning > 0 && summary.campRunning > 0 && ' · '}
+                    {summary.campRunning > 0 && `${summary.campRunning} campaign`}
+                  </div>
+                )}
+              </div>
+            )}
             <div>
               <div className="desk-overview__stat-label">Current sent</div>
               <div className="desk-overview__stat-value" style={{ color: '#fbbf24' }}>{sent}</div>
