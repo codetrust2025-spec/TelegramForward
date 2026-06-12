@@ -10,7 +10,7 @@ import os
 import shutil
 from datetime import datetime
 
-from fastapi import FastAPI, File, Form, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -1765,6 +1765,7 @@ async def login_status():
 
 @app.get("/candidates")
 async def candidates_list(
+    request: Request,
     stage: str | None = Query(default=None),
     task: str | None = Query(default=None),
     search: str | None = Query(default=None),
@@ -1772,20 +1773,28 @@ async def candidates_list(
     pending_only: bool = Query(default=False),
     reference: str | None = Query(default=None),
 ):
+    from core.dashboard_access import handler_reference_scope
     from features import candidate_store
 
+    ref = handler_reference_scope(request, reference)
     rows = candidate_store.list_candidates(
         stage=stage, task=task, search=search, month=month,
-        pending_only=pending_only, reference=reference,
+        pending_only=pending_only, reference=ref,
     )
     return {"status": "ok", "candidates": rows, "count": len(rows)}
 
 
 @app.get("/candidates/stats")
-async def candidates_stats(month: str | None = Query(default=None)):
+async def candidates_stats(
+    request: Request,
+    month: str | None = Query(default=None),
+    reference: str | None = Query(default=None),
+):
+    from core.dashboard_access import handler_reference_scope
     from features import candidate_store
 
-    return {"status": "ok", "stats": candidate_store.stats(month=month)}
+    ref = handler_reference_scope(request, reference)
+    return {"status": "ok", "stats": candidate_store.stats(month=month, reference=ref)}
 
 
 @app.get("/candidates/{cid}")
