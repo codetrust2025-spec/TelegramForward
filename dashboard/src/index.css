@@ -8433,6 +8433,16 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   text-align: left;
   align-items: stretch;
 }
+
+.cand-stat-card--expenses {
+  text-align: left;
+  border-color: rgba(248, 113, 113, 0.35);
+  background: linear-gradient(140deg, rgba(248, 113, 113, 0.12), rgba(248, 113, 113, 0.04));
+}
+
+.cand-stat-value--expenses {
+  color: #fca5a5;
+}
 .cand-payto-list {
   list-style: none;
   margin: 8px 0 6px;
