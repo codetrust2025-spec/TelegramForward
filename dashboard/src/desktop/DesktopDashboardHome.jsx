@@ -300,10 +300,15 @@ export function DesktopDashboardHome({
             <span className="desk-tick-foot__pct">{progressPct}%</span>
           </p>
 
-          <div className="desk-panel__head" style={{ marginTop: 12 }}>
+          <div className="desk-panel__head desk-panel__head--reach">
             <h3 className="desk-panel__subtitle">{mode.reachTitle}</h3>
-            <button type="button" className="desk-panel__link" onClick={onResetReach}>
-              Reset 24h
+            <button
+              type="button"
+              className="btn btn--warn btn--sm desk-reset-reach-btn"
+              onClick={onResetReach}
+              title="Clear today's counters from now until midnight IST (accounts and logs are kept)"
+            >
+              ↻ Reset today
             </button>
           </div>
           <div className="desk-reach-metrics desk-reach-metrics--compact">
