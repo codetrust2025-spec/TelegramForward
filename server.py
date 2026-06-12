@@ -1797,6 +1797,24 @@ async def candidates_stats(
     return {"status": "ok", "stats": candidate_store.stats(month=month, reference=ref)}
 
 
+@app.get("/candidates/references")
+async def candidates_references():
+    """All known referrer names for the add/edit candidate dropdown."""
+    from features import candidate_store
+    from core import dashboard_auth_vps as auth
+
+    refs: set[str] = set()
+    for handler in auth._handler_accounts().values():
+        name = (handler.get("reference") or "").strip()
+        if name:
+            refs.add(name)
+    for row in candidate_store.list_candidates():
+        name = (row.get("reference") or "").strip()
+        if name:
+            refs.add(name)
+    return {"status": "ok", "references": sorted(refs, key=lambda x: x.lower())}
+
+
 @app.get("/candidates/{cid}")
 async def candidates_get(cid: str):
     from features import candidate_store
