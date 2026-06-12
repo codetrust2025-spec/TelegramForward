@@ -7,6 +7,8 @@ from pathlib import Path
 
 import paramiko
 
+from _deploy_common import enforce_git_first
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 PASSWORD = os.environ.get("VPS_PASSWORD", "")
@@ -64,6 +66,7 @@ def patch_bundle(text: str) -> str:
 
 
 def main() -> None:
+    enforce_git_first()
     bundle = patch_bundle(LOCAL_BUNDLE.read_text(encoding="utf-8", errors="replace"))
     LOCAL_BUNDLE.write_text(bundle, encoding="utf-8")
     print(f"Wrote bundle ({len(bundle)} chars)")

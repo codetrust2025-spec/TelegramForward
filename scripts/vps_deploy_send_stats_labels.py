@@ -9,13 +9,16 @@ from pathlib import Path
 
 import paramiko
 
+from _deploy_common import enforce_git_first, repo_root
+
 HOST, USER = "187.127.169.159", "root"
 PWD = os.environ.get("VPS_PASSWORD", "")
 REMOTE = "/opt/telegramforward.old"
-LOCAL = Path(r"C:\Users\codet\TelegramForward\core\send_stats.py")
+LOCAL = repo_root() / "core" / "send_stats.py"
 
 
 def main() -> None:
+    enforce_git_first()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sock = socket.create_connection((HOST, 22), timeout=30)
     c = paramiko.SSHClient()

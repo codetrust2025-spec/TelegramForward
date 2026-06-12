@@ -9,6 +9,8 @@ from pathlib import Path
 
 import paramiko
 
+from _deploy_common import enforce_git_first, repo_root
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 HOST = "187.127.169.159"
@@ -16,7 +18,7 @@ USER = "root"
 PASSWORD = os.environ.get("VPS_PASSWORD", "")
 REMOTE = "/opt/telegramforward.old"
 ROOT = Path(__file__).resolve().parent.parent
-TF = Path(r"C:\Users\codet\TelegramForward")
+TF = repo_root()
 
 BACKEND_FILES = [
     "core/ist_time.py",
@@ -65,6 +67,7 @@ def verify_ist(c: paramiko.SSHClient) -> None:
 
 
 def main() -> None:
+    enforce_git_first()
     c = connect()
     sftp = c.open_sftp()
 

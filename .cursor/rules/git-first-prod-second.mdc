@@ -1,0 +1,45 @@
+---
+description: Git first, production second — canonical repo workflow for TeleAutomation
+alwaysApply: true
+---
+
+# Git first, prod second
+
+**Canonical repo:** `TelegramForward` on branch `main`  
+**Remote:** https://github.com/codetrust2025-spec/TelegramForward.git  
+**Do not use** `Desktop\Automation` as the git source (dashboard-only scratch; sync via `scripts/sync_prod_to_repo.ps1` if needed).
+
+## Mandatory order
+
+1. Edit code in **TelegramForward** only
+2. **Commit** all changes (including `static/` after `npm run build`)
+3. **Push** to `origin/main`
+4. **Deploy** to VPS (scripts enforce this — deploy fails if git is dirty or unpushed)
+
+Never deploy first and commit later. Never leave prod-only changes on the VPS without a matching git commit.
+
+## Dashboard deploy flow
+
+```powershell
+cd C:\Users\codet\TelegramForward\dashboard
+npm run build
+cd ..
+git add -A && git commit -m "..." && git push origin main
+$env:VPS_PASSWORD = "..."   # local env only — never commit
+python scripts/vps_deploy_dashboard_static.py
+```
+
+## Backend deploy flow
+
+Same git commit + push, then:
+
+```powershell
+python scripts/vps_deploy_auth_routes.py   # or relevant vps_deploy_*.py
+```
+
+## Agent behavior
+
+- Before any VPS deploy or production change, verify git is clean and pushed (`python scripts/git_deploy_gate.py --require`)
+- After dashboard changes, remind to rebuild and commit `static/`
+- Never commit `.env`, `*.session`, or `VPS_PASSWORD`
+- On a new machine: `git clone` → copy `.env` from secure backup → `npm install` in `dashboard/`

@@ -8,6 +8,8 @@ from pathlib import Path
 
 import paramiko
 
+from _deploy_common import enforce_git_first
+
 HOST = "187.127.169.159"
 USER = "root"
 PASSWORD = os.environ.get("VPS_PASSWORD", "")
@@ -65,6 +67,7 @@ def upload_static(client: paramiko.SSHClient) -> None:
 
 
 def main() -> None:
+    enforce_git_first()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     client = connect()
     try:

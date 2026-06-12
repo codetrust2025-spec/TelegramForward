@@ -9,11 +9,15 @@ from pathlib import Path
 
 import paramiko
 
+from _deploy_common import enforce_git_first, repo_root
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+enforce_git_first()
 
 PASSWORD = os.environ.get("VPS_PASSWORD", "")
 REMOTE = "/opt/telegramforward.old"
-LOCAL_TF = Path(r"C:\Users\codet\TelegramForward")
+LOCAL_TF = repo_root()
 
 UPLOAD = [
     "workers/feature_runtime.py",

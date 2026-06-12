@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 import os, socket, paramiko, sys
+
+from _deploy_common import enforce_git_first
+
+enforce_git_first()
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 PASSWORD = os.environ.get("VPS_PASSWORD", "")

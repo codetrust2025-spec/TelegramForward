@@ -8,7 +8,8 @@
   Remote: https://github.com/codetrust2025-spec/TelegramForward.git
   Branch: main
 
-  Run from repo root after dashboard/VPS script changes in OneDrive\Desktop\Automation:
+  GIT FIRST, PROD SECOND — never deploy before commit + push.
+  Deploy scripts call git_deploy_gate.py and will refuse if git is dirty or unpushed.
     pwsh scripts/sync_prod_to_repo.ps1
     git status
     git add -A && git commit -m "your message" && git push origin main
