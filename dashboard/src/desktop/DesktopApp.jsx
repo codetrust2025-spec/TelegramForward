@@ -60,8 +60,10 @@ export function DesktopApp({
   totalListLoading,
   onTotalList,
   authUsername,
+  authRole,
   authEnabled,
   authLogout,
+  onChangePassword,
   fleet,
   globalCountdown,
   sentWindowLabel,
@@ -348,8 +350,10 @@ export function DesktopApp({
           inboxUnreadTotal={inboxUnreadTotal}
           connected={connected}
           authUsername={authUsername}
+          authRole={authRole}
           authEnabled={authEnabled}
           authLogout={authLogout}
+          onChangePassword={onChangePassword}
         />
 
         <div className="desktop-main">
@@ -376,8 +380,10 @@ export function DesktopApp({
             inboxUnreadBadge={inboxUnreadBadge}
             onOpenInbox={() => handleSidebar('inbox')}
             authUsername={authUsername}
+            authRole={authRole}
             authEnabled={authEnabled}
             authLogout={authLogout}
+            onChangePassword={onChangePassword}
             connected={connected}
           />
           <div className={bodyClass}>{content}</div>

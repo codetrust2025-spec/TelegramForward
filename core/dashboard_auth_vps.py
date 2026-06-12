@@ -32,6 +32,7 @@ _PUBLIC_EXACT = frozenset({
     "/auth/login",
     "/auth/logout",
     "/auth/verify-admin",
+    "/auth/reset-password",
     "/auth/status",
     "/health",
     "/favicon.svg",
@@ -117,6 +118,111 @@ def _handler_accounts() -> dict[str, dict[str, str]]:
 
 def reload_handler_accounts() -> None:
     _handler_accounts.cache_clear()
+
+
+def _handlers_yaml_path() -> str:
+    return os.path.join(BASE_DIR, "config", "dashboard_handlers.yaml")
+
+
+def _load_handlers_yaml() -> dict[str, Any]:
+    path = _handlers_yaml_path()
+    if not os.path.isfile(path):
+        return {"handlers": []}
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    except OSError:
+        return {"handlers": []}
+    if not isinstance(raw, dict):
+        return {"handlers": []}
+    handlers = raw.get("handlers")
+    if not isinstance(handlers, list):
+        raw["handlers"] = []
+    return raw
+
+
+def _save_handlers_yaml(data: dict[str, Any]) -> None:
+    path = _handlers_yaml_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            data,
+            f,
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False,
+        )
+    os.replace(tmp, path)
+
+
+def _validate_new_password(password: str) -> str | None:
+    pwd = str(password or "")
+    if len(pwd) < 4:
+        return "Password must be at least 4 characters"
+    if len(pwd) > 128:
+        return "Password is too long"
+    return None
+
+
+def _set_handler_password_in_yaml(username: str, new_password: str) -> str | None:
+    user_key = str(username or "").strip().lower()
+    if not user_key:
+        return "Username required"
+    err = _validate_new_password(new_password)
+    if err:
+        return err
+    data = _load_handlers_yaml()
+    updated = False
+    for row in data.get("handlers") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("username") or "").strip().lower() == user_key:
+            row["password"] = str(new_password)
+            updated = True
+            break
+    if not updated:
+        return "Handler account not found"
+    _save_handlers_yaml(data)
+    reload_handler_accounts()
+    return None
+
+
+def change_handler_password(
+    username: str,
+    current_password: str,
+    new_password: str,
+) -> str | None:
+    """Return an error message, or None when the password was updated."""
+    reload_handler_accounts()
+    user_key = str(username or "").strip().lower()
+    handler = _handler_accounts().get(user_key)
+    if not handler:
+        return "Handler account not found"
+    if not secrets.compare_digest(str(current_password or ""), handler["password"]):
+        return "Current password is incorrect"
+    if secrets.compare_digest(str(new_password or ""), handler["password"]):
+        return "Choose a different password"
+    return _set_handler_password_in_yaml(handler["username"], new_password)
+
+
+def reset_handler_password_forgot(
+    username: str,
+    reference: str,
+    new_password: str,
+) -> str | None:
+    """Self-service reset when the handler knows username + reference name."""
+    reload_handler_accounts()
+    user_key = str(username or "").strip().lower()
+    ref = str(reference or "").strip()
+    if not user_key or not ref:
+        return "Username and reference are required"
+    handler = _handler_accounts().get(user_key)
+    if not handler:
+        return "Handler account not found"
+    if handler["reference"].strip().lower() != ref.lower():
+        return "Reference does not match this account"
+    return _set_handler_password_in_yaml(handler["username"], new_password)
 
 
 def resolve_operator_login(username: str, password: str) -> dict[str, Any] | None:
