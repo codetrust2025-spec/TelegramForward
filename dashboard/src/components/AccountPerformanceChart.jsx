@@ -2,14 +2,46 @@ import React, { useMemo } from 'react'
 import { rankAccountsByPerformance } from '../utils/accountPerformance.js'
 import { SubscriptionBadge } from './SubscriptionBadge.jsx'
 
+function performanceCopy(modeFilter) {
+  if (modeFilter === 'forwarding') {
+    return {
+      sortLabel: 'forwards',
+      sentLabel: 'forwarded',
+      idleLabel: 'No forwards in window',
+    }
+  }
+  if (modeFilter === 'campaign') {
+    return {
+      sortLabel: 'posts',
+      sentLabel: 'posted',
+      idleLabel: 'No posts in window',
+    }
+  }
+  return {
+    sortLabel: 'sends',
+    sentLabel: 'sent',
+    idleLabel: 'No sends in window',
+  }
+}
+
 /**
  * Horizontal bar chart — accounts sorted by messages sent in last 24h (high → low).
  */
-export function AccountPerformanceChart({ perAccount, accountInfo, statsWindow, subscriptionSlots = [], rankingOnly = false }) {
+export function AccountPerformanceChart({
+  perAccount,
+  accountInfo,
+  statsWindow,
+  subscriptionSlots = [],
+  rankingOnly = false,
+  modeFilter = 'all',
+}) {
   const subs = Array.isArray(subscriptionSlots) ? subscriptionSlots : []
   const windowNote = statsWindow === 'since_reset'
     ? 'since last reset'
-    : 'in the rolling last 24h'
+    : statsWindow === 'ist_day'
+      ? 'today · midnight IST – now'
+      : 'in the rolling last 24h'
+  const copy = performanceCopy(modeFilter)
   const ranked = useMemo(
     () => rankAccountsByPerformance(perAccount, accountInfo),
     [perAccount, accountInfo],
@@ -28,8 +60,8 @@ export function AccountPerformanceChart({ perAccount, accountInfo, statsWindow, 
         <h4 className="perf-chart-title">Top performers</h4>
         <p className="perf-chart-sub">
           {rankingOnly
-            ? 'Relative ranking by forwards — bar length only'
-            : <>Sorted high → low by <strong>forwarded</strong> {windowNote}</>}
+            ? `Relative ranking by ${copy.sortLabel} — bar length only`
+            : <>Sorted high → low by <strong>{copy.sortLabel}</strong> {windowNote}</>}
         </p>
       </header>
 
@@ -76,9 +108,9 @@ export function AccountPerformanceChart({ perAccount, accountInfo, statsWindow, 
                 {!rankingOnly && (
                 <div className="perf-chart-meta">
                   {row.sent24h > 0 ? (
-                    <span className="perf-chart-meta--24h">{row.sent24h} forwarded</span>
+                    <span className="perf-chart-meta--24h">{row.sent24h} {copy.sentLabel}</span>
                   ) : (
-                    <span className="perf-chart-meta--idle">No forwards in window</span>
+                    <span className="perf-chart-meta--idle">{copy.idleLabel}</span>
                   )}
                   {row.running && (
                     <span className="perf-chart-meta--live">Running now</span>

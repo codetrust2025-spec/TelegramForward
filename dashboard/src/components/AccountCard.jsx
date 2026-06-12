@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { API, COUNTRY_CODES, SAVED_PHONES } from '../config.js'
-import { ButtonContent, Spinner } from '../Loader.jsx'
+import { ButtonContent, Spinner, InlineLoader } from '../Loader.jsx'
 import { StatusBadge } from './StatusBadge.jsx'
 import { MessageEditor } from './MessageEditor.jsx'
+import { PostingModePanel } from './PostingModePanel.jsx'
 import {
   accountLabel,
   accountCardTitle,
@@ -16,60 +17,26 @@ import {
   formatMembershipAge,
   JOINS_TODAY_TOOLTIP,
   formatAccountStatusLabel,
+  formatAccountMiniStatusLabel,
   formatPhoneDisplay,
   formatCountdown,
   getAccountStatus,
   getHealthLevel,
   isHeavyRateLimit,
+  isCampaignEnabled,
+  isForwardingEnabled,
   isSubscriptionAccount,
+  accountShutdownMapForSlot,
+  isAccountOnShutdown,
+  accountPrimaryMode,
 } from '../utils/accountUi'
+import { AccountPrimaryActions } from './AccountPrimaryActions.jsx'
 import { useConfirm } from '../context/ConfirmContext.jsx'
 import { SubscriptionBadge } from './SubscriptionBadge.jsx'
 import { Button } from './ui/Button.jsx'
 import { MetricBlock, MetricGrid } from './ui/MetricBlock.jsx'
-
-function AccountCardMenu({ open, onToggle, onClose, items }) {
-  const ref = useRef(null)
-  useEffect(() => {
-    if (!open) return undefined
-    function onDoc(e) {
-      if (ref.current && !ref.current.contains(e.target)) onClose()
-    }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [open, onClose])
-
-  return (
-    <div className="acct-v3-menu" ref={ref}>
-      <button
-        type="button"
-        className="btn btn--ghost btn--sm acct-v3-menu-trigger"
-        onClick={onToggle}
-        aria-expanded={open}
-        aria-haspopup="menu"
-        title="More actions"
-      >
-        ⋯
-      </button>
-      {open && (
-        <div className="acct-v3-menu-panel" role="menu">
-          {items.map(item => (
-            <button
-              key={item.key}
-              type="button"
-              role="menuitem"
-              className={`acct-v3-menu-item${item.danger ? ' acct-v3-menu-item--danger' : ''}`}
-              onClick={item.onClick}
-              disabled={item.disabled}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
+import { AccountNameEditor } from './AccountNameEditor.jsx'
+import { AccountModeSwitcher } from './AccountModeSwitcher.jsx'
 
 export function AccountMiniCard({
   slot,
@@ -77,13 +44,22 @@ export function AccountMiniCard({
   info,
   acctState,
   accountStatus,
-  switching,
+  accountShutdown,
+  postingModes = {},
+  accountStates = {},
+  switchingAccount = null,
   isSubscription = false,
   onSelect,
+  onRenamed,
 }) {
   const loggedIn = !!info
-  const status = getAccountStatus(acctState, loggedIn, accountStatus)
-  const statusLabel = formatAccountStatusLabel(status)
+  const isSwitching = switchingAccount === slot
+  const switchPending = switchingAccount != null && switchingAccount !== slot
+  const gridLocked = switchingAccount != null
+  const shutdownMap = accountShutdownMapForSlot(accountShutdown, slot)
+  const status = getAccountStatus(acctState, loggedIn, accountStatus, shutdownMap, slot)
+  const statusLabel = formatAccountMiniStatusLabel(status)
+  const statusLabelFull = formatAccountStatusLabel(status)
   const tgName = telegramDisplayName(info)
   const tgUser = telegramUsername(info)
   const slotLabel = accountLabel(slot)
@@ -99,30 +75,78 @@ export function AccountMiniCard({
   const groupsTooltip = membership
     ? formatTelegramMembershipTooltip(membership)
     : undefined
+  const campOn = isCampaignEnabled(accountStates, slot, postingModes)
+  const fwdOn = isForwardingEnabled(accountStates, slot, postingModes)
+
+  function selectSlot() {
+    if (gridLocked) return
+    onSelect(slot)
+  }
 
   return (
-    <button
-      type="button"
-      className={`account-mini account-mini--v2${selected ? ' account-mini--selected' : ''} account-mini--${status}${isSub ? ' account-mini--subscription' : ''}${switching ? ' account-mini--busy' : ''}`}
-      onClick={() => onSelect(slot)}
-      disabled={switching}
+    <div
+      role="button"
+      tabIndex={gridLocked ? -1 : 0}
+      className={`account-mini account-mini--v2${selected ? ' account-mini--selected' : ''} account-mini--${status}${status === 'shutdown' ? ' account-mini--shutdown' : ''}${isSub ? ' account-mini--subscription' : ''}${isSwitching ? ' account-mini--switching' : ''}${switchPending ? ' account-mini--switch-pending' : ''}`}
+      onClick={selectSlot}
+      onKeyDown={e => {
+        if (gridLocked) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          selectSlot()
+        }
+      }}
       title={title}
       aria-current={selected ? 'true' : undefined}
-      aria-label={`${slotLabel}, ${statusLabel}${tgName ? `, ${tgName}` : ''}${membership ? `, ${membership.total} joined groups` : ''}`}
+      aria-busy={isSwitching ? 'true' : undefined}
+      aria-label={`${slotLabel}, ${statusLabel}${tgName ? `, ${tgName}` : ''}${membership ? `, ${membership.total} joined groups` : ''}${isSwitching ? ', loading' : ''}`}
     >
+      {isSwitching && (
+        <span className="account-mini-switch-overlay" aria-hidden>
+          <Spinner size={18} />
+        </span>
+      )}
       <span className="account-mini-top">
-        <span className="account-mini-slot">{slotLabel}</span>
-        {isSub && <SubscriptionBadge variant="icon" title="Subscription account" />}
-        <span className={`account-mini-status-pill account-mini-status-pill--${status}`}>
-          {statusLabel}
+        <span className="account-mini-top-row">
+          <span className="account-mini-slot">{slotLabel}</span>
+          {isSub && <SubscriptionBadge variant="icon" title="Subscription account" />}
+          <span
+            className={`account-mini-status-pill account-mini-status-pill--${status}`}
+            title={statusLabelFull}
+          >
+            {statusLabel}
+          </span>
+        </span>
+        <span className="account-mini-top-row account-mini-top-row--mode">
+          {fwdOn ? (
+            <span className="account-mini-mode-pill account-mini-mode-pill--forward" title="Forwarding enabled">
+              Forward
+            </span>
+          ) : campOn ? (
+            <span className="account-mini-mode-pill" title="Campaign enabled">
+              Campaign
+            </span>
+          ) : null}
+          {!campOn && !fwdOn && (
+            <span className="account-mini-mode-pill account-mini-mode-pill--muted" title="No features enabled">
+              Off
+            </span>
+          )}
         </span>
       </span>
 
-      <span className="account-mini-name" title={displayName}>{displayName}</span>
-
-      {loggedIn && tgUser && (
-        <span className="account-mini-user">{tgUser}</span>
+      {loggedIn ? (
+        <AccountNameEditor slot={slot} info={info} onRenamed={onRenamed} compact selected={selected} />
+      ) : (
+        <span className="account-mini-name" title={displayName}>{displayName}</span>
       )}
+
+      <span
+        className={`account-mini-user${tgUser ? '' : ' account-mini-user--empty'}`}
+        aria-hidden={!tgUser}
+      >
+        {tgUser || '\u00a0'}
+      </span>
 
       {loggedIn && membership && (
         <span
@@ -138,7 +162,7 @@ export function AccountMiniCard({
       {!loggedIn && (
         <span className="account-mini-hint">Tap to log in</span>
       )}
-    </button>
+    </div>
   )
 }
 
@@ -156,6 +180,8 @@ export function AccountCard({
   onRefreshJoined,
   acctState,
   accountStatus,
+  accountShutdown,
+  forwardJob = null,
   refreshingJoined,
   accountActionLoading,
   switchingAccount,
@@ -163,8 +189,19 @@ export function AccountCard({
   sentInWindow: _sentInWindow,
   customMessage = '',
   onMessageSaved,
+  postingModeConfig,
+  postingModes = {},
+  accountStates = {},
+  onPostingModeUpdated,
+  setupFilter = 'all',
+  workspaceMode = null,
+  compactSetup = false,
+  loginTab = false,
+  onOpenSetupTab,
+  onRenamed,
 }) {
   const [step, setStep] = useState('idle')
+  const [nameEditOpen, setNameEditOpen] = useState(false)
   const [countryCode, setCountryCode] = useState('+91')
   const [localNumber, setLocalNumber] = useState('')
   const [phone, setPhone] = useState('+91')
@@ -172,11 +209,16 @@ export function AccountCard({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const [menuOpen, setMenuOpen] = useState(false)
   const startLoading = accountActionLoading === `${slot}:start`
   const stopLoading = accountActionLoading === `${slot}:stop`
+  const campStartLoading = accountActionLoading === `${slot}:campaign:start`
+  const campStopLoading = accountActionLoading === `${slot}:campaign:stop`
+  const fwdStartLoading = accountActionLoading === `${slot}:forwarding:start`
+  const fwdStopLoading = accountActionLoading === `${slot}:forwarding:stop`
   const heavyLimit = isHeavyRateLimit(acctState)
-  const status = getAccountStatus(acctState, !!info, accountStatus)
+  const shutdownMap = accountShutdownMapForSlot(accountShutdown, slot)
+  const onShutdown = isAccountOnShutdown(shutdownMap, slot)
+  const status = getAccountStatus(acctState, !!info, accountStatus, shutdownMap, slot)
   const health = getHealthLevel(acctState)
   const membership = formatJoinedStats(info)
   const membershipStale = isMembershipStale(info)
@@ -184,7 +226,7 @@ export function AccountCard({
   const membershipTooltip = formatTelegramMembershipTooltip(membership)
   const joinToday = formatJoinStatsToday(acctState)
   const scannedAt = formatMembershipScannedAt(membership?.updated)
-  const displayName = info?.name ? telegramDisplayName(info) || label : label
+  const displayName = info ? (telegramDisplayName(info) || label) : label
   const { confirm } = useConfirm()
 
   function resetPhoneFields() {
@@ -214,6 +256,37 @@ export function AccountCard({
     }
   }
 
+  async function loginFetch(path, body, timeoutMs = 90000) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const res = await fetch(`${API}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+      let data = {}
+      try {
+        data = await res.json()
+      } catch {
+        data = {}
+      }
+      if (!res.ok && !data.error) {
+        data.error = data.detail || `Request failed (${res.status})`
+      }
+      return data
+    } catch (e) {
+      if (e?.name === 'AbortError') {
+        return { success: false, error: 'Request timed out. Check your connection and try again.' }
+      }
+      return { success: false, error: e?.message || 'Network error — try again.' }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   async function sendOtp() {
     const normalized = buildPhone(countryCode, localNumber)
     if (!localNumber.trim() || normalized.length < 8) {
@@ -222,17 +295,15 @@ export function AccountCard({
     }
     setLoading(true)
     setError('')
-    const res = await fetch(`${API}/login/send-otp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: normalized, slot }),
-    })
-    const data = await res.json()
-    setLoading(false)
-    if (data.success) {
-      setPhone(normalized)
-      setStep('otp')
-    } else setError(data.error || 'Failed to send OTP')
+    try {
+      const data = await loginFetch('/login/send-otp', { phone: normalized, slot })
+      if (data.success) {
+        setPhone(normalized)
+        setStep('otp')
+      } else setError(data.error || 'Failed to send OTP')
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function verifyOtp() {
@@ -242,17 +313,19 @@ export function AccountCard({
     }
     setLoading(true)
     setError('')
-    const res = await fetch(`${API}/login/verify-otp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: otp.trim(), slot }),
-    })
-    const data = await res.json()
-    setLoading(false)
-    if (data.success) {
-      setStep('idle')
-      onLogin(data)
-    } else setError(data.error || 'Invalid OTP')
+    try {
+      const data = await loginFetch('/login/verify-otp', {
+        code: otp.trim(),
+        slot,
+        workspace_mode: workspaceMode || undefined,
+      })
+      if (data.success) {
+        setStep('idle')
+        onLogin(data)
+      } else setError(data.error || 'Invalid OTP')
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function doLogout() {
@@ -303,47 +376,222 @@ export function AccountCard({
   async function handleRestart() {
     const ok = await confirm({
       title: `Restart ${label}?`,
-      message: acctRunning
-        ? 'The worker will stop and start again from the next cycle.'
-        : 'Start the worker from a fresh cycle.',
+      message: anyRunning
+        ? 'Stop all features and start enabled campaign + forwarding again.'
+        : 'Start all enabled features.',
       confirmLabel: 'Restart',
       variant: 'warn',
     })
     if (!ok) return
-    if (acctRunning) await onStop(slot)
+    if (anyRunning) await onStop(slot)
     onStart(slot, false)
   }
 
   const healthScore = acctState?.health_score != null && !Number.isNaN(Number(acctState.health_score))
     ? Math.round(Number(acctState.health_score))
     : null
-  const cycleNum = acctState?.cycle > 0 ? acctState.cycle : null
-  const cycleSuccess = acctState?.success ?? 0
-  const cycleFailed = acctState?.failed ?? 0
-  const cycleProcessed = cycleSuccess + cycleFailed
-  const cycleTotal = acctState?.my_groups?.length || acctState?.active_groups || 0
-  const cyclePct = cycleTotal > 0 ? Math.min(100, Math.round((cycleProcessed / cycleTotal) * 100)) : 0
+  const campRt = acctState?.campaign || {}
+  const fwdRt = acctState?.forwarding || {}
+  const campRunning = !!(campRt.running ?? acctState?.campaign_running)
+  const fwdDispatch = (
+    postingModeConfig?.forwarding?.forward_dispatch
+    || postingModes?.[slot]?.forwarding?.forward_dispatch
+    || 'auto'
+  )
+  const isManualForward = fwdDispatch !== 'auto'
+  const forwardCycleRunning = forwardJob?.status === 'running'
+  const fwdRunning = isManualForward
+    ? forwardCycleRunning
+    : !!(fwdRt.running ?? acctState?.forwarding_running)
+  const anyRunning = campRunning || fwdRunning || acctRunning
+
+  const nextIn = acctState?.next_cycle_in > 0 ? acctState.next_cycle_in : 0
+  const currentGroup = acctState?.current_group
+    ? `@${String(acctState.current_group).replace(/^@/, '')}`
+    : null
+  const statusSub = currentGroup && anyRunning
+    ? currentGroup
+    : (nextIn > 0 && (status === 'running' || status === 'sleeping'))
+      ? `Next send in ${formatCountdown(nextIn)}`
+      : null
+
+  const campCycle = campRt.cycle ?? acctState?.campaign_cycle ?? 0
+  const campSuccess = campRt.success ?? 0
+  const campFailed = campRt.failed ?? 0
+  const campTotal = campRt.active_groups ?? acctState?.my_groups?.length ?? 0
+  const campProcessed = campSuccess + campFailed
+
+  const fwdCycle = fwdRt.cycle ?? acctState?.forwarding_cycle ?? 0
+  const fwdSuccess = fwdRt.success ?? 0
+  const fwdFailed = fwdRt.failed ?? 0
+  const fwdSkipped = fwdRt.skipped_already_posted ?? 0
+  const fwdTotal = fwdRt.active_groups ?? 0
+  const fwdJoined = fwdRt.forward_joined_total ?? acctState?.forward_joined_total ?? 0
+  const fwdProcessed = fwdSuccess + fwdFailed + fwdSkipped
+  const fwdBatch = fwdRt.forward_batch ?? acctState?.forward_batch ?? 0
+  const fwdBatchTotal = fwdRt.forward_batch_total ?? acctState?.forward_batch_total ?? 0
+
+  async function startRelogin() {
+    const ok = await confirm({
+      title: `Re-login ${label}?`,
+      message: 'You will log out this slot, then enter phone + OTP again. Use this if sends fail or the session broke.',
+      confirmLabel: 'Continue',
+      variant: 'warn',
+    })
+    if (!ok) return
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch(`${API}/login/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slot }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data.success) {
+        setError(data.error || 'Could not log out — try again')
+        return
+      }
+      resetPhoneFields()
+      setOtp('')
+      setStep('phone')
+      onLogout(slot)
+    } catch (e) {
+      setError(e.message || 'Could not log out')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const accountMode = accountPrimaryMode(accountStates, slot, postingModes)
+  const campOn = isCampaignEnabled(accountStates, slot, postingModes)
+  const fwdOn = isForwardingEnabled(accountStates, slot, postingModes)
+  const deskLabel = campOn && fwdOn
+    ? 'Forward + Campaign'
+    : fwdOn
+      ? 'Forward desk'
+      : campOn
+        ? 'Campaign desk'
+        : 'No desk selected'
+
+  if (loginTab && info) {
+    const statusLine = statusSub
+      || (status === 'running' ? 'Sending messages now'
+        : status === 'sleeping' || status === 'rate_limited' ? formatAccountStatusLabel(status)
+          : 'Not sending right now')
+
+    return (
+      <article className="account-card account-card--login-manage account-card--dense account-card--v3">
+        <header className="acct-login-manage__header">
+          <div className="acct-login-manage__identity">
+            <AccountNameEditor
+                slot={slot}
+                info={info}
+                onRenamed={onRenamed}
+                startEditing={nameEditOpen}
+                onEditingChange={open => { if (!open) setNameEditOpen(false) }}
+              />
+            <p className="acct-v3-phone-row">
+              {info.phone && <span>{formatPhoneDisplay(info.phone)}</span>}
+              {isSubAccount && <SubscriptionBadge variant="dot" title="Subscription account" />}
+            </p>
+          </div>
+          <StatusBadge
+            status={status}
+            pulse={status === 'running'}
+            label={
+              status === 'sleeping' ? 'Waiting'
+                : status === 'rate_limited' ? 'Limited'
+                  : undefined
+            }
+          />
+        </header>
+
+        <div className="acct-login-manage__body">
+          <p className="acct-login-manage__status">{statusLine}</p>
+          <p className="acct-login-manage__desk">
+            <span className="acct-login-manage__desk-label">Assigned to</span>
+            <strong>{deskLabel}</strong>
+          </p>
+          {membership && (
+            <p className="acct-login-manage__meta">
+              {membership.total} groups on Telegram
+              {joinToday ? ` · ${joinToday.today}/${joinToday.limit ?? '—'} joins today` : ''}
+            </p>
+          )}
+
+          <div className="acct-login-manage__mode">
+            <p className="field-label">Change desk</p>
+            <AccountModeSwitcher
+              slot={slot}
+              postingModeConfig={postingModeConfig || acctState?.posting_mode_config}
+              postingModes={postingModes}
+              accountStates={accountStates}
+              onUpdated={onPostingModeUpdated}
+              className="acct-v3-mode-switch"
+            />
+          </div>
+
+          {error && <p className="field-error">{error}</p>}
+
+          <div className="acct-login-manage__actions">
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={() => setNameEditOpen(true)}
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={startRelogin}
+              disabled={loading}
+            >
+              <ButtonContent loading={loading} loadingLabel="Working…">Re-login (phone + OTP)</ButtonContent>
+            </button>
+            <button
+              type="button"
+              className="btn btn--ghost btn--danger-text"
+              onClick={doLogout}
+              disabled={loading || anyRunning}
+              title={anyRunning ? 'Stop the account on the Setup tab before logging out' : undefined}
+            >
+              Log out
+            </button>
+          </div>
+
+          {onOpenSetupTab && (
+            <p className="acct-login-manage__next">
+              Ready to send?{' '}
+              <button type="button" className="accounts-login-guide__link" onClick={onOpenSetupTab}>
+                Open Setup tab →
+              </button>
+            </p>
+          )}
+        </div>
+      </article>
+    )
+  }
+
+  const uiFilter = workspaceMode || setupFilter
+  const showCampaignUi = uiFilter === 'all' || uiFilter === 'campaign'
+  const showForwardingUi = uiFilter === 'all' || uiFilter === 'forwarding'
+  const fwdCfg = postingModeConfig?.forwarding || acctState?.posting_mode_config?.forwarding || {}
+  const forwardSourceType = fwdCfg.source_type === 'telegram_post' ? 'telegram_post' : 'template'
+  const primaryMode = workspaceMode || accountPrimaryMode(accountStates, slot, postingModes)
+  const modeMismatch = workspaceMode && accountMode !== 'off' && accountMode !== workspaceMode
+  const showMessageEditor = primaryMode === 'campaign'
+    || (primaryMode === 'forwarding' && forwardSourceType === 'template')
   const joinsToday = joinToday?.today ?? 0
   const joinsLimit = joinToday?.limit ?? 0
   const joinsTone = joinToday?.restricted ? 'bad' : joinsLimit > 0 && joinsToday >= joinsLimit * 0.8 ? 'warn' : 'good'
   const healthTone = health === 'good' ? 'good' : health === 'warning' ? 'warn' : health === 'bad' ? 'bad' : 'neutral'
-  const nextIn = acctState?.next_cycle_in > 0 ? acctState.next_cycle_in : 0
   const liveClass = status === 'running' ? 'running'
     : (status === 'sleeping' || status === 'rate_limited') ? 'waiting'
       : 'stopped'
-  const currentGroup = acctState?.current_group
-    ? `@${String(acctState.current_group).replace(/^@/, '')}`
-    : null
-  const statusSub = currentGroup && acctRunning
-    ? currentGroup
-    : (nextIn > 0 && (status === 'running' || status === 'sleeping'))
-      ? `next in ${formatCountdown(nextIn)}`
-      : null
   const hasHealth = healthScore != null && healthScore > 0
   const joinsPct = joinsLimit > 0 ? Math.round((joinsToday / joinsLimit) * 100) : null
-  const cycleDisplay = cycleTotal > 0
-    ? `${cycleProcessed}/${cycleTotal}`
-    : (cycleNum ? `#${cycleNum}` : null)
 
   const metaParts = []
   if (membership) {
@@ -354,22 +602,46 @@ export function AccountCard({
   if (membershipStale) metaParts.push('stale')
   const metaLine = metaParts.join(' · ')
 
+  const campStatLabel = campRunning ? 'Running' : 'Stopped'
+  const campStatDetail = campTotal > 0
+    ? `${campProcessed}/${campTotal} sent · cycle ${campCycle || '—'}`
+    : `cycle ${campCycle || '—'}`
+  const fwdStatLabel = fwdRunning ? 'Running' : 'Stopped'
+  const fwdStatDetail = fwdTotal > 0
+    ? `${fwdProcessed}/${fwdTotal}${fwdBatchTotal ? ` · B${fwdBatch}/${fwdBatchTotal}` : ''}`
+    : `tick ${fwdCycle || '—'}`
+
   const cardClass = [
     'account-card',
     isActive ? 'account-card--active' : '',
     `account-card--${status}`,
     heavyLimit ? 'account-card--sleep' : '',
     isSubAccount ? 'account-card--subscription' : '',
+    loginTab && !info ? 'account-card--login-empty' : '',
   ].filter(Boolean).join(' ')
 
+  const loginSlotTitle = loginTab ? `Connect ${label}` : null
+  const isSwitching = switchingAccount === slot
+
   return (
-    <article className={`${cardClass} account-card--dense account-card--v3 account-card--live account-card--live-${liveClass}`}>
+    <article className={`${cardClass} account-card--dense account-card--v3 account-card--live account-card--live-${liveClass}${compactSetup ? ' account-card--setup-compact' : ''}${loginTab && info ? ' account-card--login-manage' : ''}${isSwitching ? ' account-card--switching' : ''}`}>
+      {isSwitching && (
+        <div className="account-card-switch-overlay" role="status" aria-live="polite">
+          <InlineLoader label={`Loading ${label}…`} size={16} />
+        </div>
+      )}
       {info ? (
         <>
           <div className="acct-v3-shine" aria-hidden />
           <header className="acct-v3-header">
             <div className="acct-v3-identity">
-              <h3 className="acct-v3-name">{displayName}</h3>
+              <AccountNameEditor
+                slot={slot}
+                info={info}
+                onRenamed={onRenamed}
+                startEditing={nameEditOpen}
+                onEditingChange={open => { if (!open) setNameEditOpen(false) }}
+              />
               <p className="acct-v3-phone-row">
                 {info.phone && <span>{formatPhoneDisplay(info.phone)}</span>}
                 {isSubAccount && <SubscriptionBadge variant="dot" title="Subscription account" />}
@@ -392,143 +664,253 @@ export function AccountCard({
           </header>
 
           <div className="acct-v3-body" onClick={e => e.stopPropagation()}>
-            <MetricGrid columns={2} className="acct-v3-grid">
-              {cycleTotal > 0 ? (
-                <MetricBlock
-                  className="acct-v3-cell"
-                  label="Send slice"
-                  value={cycleTotal}
-                  tone="neutral"
-                  title="Groups assigned to this account for posting (share of master list, minus dead names). Cycle bar uses this count."
-                />
-              ) : null}
-              {membership != null || refreshingJoined ? (
-                <MetricBlock
-                  className="acct-v3-cell"
-                  label="On Telegram"
-                  value={refreshingJoined ? '…' : membership.total}
-                  tone={membershipStale ? 'warn' : 'neutral'}
-                  title={membershipTooltip}
-                />
-              ) : null}
-              {joinToday ? (
-                <MetricBlock
-                  className="acct-v3-cell"
-                  label="Joins"
-                  value={`${joinToday.today}${joinToday.limit != null ? `/${joinToday.limit}` : ''}`}
-                  progress={joinsPct}
-                  tone={joinsTone}
-                  title={JOINS_TODAY_TOOLTIP}
-                />
-              ) : null}
-              {cycleNum != null ? (
-                <MetricBlock
-                  className={`acct-v3-cell${!hasHealth ? ' acct-v3-cell--span' : ''}`}
-                  label="Cycle"
-                  value={cycleDisplay || `#${cycleNum}`}
-                  progress={cycleTotal > 0 ? cyclePct : null}
-                  tone={cyclePct >= 70 ? 'good' : cyclePct >= 35 ? 'warn' : 'neutral'}
-                  title={cycleNum
-                    ? `${cycleSuccess} OK · ${cycleFailed} fail · cycle #${cycleNum}`
-                    : undefined}
-                />
-              ) : null}
-              {hasHealth ? (
-                <MetricBlock
-                  className="acct-v3-cell"
-                  label="Health"
-                  value={`${healthScore}%`}
-                  progress={healthScore}
-                  tone={healthTone}
-                  title={`Health score ${healthScore}%`}
-                />
-              ) : null}
-            </MetricGrid>
-            {(refreshingJoined || metaLine) && (
-              <p className="acct-v3-meta">
-                {refreshingJoined ? (
-                  <span className="acct-v3-meta-loading"><Spinner size={10} /> Scanning…</span>
-                ) : metaLine}
-              </p>
+            {compactSetup ? (
+              <div className="acct-v3-stats-bar" role="group" aria-label="Account stats">
+                {(membership != null || refreshingJoined) && (
+                  <span
+                    className={`acct-v3-stat${membershipStale ? ' acct-v3-stat--warn' : ''}`}
+                    title={membershipTooltip}
+                  >
+                    <strong>{refreshingJoined ? '…' : membership.total}</strong>
+                    <span className="acct-v3-stat-label">groups</span>
+                  </span>
+                )}
+                {joinToday && (
+                  <span
+                    className={`acct-v3-stat acct-v3-stat--joins${joinsTone === 'bad' ? ' acct-v3-stat--bad' : joinsTone === 'warn' ? ' acct-v3-stat--warn' : ''}`}
+                    title={JOINS_TODAY_TOOLTIP}
+                  >
+                    <strong>{joinToday.today}{joinToday.limit != null ? `/${joinToday.limit}` : ''}</strong>
+                    <span className="acct-v3-stat-label">joins today</span>
+                  </span>
+                )}
+                {showCampaignUi && (
+                  <span
+                    className={`acct-v3-stat acct-v3-stat--desk${campRunning ? ' acct-v3-stat--live' : ''}`}
+                    title={`Campaign: ${campSuccess} sent · ${campFailed} failed`}
+                  >
+                    <strong>Campaign {campStatLabel.toLowerCase()}</strong>
+                    <span className="acct-v3-stat-label">{campStatDetail}</span>
+                  </span>
+                )}
+                {showForwardingUi && (
+                  <span
+                    className={`acct-v3-stat acct-v3-stat--desk${fwdRunning ? ' acct-v3-stat--live' : ''}`}
+                    title={`Forward tick #${fwdCycle} · sent ${fwdSuccess} · fail ${fwdFailed}`}
+                  >
+                    <strong>Forward {fwdStatLabel.toLowerCase()}</strong>
+                    <span className="acct-v3-stat-label">{fwdStatDetail}</span>
+                  </span>
+                )}
+                {hasHealth && (
+                  <span className={`acct-v3-stat acct-v3-stat--health${healthTone === 'good' ? ' acct-v3-stat--live' : healthTone === 'warning' ? ' acct-v3-stat--warn' : healthTone === 'bad' ? ' acct-v3-stat--bad' : ''}`}>
+                    <strong>{healthScore}%</strong>
+                    <span className="acct-v3-stat-label">health</span>
+                  </span>
+                )}
+                {membership && !refreshingJoined && (
+                  <button
+                    type="button"
+                    className="acct-v3-stat acct-v3-stat--link"
+                    onClick={() => onRefreshJoined(slot)}
+                    disabled={refreshingJoined}
+                  >
+                    Rescan groups
+                  </button>
+                )}
+              </div>
+            ) : (
+              <>
+                <MetricGrid columns={2} className="acct-v3-grid">
+                  {membership != null || refreshingJoined ? (
+                    <MetricBlock
+                      className="acct-v3-cell"
+                      label="On Telegram"
+                      value={refreshingJoined ? '…' : membership.total}
+                      tone={membershipStale ? 'warn' : 'neutral'}
+                      title={membershipTooltip}
+                    />
+                  ) : null}
+                  {joinToday ? (
+                    <MetricBlock
+                      className="acct-v3-cell"
+                      label="Joins"
+                      value={`${joinToday.today}${joinToday.limit != null ? `/${joinToday.limit}` : ''}`}
+                      progress={joinsPct}
+                      tone={joinsTone}
+                      title={JOINS_TODAY_TOOLTIP}
+                    />
+                  ) : null}
+                  {showCampaignUi && (
+                    <MetricBlock
+                      className="acct-v3-cell acct-v3-cell--feature"
+                      label="Campaign"
+                      value={campRunning ? 'Running' : 'Stopped'}
+                      sub={campTotal > 0 ? `${campProcessed}/${campTotal} · cycle ${campCycle || '—'}` : `cycle ${campCycle || '—'}`}
+                      tone={campRunning ? 'good' : 'neutral'}
+                      title={`Campaign: ${campSuccess} sent · ${campFailed} failed`}
+                    />
+                  )}
+                  {showForwardingUi && (
+                    <MetricBlock
+                      className="acct-v3-cell acct-v3-cell--feature"
+                      label="Forwarding"
+                      value={fwdRunning ? 'Running' : 'Stopped'}
+                      sub={fwdTotal > 0
+                        ? `${fwdProcessed}/${fwdTotal}${fwdJoined > fwdTotal ? ` · ${fwdJoined} joined` : ''}${fwdBatchTotal ? ` · B${fwdBatch}/${fwdBatchTotal}` : ''}`
+                        : (fwdJoined ? `${fwdJoined} joined` : `tick ${fwdCycle || '—'}`)}
+                      tone={fwdRunning ? 'good' : 'neutral'}
+                      title={`Forward tick #${fwdCycle} · sent ${fwdSuccess} · skip ${fwdSkipped} · fail ${fwdFailed}`}
+                    />
+                  )}
+                  {hasHealth ? (
+                    <MetricBlock
+                      className="acct-v3-cell"
+                      label="Health"
+                      value={`${healthScore}%`}
+                      progress={healthScore}
+                      tone={healthTone}
+                      title={`Health score ${healthScore}%`}
+                    />
+                  ) : null}
+                </MetricGrid>
+                {(refreshingJoined || metaLine) && (
+                  <p className="acct-v3-meta">
+                    {refreshingJoined ? (
+                      <span className="acct-v3-meta-loading"><Spinner size={10} /> Scanning…</span>
+                    ) : (
+                      <>
+                        {metaLine}
+                        {membership && (
+                          <>
+                            {' · '}
+                            <button
+                              type="button"
+                              className="acct-v3-meta-link"
+                              onClick={() => onRefreshJoined(slot)}
+                              disabled={refreshingJoined}
+                            >
+                              Rescan groups
+                            </button>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </p>
+                )}
+              </>
             )}
           </div>
 
-          <footer className="acct-v3-actions" onClick={e => e.stopPropagation()}>
-            {!acctRunning ? (
-              <Button
-                variant="success"
-                size="sm"
-                className="acct-v3-btn-action"
-                onClick={() => onStart(slot, false)}
-                disabled={startLoading}
-                loading={startLoading}
-                loadingLabel="…"
-              >
-                <span className="acct-v3-btn-icon" aria-hidden>▶</span> Start
-              </Button>
-            ) : (
-              <Button
-                variant="danger"
-                size="sm"
-                className="acct-v3-btn-action acct-v3-btn-stop"
-                onClick={handleStop}
-                disabled={stopLoading}
-                loading={stopLoading}
-                loadingLabel="…"
-              >
-                <span className="acct-v3-btn-icon" aria-hidden>⏹</span> Stop
-              </Button>
+          <div className={`acct-v3-setup-flow${workspaceMode ? ` acct-v3-setup-flow--${workspaceMode}` : ''}${compactSetup ? ' acct-v3-setup-flow--compact' : ''}`} onClick={e => e.stopPropagation()}>
+            {modeMismatch && (
+              <div className="modes-setup-mismatch acct-v3-mode-mismatch">
+                <p className="stat-hint">
+                  Account is on <strong>{accountMode}</strong> — switch to <strong>{workspaceMode === 'forwarding' ? 'Forward' : 'Campaign'}</strong> to use this workspace.
+                </p>
+                <AccountModeSwitcher
+                  slot={slot}
+                  postingModeConfig={postingModeConfig || acctState?.posting_mode_config}
+                  postingModes={postingModes}
+                  accountStates={accountStates}
+                  onUpdated={onPostingModeUpdated}
+                  className="acct-v3-mode-switch"
+                />
+              </div>
             )}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="acct-v3-btn-action acct-v3-btn-restart"
-              onClick={handleRestart}
-              disabled={startLoading || stopLoading}
-            >
-              ↻ Restart
-            </Button>
-            <AccountCardMenu
-              open={menuOpen}
-              onToggle={() => setMenuOpen(v => !v)}
-              onClose={() => setMenuOpen(false)}
-              items={[
-                {
-                  key: 'rescan',
-                  label: refreshingJoined ? 'Scanning…' : 'Rescan membership',
-                  onClick: () => { setMenuOpen(false); onRefreshJoined(slot) },
-                  disabled: refreshingJoined,
-                },
-                {
-                  key: 'logout',
-                  label: 'Log out',
-                  danger: true,
-                  onClick: () => { setMenuOpen(false); doLogout() },
-                  disabled: loading || acctRunning,
-                },
-              ]}
-            />
-          </footer>
-
-          {/* ── Per-account message editor ── */}
-          <div className="acct-v3-message-editor" onClick={e => e.stopPropagation()}>
-            <MessageEditor
-              slot={slot}
-              customMessage={customMessage}
-              onSaved={onMessageSaved || (() => {})}
-            />
+            <div className="acct-v3-toolbar">
+              <div className="acct-v3-toolbar-run">
+                <AccountPrimaryActions
+                  slot={slot}
+                  postingModeConfig={postingModeConfig || acctState?.posting_mode_config}
+                  postingModes={postingModes}
+                  accountStates={accountStates}
+                  acctState={acctState}
+                  forwardJob={forwardJob}
+                  onShutdown={onShutdown}
+                  onStart={onStart}
+                  onStop={onStop}
+                  accountActionLoading={accountActionLoading}
+                  forcedMode={workspaceMode || undefined}
+                  className="acct-v3-primary-actions"
+                />
+              </div>
+              <div className="acct-v3-toolbar-account" aria-label="Account actions">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="acct-v3-btn-action acct-v3-btn-rename"
+                  onClick={() => setNameEditOpen(true)}
+                >
+                  Rename
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="acct-v3-btn-action acct-v3-btn-logout"
+                  onClick={doLogout}
+                  disabled={loading || anyRunning}
+                  title={anyRunning ? 'Stop the account before logging out' : undefined}
+                >
+                  Log out
+                </Button>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="acct-v3-btn-action acct-v3-btn-restart"
+                onClick={handleRestart}
+                disabled={startLoading || stopLoading || campStartLoading || fwdStartLoading}
+              >
+                ↻ Restart
+              </Button>
+            </div>
+            <details className="acct-setup-details">
+              <summary className="acct-setup-details__summary">
+                {workspaceMode === 'forwarding' ? 'Forward message & settings' : workspaceMode === 'campaign' ? 'Campaign message & settings' : 'Message & settings'}
+              </summary>
+              <PostingModePanel
+                slot={slot}
+                postingModeConfig={postingModeConfig || acctState?.posting_mode_config}
+                postingModes={postingModes}
+                accountStates={accountStates}
+                acctRunning={anyRunning}
+                onUpdated={onPostingModeUpdated}
+                onStartForward={s => onStart(s, false, 'forwarding')}
+                onStopForward={s => onStop(s, 'forwarding')}
+                setupFilter={uiFilter === 'all' ? workspaceMode || 'all' : uiFilter}
+                layout="simple"
+                primaryMode={primaryMode}
+              />
+              {showMessageEditor && (
+                <div className="acct-v3-message-editor">
+                  <MessageEditor
+                    slot={slot}
+                    customMessage={customMessage}
+                    onSaved={onMessageSaved || (() => {})}
+                  />
+                </div>
+              )}
+            </details>
           </div>
         </>
       ) : step === 'idle' ? (
         <div className="account-card-login">
-          <p className="stat-hint">Not logged in</p>
+          {loginTab && (
+            <>
+              <h3 className="section-title-sm">{loginSlotTitle}</h3>
+              <p className="stat-hint">Enter the Telegram phone number for this slot. You will get one OTP in the Telegram app.</p>
+            </>
+          )}
+          {!loginTab && <p className="stat-hint">Not logged in</p>}
           <button type="button" className="btn btn--success" onClick={() => { resetPhoneFields(); setStep('phone') }}>
-            + Login
+            {loginTab ? 'Connect with phone + OTP' : '+ Login'}
           </button>
         </div>
       ) : step === 'phone' ? (
         <div className="account-card-form" onClick={e => e.stopPropagation()}>
-          <label className="field-label">Phone number</label>
+          {loginTab && <h3 className="section-title-sm">{loginSlotTitle}</h3>}
+          <label className="field-label">Step 1 — Phone number</label>
           <div className="field-row">
             <select className="input input--select" value={countryCode} onChange={e => setCountryCode(e.target.value)}>
               {COUNTRY_CODES.map(c => <option key={c} value={c}>{c}</option>)}
@@ -557,7 +939,8 @@ export function AccountCard({
         </div>
       ) : (
         <div className="account-card-form" onClick={e => e.stopPropagation()}>
-          <p className="field-hint">OTP sent to <strong>{phone}</strong></p>
+          {loginTab && <h3 className="section-title-sm">{loginSlotTitle}</h3>}
+          <p className="field-hint">Step 2 — OTP sent to <strong>{phone}</strong>. Check the Telegram app on that phone.</p>
           <input className="input" placeholder="Enter OTP" value={otp} onChange={e => setOtp(e.target.value)} onKeyDown={e => e.key === 'Enter' && verifyOtp()} />
           {error && <p className="field-error">{error}</p>}
           <div className="btn-row">

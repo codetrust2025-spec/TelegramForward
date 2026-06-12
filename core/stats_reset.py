@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone
 
 from core.config import DATA_DIR
+from core.ist_time import ist_day_start_iso, ist_day_start_ts
 
 ROLLING_WINDOW_SECONDS = 86400
 MIN_RESET_INTERVAL_SECONDS = 2.0
@@ -70,26 +71,45 @@ def get_reset_at_iso(account_id: str | None = None) -> str | None:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
-def get_effective_cutoff(account_id: str | None = None, now: float | None = None) -> float:
-    """
-    Count events with timestamp >= this value.
-    Per-account reset overrides global; otherwise global reset; otherwise rolling 24h.
-    """
+def active_reset_timestamp(account_id: str | None = None, now: float | None = None) -> float | None:
+    """Manual reset time if it happened today (IST); stale resets roll off at midnight IST."""
     now = now or time.time()
+    day_start = ist_day_start_ts(now)
     if account_id:
         with _lock:
             per = (_load().get("per_account") or {}).get(account_id) or {}
         per_ts = _parse_ts(per.get("reset_timestamp"))
-        if per_ts:
+        if per_ts and per_ts >= day_start:
             return per_ts
     reset_ts = get_reset_timestamp()
-    if reset_ts:
+    if reset_ts and reset_ts >= day_start:
         return reset_ts
-    return now - ROLLING_WINDOW_SECONDS
+    return None
+
+
+def stats_window_kind(account_id: str | None = None, now: float | None = None) -> str:
+    """since_reset = manual reset today; ist_day = midnight IST through now."""
+    return "since_reset" if active_reset_timestamp(account_id, now) else "ist_day"
+
+
+def get_effective_cutoff(account_id: str | None = None, now: float | None = None) -> float:
+    """
+    Count events with timestamp >= this value.
+    Default window is the current IST calendar day (00:00 IST → now).
+    A manual reset today moves the cutoff forward to that moment.
+    """
+    now = now or time.time()
+    day_start = ist_day_start_ts(now)
+    manual = active_reset_timestamp(account_id, now)
+    if manual:
+        return max(manual, day_start)
+    return day_start
 
 
 def get_join_reset_baseline(account_id: str) -> int:
-    """Displayed joined count baseline captured at last stats reset."""
+    """Displayed joined count baseline captured at last stats reset (today IST only)."""
+    if not active_reset_timestamp(account_id):
+        return 0
     with _lock:
         data = _load()
         per = (data.get("per_account") or {}).get(account_id) or {}

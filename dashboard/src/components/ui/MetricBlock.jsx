@@ -15,11 +15,16 @@ export function MetricBlock({
   value,
   sub,
   title,
+  /** Longer explanation; shows a ? icon with hover/focus tooltip */
+  help,
   tone = 'neutral',
   density = 'compact',
   variant = 'card',
   progress,
   className = '',
+  /** Primary KPI — stronger border/glow in daily stats */
+  highlight = false,
+  highlightVariant,
 }) {
   const hasProgress = progress != null && !Number.isNaN(Number(progress))
   const pct = hasProgress ? Math.max(0, Math.min(100, Number(progress))) : 0
@@ -28,13 +33,30 @@ export function MetricBlock({
     `metric-block--${density}`,
     `metric-block--${variant}`,
     TONE_CLASS[tone] || '',
+    highlight ? 'metric-block--key' : '',
+    highlight && highlightVariant ? `metric-block--key-${highlightVariant}` : '',
     className,
   ].filter(Boolean).join(' ')
 
+  const tip = help || title
+
   return (
-    <div className={classes} title={title || undefined}>
+    <div className={classes} title={tip || undefined}>
       <div className="metric-block-head">
-        <span className="metric-block-label">{label}</span>
+        <span className="metric-block-label-row">
+          <span className="metric-block-label">{label}</span>
+          {help ? (
+            <button
+              type="button"
+              className="metric-block-help"
+              aria-label={`About ${label}`}
+              title={help}
+              onClick={(e) => e.stopPropagation()}
+            >
+              ?
+            </button>
+          ) : null}
+        </span>
         <span className="metric-block-value">{value}</span>
       </div>
       {sub && <span className="metric-block-sub">{sub}</span>}

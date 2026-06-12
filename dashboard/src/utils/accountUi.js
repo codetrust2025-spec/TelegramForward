@@ -44,8 +44,15 @@ export function accountLabel(slot) {
   return m ? `Account ${m[1]}` : slot
 }
 
-/** Telegram display name (first + last), or @username, or phone. */
-export function telegramDisplayName(info) {
+/** Inbox UI: which logged-in Telegram account owns this chat (custom or Telegram name). */
+export function inboxAccountOwnerName(slot, accountInfo) {
+  if (!slot) return ''
+  const info = accountInfo?.[slot]
+  return telegramDisplayName(info) || accountLabel(slot)
+}
+
+/** Telegram name from login (ignores dashboard display_name override). */
+export function telegramLegalName(info) {
   if (!info) return null
   const name = String(info.name || '').trim()
   const first = String(info.first_name || '').trim()
@@ -54,9 +61,15 @@ export function telegramDisplayName(info) {
   const user = String(info.username || '').trim().replace(/^@/, '')
   if (full) return full
   if (user) return `@${user}`
-  const phone = String(info.phone || '').trim()
-  if (phone) return phone.startsWith('+') ? phone : `+${phone}`
   return null
+}
+
+/** Profile label in UI — custom display_name if set, else Telegram name. */
+export function telegramDisplayName(info) {
+  if (!info) return null
+  const custom = String(info.display_name || '').trim()
+  if (custom) return custom
+  return telegramLegalName(info)
 }
 
 /** @username line for mini cards (null if no username). */
@@ -253,15 +266,52 @@ export function sortAccountsForDisplay(slots, accountStates, accountInfo) {
   })
 }
 
-/** running | sleeping | rate_limited | stopped | idle */
-export function getAccountStatus(acctState, loggedIn, accountStatus) {
+export function isAccountOnShutdown(accountShutdown, slot) {
+  const info = accountShutdown?.[slot]
+  return !!(info && info.active)
+}
+
+/** True when slot is on the 1-week auto-rest list (UI or backend). */
+export function isSlotOnShutdownList(accountShutdown, shutdownList, slot) {
+  if (!slot) return false
+  if (isAccountOnShutdown(accountShutdown, slot)) return true
+  return !!(shutdownList && shutdownList[slot])
+}
+
+/** Normalize per-slot shutdown object or full slot→info map for status helpers. */
+export function accountShutdownMapForSlot(accountShutdown, slot) {
+  if (!accountShutdown || !slot) return {}
+  if (accountShutdown.active !== undefined) {
+    return { [slot]: accountShutdown }
+  }
+  return accountShutdown
+}
+
+export function filterSlotsExcludingShutdown(slots, accountShutdown, shutdownList) {
+  return (slots || []).filter(
+    slot => !isSlotOnShutdownList(accountShutdown, shutdownList, slot),
+  )
+}
+
+/** running | sleeping | rate_limited | stopped | idle | shutdown */
+export function getAccountStatus(acctState, loggedIn, accountStatus, accountShutdown, slot) {
+  if (slot && isAccountOnShutdown(accountShutdown, slot)) return 'shutdown'
   if (!loggedIn) return 'idle'
   const lifecycle = accountStatus?.lifecycle
   if (lifecycle === 'ERROR') return 'rate_limited'
   if (lifecycle === 'SLEEPING' || isHeavyRateLimit(acctState)) return 'sleeping'
   if (!acctState) return lifecycle === 'RUNNING' ? 'running' : 'stopped'
   if (acctState.status === 'flood_wait') return 'rate_limited'
-  if (lifecycle === 'RUNNING' || acctState.running) return 'running'
+  if (
+    lifecycle === 'RUNNING'
+    || acctState.running
+    || acctState.campaign_running
+    || acctState.forwarding_running
+    || acctState.campaign?.running
+    || acctState.forwarding?.running
+  ) {
+    return 'running'
+  }
   return 'stopped'
 }
 
@@ -271,10 +321,25 @@ const STATUS_LABELS = {
   rate_limited: 'Rate limited',
   stopped: 'Stopped',
   idle: 'Not logged in',
+  shutdown: 'Shutdown (1 week)',
 }
 
 export function formatAccountStatusLabel(status) {
   return STATUS_LABELS[status] || 'Unknown'
+}
+
+/** Short labels for account grid mini cards (narrow columns). */
+const MINI_STATUS_LABELS = {
+  running: 'Active',
+  sleeping: 'Waiting',
+  rate_limited: 'Limited',
+  stopped: 'Idle',
+  idle: 'Empty',
+  shutdown: 'Resting',
+}
+
+export function formatAccountMiniStatusLabel(status) {
+  return MINI_STATUS_LABELS[status] || formatAccountStatusLabel(status)
 }
 
 /** Compact lines for sidebar mini cards. */
@@ -354,4 +419,99 @@ export function accountProfileHint(slot) {
     account8: 'Safe',
   }
   return hints[slot] || null
+}
+
+/** Raw enabled flags (may be stale if both were true in old data). */
+function rawCampaignEnabled(accountStates, slot, postingModes) {
+  const cfg = postingModes?.[slot]
+  if (cfg && typeof cfg.campaign_enabled === 'boolean') return cfg.campaign_enabled
+  const label = accountStates?.[slot]?.posting_mode || cfg?.mode || 'campaign'
+  return label === 'campaign' || label === 'both'
+}
+
+function rawForwardingEnabled(accountStates, slot, postingModes) {
+  const cfg = postingModes?.[slot]
+  if (cfg && typeof cfg.forwarding_enabled === 'boolean') return cfg.forwarding_enabled
+  const label = accountStates?.[slot]?.posting_mode || cfg?.mode || 'campaign'
+  return label === 'forwarding' || label === 'both'
+}
+
+/** At most one feature on per account (forwarding wins if legacy data had both). */
+export function isCampaignEnabled(accountStates, slot, postingModes) {
+  const c = rawCampaignEnabled(accountStates, slot, postingModes)
+  const f = rawForwardingEnabled(accountStates, slot, postingModes)
+  if (c && f) return false
+  return c
+}
+
+export function isForwardingEnabled(accountStates, slot, postingModes) {
+  const c = rawCampaignEnabled(accountStates, slot, postingModes)
+  const f = rawForwardingEnabled(accountStates, slot, postingModes)
+  if (c && f) return true
+  return f
+}
+
+/** Per-slot posting mode for fleet filters and stats views (legacy string). */
+export function postingModeForSlot(accountStates, slot, postingModes) {
+  const c = isCampaignEnabled(accountStates, slot, postingModes)
+  const f = isForwardingEnabled(accountStates, slot, postingModes)
+  if (f) return 'forwarding'
+  if (c) return 'campaign'
+  return 'none'
+}
+
+export function featureRuntime(acctState, feature) {
+  const block = acctState?.[feature]
+  if (block && typeof block === 'object') return block
+  if (feature === 'campaign') {
+    return {
+      running: false,
+      cycle: acctState?.cycle ?? 0,
+      success: acctState?.success ?? 0,
+      failed: acctState?.failed ?? 0,
+      skipped_already_posted: acctState?.skipped_already_posted ?? 0,
+      active_groups: acctState?.my_groups?.length ?? acctState?.active_groups ?? 0,
+      status: acctState?.status ?? 'stopped',
+      success_list: acctState?.success_list ?? [],
+      failed_list: acctState?.failed_list ?? [],
+    }
+  }
+  const fwd = acctState?.forwarding
+  return {
+    running: acctState?.forwarding_running ?? fwd?.running ?? false,
+    cycle: acctState?.forwarding_cycle ?? fwd?.cycle ?? 0,
+    success: fwd?.success ?? acctState?.forwarding_success ?? 0,
+    failed: fwd?.failed ?? acctState?.forwarding_failed ?? 0,
+    skipped_already_posted: fwd?.skipped_already_posted ?? acctState?.forwarding_skipped_already_posted ?? 0,
+    active_groups: fwd?.active_groups ?? acctState?.forwarding_active_groups ?? acctState?.active_groups ?? 0,
+    status: acctState?.forwarding_status ?? fwd?.status ?? acctState?.status ?? 'stopped',
+    forward_batch: acctState?.forward_batch ?? fwd?.forward_batch ?? 0,
+    forward_batch_total: acctState?.forward_batch_total ?? fwd?.forward_batch_total ?? 0,
+    forward_joined_total: acctState?.forward_joined_total ?? fwd?.forward_joined_total ?? 0,
+    success_list: fwd?.success_list ?? [],
+    failed_list: fwd?.failed_list ?? [],
+  }
+}
+
+/** Campaign | forwarding | off — for simplified setup UI. */
+export function accountPrimaryMode(accountStates, slot, postingModes) {
+  const forwardingOn = isForwardingEnabled(accountStates, slot, postingModes)
+  if (forwardingOn) return 'forwarding'
+  const campaignOn = isCampaignEnabled(accountStates, slot, postingModes)
+  if (campaignOn) return 'campaign'
+  return 'off'
+}
+
+/** Setup / stats UI view when Accounts filter is All vs Campaign vs Forwarding. */
+export function setupViewForAccountsFilter(
+  accountsModeFilter,
+  slot,
+  accountStates,
+  postingModes,
+) {
+  if (accountsModeFilter === 'forwarding' || accountsModeFilter === 'campaign') {
+    return accountsModeFilter
+  }
+  if (slot) return postingModeForSlot(accountStates, slot, postingModes)
+  return 'all'
 }

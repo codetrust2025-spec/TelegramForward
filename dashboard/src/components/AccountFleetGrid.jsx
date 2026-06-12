@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { Spinner } from '../Loader.jsx'
 import {
   accountLabel,
   formatAccountStatusLabel,
@@ -149,6 +150,11 @@ export function AccountFleetGrid({
                 onClick={() => handleSelect(row.slot)}
                 disabled={busy}
               >
+                {busy && (
+                  <span className="acct-fleet-tile-switching" aria-hidden>
+                    <Spinner size={16} />
+                  </span>
+                )}
                 <span className="acct-fleet-tile-top">
                   <span className="acct-fleet-tile-id">{shortSlotLabel(row.slot)}</span>
                   {isSub && <span className="acct-fleet-tile-sub" aria-hidden title="Subscription">◆</span>}

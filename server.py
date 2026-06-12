@@ -46,10 +46,14 @@ from services.account_manager import manager
 from events.event_bus import event_bus
 from events.event_types import EventType
 
+from core.dashboard_auth_api import install_dashboard_auth
+from core.dashboard_auth_vps import _API_ROOTS
+
 registry = manager  # backward-compatible alias
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+install_dashboard_auth(app)
 
 # Per-slot login state — no cross-account coupling
 login_state: dict[str, dict] = {
@@ -452,7 +456,7 @@ async def get_daily_stats():
 
 @app.post("/stats/reset")
 async def reset_stats(payload: dict | None = None):
-    """Reset daily stat counters from now. Stats-only — no chat/message data deleted."""
+    """Manual mid-day reset; default daily window is midnight IST → now."""
     return await _perform_stats_reset(payload or {})
 
 
@@ -2028,9 +2032,8 @@ if os.path.exists(STATIC_DIR):
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         # Never serve index.html for API-like paths (avoids JSON parse errors in the UI)
-        api_roots = {"groups", "account", "accounts", "login", "message", "start", "stop", "state", "health", "ws", "inbox", "crm", "stats"}
         first = full_path.split("/")[0] if full_path else ""
-        if first in api_roots:
+        if first in _API_ROOTS:
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="Not Found")
         file_path = os.path.join(STATIC_DIR, full_path)

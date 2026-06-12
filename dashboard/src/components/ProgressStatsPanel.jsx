@@ -16,6 +16,14 @@ export function ProgressStatsPanel({
   secondary,
   children,
   hideGrid = false,
+  successLabel = 'Posted OK',
+  failedLabel = 'Failed',
+  successRateLabel = 'Success rate',
+  processedHint = 'tried this cycle',
+  groupsLabel = 'Groups in list',
+  successTitle = 'Messages posted successfully this cycle',
+  failedTitle = 'Groups where posting failed this cycle',
+  rateTitle = 'Share of attempts that succeeded (posted OK ÷ tried)',
 }) {
   const rateNum = parseFloat(successRate)
   const rateTone = rateNum >= 70 ? 'good' : rateNum >= 40 ? 'warn' : 'bad'
@@ -30,15 +38,15 @@ export function ProgressStatsPanel({
 
       {!hideGrid && (
       <MetricGrid columns={4} className="progress-stats-grid">
-        <MetricBlock label="Groups in list" value={totalGroups} title="Groups in this account's list" />
-        <MetricBlock label="Posted OK" value={success} tone="success" title="Messages posted successfully this cycle" />
-        <MetricBlock label="Failed" value={failed} tone="danger" title="Groups where posting failed this cycle" />
+        <MetricBlock label={groupsLabel} value={totalGroups} title="Groups in this account's list" />
+        <MetricBlock label={successLabel} value={success} tone="success" title={successTitle} />
+        <MetricBlock label={failedLabel} value={failed} tone="danger" title={failedTitle} />
         <MetricBlock
-          label="Success rate"
+          label={successRateLabel}
           value={`${successRate}%`}
-          sub={processed != null ? `${processed} tried this cycle` : null}
+          sub={processed != null ? `${processed} ${processedHint}` : null}
           tone={rateTone}
-          title="Share of attempts that succeeded (posted OK ÷ tried)"
+          title={rateTitle}
         />
       </MetricGrid>
       )}

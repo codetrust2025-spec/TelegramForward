@@ -1,13 +1,33 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { ResizableDashboardLayout } from './ResizableDashboard.jsx'
 import { ButtonContent, OverlayLoader, Spinner } from './Loader.jsx'
-import { API, WS } from './config.js'
+import { API, WS, BUILD_STAMP } from './config.js'
 import { DashboardColumn } from './components/DashboardColumn.jsx'
+import { ResponsiveOptions } from './components/ui/ResponsiveOptions.jsx'
 import { AccountPanel } from './components/AccountPanel.jsx'
-import { MessageEditor } from './components/MessageEditor.jsx'
+import { ShutdownListPanel } from './components/ShutdownListPanel.jsx'
 import { GroupsUpload } from './components/GroupsUpload.jsx'
+import { ModesSetupPanel } from './components/ModesSetupPanel.jsx'
+import { SetupAccountPicker } from './components/SetupAccountPicker.jsx'
+import { FleetDefaultsPanel } from './components/FleetDefaultsPanel.jsx'
+import { SetupMainPanel } from './components/SetupMainPanel.jsx'
+import {
+  loadWorkspaceMode,
+  saveWorkspaceMode,
+  WORKSPACE_CAMPAIGN,
+  WORKSPACE_FORWARDING,
+  WORKSPACE_MODE_OPTIONS,
+} from './utils/workspaceMode.js'
+import {
+  fleetAnyProcessRunning,
+  fleetWorkspaceAnyRunning,
+  fleetWorkspaceCanStartMore,
+  resolveWorkspaceSync,
+} from './utils/workspaceDashboard.js'
+import { SABHI_ACCOUNTS, SABHI_SETUP } from './utils/sabAccountsUi.js'
 import { GroupsModal } from './components/GroupsModal.jsx'
 import { GlobalActions } from './components/GlobalActions.jsx'
+import { AppViewNav } from './components/AppViewNav.jsx'
 import { ProgressHubPanel } from './components/ProgressHubPanel.jsx'
 import { aggregateFleetStats } from './utils/globalStats.js'
 import {
@@ -17,15 +37,35 @@ import {
 } from './components/LogPanel.jsx'
 import {
   accountLabel,
+  telegramDisplayName,
   formatJoinedStats,
   formatLogTime,
   getAccountSlots,
   getLoggedInSlots,
+  isAccountLoggedIn,
   isMembershipStale,
+  filterSlotsExcludingShutdown,
+  sortAccountsForDisplay,
+  isSlotOnShutdownList,
+  isCampaignEnabled,
+  isForwardingEnabled,
+  accountPrimaryMode,
+  featureRuntime,
+  setupViewForAccountsFilter,
 } from './utils/accountUi.js'
 import { useConfirm } from './context/ConfirmContext.jsx'
+import { statsResetConfirmOptions } from './utils/statsResetConfirm.js'
+import { useAuth } from './context/AuthContext.jsx'
+import {
+  clearOpenChatUrlParams,
+  parseOpenChatFromUrl,
+  subscribePushOpenChat,
+  syncWebPushSubscription,
+} from './utils/webPush.js'
 import { InboxPanel } from './components/InboxPanel.jsx'
 import { CandidatesPanel } from './components/CandidatesPanel.jsx'
+import { DataRoomPanel } from './components/DataRoomPanel.jsx'
+import { AdminPanel } from './components/AdminPanel.jsx'
 import {
   playNewMessageSound,
   unlockNotificationSound,
@@ -36,7 +76,11 @@ import {
 } from './utils/notificationSound.js'
 import { IncomingCallModal } from './components/crm/IncomingCallModal.jsx'
 import { computeInboxUnreadTotal, formatUnreadBadgeCount } from './utils/inboxUnread.js'
+import { syncTabUnreadBadge, resetTabUnreadBadge } from './utils/tabUnreadBadge.js'
 import { fetchCrmState } from './utils/crm.js'
+import { useCompactLayout } from './utils/useCompactLayout.js'
+import { MobileApp } from './mobile/MobileApp.jsx'
+import { DesktopApp } from './desktop/DesktopApp.jsx'
 
 
 function mergeInboxConversationList(convs, conversation, { clearUnread = false } = {}) {
@@ -72,6 +116,7 @@ function mergeInboxWs(prev, data) {
     'reply_sent',
     'outgoing_message',
     'message_edited',  // last_message preview / edited flag may have changed
+    'message_deleted',
   ])
   if (conversationPatchEvents.has(data.event) && data.conversation) {
     const convs = [...(next.slots[slot].conversations || [])]
@@ -92,11 +137,39 @@ function mergeInboxWs(prev, data) {
       }),
     }
   }
+  if (data.event === 'conversation_deleted' && data.conversation?.user_id != null) {
+    const uid = Number(data.conversation.user_id)
+    const convs = (next.slots[slot].conversations || []).filter(
+      (c) => Number(c.user_id) !== uid,
+    )
+    next.slots[slot] = { ...next.slots[slot], conversations: convs }
+  }
+  if (
+    (data.event === 'lead_updated' || data.event === 'lead_blocked')
+    && data.conversation?.user_id != null
+  ) {
+    const uid = Number(data.conversation.user_id)
+    const conv = data.conversation
+    let convs = [...(next.slots[slot].conversations || [])]
+    if (conv.crm_blocked || conv.crm_status === 'spam') {
+      convs = convs.filter((c) => Number(c.user_id) !== uid)
+    } else {
+      convs = mergeInboxConversationList(convs, conv)
+    }
+    next.slots[slot] = { ...next.slots[slot], conversations: convs }
+  }
   return next
 }
 
 
 export default function App() {
+  const {
+    enabled: authEnabled,
+    authenticated: authAuthenticated,
+    username: authUsername,
+    logout: authLogout,
+  } = useAuth()
+  const [openChatTarget, setOpenChatTarget] = useState(() => parseOpenChatFromUrl())
   const [state, setState] = useState({
     running: false, total: 40, success: 0, failed: 0,
     current_group: '', success_list: [], failed_list: [],
@@ -124,7 +197,9 @@ export default function App() {
   const [accountActionLoading, setAccountActionLoading] = useState(null) // account1:start
   const [switchingAccount, setSwitchingAccount] = useState(null)
   const [overviewScope, setOverviewScope] = useState('fleet')
-  const [mainView, setMainView] = useState('dashboard') // dashboard | inbox | candidates | logs
+  const [workspaceMode, setWorkspaceMode] = useState(loadWorkspaceMode)
+  const workspaceBootstrapDoneRef = useRef(false)
+  const [mainView, setMainView] = useState('dashboard') // dashboard | inbox | candidates | data-room | admin | logs
   const [inboxState, setInboxState] = useState({ slots: {} })
   const [crmState, setCrmState] = useState({
     leads: {},
@@ -140,6 +215,21 @@ export default function App() {
   const [inboxLiveTick, setInboxLiveTick] = useState(0)
   const [incomingCall, setIncomingCall] = useState(null)
   useEffect(() => {
+    document.documentElement.dataset.build = BUILD_STAMP
+    const url = new URL(window.location.href)
+    let changed = false
+    for (const key of ['hard', 'v']) {
+      if (url.searchParams.has(key)) {
+        url.searchParams.delete(key)
+        changed = true
+      }
+    }
+    if (changed) {
+      window.history.replaceState(null, '', url.pathname + url.search + url.hash)
+    }
+  }, [])
+
+  useEffect(() => {
     switchingAccountRef.current = switchingAccount
   }, [switchingAccount])
   const [clearingLogs, setClearingLogs] = useState(false)
@@ -149,6 +239,7 @@ export default function App() {
   const wsRef = useRef(null)
   const wsBackoffRef = useRef(1500)
   const switchingAccountRef = useRef(null)
+  const switchAbortRef = useRef(null)
   const { confirm } = useConfirm()
   const activeAcctState = state.account_states?.[state.active_account]
   const allAccountLogs = useMemo(() => {
@@ -200,6 +291,30 @@ export default function App() {
       .then(crm => setCrmState(crm))
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    const fromUrl = parseOpenChatFromUrl()
+    if (!fromUrl) return
+    setOpenChatTarget(fromUrl)
+    setMainView('inbox')
+    fetchInbox()
+    clearOpenChatUrlParams()
+  }, [fetchInbox])
+
+  useEffect(() => {
+    if (!authAuthenticated) return undefined
+    syncWebPushSubscription().catch(() => {})
+    return undefined
+  }, [authAuthenticated])
+
+  useEffect(() => {
+    return subscribePushOpenChat(target => {
+      setOpenChatTarget(target)
+      setMainView('inbox')
+      fetchInbox()
+      clearOpenChatUrlParams()
+    })
+  }, [fetchInbox])
 
   useEffect(() => {
     if (mainView !== 'inbox') return undefined
@@ -291,7 +406,11 @@ export default function App() {
         patch.crm_blocked = false
         patch.crm_status = 'new'
       }
-      convs[idx] = patch
+      if (lead?.status === 'spam') {
+        convs.splice(idx, 1)
+      } else {
+        convs[idx] = patch
+      }
       return {
         ...prev,
         slots: {
@@ -442,8 +561,22 @@ export default function App() {
       if (data.type === 'daily_stats' && data.daily_stats) {
         setState(prev => ({ ...prev, daily_stats: data.daily_stats }))
       }
-      if (data.type === 'event' && data.event === 'STATS_RESET' && data.data?.daily_stats) {
-        setState(prev => ({ ...prev, daily_stats: data.data.daily_stats }))
+      if (data.type === 'event' && data.event === 'STATS_RESET' && data.data) {
+        setState(prev => {
+          const patch = data.data.account_states
+          let account_states = prev.account_states
+          if (patch && typeof patch === 'object') {
+            account_states = { ...prev.account_states }
+            for (const [slot, partial] of Object.entries(patch)) {
+              account_states[slot] = { ...(account_states[slot] || {}), ...partial }
+            }
+          }
+          return {
+            ...prev,
+            daily_stats: data.data.daily_stats ?? prev.daily_stats,
+            account_states,
+          }
+        })
       }
       if (data.type === 'inbox') {
         setInboxState(prev => mergeInboxWs(prev, data))
@@ -481,6 +614,8 @@ export default function App() {
             scheduled_calls: data.crm.scheduled_calls || {},
             call_reminders: data.crm.call_reminders || [],
             past_due_calls: data.crm.past_due_calls || [],
+            block_list: data.crm.block_list || {},
+            blocked_count: data.crm.blocked_count ?? 0,
           })
         }
         if (data.conversation && data.slot) {
@@ -489,6 +624,49 @@ export default function App() {
             event: data.event || 'lead_updated',
             conversation: data.conversation,
           }))
+        }
+      }
+      if (data.type === 'voice_call') {
+        const session = data.session || {}
+        const slot = data.slot || session.account_id
+        const userId = data.user_id ?? session.user_id
+        if (data.crm) {
+          setCrmState({
+            leads: data.crm.leads || {},
+            stats: data.crm.stats || {},
+            due_reminders: data.crm.due_reminders || [],
+            scheduled_calls: data.crm.scheduled_calls || {},
+            call_reminders: data.crm.call_reminders || [],
+            past_due_calls: data.crm.past_due_calls || [],
+          })
+        }
+        if (data.conversation && slot) {
+          setInboxState(prev => mergeInboxWs(prev, {
+            slot,
+            event: data.event || 'call_updated',
+            conversation: data.conversation,
+          }))
+        }
+        if (data.message && slot) {
+          inboxLiveQueueRef.current.push({
+            slot,
+            event: 'call_event',
+            message: data.message,
+            conversation: data.conversation,
+            ts: Date.now(),
+          })
+          setInboxLiveTick(t => t + 1)
+        }
+        window.dispatchEvent(new CustomEvent('voice-call-session', { detail: data }))
+        const ev = data.event || ''
+        if (ev === 'telegram_answered') {
+          window.dispatchEvent(new CustomEvent('voice-call-telegram-answered', { detail: data }))
+        } else if (ev === 'telegram_active' || ev === 'active') {
+          window.dispatchEvent(new CustomEvent('voice-call-telegram-active', { detail: data }))
+        } else if (ev === 'telegram_ended' || ev === 'ended' || ev === 'missed') {
+          window.dispatchEvent(new CustomEvent('voice-call-telegram-ended', { detail: data }))
+        } else if (ev === 'telegram_failed' || ev === 'failed') {
+          window.dispatchEvent(new CustomEvent('voice-call-telegram-failed', { detail: data }))
         }
       }
       if (data.type === 'incoming_call') {
@@ -525,6 +703,27 @@ export default function App() {
     }
   }
 
+  async function provisionAccountSlot() {
+    const res = await fetch(`${API}/accounts/provision-slot`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    const data = await res.json().catch(() => ({}))
+    if (data.status !== 'ok' || !data.slot) {
+      throw new Error(data.message || data.error || 'Could not add account slot')
+    }
+    if (Array.isArray(data.account_slots)) {
+      setConfiguredSlots(data.account_slots)
+    }
+    const { type: _t, ...rest } = data
+    setState(prev => ({
+      ...prev,
+      ...rest,
+      active_account: data.slot,
+    }))
+    return data.slot
+  }
+
   async function refreshAccounts() {
     try {
       const res = await fetch(`${API}/state?t=${Date.now()}`, { cache: 'no-store' })
@@ -532,7 +731,7 @@ export default function App() {
         const data = await res.json()
         const { type: _t, ...rest } = data
         setState(prev => ({ ...prev, ...rest }))
-        return
+        return data
       }
     } catch { /* fallback below */ }
     const res = await fetch(`${API}/account/status`)
@@ -549,6 +748,14 @@ export default function App() {
       account_states: data.account_states || prev.account_states,
       custom_message: msgData.message || prev.custom_message,
     }))
+    return data
+  }
+
+  async function handleAccountChange(loginResult) {
+    await refreshAccounts()
+    if (loginResult?.slot) {
+      await switchAccount(loginResult.slot)
+    }
   }
 
   async function refreshJoinedCounts(slot, { quiet = false } = {}) {
@@ -613,6 +820,14 @@ export default function App() {
     setHardRefreshing(true)
     wsRef.current?.close()
     try {
+      if ('caches' in window) {
+        const keys = await caches.keys()
+        await Promise.all(keys.map(k => caches.delete(k)))
+      }
+    } catch {
+      /* ignore cache API errors */
+    }
+    try {
       const res = await fetch(`${API}/state?t=${Date.now()}`, { cache: 'no-store' })
       if (res.ok) {
         const data = await res.json()
@@ -622,7 +837,8 @@ export default function App() {
       /* full reload below */
     }
     const url = new URL(window.location.href)
-    url.searchParams.set('hard', Date.now().toString())
+    url.searchParams.delete('hard')
+    url.searchParams.set('v', `${BUILD_STAMP}-${Date.now()}`)
     window.location.replace(url.pathname + url.search + url.hash)
   }
 
@@ -648,36 +864,56 @@ export default function App() {
 
   async function switchAccount(slot) {
     if (!slot) return
+    const mode = accountPrimaryMode(state.account_states, slot, state.posting_modes)
+    if (mode === 'forwarding') setWorkspaceMode(WORKSPACE_FORWARDING)
+    else if (mode === 'campaign') setWorkspaceMode(WORKSPACE_CAMPAIGN)
     setOverviewScope('account')
-    if (slot === state.active_account) return
-    setSwitchingAccount(slot)
-    setState(prev => ({
-      ...prev,
-      active_account: slot,
-      custom_message: prev.account_messages?.[slot] ?? prev.custom_message,
-      ...mirrorActiveAccountFields(prev.account_states?.[slot]),
-    }))
+    const same = slot === state.active_account
+    switchAbortRef.current?.abort()
     const controller = new AbortController()
-    const timeoutId = window.setTimeout(() => controller.abort(), 8000)
+    switchAbortRef.current = controller
+    const timeoutId = window.setTimeout(() => controller.abort(), 12000)
+    setSwitchingAccount(slot)
+    if (!same) {
+      setState(prev => ({
+        ...prev,
+        active_account: slot,
+        custom_message: prev.account_messages?.[slot] ?? prev.custom_message,
+        ...mirrorActiveAccountFields(prev.account_states?.[slot]),
+      }))
+    }
     try {
-      await fetch(`${API}/account/switch`, {
+      const res = await fetch(`${API}/account/switch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ slot }),
         signal: controller.signal,
+        credentials: 'include',
       })
+      if (controller.signal.aborted) return
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.status === 'error') {
+        throw new Error(data.message || `Switch failed (${res.status})`)
+      }
       const msgRes = await fetch(`${API}/message?slot=${encodeURIComponent(slot)}`, {
         signal: controller.signal,
+        credentials: 'include',
       })
       if (msgRes.ok) {
         const msgData = await msgRes.json()
-        setState(prev => ({ ...prev, custom_message: msgData.message || prev.custom_message }))
+        if (!controller.signal.aborted) {
+          setState(prev => ({ ...prev, custom_message: msgData.message || prev.custom_message }))
+        }
       }
-    } catch {
-      /* WebSocket will sync state */
+    } catch (e) {
+      if (e?.name === 'AbortError') return
+      /* WebSocket may still sync; keep optimistic selection */
     } finally {
       window.clearTimeout(timeoutId)
-      setSwitchingAccount(null)
+      if (switchAbortRef.current === controller) {
+        switchAbortRef.current = null
+        setSwitchingAccount(null)
+      }
     }
   }
 
@@ -687,10 +923,21 @@ export default function App() {
     [accountSlots, state.account_info],
   )
   const fleet = useMemo(
-    () => aggregateFleetStats(state, loggedInSlots),
-    [state, loggedInSlots],
+    () => aggregateFleetStats(state, loggedInSlots, {
+      postingModes: state.posting_modes || {},
+      modeFilter: workspaceMode === WORKSPACE_FORWARDING
+        ? 'forwarding'
+        : workspaceMode === WORKSPACE_CAMPAIGN
+          ? 'campaign'
+          : 'all',
+    }),
+    [state, loggedInSlots, workspaceMode],
   )
-  const sentWindowLabel = state.daily_stats?.window === 'since_reset' ? 'Since reset' : 'Last 24h'
+  const sentWindowLabel = state.daily_stats?.window === 'since_reset'
+    ? 'Since reset'
+    : state.daily_stats?.window === 'ist_day'
+      ? 'Today IST'
+      : 'Last 24h'
   const inboxUnreadTotal = useMemo(
     () => computeInboxUnreadTotal(inboxState),
     [inboxState],
@@ -698,24 +945,68 @@ export default function App() {
   const inboxUnreadBadge = formatUnreadBadgeCount(inboxUnreadTotal)
 
   useEffect(() => {
-    syncInboxAlertMusic(inboxUnreadTotal)
+    syncInboxAlertMusic(inboxUnreadTotal, inboxState)
+    syncTabUnreadBadge(inboxUnreadTotal)
     return () => stopInboxAlertMusicOnUnmount()
-  }, [inboxUnreadTotal])
+  }, [inboxUnreadTotal, inboxState])
+
+  useEffect(() => () => resetTabUnreadBadge(), [])
 
   useEffect(() => {
-    const resync = () => syncInboxAlertMusic(inboxUnreadTotal)
+    const resync = () => syncInboxAlertMusic(inboxUnreadTotal, inboxState)
     window.addEventListener('sound-quiet-hours-change', resync)
+    window.addEventListener('crm-buzzer-toggle', resync)
     const tick = window.setInterval(resync, 60000)
     return () => {
       window.removeEventListener('sound-quiet-hours-change', resync)
+      window.removeEventListener('crm-buzzer-toggle', resync)
       clearInterval(tick)
     }
-  }, [inboxUnreadTotal])
+  }, [inboxUnreadTotal, inboxState])
   const loggedIn = loggedInSlots.length > 0
   const idleLoggedInSlots = loggedInSlots.filter(
     s => !state.account_states?.[s]?.running
   )
   const canStartMore = idleLoggedInSlots.length > 0
+
+  const workspaceAnyRunning = useMemo(
+    () =>
+      fleetWorkspaceAnyRunning(
+        loggedInSlots,
+        state,
+        state.posting_modes,
+        workspaceMode,
+        fleet,
+      ),
+    [loggedInSlots, state, workspaceMode, fleet],
+  )
+  const workspaceCanStartMore = useMemo(
+    () =>
+      fleetWorkspaceCanStartMore(
+        loggedInSlots,
+        state,
+        state.posting_modes,
+        workspaceMode,
+      ),
+    [loggedInSlots, state, workspaceMode],
+  )
+  const anyProcessRunning = useMemo(
+    () =>
+      fleetAnyProcessRunning(loggedInSlots, state, state.posting_modes || {}),
+    [loggedInSlots, state],
+  )
+
+  useEffect(() => {
+    if (workspaceBootstrapDoneRef.current || !loggedInSlots.length) return
+    workspaceBootstrapDoneRef.current = true
+    const synced = resolveWorkspaceSync(
+      workspaceMode,
+      loggedInSlots,
+      state,
+      state.posting_modes || {},
+    )
+    if (synced !== workspaceMode) setWorkspaceMode(synced)
+  }, [loggedInSlots, state, workspaceMode])
 
   async function startForwarding() {
     setBulkActionLoading('start')
@@ -763,21 +1054,26 @@ export default function App() {
       setBulkActionLoading(null)
     }
   }
-  async function startAccount(slot, oneShot = false) {
-    setAccountActionLoading(`${slot}:start`)
+  async function startAccount(slot, oneShot = false, feature = '') {
+    const featKey = feature ? `${feature}:` : ''
+    setAccountActionLoading(`${slot}:${featKey}start`)
     try {
-      const url = oneShot
-        ? `${API}/account/${slot}/start?one_shot=true`
-        : `${API}/account/${slot}/start`
+      const params = new URLSearchParams()
+      if (oneShot) params.set('one_shot', 'true')
+      if (feature) params.set('feature', feature)
+      const qs = params.toString()
+      const url = `${API}/account/${slot}/start${qs ? `?${qs}` : ''}`
       await fetch(url, { method: 'POST' })
     } finally {
       setAccountActionLoading(null)
     }
   }
-  async function stopAccount(slot) {
-    setAccountActionLoading(`${slot}:stop`)
+  async function stopAccount(slot, feature = '') {
+    const featKey = feature ? `${feature}:` : ''
+    setAccountActionLoading(`${slot}:${featKey}stop`)
     try {
-      const res = await fetch(`${API}/account/${slot}/stop`, { method: 'POST' })
+      const qs = feature ? `?feature=${encodeURIComponent(feature)}` : ''
+      const res = await fetch(`${API}/account/${slot}/stop${qs}`, { method: 'POST' })
       if (res.ok) {
         const data = await res.json()
         const { status: _st, slot: _slot, ...rest } = data
@@ -947,7 +1243,10 @@ export default function App() {
         alert(msg)
         return
       }
-      const csv = ['username', ...usernames.map(csvEscape)].join('\n')
+      const csv = [
+        'sno,username',
+        ...usernames.map((u, i) => `${i + 1},${csvEscape(u)}`),
+      ].join('\n')
       const ts = new Date()
       const stamp = `${ts.getFullYear()}${String(ts.getMonth() + 1).padStart(2, '0')}${String(ts.getDate()).padStart(2, '0')}_${String(ts.getHours()).padStart(2, '0')}${String(ts.getMinutes()).padStart(2, '0')}`
       downloadCsvFile(`total_joined_list_${stamp}.csv`, csv)
@@ -1011,16 +1310,81 @@ export default function App() {
     cycleStartRef.current = null
     setCycleElapsed(0)
   }, [activeAcctState?.running, state.active_account])
-  const displaySuccess = activeAcctState?.success ?? state.success
-  const displayFailed = activeAcctState?.failed ?? state.failed
-  const displayCurrentGroup = activeAcctState?.current_group || state.current_group
-  const displayActiveGroups = activeAcctState?.active_groups ?? state.active_groups
-  const displaySent24h = activeAcctState?.messages_sent_24h ?? 0
-  const displaySkippedPosted = activeAcctState?.skipped_already_posted ?? 0
-  const displaySkippedCooldown = activeAcctState?.skipped_cooldown ?? 0
-  const displaySkippedOther = activeAcctState?.skipped_other ?? 0
-  const displaySuccessList = activeAcctState?.success_list ?? state.success_list
-  const displayFailedList = activeAcctState?.failed_list ?? state.failed_list
+  const progressView = setupViewForAccountsFilter(
+    workspaceMode,
+    state.active_account,
+    state.account_states,
+    state.posting_modes || {},
+  )
+  const activeFwd = featureRuntime(activeAcctState, 'forwarding')
+  const activeCamp = featureRuntime(activeAcctState, 'campaign')
+  const displaySuccess = progressView === 'forwarding'
+    ? (activeFwd.success ?? 0)
+    : progressView === 'campaign'
+      ? (activeCamp.success ?? 0)
+      : (activeAcctState?.success ?? state.success)
+  const displayFailed = progressView === 'forwarding'
+    ? (activeFwd.failed ?? 0)
+    : progressView === 'campaign'
+      ? (activeCamp.failed ?? 0)
+      : (activeAcctState?.failed ?? state.failed)
+  const displayCurrentGroup = progressView === 'forwarding'
+    ? (activeAcctState?.forwarding?.current_group || activeAcctState?.current_group || state.current_group)
+    : progressView === 'campaign'
+      ? (activeAcctState?.campaign?.current_group || activeAcctState?.current_group || state.current_group)
+      : (activeAcctState?.current_group || state.current_group)
+  const displayActiveGroups = progressView === 'forwarding'
+    ? (activeFwd.active_groups ?? activeAcctState?.active_groups ?? state.active_groups)
+    : progressView === 'campaign'
+      ? (activeCamp.active_groups ?? activeAcctState?.active_groups ?? state.active_groups)
+      : (activeAcctState?.active_groups ?? state.active_groups)
+  const displaySkippedPosted = progressView === 'forwarding'
+    ? (activeFwd.skipped_already_posted ?? activeAcctState?.skipped_already_posted ?? 0)
+    : progressView === 'campaign'
+      ? (activeCamp.skipped_already_posted ?? activeAcctState?.skipped_already_posted ?? 0)
+      : (activeAcctState?.skipped_already_posted ?? 0)
+  const displayTickProcessed = progressView === 'forwarding'
+    ? (displaySuccess + displayFailed + displaySkippedPosted)
+    : 0
+  const displayTickTotal = progressView === 'forwarding'
+    ? (Number(displayActiveGroups) || Number(activeAcctState?.forward_batch_size) || 100)
+    : 0
+  const displayTickRemaining = progressView === 'forwarding'
+    ? Math.max(0, displayTickTotal - displayTickProcessed)
+    : 0
+  const displaySent24h = progressView === 'forwarding'
+    ? (activeAcctState?.forward_posts_24h ?? 0)
+    : progressView === 'campaign'
+      ? (activeAcctState?.campaign_posts_24h ?? 0)
+      : (activeAcctState?.messages_sent_24h ?? 0)
+  const displaySkippedCooldown = progressView === 'forwarding'
+    ? 0
+    : progressView === 'campaign'
+      ? (activeCamp.skipped_cooldown ?? activeAcctState?.skipped_cooldown ?? 0)
+      : (activeAcctState?.skipped_cooldown ?? 0)
+  const displaySkippedOther = progressView === 'forwarding'
+    ? 0
+    : progressView === 'campaign'
+      ? (activeCamp.skipped_other ?? activeAcctState?.skipped_other ?? 0)
+      : (activeAcctState?.skipped_other ?? 0)
+  const displaySuccessList = useMemo(() => {
+    if (progressView === 'forwarding') {
+      return activeFwd?.success_list ?? activeAcctState?.forwarding?.success_list ?? []
+    }
+    if (progressView === 'campaign') {
+      return activeCamp?.success_list ?? activeAcctState?.campaign?.success_list ?? activeAcctState?.success_list ?? state.success_list ?? []
+    }
+    return activeAcctState?.success_list ?? state.success_list ?? []
+  }, [progressView, activeFwd, activeCamp, activeAcctState, state.success_list])
+  const displayFailedList = useMemo(() => {
+    if (progressView === 'forwarding') {
+      return activeFwd?.failed_list ?? activeAcctState?.forwarding?.failed_list ?? []
+    }
+    if (progressView === 'campaign') {
+      return activeCamp?.failed_list ?? activeAcctState?.campaign?.failed_list ?? activeAcctState?.failed_list ?? state.failed_list ?? []
+    }
+    return activeAcctState?.failed_list ?? state.failed_list ?? []
+  }, [progressView, activeFwd, activeCamp, activeAcctState, state.failed_list])
   const displaySuccessNewestFirst = useMemo(
     () => [...(displaySuccessList || [])].reverse(),
     [displaySuccessList],
@@ -1029,6 +1393,120 @@ export default function App() {
     () => [...(displayFailedList || [])].reverse(),
     [displayFailedList],
   )
+
+  const [setupTab, setSetupTab] = useState('setup')
+
+  const shutdownListCount = Object.keys(state.shutdown_list || {}).length
+
+  const setupLoggedInSlots = useMemo(() => {
+    const all = getAccountSlots(state, configuredSlots)
+    const loggedIn = sortAccountsForDisplay(
+      getLoggedInSlots(all, state.account_info || {}),
+      state.account_states,
+      state.account_info,
+    )
+    return filterSlotsExcludingShutdown(
+      loggedIn,
+      state.account_shutdown,
+      state.shutdown_list,
+    )
+  }, [
+    state.account_info,
+    state.account_states,
+    state.account_shutdown,
+    state.shutdown_list,
+    configuredSlots,
+  ])
+
+  const columnSetupView = workspaceMode
+
+  const handleSetupAccountFilter = React.useCallback((filterMode) => {
+    setWorkspaceMode(filterMode)
+  }, [])
+
+  const handleAccountModeApplied = React.useCallback((mode) => {
+    setWorkspaceMode(mode === 'forwarding' ? WORKSPACE_FORWARDING : WORKSPACE_CAMPAIGN)
+  }, [])
+
+  useEffect(() => {
+    saveWorkspaceMode(workspaceMode)
+  }, [workspaceMode])
+
+  useEffect(() => {
+    if (workspaceMode === WORKSPACE_FORWARDING && setupTab === 'groups') {
+      setSetupTab('setup')
+    }
+  }, [workspaceMode, setupTab])
+
+  const setupColumnSubtitle = useMemo(() => {
+    if (setupTab === 'setup') {
+      const slot = state.active_account
+      const info = slot && state.account_info?.[slot]
+      if (info) {
+        return `${telegramDisplayName(info) || accountLabel(slot)} — account → change method → start`
+      }
+      return 'Pick account → change method → start'
+    }
+    if (setupTab === 'login') return 'Connect Telegram numbers — login, logout, rename'
+    if (setupTab === 'groups') return 'Upload master group lists (campaign)'
+    if (setupTab === 'fleet') {
+      return 'Apply the same link or message to every logged-in account'
+    }
+    if (setupTab === 'shutdown') {
+      return shutdownListCount > 0
+        ? `${shutdownListCount} resting — clear when ready`
+        : 'Accounts on rest after limits'
+    }
+    return ''
+  }, [setupTab, state.active_account, state.account_info, shutdownListCount])
+
+  useEffect(() => {
+    if (switchingAccountRef.current) return
+    if (setupTab !== 'setup' && setupTab !== 'groups') return
+    const first = setupLoggedInSlots[0]
+    if (!first) return
+    const active = state.active_account
+    const ok = active
+      && isAccountLoggedIn(state.account_info, active)
+      && !isSlotOnShutdownList(state.account_shutdown, state.shutdown_list, active)
+    if (!ok) switchAccount(first)
+  }, [
+    setupTab,
+    setupLoggedInSlots,
+    state.active_account,
+    state.account_info,
+    state.account_shutdown,
+    state.shutdown_list,
+  ])
+
+  const setupTabOptions = useMemo(() => {
+    const shutdownLabel = shutdownListCount > 0
+      ? `Shutdown (${shutdownListCount})`
+      : 'Shutdown'
+    const tabs = [
+      { value: 'setup', label: 'Setup', role: 'tab' },
+      { value: 'login', label: 'Accounts', role: 'tab' },
+      { value: 'fleet', label: 'Bulk', role: 'tab' },
+    ]
+    if (workspaceMode === WORKSPACE_CAMPAIGN) {
+      tabs.push({ value: 'groups', label: 'Groups', role: 'tab' })
+    }
+    tabs.push({ value: 'shutdown', label: shutdownLabel, role: 'tab' })
+    return tabs
+  }, [shutdownListCount, workspaceMode])
+
+  useEffect(() => {
+    if (!setupTabOptions.some(t => t.value === setupTab)) {
+      const legacyMap = {
+        accounts: 'login',
+        modes: 'setup',
+        forward: 'setup',
+        message: 'setup',
+      }
+      const next = legacyMap[setupTab] || 'setup'
+      setSetupTab(setupTabOptions.some(t => t.value === next) ? next : 'setup')
+    }
+  }, [setupTabOptions, setupTab])
 
   useEffect(() => {
     const el = logsContainerRef.current
@@ -1039,17 +1517,603 @@ export default function App() {
     }
   }, [displayLogs, displaySuccessList, displayFailedList, activeTab])
 
-  const total = displaySuccess + displayFailed
+  const total = progressView === 'forwarding'
+    ? displaySuccess + displayFailed + displaySkippedPosted
+    : displaySuccess + displayFailed
   const successRate = total > 0 ? ((displaySuccess / total) * 100).toFixed(1) : '0.0'
-  const processed = displaySuccess + displayFailed
-  const progressMax = state.total || 1
+  const processed = total
+  const progressMax = progressView === 'forwarding'
+    ? (displayTickTotal || 100)
+    : (state.total || 1)
   // skipped = groups where our msg was already last (didn't need sending)
-  const skipped = progressMax - (displayActiveGroups || 0)
+  const skipped = progressView === 'forwarding'
+    ? displaySkippedPosted
+    : progressMax - (displayActiveGroups || 0)
   // Only show progress if a cycle has actually run
-  const hasCycleRun = (activeAcctState?.cycle ?? 0) > 0
-  const progressValue = hasCycleRun ? Math.min(progressMax, skipped + processed) : 0
+  const hasCycleRun = progressView === 'forwarding'
+    ? (activeFwd.cycle ?? 0) > 0
+    : (activeAcctState?.cycle ?? 0) > 0
+  const progressValue = hasCycleRun
+    ? (progressView === 'forwarding'
+      ? Math.min(progressMax, displaySuccess + displayFailed + displaySkippedPosted)
+      : Math.min(progressMax, skipped + displaySuccess + displayFailed))
+    : 0
 
   const showBootOverlay = initialLoading && !connected
+  const compactMobileUi = useCompactLayout()
+  const [mobilePage, setMobilePage] = useState('home')
+  const [desktopPage, setDesktopPage] = useState('home')
+
+  const mobileModesProps = useMemo(
+    () => ({
+      workspaceMode,
+      customMessage:
+        (state.active_account && state.account_messages?.[state.active_account])
+        ?? state.custom_message
+        ?? '',
+      rewriteEnabled: state.message_rewrite_enabled,
+      cyclePreview: state.cycle_message_preview,
+      onMessageSaved: refreshAccounts,
+      onPostingModeUpdated: refreshAccounts,
+      postingModeConfig: state.account_states?.[state.active_account]?.posting_mode_config,
+      postingModes: state.posting_modes,
+      accountStates: state.account_states,
+      acctRunning: !!state.account_states?.[state.active_account]?.running,
+      forwardJob: state.forward_message_jobs?.[state.active_account],
+      workerRunning: !!state.account_states?.[state.active_account]?.running,
+      loggedIn: !!state.account_info?.[state.active_account],
+      onStartAccount: startAccount,
+      onStopAccount: stopAccount,
+      accountActionLoading,
+    }),
+    [
+      workspaceMode,
+      state,
+      refreshAccounts,
+      startAccount,
+      stopAccount,
+      accountActionLoading,
+    ],
+  )
+
+  const fleetScopedSuccessRate =
+    overviewScope === 'fleet'
+      ? (fleet.averageSuccessRate ?? fleet.successRate)
+      : successRate
+
+  const desktopTickOverview = useMemo(() => {
+    if (overviewScope === 'fleet') {
+      return {
+        groups: fleet.progressMax,
+        sent: fleet.success,
+        failed: fleet.failed,
+        successRate: fleet.averageSuccessRate ?? fleet.successRate,
+        remaining: fleet.needResend,
+        skipped: fleet.skippedAlreadyPosted,
+      }
+    }
+    return {
+      groups: displayTickTotal || fleet.progressMax,
+      sent: displaySuccess,
+      failed: displayFailed,
+      successRate,
+      remaining: displayTickRemaining,
+      skipped: displaySkippedPosted,
+    }
+  }, [
+    overviewScope,
+    fleet.success,
+    fleet.failed,
+    fleet.successRate,
+    fleet.averageSuccessRate,
+    fleet.needResend,
+    fleet.skippedAlreadyPosted,
+    fleet.progressMax,
+    displayTickTotal,
+    displaySuccess,
+    displayFailed,
+    successRate,
+    displayTickRemaining,
+    displaySkippedPosted,
+  ])
+
+  if (compactMobileUi) {
+    return (
+      <div
+        className={`app-shell app-shell--mobile-ui app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}
+      >
+        <MobileApp
+          showBootOverlay={showBootOverlay}
+          connected={connected}
+          mainView={mainView}
+          setMainView={setMainView}
+          mobilePage={mobilePage}
+          setMobilePage={setMobilePage}
+          unlockNotificationSound={unlockNotificationSound}
+          fetchInbox={fetchInbox}
+          inboxUnreadTotal={inboxUnreadTotal}
+          inboxUnreadBadge={inboxUnreadBadge}
+          connectedForHeader={connected}
+          anyRunning={anyProcessRunning}
+          workspaceAnyRunning={workspaceAnyRunning}
+          canStartMore={workspaceCanStartMore}
+          bulkActionLoading={bulkActionLoading}
+          onStartAll={startForwarding}
+          onStopAll={stopForwarding}
+          hardRefreshing={hardRefreshing}
+          onHardRefresh={hardRefresh}
+          totalListLoading={totalListLoading}
+          onTotalList={buildTotalList}
+          authEnabled={authEnabled}
+          authUsername={authUsername}
+          authLogout={authLogout}
+          fleet={fleet}
+          globalCountdown={globalCountdown}
+          sentWindowLabel={sentWindowLabel}
+          state={state}
+          loggedInSlots={loggedInSlots}
+          postingModes={state.posting_modes}
+          workspaceMode={workspaceMode}
+          setWorkspaceMode={setWorkspaceMode}
+          switchAccount={switchAccount}
+          overviewScope={overviewScope}
+          onSelectAllAccounts={() => setOverviewScope('fleet')}
+          refreshAccounts={refreshAccounts}
+          startAccount={startAccount}
+          stopAccount={stopAccount}
+          accountActionLoading={accountActionLoading}
+          setupLoggedInSlots={setupLoggedInSlots}
+          handleSetupAccountFilter={handleSetupAccountFilter}
+          handleAccountModeApplied={handleAccountModeApplied}
+          subscriptionSlots={subscriptionSlots.length ? subscriptionSlots : (state.subscription_slots || [])}
+          switchingAccount={switchingAccount}
+          setSetupTab={setSetupTab}
+          setupTab={setupTab}
+          setupTabOptions={setupTabOptions}
+          shutdownListCount={shutdownListCount}
+          modesProps={mobileModesProps}
+          inboxProps={{
+            inboxState,
+            inboxLiveQueueRef,
+            inboxLiveTick,
+            accountSlots,
+            accountInfo: state.account_info,
+            postingModes: state.posting_modes || {},
+            crmState,
+            onInboxPatch: fetchInbox,
+            onCrmUpdate: handleCrmUpdate,
+            openChatTarget,
+          }}
+          logsProps={{
+            activeTab,
+            activeAccount: state.active_account,
+            accountSlots: state.account_slots,
+            logScope,
+            onLogScopeChange: setLogScope,
+            displayLogs,
+            displaySuccessList,
+            displayFailedList,
+            logsContainerRef,
+            onScroll: handleLogsScroll,
+            connected,
+            toolbarActions: (
+              <LogToolbarActions
+                activeTab={activeTab}
+                displayLogs={displayLogs}
+                displayLogsNewestFirst={displayLogsNewestFirst}
+                displaySuccessNewestFirst={displaySuccessNewestFirst}
+                displayFailedNewestFirst={displayFailedNewestFirst}
+                clearingLogs={clearingLogs}
+                copied={copied}
+                clearDisabled={logScope === 'all'}
+                clearTitle={
+                  logScope === 'all'
+                    ? 'Switch to Account logs to clear the selected account'
+                    : 'Clear logs for selected account'
+                }
+                onClear={clearLogs}
+                onCopy={() => {
+                  let text = ''
+                  if (activeTab === 'logs') {
+                    text = displayLogsNewestFirst.map(e => {
+                      const line = (e.summary || e.fields?.detail || e.msg || '').trim()
+                      const lvl = (e.level || 'info').toUpperCase().padEnd(7)
+                      const acct = e.account_id ? `[${e.account_id}] ` : ''
+                      return `${formatLogTime(e.timestamp || e.time)}  ${lvl} ${acct}${line}`
+                    }).join('\n')
+                  } else if (activeTab === 'success') {
+                    text = displaySuccessNewestFirst.join('\n')
+                  } else {
+                    text = displayFailedNewestFirst.map(e => `${e.group} — ${e.reason}`).join('\n')
+                  }
+                  navigator.clipboard.writeText(text).then(() => {
+                    setCopied(true)
+                    setTimeout(() => setCopied(false), 2000)
+                  }).catch(() => {
+                    alert('Copy failed — clipboard access blocked by browser.')
+                  })
+                }}
+              />
+            ),
+            activeTabControl: (
+              <LogsToolbarTabs
+                activeTab={activeTab}
+                setActiveTab={setActiveTab}
+                logCount={displayLogs.length}
+                okCount={displaySuccessList.length}
+                failCount={displayFailedList.length}
+              />
+            ),
+          }}
+          progressHubProps={{
+            overviewScope,
+            accountsModeFilter: workspaceMode,
+            onShowFleetOverview: () => setOverviewScope('fleet'),
+            fleet,
+            globalCountdown,
+            sentWindowLabel,
+            accountInfo: state.account_info,
+            subscriptionSlots: subscriptionSlots.length ? subscriptionSlots : (state.subscription_slots || []),
+            dailyStats: state.daily_stats,
+            accountSlots,
+            onConfirmReset: ({ scope, accountLabel: acctLabel }) =>
+              confirm(statsResetConfirmOptions({ scope, accountLabel: acctLabel })),
+            onDailyStatsUpdate: (stats, full) => {
+              const daily = stats || full?.daily_stats
+              if (!daily) return
+              setState(prev => {
+                const next = { ...prev, daily_stats: daily }
+                const incoming = full?.account_states
+                if (incoming && prev.account_states) {
+                  const account_states = { ...prev.account_states }
+                  for (const slot of Object.keys(account_states)) {
+                    const patch = incoming[slot]
+                    if (!patch?.join_stats) continue
+                    account_states[slot] = {
+                      ...account_states[slot],
+                      join_stats: patch.join_stats,
+                    }
+                  }
+                  next.account_states = account_states
+                }
+                return next
+              })
+            },
+            activeAccount: state.active_account,
+            activeAcctState,
+            accountStatus: state.account_status,
+            accountShutdown: state.account_shutdown,
+            accountStates: state.account_states,
+            postingModes: state.posting_modes || {},
+            onSelectAccount: switchAccount,
+            switchingAccount,
+            accountProgress: {
+              displaySuccess: overviewScope === 'fleet' ? fleet.success : displaySuccess,
+              displayFailed: overviewScope === 'fleet' ? fleet.failed : displayFailed,
+              successRate: fleetScopedSuccessRate,
+              processed: overviewScope === 'fleet' ? fleet.processed : processed,
+              displayActiveGroups,
+              displayTickTotal,
+              displayTickRemaining,
+              displaySkippedPosted,
+              displaySkippedCooldown,
+              displaySkippedOther,
+              displaySent24h,
+            },
+            cycle: {
+              displayCurrentGroup,
+              countdown,
+              cycleElapsed,
+              progressValue,
+              progressMax,
+              hasCycleRun,
+            },
+            tools: {
+              openGroups,
+              exportGroupLists,
+              loadingGroups,
+              exportingKind,
+            },
+          }}
+          confirm={confirm}
+          onNavigateExtra={view => {
+            unlockNotificationSound()
+            setMainView(view)
+          }}
+          groupsModal={(
+            <GroupsModal
+              open={showGroups}
+              onClose={() => setShowGroups(false)}
+              groups={groups}
+              loading={loadingGroups}
+              onDownload={downloadGroups}
+              slotLists={groupsListMeta}
+            />
+          )}
+          incomingCallModal={(
+            <IncomingCallModal
+              call={incomingCall}
+              onDismiss={() => {
+                stopIncomingCallRing()
+                setIncomingCall(null)
+              }}
+            />
+          )}
+        />
+      </div>
+    )
+  }
+
+  if (!compactMobileUi) {
+    return (
+      <div
+        className={`app-shell app-shell--desktop-ui app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}
+      >
+        <DesktopApp
+          showBootOverlay={showBootOverlay}
+          connected={connected}
+          mainView={mainView}
+          setMainView={setMainView}
+          desktopPage={desktopPage}
+          setDesktopPage={setDesktopPage}
+          setWorkspaceMode={setWorkspaceMode}
+          workspaceMode={workspaceMode}
+          unlockNotificationSound={unlockNotificationSound}
+          fetchInbox={fetchInbox}
+          inboxUnreadTotal={inboxUnreadTotal}
+          inboxUnreadBadge={inboxUnreadBadge}
+          anyRunning={anyProcessRunning}
+          workspaceAnyRunning={workspaceAnyRunning}
+          canStartMore={workspaceCanStartMore}
+          bulkActionLoading={bulkActionLoading}
+          onStartAll={startForwarding}
+          onStopAll={stopForwarding}
+          totalListLoading={totalListLoading}
+          onTotalList={buildTotalList}
+          authUsername={authUsername}
+          authEnabled={authEnabled}
+          authLogout={authLogout}
+          fleet={fleet}
+          globalCountdown={globalCountdown}
+          sentWindowLabel={sentWindowLabel}
+          state={state}
+          loggedInSlots={loggedInSlots}
+          postingModes={state.posting_modes}
+          switchAccount={switchAccount}
+          overviewScope={overviewScope}
+          onSelectAllAccounts={() => setOverviewScope('fleet')}
+          refreshAccounts={refreshAccounts}
+          startAccount={startAccount}
+          stopAccount={stopAccount}
+          accountActionLoading={accountActionLoading}
+          shutdownListCount={shutdownListCount}
+          setupLoggedInSlots={setupLoggedInSlots}
+          handleSetupAccountFilter={handleSetupAccountFilter}
+          handleAccountModeApplied={handleAccountModeApplied}
+          subscriptionSlots={subscriptionSlots.length ? subscriptionSlots : (state.subscription_slots || [])}
+          switchingAccount={switchingAccount}
+          setSetupTab={setSetupTab}
+          setupTab={setupTab}
+          setupTabOptions={setupTabOptions}
+          modesProps={mobileModesProps}
+          inboxProps={{
+            inboxState,
+            inboxLiveQueueRef,
+            inboxLiveTick,
+            accountSlots,
+            accountInfo: state.account_info,
+            postingModes: state.posting_modes || {},
+            crmState,
+            onInboxPatch: fetchInbox,
+            onCrmUpdate: handleCrmUpdate,
+            openChatTarget,
+          }}
+          logsProps={{
+            activeTab,
+            activeAccount: state.active_account,
+            accountSlots: state.account_slots,
+            logScope,
+            onLogScopeChange: setLogScope,
+            displayLogs,
+            displaySuccessList,
+            displayFailedList,
+            logsContainerRef,
+            onScroll: handleLogsScroll,
+            connected,
+            toolbarActions: (
+              <LogToolbarActions
+                activeTab={activeTab}
+                displayLogs={displayLogs}
+                displayLogsNewestFirst={displayLogsNewestFirst}
+                displaySuccessNewestFirst={displaySuccessNewestFirst}
+                displayFailedNewestFirst={displayFailedNewestFirst}
+                clearingLogs={clearingLogs}
+                copied={copied}
+                clearDisabled={logScope === 'all'}
+                clearTitle={
+                  logScope === 'all'
+                    ? 'Switch to Account logs to clear the selected account'
+                    : 'Clear logs for selected account'
+                }
+                onClear={clearLogs}
+                onCopy={() => {
+                  let text = ''
+                  if (activeTab === 'logs') {
+                    text = displayLogsNewestFirst.map(e => {
+                      const line = (e.summary || e.fields?.detail || e.msg || '').trim()
+                      const lvl = (e.level || 'info').toUpperCase().padEnd(7)
+                      const acct = e.account_id ? `[${e.account_id}] ` : ''
+                      return `${formatLogTime(e.timestamp || e.time)}  ${lvl} ${acct}${line}`
+                    }).join('\n')
+                  } else if (activeTab === 'success') {
+                    text = displaySuccessNewestFirst.join('\n')
+                  } else {
+                    text = displayFailedNewestFirst.map(e => `${e.group} — ${e.reason}`).join('\n')
+                  }
+                  navigator.clipboard.writeText(text).then(() => {
+                    setCopied(true)
+                    setTimeout(() => setCopied(false), 2000)
+                  }).catch(() => {
+                    alert('Copy failed — clipboard access blocked by browser.')
+                  })
+                }}
+              />
+            ),
+            activeTabControl: (
+              <LogsToolbarTabs
+                activeTab={activeTab}
+                setActiveTab={setActiveTab}
+                logCount={displayLogs.length}
+                okCount={displaySuccessList.length}
+                failCount={displayFailedList.length}
+              />
+            ),
+          }}
+          progressHubProps={{
+            overviewScope,
+            accountsModeFilter: workspaceMode,
+            onShowFleetOverview: () => setOverviewScope('fleet'),
+            fleet,
+            globalCountdown,
+            sentWindowLabel,
+            accountInfo: state.account_info,
+            subscriptionSlots: subscriptionSlots.length ? subscriptionSlots : (state.subscription_slots || []),
+            dailyStats: state.daily_stats,
+            accountSlots,
+            onConfirmReset: ({ scope, accountLabel: acctLabel }) =>
+              confirm(statsResetConfirmOptions({ scope, accountLabel: acctLabel })),
+            onDailyStatsUpdate: (stats, full) => {
+              const daily = stats || full?.daily_stats
+              if (!daily) return
+              setState(prev => {
+                const next = { ...prev, daily_stats: daily }
+                const incoming = full?.account_states
+                if (incoming && prev.account_states) {
+                  const account_states = { ...prev.account_states }
+                  for (const slot of Object.keys(account_states)) {
+                    const patch = incoming[slot]
+                    if (!patch?.join_stats) continue
+                    account_states[slot] = {
+                      ...account_states[slot],
+                      join_stats: patch.join_stats,
+                    }
+                  }
+                  next.account_states = account_states
+                }
+                return next
+              })
+            },
+            activeAccount: state.active_account,
+            activeAcctState,
+            accountStatus: state.account_status,
+            accountShutdown: state.account_shutdown,
+            accountStates: state.account_states,
+            postingModes: state.posting_modes || {},
+            onSelectAccount: switchAccount,
+            switchingAccount,
+            accountProgress: {
+              displaySuccess: overviewScope === 'fleet' ? fleet.success : displaySuccess,
+              displayFailed: overviewScope === 'fleet' ? fleet.failed : displayFailed,
+              successRate: fleetScopedSuccessRate,
+              processed: overviewScope === 'fleet' ? fleet.processed : processed,
+              displayActiveGroups,
+              displayTickTotal,
+              displayTickRemaining,
+              displaySkippedPosted,
+              displaySkippedCooldown,
+              displaySkippedOther,
+              displaySent24h,
+            },
+            cycle: {
+              displayCurrentGroup,
+              countdown,
+              cycleElapsed,
+              progressValue,
+              progressMax,
+              hasCycleRun,
+            },
+            tools: {
+              openGroups,
+              exportGroupLists,
+              loadingGroups,
+              exportingKind,
+            },
+          }}
+          confirm={confirm}
+          setupPanelProps={{
+            accountPanel: {
+              state,
+              configuredSlots,
+              subscriptionSlots: subscriptionSlots.length ? subscriptionSlots : (state.subscription_slots || []),
+              accountsModeFilter: workspaceMode,
+              onAccountsModeFilterChange: setWorkspaceMode,
+              hideAccountsModeFilter: true,
+              workspaceMode,
+              onAccountChange: handleAccountChange,
+              onStartAccount: startAccount,
+              onStopAccount: stopAccount,
+              onSwitchAccount: switchAccount,
+              onRefreshJoined: refreshJoinedCounts,
+              refreshingJoinedSlot,
+              accountActionLoading,
+              switchingAccount,
+              onMessageSaved: refreshAccounts,
+              onPostingModeUpdated: refreshAccounts,
+              onShutdownUpdated: refreshAccounts,
+              onRenamed: (slot, accountInfo) => {
+                if (!slot || !accountInfo) return
+                setState(prev => ({
+                  ...prev,
+                  account_info: { ...prev.account_info, [slot]: accountInfo },
+                }))
+              },
+              onProvisionSlot: provisionAccountSlot,
+              compactSetup: true,
+              showShutdown: false,
+              overviewScope,
+              onShowFleetOverview: () => setOverviewScope('fleet'),
+              onOpenFleetTab: () => {
+                setSetupTab('fleet')
+                setOverviewScope('fleet')
+              },
+            },
+          }}
+          groupsUploadProps={{
+            currentTotal: state.total || 0,
+            fleetSliceTotal: fleet.fleetSliceTotal ?? 0,
+            activeAccountSlice: state.active_account
+              ? (state.account_states?.[state.active_account]?.my_groups?.length ?? 0)
+              : null,
+            onUpdated: refreshAccounts,
+            listSummary: groupsListMeta
+              ? { active: groupsListMeta.active_count, dead: groupsListMeta.dead_count }
+              : null,
+          }}
+          tickOverview={desktopTickOverview}
+          recentLogs={displayLogsNewestFirst}
+          groupsModal={(
+            <GroupsModal
+              open={showGroups}
+              onClose={() => setShowGroups(false)}
+              groups={groups}
+              loading={loadingGroups}
+              onDownload={downloadGroups}
+              slotLists={groupsListMeta}
+            />
+          )}
+          incomingCallModal={(
+            <IncomingCallModal
+              call={incomingCall}
+              onDismiss={() => {
+                stopIncomingCallRing()
+                setIncomingCall(null)
+              }}
+            />
+          )}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className={`app-shell app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}>
@@ -1068,7 +2132,7 @@ export default function App() {
               Multi-account automation · live status
               {state.active_account && state.account_info?.[state.active_account] && (
                 <span className="app-header-active-user">
-                  · Viewing {state.account_info[state.active_account].name}
+                  · Viewing {telegramDisplayName(state.account_info[state.active_account])}
                 </span>
               )}
             </p>
@@ -1076,64 +2140,48 @@ export default function App() {
         </div>
 
         <div className="app-header-right">
-          <nav className="app-view-nav" aria-label="Main view">
-            <button
-              type="button"
-              className={`app-view-nav-btn${mainView === 'dashboard' ? ' app-view-nav-btn--active' : ''}`}
-              onClick={() => {
-                unlockNotificationSound()
-                setMainView('dashboard')
-              }}
+          <div className="app-header-toolbar">
+            <div
+              className="app-header-auth"
+              title={`Signed in as ${authUsername || 'operator'}`}
             >
-              Dashboard
-            </button>
-            <button
-              type="button"
-              className={`app-view-nav-btn${mainView === 'inbox' ? ' app-view-nav-btn--active' : ''}${inboxUnreadTotal > 0 ? ' app-view-nav-btn--has-unread' : ''}`}
-              onClick={() => { setMainView('inbox'); fetchInbox() }}
-              aria-label={
-                inboxUnreadTotal > 0
-                  ? `Inbox, ${inboxUnreadTotal} unread message${inboxUnreadTotal === 1 ? '' : 's'}`
-                  : 'Inbox'
-              }
-            >
-              Inbox
-              {inboxUnreadTotal > 0 && (
-                <span className="app-view-nav-badge" aria-hidden>
-                  {inboxUnreadBadge}
+              <div className="app-header-auth-user">
+                <span className="app-header-auth-avatar" aria-hidden>
+                  {(authUsername || 'op').slice(0, 2).toUpperCase()}
                 </span>
-              )}
-            </button>
-            <button
-              type="button"
-              className={`app-view-nav-btn${mainView === 'candidates' ? ' app-view-nav-btn--active' : ''}`}
-              onClick={() => { setMainView('candidates') }}
-              aria-label="Candidates tracker"
-              title="Candidates tracker"
-            >
-              Candidates
-            </button>
-            <button
-              type="button"
-              className={`app-view-nav-btn${mainView === 'logs' ? ' app-view-nav-btn--active' : ''}`}
-              onClick={() => { setMainView('logs') }}
-              aria-label="Live activity logs"
-              title="Live activity logs"
-            >
-              Logs
-            </button>
-          </nav>
-          <GlobalActions
-            connected={connected}
-            canStartMore={canStartMore}
-            anyRunning={loggedInSlots.some(s => state.account_states?.[s]?.running)}
-            bulkActionLoading={bulkActionLoading}
-            hardRefreshing={hardRefreshing}
-            totalListLoading={totalListLoading}
-            onStartAll={startForwarding}
-            onStopAll={stopForwarding}
-            onHardRefresh={hardRefresh}
-            onTotalList={buildTotalList}
+                <span className="app-header-auth-name">{authUsername || 'operator'}</span>
+              </div>
+              <button
+                type="button"
+                className="app-header-auth-signout"
+                onClick={() => authLogout()}
+                aria-label={`Sign out ${authUsername || 'operator'}`}
+              >
+                Sign out
+              </button>
+            </div>
+            <GlobalActions
+              connected={connected}
+              canStartMore={canStartMore}
+              anyRunning={loggedInSlots.some(s => state.account_states?.[s]?.running)}
+              bulkActionLoading={bulkActionLoading}
+              hardRefreshing={hardRefreshing}
+              totalListLoading={totalListLoading}
+              onStartAll={startForwarding}
+              onStopAll={stopForwarding}
+              onHardRefresh={hardRefresh}
+              onTotalList={buildTotalList}
+            />
+          </div>
+          <AppViewNav
+            mainView={mainView}
+            inboxUnreadTotal={inboxUnreadTotal}
+            inboxUnreadBadge={inboxUnreadBadge}
+            onNavigate={view => {
+              if (view === 'dashboard') unlockNotificationSound()
+              if (view === 'inbox') fetchInbox()
+              setMainView(view)
+            }}
           />
         </div>
       </header>
@@ -1144,12 +2192,20 @@ export default function App() {
           inboxLiveQueueRef={inboxLiveQueueRef}
           inboxLiveTick={inboxLiveTick}
           accountSlots={accountSlots}
+          accountInfo={state.account_info}
+          postingModes={state.posting_modes || {}}
           crmState={crmState}
           onInboxPatch={fetchInbox}
           onCrmUpdate={handleCrmUpdate}
+          onBackToDashboard={() => setMainView('dashboard')}
+          openChatTarget={openChatTarget}
         />
       ) : mainView === 'candidates' ? (
         <CandidatesPanel />
+      ) : mainView === 'data-room' ? (
+        <DataRoomPanel />
+      ) : mainView === 'admin' ? (
+        <AdminPanel />
       ) : mainView === 'logs' ? (
         <div className="logs-fullpage">
           <LogPanel
@@ -1219,44 +2275,187 @@ export default function App() {
         left={(
         <DashboardColumn
           id="left"
-          title="Column 1 · Setup"
-          subtitle="Accounts, message, groups"
+          title="Setup"
+          subtitle={setupColumnSubtitle}
         >
-          <AccountPanel
-            state={state}
-            configuredSlots={configuredSlots}
-            subscriptionSlots={subscriptionSlots.length ? subscriptionSlots : (state.subscription_slots || [])}
-            onAccountChange={refreshAccounts}
-            onStartAccount={startAccount}
-            onStopAccount={stopAccount}
-            onSwitchAccount={switchAccount}
-            onRefreshJoined={refreshJoinedCounts}
-            refreshingJoinedSlot={refreshingJoinedSlot}
-            accountActionLoading={accountActionLoading}
-            switchingAccount={switchingAccount}
-            onMessageSaved={refreshAccounts}
-          />
-          <MessageEditor
-            slot={state.active_account}
-            customMessage={state.custom_message}
-            rewriteEnabled={state.message_rewrite_enabled}
-            cyclePreview={state.cycle_message_preview}
-            onSaved={refreshAccounts}
-          />
-          <GroupsUpload
-            currentTotal={state.total || 0}
-            fleetSliceTotal={fleet.fleetSliceTotal ?? 0}
-            activeAccountSlice={
-              state.active_account
-                ? (state.account_states?.[state.active_account]?.my_groups?.length ?? 0)
-                : null
-            }
-            onUpdated={refreshAccounts}
-            listSummary={groupsListMeta ? {
-              active: groupsListMeta.active_count,
-              dead: groupsListMeta.dead_count,
-            } : null}
-          />
+          <div className={`setup-column setup-column--${workspaceMode}`}>
+            <div className="setup-column-nav" aria-label="Setup menu">
+              <ResponsiveOptions
+                className="setup-column-nav__tabs-wrap"
+                segmentedClassName="setup-column-nav__tabs setup-column-tabs"
+                label="Setup menu"
+                options={setupTabOptions}
+                value={setupTab}
+                onChange={setSetupTab}
+                role="tablist"
+                compactColumns={2}
+              />
+            </div>
+            <div className="setup-column-panels">
+              <div
+                className={`setup-column-panel${setupTab === 'setup' ? ' setup-column-panel--active' : ''}`}
+                role="tabpanel"
+                hidden={setupTab !== 'setup'}
+                aria-hidden={setupTab !== 'setup'}
+              >
+                <div className="setup-column-panel__scroll">
+                  <SetupMainPanel
+                    slots={setupLoggedInSlots}
+                    accountFilter={workspaceMode}
+                    onAccountFilterChange={handleSetupAccountFilter}
+                    onModeApplied={handleAccountModeApplied}
+                    activeSlot={state.active_account}
+                    accountInfo={state.account_info}
+                    accountStates={state.account_states}
+                    postingModes={state.posting_modes}
+                    accountShutdown={state.account_shutdown}
+                    subscriptionSlots={subscriptionSlots.length ? subscriptionSlots : (state.subscription_slots || [])}
+                    switchingAccount={switchingAccount}
+                    onSelectAccount={switchAccount}
+                    onOpenLoginTab={() => setSetupTab('login')}
+                    onPostingModeUpdated={refreshAccounts}
+                    modesProps={{
+                      workspaceMode,
+                      customMessage:
+                        (state.active_account && state.account_messages?.[state.active_account])
+                        ?? state.custom_message
+                        ?? '',
+                      rewriteEnabled: state.message_rewrite_enabled,
+                      cyclePreview: state.cycle_message_preview,
+                      onMessageSaved: refreshAccounts,
+                      onPostingModeUpdated: refreshAccounts,
+                      postingModeConfig: state.account_states?.[state.active_account]?.posting_mode_config,
+                      postingModes: state.posting_modes,
+                      accountStates: state.account_states,
+                      acctRunning: !!state.account_states?.[state.active_account]?.running,
+                      forwardJob: state.forward_message_jobs?.[state.active_account],
+                      workerRunning: !!state.account_states?.[state.active_account]?.running,
+                      loggedIn: !!state.account_info?.[state.active_account],
+                      onStartAccount: startAccount,
+                      onStopAccount: stopAccount,
+                      accountActionLoading,
+                    }}
+                  />
+                </div>
+              </div>
+              <div
+                className={`setup-column-panel${setupTab === 'login' ? ' setup-column-panel--active' : ''}`}
+                role="tabpanel"
+                hidden={setupTab !== 'login'}
+                aria-hidden={setupTab !== 'login'}
+              >
+                <div className="setup-column-panel__scroll">
+                  <AccountPanel
+                    state={state}
+                    configuredSlots={configuredSlots}
+                    subscriptionSlots={subscriptionSlots.length ? subscriptionSlots : (state.subscription_slots || [])}
+                    accountsModeFilter={workspaceMode}
+                    onAccountsModeFilterChange={setWorkspaceMode}
+                    hideAccountsModeFilter
+                    workspaceMode={workspaceMode}
+                    onAccountChange={handleAccountChange}
+                    onStartAccount={startAccount}
+                    onStopAccount={stopAccount}
+                    onSwitchAccount={switchAccount}
+                    onRefreshJoined={refreshJoinedCounts}
+                    refreshingJoinedSlot={refreshingJoinedSlot}
+                    accountActionLoading={accountActionLoading}
+                    switchingAccount={switchingAccount}
+                    onMessageSaved={refreshAccounts}
+                    onPostingModeUpdated={refreshAccounts}
+                    onShutdownUpdated={refreshAccounts}
+                    onRenamed={(slot, accountInfo) => {
+                      if (!slot || !accountInfo) return
+                      setState(prev => ({
+                        ...prev,
+                        account_info: {
+                          ...prev.account_info,
+                          [slot]: accountInfo,
+                        },
+                      }))
+                    }}
+                    onProvisionSlot={provisionAccountSlot}
+                    compactSetup
+                    loginTab
+                    onOpenSetupTab={() => setSetupTab('setup')}
+                    showShutdown={false}
+                    overviewScope={overviewScope}
+                    onShowFleetOverview={() => setOverviewScope('fleet')}
+                    onOpenFleetTab={() => {
+                      setSetupTab('fleet')
+                      setOverviewScope('fleet')
+                    }}
+                  />
+                </div>
+              </div>
+              <div
+                className={`setup-column-panel setup-column-panel--fleet${setupTab === 'fleet' ? ' setup-column-panel--active' : ''}`}
+                role="tabpanel"
+                hidden={setupTab !== 'fleet'}
+                aria-hidden={setupTab !== 'fleet'}
+              >
+                <div className="setup-column-panel__scroll setup-column-panel__scroll--fleet">
+                  <FleetDefaultsPanel
+                    embedInTab
+                    workspaceMode={workspaceMode}
+                    loggedInCount={setupLoggedInSlots.length}
+                    onUpdated={refreshAccounts}
+                  />
+                </div>
+              </div>
+              <div
+                className={`setup-column-panel${setupTab === 'groups' ? ' setup-column-panel--active' : ''}`}
+                role="tabpanel"
+                hidden={setupTab !== 'groups'}
+                aria-hidden={setupTab !== 'groups'}
+              >
+                <div className="setup-column-panel__scroll">
+                  <SetupAccountPicker
+                    slots={setupLoggedInSlots}
+                    activeSlot={state.active_account}
+                    accountInfo={state.account_info}
+                    accountStates={state.account_states}
+                    postingModes={state.posting_modes}
+                    accountShutdown={state.account_shutdown}
+                    subscriptionSlots={subscriptionSlots.length ? subscriptionSlots : (state.subscription_slots || [])}
+                    switchingAccount={switchingAccount}
+                    onSelect={switchAccount}
+                    onOpenAccountsTab={() => setSetupTab('login')}
+                  />
+                  <GroupsUpload
+                    currentTotal={state.total || 0}
+                    fleetSliceTotal={fleet.fleetSliceTotal ?? 0}
+                    activeAccountSlice={
+                      state.active_account
+                        ? (state.account_states?.[state.active_account]?.my_groups?.length ?? 0)
+                        : null
+                    }
+                    onUpdated={refreshAccounts}
+                    listSummary={groupsListMeta ? {
+                      active: groupsListMeta.active_count,
+                      dead: groupsListMeta.dead_count,
+                    } : null}
+                  />
+                </div>
+              </div>
+              <div
+                className={`setup-column-panel${setupTab === 'shutdown' ? ' setup-column-panel--active' : ''}`}
+                role="tabpanel"
+                hidden={setupTab !== 'shutdown'}
+                aria-hidden={setupTab !== 'shutdown'}
+              >
+                <div className="setup-column-panel__scroll">
+                  <ShutdownListPanel
+                    shutdownList={state.shutdown_list}
+                    accountShutdown={state.account_shutdown}
+                    accountInfo={state.account_info}
+                    onUpdated={refreshAccounts}
+                    embedInTab
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
         </DashboardColumn>
         )}
         center={(
@@ -1266,12 +2465,13 @@ export default function App() {
           subtitle={
             overviewScope === 'account' && state.active_account
               ? accountLabel(state.active_account)
-              : 'All accounts'
+              : SABHI_ACCOUNTS
           }
           flush
         >
           <ProgressHubPanel
             overviewScope={overviewScope}
+            accountsModeFilter={workspaceMode}
             onShowFleetOverview={() => setOverviewScope('fleet')}
             fleet={fleet}
             globalCountdown={globalCountdown}
@@ -1280,16 +2480,10 @@ export default function App() {
             subscriptionSlots={subscriptionSlots.length ? subscriptionSlots : (state.subscription_slots || [])}
             dailyStats={state.daily_stats}
             accountSlots={accountSlots}
-            onConfirmReset={({ scope, accountLabel: acctLabel }) => confirm({
-              title: scope === 'account' ? `Reset stats for ${acctLabel}?` : 'Reset 24 Hours',
-              message:
-                scope === 'account'
-                  ? `Reset 24-hour stats for ${acctLabel}? Only counters are cleared — chat history, messages, and sessions are preserved.`
-                  : 'Are you sure you want to reset 24-hour stats? Only counters are cleared — chat history, messages, and sessions are preserved.',
-              confirmLabel: 'Reset stats',
-              cancelLabel: 'Cancel',
-              variant: 'warn',
-            })}
+            onConfirmReset={({ scope, accountLabel: acctLabel }) =>
+              confirm(
+                statsResetConfirmOptions({ scope, accountLabel: acctLabel }),
+              )}
             onDailyStatsUpdate={(stats, full) => {
               const daily = stats || full?.daily_stats
               if (!daily) return
@@ -1314,7 +2508,10 @@ export default function App() {
             }}
             activeAccount={state.active_account}
             activeAcctState={activeAcctState}
+            accountStatus={state.account_status}
+            accountShutdown={state.account_shutdown}
             accountStates={state.account_states}
+            postingModes={state.posting_modes || {}}
             onSelectAccount={switchAccount}
             switchingAccount={switchingAccount}
             accountProgress={{
@@ -1323,6 +2520,8 @@ export default function App() {
               successRate,
               processed,
               displayActiveGroups,
+              displayTickTotal,
+              displayTickRemaining,
               displaySkippedPosted,
               displaySkippedCooldown,
               displaySkippedOther,

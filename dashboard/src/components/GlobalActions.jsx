@@ -30,7 +30,7 @@ export function GlobalActions({
 
   return (
     <div className="app-header-actions">
-      <div className="app-header-right-group">
+      <div className="app-header-right-group app-header-right-group--primary">
         {anyRunning ? (
           <Button
             variant="danger"
@@ -41,7 +41,8 @@ export function GlobalActions({
             loadingLabel="Stopping…"
             title="Stop all running accounts"
           >
-            ⏹ Stop All
+            <span className="app-header-btn-icon" aria-hidden>⏹</span>
+            <span className="app-header-btn-label">Stop All</span>
           </Button>
         ) : (
           <Button
@@ -57,11 +58,12 @@ export function GlobalActions({
                 : 'No logged-in accounts ready to start'
             }
           >
-            ▶ Start All
+            <span className="app-header-btn-icon" aria-hidden>▶</span>
+            <span className="app-header-btn-label">Start All</span>
           </Button>
         )}
       </div>
-      <div className="app-header-right-group">
+      <div className="app-header-right-group app-header-right-group--status">
         <div className="connection-pill app-header-control" title={connected ? 'Live updates from backend' : 'Cannot reach backend — retrying every 3s'}>
           <span className={`connection-dot${connected ? ' connection-dot--on' : ''}`} />
           {!connected && <Spinner size={12} />}
@@ -71,7 +73,7 @@ export function GlobalActions({
         </div>
       </div>
       {onTotalList && (
-        <div className="app-header-right-group">
+        <div className="app-header-right-group app-header-right-group--secondary">
           <Button
             variant="ghost"
             className="app-header-btn"
@@ -81,11 +83,12 @@ export function GlobalActions({
             loadingLabel="Building list…"
             title="Fetch every joined group/channel from all logged-in accounts and download as CSV"
           >
-            📋 Total List
+            <span className="app-header-btn-icon" aria-hidden>📋</span>
+            <span className="app-header-btn-label">Total List</span>
           </Button>
         </div>
       )}
-      <div className="app-header-right-group">
+      <div className="app-header-right-group app-header-right-group--secondary">
         <Button
           variant="ghost"
           className="app-header-btn"
@@ -95,7 +98,8 @@ export function GlobalActions({
           loadingLabel="Refreshing…"
           title="Full page reload + latest server state"
         >
-          ↻ Hard Refresh
+          <span className="app-header-btn-icon" aria-hidden>↻</span>
+          <span className="app-header-btn-label">Hard Refresh</span>
         </Button>
       </div>
     </div>
