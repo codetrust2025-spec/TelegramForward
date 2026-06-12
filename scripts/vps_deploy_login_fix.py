@@ -4,6 +4,10 @@ import os, socket, sys
 from pathlib import Path
 import paramiko
 
+from _deploy_common import enforce_git_first
+
+enforce_git_first()
+
 PASSWORD = os.environ.get("VPS_PASSWORD", "")
 LOCAL = Path(__file__).resolve().parent.parent / "static" / "assets" / "app-BkUk1ts9.js"
 REMOTE = "/opt/telegramforward/static/assets/app-BkUk1ts9.js"

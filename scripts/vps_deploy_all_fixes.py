@@ -9,6 +9,8 @@ from pathlib import Path
 
 import paramiko
 
+from _deploy_common import enforce_git_first
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 HOST = "187.127.169.159"
@@ -53,6 +55,7 @@ def put_file(c: paramiko.SSHClient, sftp: paramiko.SFTPClient, local: Path, remo
 
 
 def main() -> None:
+    enforce_git_first()
     c = connect()
     sftp = c.open_sftp()
 

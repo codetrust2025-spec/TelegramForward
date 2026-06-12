@@ -9,6 +9,8 @@ from pathlib import Path
 
 import paramiko
 
+from _deploy_common import enforce_git_first
+
 HOST, USER = "187.127.169.159", "root"
 PWD = os.environ.get("VPS_PASSWORD", "")
 REMOTE = "/opt/telegramforward.old"
@@ -16,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent / "static"
 
 
 def main() -> None:
+    enforce_git_first()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sock = socket.create_connection((HOST, 22), timeout=30)
     c = paramiko.SSHClient()

@@ -8,11 +8,13 @@ from pathlib import Path
 
 import paramiko
 
+from _deploy_common import enforce_git_first, repo_root
+
 HOST = "187.127.169.159"
 USER = "root"
 PASSWORD = os.environ.get("VPS_PASSWORD", "")
 REMOTE = "/opt/telegramforward.old"
-LOCAL_ROOT = Path(r"C:\Users\codet\TelegramForward")
+LOCAL_ROOT = repo_root()
 
 FILES = [
     "server.py",
@@ -24,6 +26,7 @@ FILES = [
 
 
 def main() -> None:
+    enforce_git_first()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if not PASSWORD:
         raise SystemExit("Set VPS_PASSWORD environment variable")
