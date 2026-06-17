@@ -1,9 +1,9 @@
 {
   "version": 2,
   "description": "Pinned production assets \u2014 live site must match these hashes.",
-  "git_commit": "93a086fdad838af10669563c5ee51cc2bc9c2808",
-  "git_commit_short": "93a086f",
-  "deployed_at": "2026-06-17T20:00:38Z",
+  "git_commit": "d540614acda49b82da78eea16d822f5e9a28474d",
+  "git_commit_short": "d540614",
+  "deployed_at": "2026-06-17T20:08:23Z",
   "js": "assets/app-KyyEDUMk.js",
   "css": "assets/index-N2T4G-qv.css",
   "js_sha256": "84497a0ada016f67a5f7ec85538699894623571993ae97e06b5a6873b0c9b6bc",
