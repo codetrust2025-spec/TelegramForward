@@ -65,6 +65,7 @@ import {
 } from './utils/webPush.js'
 import { InboxPanel } from './components/InboxPanel.jsx'
 import { CandidatesPanel } from './components/CandidatesPanel.jsx'
+import { HandlerKitPanel } from './components/HandlerKitPanel.jsx'
 import { DataRoomPanel } from './components/DataRoomPanel.jsx'
 import { AdminPanel } from './components/AdminPanel.jsx'
 import {
@@ -169,6 +170,7 @@ export default function App() {
     authenticated: authAuthenticated,
     username: authUsername,
     role: authRole,
+    reference: authReference,
     logout: authLogout,
   } = useAuth()
   const [openChatTarget, setOpenChatTarget] = useState(() => parseOpenChatFromUrl())
@@ -201,7 +203,13 @@ export default function App() {
   const [overviewScope, setOverviewScope] = useState('fleet')
   const [workspaceMode, setWorkspaceMode] = useState(loadWorkspaceMode)
   const workspaceBootstrapDoneRef = useRef(false)
-  const [mainView, setMainView] = useState('dashboard') // dashboard | inbox | candidates | data-room | admin | logs
+  const [mainView, setMainView] = useState('dashboard') // dashboard | inbox | candidates | handler-kit | ...
+
+  useEffect(() => {
+    if (authRole === 'handler' && (mainView === 'dashboard' || mainView === 'inbox' || mainView === 'data-room' || mainView === 'admin' || mainView === 'logs')) {
+      setMainView('handler-kit')
+    }
+  }, [authRole, mainView])
 
   const [inboxState, setInboxState] = useState({ slots: {} })
   const [crmState, setCrmState] = useState({
@@ -2132,6 +2140,7 @@ export default function App() {
             mainView={mainView}
             inboxUnreadTotal={inboxUnreadTotal}
             inboxUnreadBadge={inboxUnreadBadge}
+            handlerMode={authRole === 'handler'}
             onNavigate={view => {
               if (view === 'dashboard') unlockNotificationSound()
               if (view === 'inbox') fetchInbox()
@@ -2155,6 +2164,8 @@ export default function App() {
           onBackToDashboard={() => setMainView('dashboard')}
           openChatTarget={openChatTarget}
         />
+      ) : mainView === 'handler-kit' ? (
+        <HandlerKitPanel username={authUsername} reference={authReference} />
       ) : mainView === 'candidates' ? (
         <CandidatesPanel />
       ) : mainView === 'data-room' ? (

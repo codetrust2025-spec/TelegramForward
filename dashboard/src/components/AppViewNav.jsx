@@ -14,7 +14,10 @@ const MAIN_VIEWS = [
 /**
  * Top-level app sections. Narrow: tap tiles; wide: tab buttons.
  */
-const HANDLER_VIEWS = MAIN_VIEWS.filter(v => v.value === 'candidates')
+const HANDLER_VIEWS = [
+  { value: 'handler-kit', label: 'My kit', shortLabel: 'Kit' },
+  ...MAIN_VIEWS.filter(v => v.value === 'candidates'),
+]
 
 export function AppViewNav({
   mainView,

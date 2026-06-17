@@ -55,6 +55,13 @@ def format_ist_storage_label(value: datetime | float | None = None) -> str:
     return _to_ist(dt).strftime("%Y-%m-%d %H:%M IST")
 
 
+def ist_now(now: float | None = None) -> datetime:
+    """Current wall-clock time in IST (optional unix override for tests)."""
+    if now is not None:
+        return datetime.fromtimestamp(float(now), tz=IST)
+    return datetime.now(IST)
+
+
 def format_ist_iso(value: datetime | float | None = None) -> str:
     """ISO with IST offset for API fields shown in UI."""
     if value is None:
