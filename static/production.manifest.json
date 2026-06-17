@@ -1,14 +1,14 @@
 {
   "version": 2,
   "description": "Pinned production assets \u2014 live site must match these hashes.",
-  "git_commit": "7c87870d5fb5f965ad20ad633ac61225a70f6741",
-  "git_commit_short": "7c87870",
-  "deployed_at": "2026-06-17T20:17:44Z",
-  "js": "assets/app-CF4j8HMG.js",
-  "css": "assets/index-CSp4cOQD.css",
-  "js_sha256": "c1c0948e8c00cdc94f08b9f930e19c3afd82508ad921115be445eed79fae43e5",
-  "css_sha256": "e7bde8cb9ef9210c10c38d74914daf6126026f136eed39fb3783909c7a84966a",
-  "js_bytes": 1078487,
-  "css_bytes": 407554,
+  "git_commit": "ccd306ec58a910bd649d81e47bef5282b3e3e453",
+  "git_commit_short": "ccd306e",
+  "deployed_at": "2026-06-17T20:24:58Z",
+  "js": "assets/app-0yV7-vgn.js",
+  "css": "assets/index-BiHYG7_9.css",
+  "js_sha256": "6939228f23fc996db87ebadebc76fc29a0fb461c16fa9c8ccdf671d2fc63aaa0",
+  "css_sha256": "903bb921bdb332a82e716f3db97de570d45d2673a653b8de3ad573748f7ed43c",
+  "js_bytes": 1082402,
+  "css_bytes": 415086,
   "server_py_sha256": "09cb1b11fa8e403968d237ce518d88891a8780d18f30c505ded0f44020729ba0"
 }
