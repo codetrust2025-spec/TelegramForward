@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -49,17 +50,24 @@ def main() -> int:
         head = git_cmd("rev-parse", "HEAD")
         short = head[:7]
         branch = git_cmd("rev-parse", "--abbrev-ref", "HEAD")
-        dirty = bool(git_cmd("status", "--porcelain"))
+        dirty_lines = [ln for ln in git_cmd("status", "--porcelain").splitlines() if ln.strip()]
+        dirty = bool(dirty_lines)
         origin = git_cmd("rev-parse", "origin/main")
     except subprocess.CalledProcessError as exc:
         print(f"Git error: {exc}")
         return 2
 
+    significant_dirty = [
+        ln for ln in dirty_lines
+        if "production.manifest.json" not in ln
+        and not re.search(r"static/assets/(app-|index-)[A-Za-z0-9_-]+\.(js|css)", ln)
+    ]
+
     print(f"Branch:      {branch}")
     print(f"HEAD:        {short}")
     print(f"origin/main: {origin[:7]}")
     print(f"Working tree dirty: {dirty}")
-    if dirty:
+    if significant_dirty:
         issues.append("Local git has uncommitted changes — commit or stash before deploy")
 
     if head != origin:
