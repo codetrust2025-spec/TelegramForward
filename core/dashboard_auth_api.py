@@ -102,6 +102,53 @@ def install_dashboard_auth(app: FastAPI) -> None:
             return {"status": "ok", "verified": True}
         return _json({"detail": "Incorrect password"}, status=401)
 
+    @app.post("/auth/reset-password")
+    async def auth_reset_password(body: dict | None = None):
+        """Handler self-service password reset (username + referrer name)."""
+        if not auth.auth_enabled():
+            return _json({"detail": "Auth is disabled"}, status=400)
+        payload = body or {}
+        username = str(payload.get("username") or "").strip()
+        reference = str(payload.get("reference") or "").strip()
+        new_password = str(payload.get("new_password") or "")
+        err = auth.handler_self_reset_password(username, reference, new_password)
+        if err:
+            return _json({"detail": err}, status=400)
+        return {"status": "ok"}
+
+    @app.post("/auth/change-password")
+    async def auth_change_password(request: Request, body: dict | None = None):
+        """Logged-in operator changes their own password."""
+        if not auth.auth_enabled():
+            return {"status": "ok"}
+        profile = auth.operator_profile_from_cookies(dict(request.cookies))
+        username = profile.get("username")
+        if not username:
+            return _json({"detail": "Authentication required"}, status=401)
+        payload = body or {}
+        current_password = str(payload.get("current_password") or "")
+        new_password = str(payload.get("new_password") or "")
+        err = auth.change_operator_password(username, current_password, new_password)
+        if err:
+            return _json({"detail": err}, status=400)
+        return {"status": "ok"}
+
+    @app.get("/auth/handler-kit")
+    async def auth_handler_kit(request: Request):
+        """Handler onboarding — login info + vault prompts/resources (no admin secrets)."""
+        from features import data_room_credentials_store as creds
+
+        profile = auth.operator_profile_from_cookies(dict(request.cookies))
+        username = profile.get("username")
+        if not username:
+            return _json({"detail": "Authentication required"}, status=401)
+        kit = creds.handler_kit_for(
+            username=username,
+            reference=profile.get("reference"),
+            role=profile.get("role") or "admin",
+        )
+        return {"status": "ok", "kit": kit}
+
     class DashboardAuthMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
             from core.dashboard_access import is_ops_request_authorized

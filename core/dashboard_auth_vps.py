@@ -31,6 +31,7 @@ SESSION_TTL_SEC = 7 * 24 * 3600
 _PUBLIC_EXACT = frozenset({
     "/auth/login",
     "/auth/verify-admin",
+    "/auth/reset-password",
     "/auth/status",
     "/health",
     "/favicon.svg",
@@ -43,13 +44,14 @@ _PUBLIC_EXACT = frozenset({
 _PUBLIC_PREFIXES = (
     "/assets/",
     "/call/join/",
+    "/public/",
 )
 
 # First path segment for API routes (must stay in sync with server.py serve_spa).
 _API_ROOTS = frozenset({
     "groups", "account", "accounts", "login", "auth", "message", "start", "stop",
     "state", "health", "ws", "inbox", "crm", "stats", "admin", "ai", "candidates",
-    "data-room",
+    "data-room", "public",
     "metrics", "alerts", "handler-expenses", "handler-salaries", "voice",
     "webhooks", "whatsapp", "push", "devices", "demo-tools", "workspace", "fleet",
 })
@@ -113,6 +115,183 @@ def _handler_accounts() -> dict[str, dict[str, str]]:
 
 def reload_handler_accounts() -> None:
     _handler_accounts.cache_clear()
+
+
+def _handlers_yaml_path() -> str:
+    return os.path.join(BASE_DIR, "config", "dashboard_handlers.yaml")
+
+
+def _load_handlers_yaml() -> list[dict[str, str]]:
+    path = _handlers_yaml_path()
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    except OSError:
+        return []
+    out: list[dict[str, str]] = []
+    for row in raw.get("handlers") or []:
+        if not isinstance(row, dict):
+            continue
+        user = str(row.get("username") or "").strip()
+        ref = str(row.get("reference") or "").strip()
+        pwd = str(row.get("password") or "").strip()
+        if user and ref and pwd:
+            out.append({"username": user, "reference": ref, "password": pwd})
+    return out
+
+
+def _save_handlers_yaml(rows: list[dict[str, str]]) -> None:
+    path = _handlers_yaml_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = {
+        "handlers": [
+            {
+                "username": r["username"],
+                "reference": r["reference"],
+                "password": r["password"],
+            }
+            for r in rows
+        ]
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(payload, f, default_flow_style=False, sort_keys=False)
+
+
+def _reference_matches(expected: str, provided: str) -> bool:
+    a = " ".join(str(expected or "").strip().lower().split())
+    b = " ".join(str(provided or "").strip().lower().split())
+    if not a or not b:
+        return False
+    return a == b or a in b or b in a
+
+
+def admin_add_handler(username: str, reference: str, password: str) -> str | None:
+    """Add handler login to dashboard_handlers.yaml."""
+    user = str(username or "").strip()
+    ref = str(reference or user).strip()
+    pwd = str(password or "").strip()
+    if not user or not ref or not pwd:
+        return "Username, reference, and password are required"
+    rows = _load_handlers_yaml()
+    key = user.lower()
+    if any(r["username"].lower() == key for r in rows):
+        return f"Handler already exists: {user}"
+    rows.append({"username": user, "reference": ref, "password": pwd})
+    rows.sort(key=lambda r: r["reference"].lower())
+    _save_handlers_yaml(rows)
+    reload_handler_accounts()
+    return None
+
+
+def admin_remove_handler(username: str) -> str | None:
+    user = str(username or "").strip()
+    if not user:
+        return "Username required"
+    rows = _load_handlers_yaml()
+    filtered = [r for r in rows if r["username"].lower() != user.lower()]
+    if len(filtered) == len(rows):
+        return "Handler not found"
+    _save_handlers_yaml(filtered)
+    reload_handler_accounts()
+    return None
+
+
+def admin_set_handler_password(username: str, password: str) -> str | None:
+    user = str(username or "").strip()
+    pwd = str(password or "").strip()
+    if not user or not pwd:
+        return "Username and password are required"
+    rows = _load_handlers_yaml()
+    found = False
+    for row in rows:
+        if row["username"].lower() == user.lower():
+            row["password"] = pwd
+            found = True
+            break
+    if not found:
+        return "Handler not found"
+    _save_handlers_yaml(rows)
+    reload_handler_accounts()
+    return None
+
+
+def handler_self_reset_password(username: str, reference: str, new_password: str) -> str | None:
+    """Self-service reset — username + referrer name must match handler record."""
+    user = str(username or "").strip()
+    ref = str(reference or "").strip()
+    pwd = str(new_password or "").strip()
+    if not user or not ref or len(pwd) < 4:
+        return "Enter username, referrer name, and a password of at least 4 characters"
+    handler = _handler_accounts().get(user.lower())
+    if not handler:
+        return "Unknown login username — contact your admin"
+    if not _reference_matches(handler.get("reference") or "", ref):
+        return "Referrer name does not match our records"
+    err = admin_set_handler_password(user, pwd)
+    if err:
+        return err
+    try:
+        from features import data_room_credentials_store as creds
+
+        creds.update_handler_login(user, {"password": pwd})
+    except Exception:
+        pass
+    return None
+
+
+def change_operator_password(username: str, current_password: str, new_password: str) -> str | None:
+    user = str(username or "").strip()
+    cur = str(current_password or "")
+    new = str(new_password or "").strip()
+    if not user or not cur or len(new) < 4:
+        return "Enter current password and a new password of at least 4 characters"
+    profile = resolve_operator_login(user, cur)
+    if not profile:
+        return "Current password is incorrect"
+    role = profile.get("role") or "admin"
+    if role == "handler":
+        err = admin_set_handler_password(user, new)
+        if err:
+            return err
+        try:
+            from features import data_room_credentials_store as creds
+
+            creds.update_handler_login(user, {"password": new})
+        except Exception:
+            pass
+        return None
+    expected_user, expected_pass = get_credentials()
+    if not secrets.compare_digest(user, expected_user) or not secrets.compare_digest(cur, expected_pass):
+        return "Current password is incorrect"
+    os.environ["DASHBOARD_PASSWORD"] = new
+    _refresh_dashboard_env_from_file()
+    env_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
+    if os.path.isfile(env_path):
+        try:
+            lines: list[str] = []
+            replaced = False
+            with open(env_path, encoding="utf-8") as f:
+                for raw in f:
+                    if raw.strip().startswith("DASHBOARD_PASSWORD="):
+                        lines.append(f"DASHBOARD_PASSWORD={new}\n")
+                        replaced = True
+                    else:
+                        lines.append(raw)
+            if not replaced:
+                lines.append(f"DASHBOARD_PASSWORD={new}\n")
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+        except OSError:
+            pass
+    try:
+        from features import data_room_credentials_store as creds
+
+        creds.update_admin_login({"password": new})
+    except Exception:
+        pass
+    return None
 
 
 def resolve_operator_login(username: str, password: str) -> dict[str, Any] | None:

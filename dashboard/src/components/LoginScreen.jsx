@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Spinner } from '../Loader.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
+import { ForgotPasswordPanel } from './ForgotPasswordPanel.jsx'
 
 const BRAND = {
   name: 'TeleAutomation',
@@ -14,6 +15,7 @@ export function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false)
   const [busy, setBusy] = useState(false)
   const [localError, setLocalError] = useState('')
+  const [forgot, setForgot] = useState(false)
 
   async function onSubmit(e) {
     e.preventDefault()
@@ -31,6 +33,20 @@ export function LoginScreen() {
   }
 
   const error = localError || authError
+
+  if (forgot) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <div className="auth-brand">
+            <h1>Reset password</h1>
+            <p>Handler self-service — no WhatsApp needed</p>
+          </div>
+          <ForgotPasswordPanel onBack={() => setForgot(false)} />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="auth-screen">
@@ -88,6 +104,14 @@ export function LoginScreen() {
           {error ? <p className="auth-error" role="alert">{error}</p> : null}
           <button type="submit" className="btn btn--primary auth-submit" disabled={busy}>
             {busy ? <Spinner size={18} /> : 'Sign in'}
+          </button>
+          <button
+            type="button"
+            className="btn btn--ghost auth-forgot-link"
+            disabled={busy}
+            onClick={() => setForgot(true)}
+          >
+            Forgot password?
           </button>
         </form>
         <p className="auth-footnote">

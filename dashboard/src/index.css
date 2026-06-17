@@ -14294,3 +14294,117 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   max-width: 12rem;
   white-space: normal;
 }
+
+/* Public submit-slot page */
+.submit-slot-screen .submit-slot-card {
+  max-width: 28rem;
+}
+.submit-slot-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+.submit-slot-tab {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.submit-slot-tab--active {
+  border-color: #6366f1;
+  background: rgba(99, 102, 241, 0.12);
+}
+.submit-slot-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+.submit-slot-hint {
+  font-size: 0.875rem;
+  color: #94a3b8;
+  margin: 0 0 0.75rem;
+}
+.submit-slot-booked {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+}
+.submit-slot-booked-title {
+  font-size: 0.9375rem;
+  margin: 0 0 0.5rem;
+}
+.submit-slot-booked-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 0.8125rem;
+  color: #cbd5e1;
+}
+.auth-forgot-link {
+  margin-top: 0.5rem;
+  width: 100%;
+}
+
+/* Handler onboarding kit */
+.handler-kit {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 2rem;
+}
+.handler-kit-head {
+  margin-bottom: 1.25rem;
+}
+.handler-kit-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.35rem;
+}
+.handler-kit-lead {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.9375rem;
+}
+.handler-kit-block {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.35);
+}
+.handler-kit-block h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+.handler-kit-dl {
+  display: grid;
+  grid-template-columns: 6rem 1fr;
+  gap: 0.35rem 0.75rem;
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+}
+.handler-kit-dl dt {
+  color: #94a3b8;
+}
+.handler-kit-pre {
+  white-space: pre-wrap;
+  font-size: 0.8125rem;
+  max-height: 12rem;
+  overflow: auto;
+  margin: 0.5rem 0;
+  padding: 0.5rem;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+}
+.handler-kit-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+.handler-kit-list li {
+  margin-bottom: 0.75rem;
+}
+.handler-kit--loading {
+  display: flex;
+  justify-content: center;
+  padding: 3rem;
+}

@@ -99,6 +99,10 @@ from core.whatsapp_api import install_whatsapp_routes
 
 install_whatsapp_routes(app)
 
+from core.public_slot_api import install_public_slot_routes
+
+install_public_slot_routes(app)
+
 from core.demo_tools_api import install_demo_tools_routes
 
 install_demo_tools_routes(app)
@@ -404,6 +408,13 @@ async def _startup_background() -> None:
             start_karthik_inbox_sweep()
         except Exception as e:
             log_reload_event(f"Karthik inbox sweep start failed: {type(e).__name__}: {e}")
+
+        try:
+            from services.interview_reminder_loop import start_interview_reminder_loop
+
+            start_interview_reminder_loop()
+        except Exception as e:
+            log_reload_event(f"Interview reminder loop start failed: {type(e).__name__}: {e}")
     except Exception as e:
         log_reload_event(f"Startup background task error: {type(e).__name__}: {e}")
 
@@ -3892,7 +3903,7 @@ if os.path.exists(STATIC_DIR):
         api_roots = {
             "groups", "account", "accounts", "login", "auth", "message", "start", "stop",
             "state", "health", "ws", "inbox", "crm", "stats", "admin", "ai", "voice",
-            "candidates", "data-room", "metrics", "alerts", "push", "analytics",
+            "candidates", "data-room", "public", "metrics", "alerts", "push", "analytics",
         }
         first = full_path.split("/")[0] if full_path else ""
         if first in api_roots:
