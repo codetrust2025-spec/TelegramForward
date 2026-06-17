@@ -7,6 +7,7 @@ __pycache__/
 .env
 node_modules/
 dashboard/dist/
+dashboard/node_modules/
 last_seen_ids.json
 groups_list.json
 custom_message.txt

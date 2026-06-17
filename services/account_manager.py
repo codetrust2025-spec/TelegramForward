@@ -381,7 +381,17 @@ class AccountManager:
                 mark_stopped(slot)
                 w.reset_after_logout()
                 return None
-            if not w.state.running and await self.start_account(slot, skip_refresh=True):
+            from core.posting_mode import load_posting_mode
+
+            pm = load_posting_mode(slot)
+            campaign = pm.campaign_enabled
+            forwarding = pm.forwarding_enabled
+            if not w.state.running and await self.start_account(
+                slot,
+                skip_refresh=True,
+                campaign=campaign,
+                forwarding=forwarding,
+            ):
                 return slot
             if not w.state.account_info:
                 mark_stopped(slot)

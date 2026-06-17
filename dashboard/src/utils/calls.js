@@ -43,6 +43,17 @@ export function pickDefaultLiveCallOption(contact) {
   return options.find(o => o.can_open) || null
 }
 
+/** Prefer Telegram, then WhatsApp, then phone — for one-tap outgoing call UI. */
+export function pickDefaultLiveCallOption(contact) {
+  const options = buildLiveCallOptions(contact || {})
+  const order = ['telegram', 'whatsapp', 'phone']
+  for (const id of order) {
+    const opt = options.find(o => o.id === id && o.can_open)
+    if (opt) return opt
+  }
+  return options.find(o => o.can_open) || null
+}
+
 export function buildLiveCallOptions(contact) {
   const username = String(contact?.username || '').replace(/^@/, '')
   const phone = String(contact?.phone || '').replace(/\D/g, '')

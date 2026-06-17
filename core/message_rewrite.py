@@ -67,6 +67,33 @@ _PHRASE_SWAPS: list[tuple[re.Pattern[str], list[str]]] = [
         "For serious job seekers only",
         "Serious profiles only",
     ]),
+    (re.compile(r"\bStill waiting for interview calls\b", re.I), [
+        "Still waiting on interview calls",
+        "No interview calls yet",
+        "Haven't got interview calls",
+    ]),
+    (re.compile(r"\bInterview Support\b", re.I), [
+        "Interview coaching",
+        "Interview prep support",
+        "Full interview guidance",
+    ]),
+    (re.compile(r"\bFrom Calls to Offer\b", re.I), [
+        "From screening to offer",
+        "From calls through to offer",
+        "Call to offer support",
+    ]),
+    (re.compile(r"\bYour competition isn't\b", re.I), [
+        "Others are moving ahead",
+        "Your peers are already interviewing",
+        "The market isn't waiting",
+    ]),
+]
+
+_CLOSERS = [
+    "DM for a quick chat.",
+    "Message me for details.",
+    "Reach out if you're serious.",
+    "Ping me to get started.",
 ]
 
 _OPENERS = ["🚀", "🌟", "💼", "📢", "✨", "🎯", "🔥"]
@@ -156,6 +183,13 @@ def rewrite_message_text(
 
     flush_bullets()
     result = "\n".join(out).strip()
+    if result and MESSAGE_REWRITE_ENABLED:
+        closer = rng.choice(_CLOSERS)
+        if closer not in result:
+            result = f"{result}\n{closer}"
+        batch_tag = rng.choice(["(Active today)", "(Open slots)", "(Limited batch)", ""])
+        if batch_tag and batch_tag not in result:
+            result = f"{result}\n{batch_tag}"
     return result if result else base
 
 

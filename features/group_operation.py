@@ -4,6 +4,7 @@ Decision engine: recent-message check → send → join-if-needed → classify e
 """
 
 import random
+import re
 from typing import Any
 
 from telethon import TelegramClient
@@ -104,9 +105,37 @@ def _is_service_message(message) -> bool:
     return isinstance(message, MessageService)
 
 
-async def _needs_resend(client: TelegramClient, group: str, my_id: int) -> bool | OpResult:
+def _message_body(message) -> str:
+    return (getattr(message, "message", None) or getattr(message, "text", None) or "").strip()
+
+
+def _normalize_message_for_compare(text: str) -> str:
+    """Collapse whitespace and strip leading emoji for fuzzy campaign compare."""
+    s = re.sub(r"\s+", " ", (text or "").strip().lower())
+    s = re.sub(r"^[\U0001F300-\U0001FAFF\U00002600-\U000027BF\s]+", "", s)
+    return s.strip()
+
+
+def _messages_similar(existing: str, planned: str) -> bool:
+    """True only when recent self-post matches planned text exactly (after normalize)."""
+    a = _normalize_message_for_compare(existing)
+    b = _normalize_message_for_compare(planned)
+    return bool(a and b and a == b)
+
+
+async def _needs_resend(
+    client: TelegramClient,
+    group: str,
+    my_id: int,
+    text: str | None = None,
+) -> bool | OpResult:
     """
-    Fetch last N messages; skip send if any recent non-service message is ours.
+    Fetch last N messages; skip send if any recent non-service message is ours
+    with the same (or very similar) body as *text* when provided.
+
+    When *text* is set, a recent self-post with different campaign copy still
+    allows send — fixes stale skips after fleet message updates / rewrites.
+
     Returns OpResult flood tuple if get_messages hits FloodWait.
     """
     limit = max(1, RECENT_MESSAGE_LIMIT)
@@ -117,8 +146,11 @@ async def _needs_resend(client: TelegramClient, group: str, my_id: int) -> bool 
         for msg in msgs:
             if _is_service_message(msg):
                 continue
-            if _sender_id(msg, my_id) == my_id:
-                return False
+            if _sender_id(msg, my_id) != my_id:
+                continue
+            if text and not _messages_similar(_message_body(msg), text):
+                continue
+            return False
         return True
 
     try:
@@ -338,7 +370,7 @@ async def process_group(
     if not text:
         return "error"
 
-    precheck = await _needs_resend(client, group, my_id)
+    precheck = await _needs_resend(client, group, my_id, text)
     if isinstance(precheck, tuple):
         return precheck
     if not precheck:
