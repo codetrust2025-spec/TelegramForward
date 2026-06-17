@@ -50,11 +50,26 @@ def install_public_slot_routes(app) -> None:
             return _json_error(str(e))
         return {"status": "ok", **result}
 
+    @app.post("/public/slots/parse-screenshot")
+    async def public_slot_parse_screenshot(file: UploadFile = File(...)):
+        raw = await file.read()
+        mime = file.content_type or "image/jpeg"
+        try:
+            from features.slot_screenshot_parse import parse_invite_screenshot
+
+            parsed = await asyncio.to_thread(parse_invite_screenshot, raw, mime)
+        except ValueError as e:
+            return _json_error(str(e))
+        except Exception as exc:
+            logger.exception("parse-screenshot failed")
+            return _json_error(f"Could not read screenshot: {exc}", status=500)
+        return {"status": "ok", "slot": parsed}
+
     @app.post("/public/slots/book")
     async def public_slot_book(
         name: str = Form(...),
-        date: str = Form(...),
-        time: str = Form(...),
+        date: str = Form(default=""),
+        time: str = Form(default=""),
         time_end: str = Form(default=""),
         interview_round: str = Form(default=""),
         technology: str = Form(default=""),
@@ -69,12 +84,36 @@ def install_public_slot_routes(app) -> None:
             slot_image = await file.read()
             slot_image_name = file.filename or "slot.jpg"
             slot_image_mime = file.content_type or "image/jpeg"
+
+        day = date.strip()
+        slot_time = time.strip()
+        slot_end = time_end.strip()
+        if slot_image and (not day or not slot_time):
+            try:
+                from features.slot_screenshot_parse import parse_invite_screenshot
+
+                parsed = await asyncio.to_thread(
+                    parse_invite_screenshot, slot_image, slot_image_mime
+                )
+                day = day or parsed.get("date") or ""
+                slot_time = slot_time or parsed.get("time") or ""
+                slot_end = slot_end or parsed.get("time_end") or ""
+                if not interview_round.strip() and parsed.get("interview_round"):
+                    interview_round = parsed["interview_round"]
+                if not technology.strip() and parsed.get("technology"):
+                    technology = parsed["technology"]
+            except ValueError as e:
+                return _json_error(str(e))
+
+        if not day or not slot_time:
+            return _json_error("Upload a clear invite screenshot — date and time are read automatically.")
+
         try:
             row, action = cs.import_confirmed_interview_slot(
                 name=name,
-                date=date,
-                time=time,
-                time_end=time_end,
+                date=day,
+                time=slot_time,
+                time_end=slot_end,
                 interview_round=interview_round,
                 technology=technology,
                 notes=notes,

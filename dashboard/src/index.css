@@ -14327,6 +14327,33 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   color: #94a3b8;
   margin: 0 0 0.75rem;
 }
+.submit-slot-parsed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.75rem 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 10px;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(99, 102, 241, 0.08);
+  font-size: 0.9rem;
+}
+.submit-slot-parsed--loading {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.6rem;
+  color: #94a3b8;
+}
+.submit-slot-parsed-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #a5b4fc;
+}
+.submit-slot-parsed-sub {
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
 .submit-slot-booked {
   margin-top: 1.5rem;
   padding-top: 1rem;
