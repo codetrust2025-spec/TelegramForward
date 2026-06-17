@@ -298,7 +298,6 @@ export function SubmitSlotPage() {
                   {candidates.map(c => (
                     <option key={c.name} value={c.name}>
                       {c.name}
-                      {c.balance_due > 0 ? ` — ₹${c.balance_due.toLocaleString('en-IN')} due` : ''}
                     </option>
                   ))}
                 </select>
