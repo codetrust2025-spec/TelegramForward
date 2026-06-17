@@ -60,7 +60,7 @@ export function AuthProvider({ children }) {
     installAuthFetchInterceptor()
     refresh()
     const onAuthRequired = () => {
-      setState((prev) => ({ ...prev, authenticated: false, username: null, loading: false }))
+      setState((prev) => ({ ...prev, authenticated: false, username: null }))
     }
     window.addEventListener('auth:required', onAuthRequired)
     return () => window.removeEventListener('auth:required', onAuthRequired)

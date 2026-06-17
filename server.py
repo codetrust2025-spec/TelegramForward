@@ -77,9 +77,6 @@ def _load_project_dotenv() -> None:
 
 _load_project_dotenv()
 
-from core.dashboard_auth_api import install_dashboard_auth
-from core.dashboard_auth_vps import _API_ROOTS
-
 registry = manager  # backward-compatible alias
 
 app = FastAPI()
@@ -1064,7 +1061,12 @@ async def _perform_stats_reset(payload: dict):
         "reset_at": get_reset_at_iso(account_id),
         "scope": reset_scope,
         "daily_stats": fresh_stats,
-        "account_states": reset_account_states,
+        # Join counters only — do not return full UI state (would overwrite client logs).
+        "account_states": {
+            slot: {"join_stats": join_stats_for_ui(slot)}
+            for slot in reset_slots
+            if slot
+        },
     }
 
 
@@ -2941,7 +2943,7 @@ async def candidates_list(
     reference = handler_reference_scope(request, reference)
     rows = candidate_store.list_candidates(
         stage=stage, task=task, search=search, month=month,
-        pending_only=pending_only, reference=ref,
+        pending_only=pending_only, reference=reference,
     )
     return {"status": "ok", "candidates": rows, "count": len(rows)}
 
@@ -3893,7 +3895,7 @@ if os.path.exists(STATIC_DIR):
             "candidates", "data-room", "metrics", "alerts", "push", "analytics",
         }
         first = full_path.split("/")[0] if full_path else ""
-        if first in _API_ROOTS:
+        if first in api_roots:
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="Not Found")
         file_path = os.path.join(STATIC_DIR, full_path)

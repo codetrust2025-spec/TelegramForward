@@ -1,10 +1,8 @@
 import React, { useMemo } from 'react'
 import {
   buildFleetHealthRows,
-  dailyStatsCutoff,
   formatPostsPerHour,
   sortFleetHealthRows,
-  statsWindowLabel,
 } from '../utils/fleetHealth.js'
 import { SABHI_HEALTH } from '../utils/sabAccountsUi.js'
 import { SubscriptionBadge } from './SubscriptionBadge.jsx'
@@ -27,33 +25,21 @@ function statusLabel(status, running) {
   return status || '—'
 }
 
-export function FleetHealthPanel({
-  perAccount,
-  accountInfo,
-  statsWindow,
-  dailyStats,
-  subscriptionSlots = [],
-  postingModes = {},
-  accountStates = {},
-}) {
+export function FleetHealthPanel({ perAccount, accountInfo, statsWindow, dailyStats, subscriptionSlots = [] }) {
   const subs = Array.isArray(subscriptionSlots) ? subscriptionSlots : []
   const resetTimestamp = dailyStats?.reset_timestamp ?? 0
-  const cutoffTimestamp = dailyStatsCutoff(dailyStats)
-  const windowNote = statsWindowLabel(statsWindow)
+  const windowNote =
+    statsWindow === 'since_reset' ? 'since last reset' : 'rolling 24h'
 
   const { rows, topRate, needsCount } = useMemo(() => {
     const built = sortFleetHealthRows(
-      buildFleetHealthRows(perAccount, accountInfo, statsWindow, resetTimestamp, {
-        postingModes,
-        accountStates,
-        cutoffTimestamp,
-      }),
+      buildFleetHealthRows(perAccount, accountInfo, statsWindow, resetTimestamp),
     )
     const rates = built.map((r) => r.postsPerHour).filter((n) => n > 0)
     const top = rates.length ? Math.max(...rates) : 0
     const needs = built.filter((r) => r.attention).length
     return { rows: built, topRate: top, needsCount: needs }
-  }, [perAccount, accountInfo, statsWindow, resetTimestamp, cutoffTimestamp, postingModes, accountStates])
+  }, [perAccount, accountInfo, statsWindow, resetTimestamp])
 
   if (rows.length === 0) return null
 

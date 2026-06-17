@@ -317,13 +317,8 @@ export function DesktopDashboardHome({
           </p>
           <div className="desk-panel__head" style={{ marginTop: 12 }}>
             <h3 className="desk-panel__subtitle">{mode.reachTitle}</h3>
-            <button
-              type="button"
-              className="btn btn--sm stats-reset-btn"
-              onClick={onResetReach}
-              title="Reset Posts today, Today reach, and other 24h counters to zero from now"
-            >
-              ⟳ Reset 24h
+            <button type="button" className="desk-panel__link" onClick={onResetReach}>
+              Reset 24h
             </button>
           </div>
           <div className="desk-reach-metrics desk-reach-metrics--compact">

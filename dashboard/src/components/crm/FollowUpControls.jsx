@@ -7,15 +7,15 @@ export function FollowUpControls({ onRemind2h, onRemindTomorrow, loading, disabl
       <div className="crm-follow-up-btns">
         <button
           type="button"
-          className="btn btn--ghost btn--sm crm-follow-up-btn crm-follow-up-btn--accent"
+          className="btn btn--warn btn--sm"
           onClick={onRemind2h}
           disabled={disabled || loading}
         >
-          Remind in 2h
+          Remind in 2 hours
         </button>
         <button
           type="button"
-          className="btn btn--ghost btn--sm crm-follow-up-btn"
+          className="btn btn--ghost btn--sm"
           onClick={onRemindTomorrow}
           disabled={disabled || loading}
         >

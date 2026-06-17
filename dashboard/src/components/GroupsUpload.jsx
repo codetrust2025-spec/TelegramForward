@@ -3,15 +3,8 @@ import * as XLSX from 'xlsx'
 import { API } from '../config.js'
 import { ButtonContent, OverlayLoader } from '../Loader.jsx'
 import { useConfirm } from '../context/ConfirmContext.jsx'
-import { GroupCountLegend } from './GroupCountLegend.jsx'
 
-export function GroupsUpload({
-  currentTotal,
-  fleetSliceTotal = 0,
-  activeAccountSlice = null,
-  onUpdated,
-  listSummary,
-}) {
+export function GroupsUpload({ currentTotal, onUpdated, listSummary }) {
   const [open, setOpen] = useState(false)
   const [pasteText, setPasteText] = useState('')
   const [preview, setPreview] = useState([])
@@ -187,9 +180,7 @@ export function GroupsUpload({
       <button type="button" className="panel-toggle" onClick={() => setOpen(o => !o)} aria-expanded={open}>
         <div>
           <span className="panel-toggle-title">Groups list</span>
-          <span className="groups-summary-badge" title="Total names in groups_list.json">
-            {currentTotal} master
-          </span>
+          <span className="groups-summary-badge">{currentTotal} master</span>
         </div>
         {listSummary && (
           <span className="panel-toggle-meta">
@@ -202,12 +193,6 @@ export function GroupsUpload({
 
       {open && (
         <div className="panel-body panel-body--relative">
-          <GroupCountLegend
-            master={currentTotal}
-            fleetSlice={fleetSliceTotal}
-            accountSlice={activeAccountSlice}
-            className="groups-upload-legend"
-          />
           {groupsBusy && (
             <OverlayLoader
               label={

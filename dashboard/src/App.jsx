@@ -67,7 +67,6 @@ import { InboxPanel } from './components/InboxPanel.jsx'
 import { CandidatesPanel } from './components/CandidatesPanel.jsx'
 import { DataRoomPanel } from './components/DataRoomPanel.jsx'
 import { AdminPanel } from './components/AdminPanel.jsx'
-import { DailyOpsPanel, PendingWorksProvider } from './dailyOps/dailyOpsModule.jsx'
 import {
   playNewMessageSound,
   unlockNotificationSound,
@@ -170,10 +169,8 @@ export default function App() {
     authenticated: authAuthenticated,
     username: authUsername,
     role: authRole,
-    loading: authLoading,
     logout: authLogout,
   } = useAuth()
-  const authReady = !authLoading && (authAuthenticated || !authEnabled)
   const [openChatTarget, setOpenChatTarget] = useState(() => parseOpenChatFromUrl())
   const [state, setState] = useState({
     running: false, total: 40, success: 0, failed: 0,
@@ -204,7 +201,7 @@ export default function App() {
   const [overviewScope, setOverviewScope] = useState('fleet')
   const [workspaceMode, setWorkspaceMode] = useState(loadWorkspaceMode)
   const workspaceBootstrapDoneRef = useRef(false)
-  const [mainView, setMainView] = useState('dashboard') // dashboard | inbox | candidates | daily-ops | data-room | admin | logs
+  const [mainView, setMainView] = useState('dashboard') // dashboard | inbox | candidates | data-room | admin | logs
 
   const [inboxState, setInboxState] = useState({ slots: {} })
   const [crmState, setCrmState] = useState({
@@ -944,11 +941,7 @@ export default function App() {
     }),
     [state, loggedInSlots, workspaceMode],
   )
-  const sentWindowLabel = state.daily_stats?.window === 'since_reset'
-    ? 'Since reset'
-    : state.daily_stats?.window === 'ist_day'
-      ? 'Today IST'
-      : 'Last 24h'
+  const sentWindowLabel = state.daily_stats?.window === 'since_reset' ? 'Since reset' : 'Last 24h'
   const inboxUnreadTotal = useMemo(
     () => computeInboxUnreadTotal(inboxState),
     [inboxState],
@@ -1575,33 +1568,8 @@ export default function App() {
     [fleet],
   )
 
-  const dailyOpsProps = useMemo(
-    () => ({
-      loggedInSlots,
-      activeAccount: state.active_account,
-      accountInfo: state.account_info,
-      onSelectAccount: switchAccount,
-      onStartAll: startForwarding,
-      startAllBusy: bulkActionLoading === 'start',
-      showFleetControls: true,
-      onNavCandidates: () => setMainView('candidates'),
-    }),
-    [
-      loggedInSlots,
-      state.active_account,
-      state.account_info,
-      switchAccount,
-      startForwarding,
-      bulkActionLoading,
-    ],
-  )
-
-  function withPendingWorks(node) {
-    return <PendingWorksProvider mainView={mainView}>{node}</PendingWorksProvider>
-  }
-
   if (compactMobileUi) {
-    return withPendingWorks(
+    return (
       <div
         className={`app-shell app-shell--mobile-ui app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}
       >
@@ -1667,7 +1635,6 @@ export default function App() {
             onCrmUpdate: handleCrmUpdate,
             openChatTarget,
           }}
-          dailyOpsProps={dailyOpsProps}
           logsProps={{
             activeTab,
             activeAccount: state.active_account,
@@ -1829,7 +1796,7 @@ export default function App() {
   }
 
   if (!compactMobileUi) {
-    return withPendingWorks(
+    return (
       <div
         className={`app-shell app-shell--desktop-ui app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}
       >
@@ -1892,7 +1859,6 @@ export default function App() {
             onCrmUpdate: handleCrmUpdate,
             openChatTarget,
           }}
-          dailyOpsProps={dailyOpsProps}
           logsProps={{
             activeTab,
             activeAccount: state.active_account,
@@ -2100,7 +2066,7 @@ export default function App() {
     )
   }
 
-  return withPendingWorks(
+  return (
     <div className={`app-shell app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}>
       {showBootOverlay && (
         <div className="app-boot-overlay" role="status" aria-live="polite">
@@ -2191,14 +2157,8 @@ export default function App() {
         />
       ) : mainView === 'candidates' ? (
         <CandidatesPanel />
-      ) : mainView === 'daily-ops' ? (
-        <DailyOpsPanel {...dailyOpsProps} />
       ) : mainView === 'data-room' ? (
-        authReady ? (
-          <DataRoomPanel />
-        ) : (
-          <p className="dr-muted" style={{ padding: '2rem' }}>Checking session…</p>
-        )
+        <DataRoomPanel />
       ) : mainView === 'admin' ? (
         <AdminPanel />
       ) : mainView === 'logs' ? (
@@ -2486,9 +2446,13 @@ export default function App() {
                 const incoming = full?.account_states
                 if (incoming && prev.account_states) {
                   const account_states = { ...prev.account_states }
-                  for (const [slot, patch] of Object.entries(incoming)) {
-                    if (!patch || typeof patch !== 'object') continue
-                    account_states[slot] = { ...(account_states[slot] || {}), ...patch }
+                  for (const slot of Object.keys(account_states)) {
+                    const patch = incoming[slot]
+                    if (!patch?.join_stats) continue
+                    account_states[slot] = {
+                      ...account_states[slot],
+                      join_stats: patch.join_stats,
+                    }
                   }
                   next.account_states = account_states
                 }
@@ -2584,11 +2548,6 @@ export default function App() {
           stopIncomingCallRing()
           setIncomingCall(null)
         }}
-      />
-
-      <ChangePasswordModal
-        open={changePasswordOpen}
-        onClose={() => setChangePasswordOpen(false)}
       />
 
     </div>

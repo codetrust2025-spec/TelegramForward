@@ -314,13 +314,8 @@ export function MobileDashboardHome({
           <h2 className="mob-section-title" style={{ margin: 0 }}>
             {mode.reachTitle}
           </h2>
-          <button
-            type="button"
-            className="btn btn--sm stats-reset-btn"
-            onClick={onResetReach}
-            title="Reset Posts today, Today reach, and other 24h counters to zero from now"
-          >
-            ⟳ Reset 24h
+          <button type="button" className="mob-section-head__link" onClick={onResetReach}>
+            Reset 24h
           </button>
         </div>
         <div className="mob-reach-grid mob-reach-grid--4">

@@ -7,7 +7,6 @@ import { InboxPanel } from '../components/InboxPanel.jsx'
 import { CandidatesPanel } from '../components/CandidatesPanel.jsx'
 import { DataRoomPanel } from '../components/DataRoomPanel.jsx'
 import { AdminPanel } from '../components/AdminPanel.jsx'
-import { DailyOpsPanel } from '../dailyOps/dailyOpsModule.jsx'
 import { LogPanel } from '../components/LogPanel.jsx'
 import { ProgressHubPanel } from '../components/ProgressHubPanel.jsx'
 import { SetupMainPanel } from '../components/SetupMainPanel.jsx'
@@ -28,7 +27,6 @@ function sidebarActiveId(mainView, desktopPage, workspaceMode) {
   if (mainView === 'inbox') return 'inbox'
   if (mainView === 'logs') return 'logs'
   if (mainView === 'admin') return 'admin'
-  if (mainView === 'daily-ops') return 'daily-ops'
   if (mainView === 'candidates') return 'candidates'
   if (mainView === 'data-room') return 'data'
   if (desktopPage === 'setup' || desktopPage === 'login') return 'accounts'
@@ -88,7 +86,6 @@ export function DesktopApp({
   setupTabOptions,
   modesProps,
   inboxProps,
-  dailyOpsProps,
   logsProps,
   progressHubProps,
   confirm,
@@ -132,9 +129,6 @@ export function DesktopApp({
           break
         case 'candidates':
           setMainView('candidates')
-          break
-        case 'daily-ops':
-          setMainView('daily-ops')
           break
         case 'data':
           setMainView('data-room')
@@ -210,9 +204,6 @@ export function DesktopApp({
     )
   } else if (mainView === 'admin') {
     content = <AdminPanel />
-  } else if (mainView === 'daily-ops') {
-    bodyClass += ' desktop-body--daily-ops'
-    content = <DailyOpsPanel {...dailyOpsProps} />
   } else if (mainView === 'candidates') {
     content = <CandidatesPanel />
   } else if (mainView === 'data-room') {
