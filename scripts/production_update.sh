@@ -88,6 +88,12 @@ if [ ! -f "$PROJECT_DIR/static/index.html" ]; then
   exit 1
 fi
 
+# TeleAutomation monolith can bundle two React copies; patch useConfirm to read global fallback.
+if [ -f "$PROJECT_DIR/scripts/_patch_confirm.js" ]; then
+  echo "      Patching confirm hook in app bundle..."
+  node "$PROJECT_DIR/scripts/_patch_confirm.js" || echo "WARN: _patch_confirm.js failed (check manually)"
+fi
+
 # ── 6. Restart PM2 (production config) ───────────────────────
 echo "[6/7] Starting backend (production mode)..."
 pm2 delete telegram-dashboard 2>/dev/null || true

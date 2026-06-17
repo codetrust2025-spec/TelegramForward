@@ -128,9 +128,15 @@ def default_lead_for_conversation(slot: str, conv: dict) -> dict:
 def enrich_conversation(slot: str, conv: dict) -> dict:
     """Merge CRM fields into inbox conversation row."""
     from core.block_store import is_blocked
+    from core.contact_link_store import get_by_telegram
+    from core.whatsapp_channel import conversation_channels
     from services.call_service import enrich_call_fields
 
     uid = int(conv.get("user_id") or 0)
+    link = get_by_telegram(slot, uid)
+    phone_e164 = conv.get("phone_e164") or (link or {}).get("phone_e164") or ""
+    channels = conv.get("channels") or conversation_channels(slot, uid)
+    whatsapp_linked = bool(phone_e164 or link)
     lead = get_lead(slot, uid) or default_lead_for_conversation(slot, conv)
     lead = ensure_reply_timestamps(slot, uid) or lead
     blocked = is_blocked(slot, uid)
@@ -159,6 +165,9 @@ def enrich_conversation(slot: str, conv: dict) -> dict:
         "crm_reply_delayed": compute_reply_delayed(lead),
         "crm_reply_alert_level": compute_reply_alert_level(lead),
         "crm_blocked": blocked,
+        "phone_e164": phone_e164,
+        "channels": channels,
+        "whatsapp_linked": whatsapp_linked,
     }
     return enrich_call_fields(slot, row)
 
@@ -262,6 +271,13 @@ def get_lead_detail(slot: str, user_id: int) -> dict | None:
         out["last_message"] = conv.get("last_message") or ""
         out["last_message_at"] = conv.get("last_message_at")
         out["unread_count"] = conv.get("unread_count") or 0
+    from core.contact_link_store import get_by_telegram
+    from core.whatsapp_channel import conversation_channels
+
+    link = get_by_telegram(slot, int(user_id))
+    out["phone_e164"] = out.get("phone_e164") or (conv or {}).get("phone_e164") or (link or {}).get("phone_e164") or ""
+    out["channels"] = (conv or {}).get("channels") or conversation_channels(slot, int(user_id))
+    out["whatsapp_linked"] = bool(out.get("phone_e164") or link)
     from core.call_store import get_call
 
     from core.call_store import get_last_live_call_attempt

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react'
-import { formatLogTime } from '../utils/accountUi'
+import { formatLogEventLabel, formatLogTime } from '../utils/accountUi'
+import { SABHI_ACCOUNTS } from '../utils/sabAccountsUi.js'
 import { Button } from './ui/Button.jsx'
 import { SegmentedControl } from './ui/SegmentedControl.jsx'
 
@@ -20,7 +21,9 @@ function LogLine({ entry }) {
       <span className="log-line-icon" aria-hidden>{icon}</span>
       <time className="log-line-time">{formatLogTime(entry.time)}</time>
       {event && (
-        <span className="log-line-event" title="Structured event type">{event}</span>
+        <span className="log-line-event" title={event}>
+          {formatLogEventLabel(event)}
+        </span>
       )}
       <span className="log-line-msg">{msg}</span>
     </div>
@@ -109,14 +112,14 @@ export function LogPanel({
               label="Log scope"
               options={[
                 { value: 'account', label: activeAccount || 'Account' },
-                { value: 'all', label: 'All accounts' },
+                { value: 'all', label: SABHI_ACCOUNTS },
               ]}
               value={logScope}
               onChange={onLogScopeChange}
             />
             {logScope === 'all' ? (
               <span className="logs-account-chip" title="Logs from every account">
-                All accounts ({accountSlots?.length || 0})
+                {SABHI_ACCOUNTS} ({accountSlots?.length || 0})
               </span>
             ) : activeAccount && (
               <span className="logs-account-chip" title="Logs scoped to selected account">

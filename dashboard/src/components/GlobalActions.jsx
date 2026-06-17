@@ -30,72 +30,85 @@ export function GlobalActions({
 
   return (
     <div className="app-header-actions">
-      <div className="app-header-right-group">
+      <div className="app-header-actions__primary">
         {anyRunning ? (
           <Button
             variant="danger"
-            className="app-header-btn"
+            size="sm"
+            className="app-header-btn app-header-btn--primary-action"
             onClick={handleStopAll}
             disabled={bulkActionLoading}
             loading={bulkActionLoading === 'stop'}
-            loadingLabel="Stopping…"
+            loadingLabel="…"
             title="Stop all running accounts"
+            aria-label="Stop all"
           >
-            ⏹ Stop All
+            <span className="app-header-btn-icon" aria-hidden>⏹</span>
+            <span className="app-header-btn-label">Stop all</span>
           </Button>
         ) : (
           <Button
             variant="success"
-            className="app-header-btn"
+            size="sm"
+            className="app-header-btn app-header-btn--primary-action"
             onClick={onStartAll}
             disabled={!canStartMore || bulkActionLoading}
             loading={bulkActionLoading === 'start'}
-            loadingLabel="Starting…"
+            loadingLabel="…"
             title={
               canStartMore
                 ? 'Start all logged-in idle accounts (24/7)'
                 : 'No logged-in accounts ready to start'
             }
+            aria-label="Start all"
           >
-            ▶ Start All
+            <span className="app-header-btn-icon" aria-hidden>▶</span>
+            <span className="app-header-btn-label">Start all</span>
           </Button>
         )}
-      </div>
-      <div className="app-header-right-group">
-        <div className="connection-pill app-header-control" title={connected ? 'Live updates from backend' : 'Cannot reach backend — retrying every 3s'}>
+
+        <div
+          className="connection-pill app-header-control connection-pill--compact"
+          title={connected ? 'Live updates from backend' : 'Cannot reach backend — retrying every 3s'}
+        >
           <span className={`connection-dot${connected ? ' connection-dot--on' : ''}`} />
           {!connected && <Spinner size={12} />}
           <span className="connection-label">
-            {connected ? 'Connected' : 'Reconnecting…'}
+            {connected ? 'Live' : '…'}
           </span>
         </div>
       </div>
-      {onTotalList && (
-        <div className="app-header-right-group">
+
+      <div className="app-header-actions__secondary app-header-actions__secondary--inline">
+        {onTotalList && (
           <Button
             variant="ghost"
-            className="app-header-btn"
+            size="sm"
+            className="app-header-btn app-header-btn--icon"
             onClick={onTotalList}
             disabled={totalListLoading}
             loading={totalListLoading}
-            loadingLabel="Building list…"
-            title="Fetch every joined group/channel from all logged-in accounts and download as CSV"
+            loadingLabel="…"
+            title="Download joined groups CSV for all accounts"
+            aria-label="Total list CSV"
           >
-            📋 Total List
+            <span className="app-header-btn-icon" aria-hidden>📋</span>
+            <span className="app-header-btn-label">List</span>
           </Button>
-        </div>
-      )}
-      <div className="app-header-right-group">
+        )}
         <Button
           variant="ghost"
-          className="app-header-btn"
+          size="sm"
+          className="app-header-btn app-header-btn--icon"
           onClick={onHardRefresh}
           disabled={hardRefreshing}
           loading={hardRefreshing}
-          loadingLabel="Refreshing…"
-          title="Full page reload + latest server state"
+          loadingLabel="…"
+          title="Reload page and fetch latest state"
+          aria-label="Refresh"
         >
-          ↻ Hard Refresh
+          <span className="app-header-btn-icon" aria-hidden>↻</span>
+          <span className="app-header-btn-label">Refresh</span>
         </Button>
       </div>
     </div>

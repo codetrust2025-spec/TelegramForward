@@ -11,8 +11,12 @@ import json
 from abc import ABC, abstractmethod
 from typing import Any
 
+import logging
+
 from messaging.queue_config import QUEUE_BACKEND
 from messaging.task_types import QueueTask, TaskPriority, TaskType
+
+logger = logging.getLogger("queue_backend")
 
 
 class QueueBackend(ABC):
@@ -105,10 +109,11 @@ class RedisQueueBackend(QueueBackend):
 
 def get_queue_backend() -> QueueBackend:
     if QUEUE_BACKEND == "redis":
-        import os
-
-        url = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
-        return RedisQueueBackend(url)
+        logger.error(
+            "QUEUE_BACKEND=redis is not wired yet — falling back to in-memory queue. "
+            "Set QUEUE_BACKEND=memory or implement the Redis backend (see docs/SCALABILITY.md)."
+        )
+        return InMemoryQueueBackend()
     return InMemoryQueueBackend()
 
 

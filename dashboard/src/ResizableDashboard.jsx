@@ -61,6 +61,7 @@ function ColumnResizeHandle({ onPointerDown, label }) {
  * Below 900px width uses CSS stack layout — no drag handles.
  */
 export function ResizableDashboardLayout({ left, center, right }) {
+  const twoCol = !right
   const [sizes, setSizes] = useState(loadSizes)
   const [canResize, setCanResize] = useState(
     () => typeof window !== 'undefined' && window.innerWidth >= RESIZE_MIN_WIDTH,
@@ -148,10 +149,33 @@ export function ResizableDashboardLayout({ left, center, right }) {
 
   if (!canResize) {
     return (
-      <div className="dashboard-grid dashboard-grid--auto">
+      <div
+        className={`dashboard-grid dashboard-grid--auto${twoCol ? ' dashboard-grid--two-col' : ''}`}
+      >
         {left}
         {center}
         {right}
+      </div>
+    )
+  }
+
+  if (twoCol) {
+    const total = Math.max(1, sizes.left + sizes.center)
+    const leftPct = (sizes.left / total) * 100
+    return (
+      <div className="dashboard-resize-wrap dashboard-resize-wrap--two-col">
+        <div ref={containerRef} className="dashboard-resize-row">
+          <div className="dashboard-resize-pane" style={{ width: `${leftPct}%` }}>
+            {left}
+          </div>
+          <ColumnResizeHandle
+            label="Resize setup and progress columns"
+            onPointerDown={startDrag(0)}
+          />
+          <div className="dashboard-resize-pane" style={{ width: `${100 - leftPct}%` }}>
+            {center}
+          </div>
+        </div>
       </div>
     )
   }

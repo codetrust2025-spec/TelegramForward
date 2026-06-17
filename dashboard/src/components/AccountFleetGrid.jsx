@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { Spinner } from '../Loader.jsx'
 import {
   accountLabel,
   formatAccountStatusLabel,
@@ -104,11 +105,15 @@ export function AccountFleetGrid({
     onSelectAccount?.(slot)
   }
 
+  const switching = switchingAccount != null
+
   return (
     <div className="acct-fleet-grid-wrap">
       <div className="acct-fleet-grid-header">
-        <p className="acct-fleet-grid-lead">
-          Select an account to update the detail panel, logs, and metrics.
+        <p className="acct-fleet-grid-lead" role="status" aria-live="polite">
+          {switching
+            ? `Switching to ${accountLabel(switchingAccount)}…`
+            : 'Select an account to update the detail panel, logs, and metrics.'}
         </p>
         <SegmentedControl
           className="acct-fleet-filters"
@@ -147,7 +152,6 @@ export function AccountFleetGrid({
                 ].filter(Boolean).join(' ')}
                 title={buildTooltip(row, info, acctState)}
                 onClick={() => handleSelect(row.slot)}
-                disabled={busy}
               >
                 <span className="acct-fleet-tile-top">
                   <span className="acct-fleet-tile-id">{shortSlotLabel(row.slot)}</span>
@@ -159,6 +163,11 @@ export function AccountFleetGrid({
                 </span>
                 {health && (
                   <span className="acct-fleet-tile-health">{health}</span>
+                )}
+                {busy && (
+                  <span className="acct-fleet-tile-switching" aria-hidden>
+                    <Spinner size={16} />
+                  </span>
                 )}
               </button>
             )

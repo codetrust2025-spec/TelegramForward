@@ -10,7 +10,7 @@ import os
 import shutil
 from datetime import datetime
 
-from fastapi import FastAPI, File, Form, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -39,17 +39,76 @@ from core.message_store import (
 )
 from core import telegram_client
 from telethon import TelegramClient
-from core.account_info_store import clear_account_info, load_account_info, save_account_info
+from core.account_info_store import (
+    clear_account_info,
+    duplicate_phone_login_message,
+    find_logged_in_slot_by_phone,
+    load_account_info,
+    save_account_info,
+)
 from core.login_pending import clear_pending, load_pending, save_pending
 from core.worker_persistence import log_reload_event
 from services.account_manager import manager
 from events.event_bus import event_bus
 from events.event_types import EventType
+from core.admin_dashboard import install_admin_dashboard
+
+
+def _load_project_dotenv() -> None:
+    """Load .env into os.environ so PM2/uvicorn workers see AI_API_KEY etc."""
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.isfile(env_path):
+        return
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(env_path, override=False)
+    except ImportError:
+        with open(env_path, encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                if key and key not in os.environ:
+                    os.environ[key] = val.strip().strip('"').strip("'")
+
+
+_load_project_dotenv()
 
 registry = manager  # backward-compatible alias
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+install_admin_dashboard(app)
+
+from core.dashboard_auth_api import install_dashboard_auth
+
+install_dashboard_auth(app)
+
+from core.voice_call_api import install_voice_call_routes
+
+install_voice_call_routes(app)
+
+from core.web_push_api import install_web_push_routes
+
+install_web_push_routes(app)
+
+from core.whatsapp_api import install_whatsapp_routes
+
+install_whatsapp_routes(app)
+
+from core.demo_tools_api import install_demo_tools_routes
+
+install_demo_tools_routes(app)
+
+
+def _require_fleet_admin(request: Request) -> None:
+    from core.dashboard_access import require_fleet_admin
+
+    require_fleet_admin(request)
+
 
 # Per-slot login state — no cross-account coupling
 login_state: dict[str, dict] = {
@@ -59,12 +118,16 @@ login_state: dict[str, dict] = {
 
 def _sync_login_state_slots() -> None:
     """Ensure login_state has an entry for every configured account slot."""
-    for slot in ACCOUNTS:
+    from core.config import ACCOUNTS as live_accounts
+
+    for slot in live_accounts:
         login_state.setdefault(slot, {"phone": None, "phone_code_hash": None})
 
 
 def _slot_valid(slot: str) -> bool:
-    return slot in ACCOUNTS
+    from core.config import ACCOUNTS as live_accounts
+
+    return slot in live_accounts
 
 
 def _get_login_pending(slot: str) -> dict | None:
@@ -112,22 +175,49 @@ def _migrate_legacy_files() -> None:
 
 
 async def _push_state() -> None:
-    await broadcast.broadcast({"type": "state", **registry.build_ui_state()})
+    state = await asyncio.to_thread(registry.build_ui_state)
+    await broadcast.broadcast({"type": "state", **state})
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    from core import dashboard_auth_vps as dash_auth
+
     await websocket.accept()
     broadcast.active_connections.append(websocket)
-    await websocket.send_json({"type": "state", **registry.build_ui_state()})
+    profile = dash_auth.operator_profile_from_cookies(dict(websocket.cookies))
+    broadcast.connection_profiles[websocket] = profile
+    full = await asyncio.to_thread(registry.build_ui_state)
+    await websocket.send_json({"type": "state", **full})
     if _membership_scheduler is not None:
         _membership_scheduler.schedule_stale_refresh(reason="dashboard_open")
     try:
         while True:
-            await websocket.receive_text()
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(msg, dict) or msg.get("type") != "voice":
+                continue
+            action = str(msg.get("action") or "").strip().lower()
+            session_id = str(msg.get("session_id") or "").strip()
+            if not session_id:
+                continue
+            from core import voice_signaling
+            from services import voice_call_service as voice_svc
+
+            if action == "register":
+                await voice_signaling.register_peer(session_id, "operator", websocket)
+            elif action == "signal":
+                signal = msg.get("signal") if isinstance(msg.get("signal"), dict) else {}
+                await voice_svc.handle_operator_signal(session_id, signal)
     except WebSocketDisconnect:
+        pass
+    finally:
+        broadcast.connection_profiles.pop(websocket, None)
         if websocket in broadcast.active_connections:
             broadcast.active_connections.remove(websocket)
 
@@ -136,6 +226,7 @@ CODE_VERSION = "2026-05-23-account-isolation"
 _persist_running_task: asyncio.Task | None = None
 _health_monitor = None
 _membership_scheduler = None
+_shutdown_monitor = None
 _start_all_task: asyncio.Task | None = None
 
 
@@ -205,6 +296,60 @@ async def _persist_running_workers_loop() -> None:
             pass
 
 
+async def _auto_stats_reset_loop() -> None:
+    """Roll daily dashboard counters every 24h and push fresh state to clients."""
+    from core.daily_stats import refresh_daily_stats
+    from core.join_cycle import join_stats_for_ui
+    from core.stats_reset import get_reset_at_iso
+
+    await asyncio.sleep(30.0)
+    while True:
+        try:
+            daily_stats, auto_reset = await asyncio.to_thread(
+                refresh_daily_stats, list(ACCOUNTS)
+            )
+            if auto_reset:
+                reset_slots = (
+                    list(ACCOUNTS)
+                    if auto_reset.scope == "global"
+                    else list(auto_reset.account_ids)
+                )
+                if auto_reset.scope == "global":
+                    registry.reset_stats_display_counters(None)
+                else:
+                    for slot in auto_reset.account_ids:
+                        registry.reset_stats_display_counters(slot)
+                account_states_patch = {
+                    slot: registry.get_worker(slot).state.to_dict()
+                    for slot in reset_slots
+                }
+                reset_scope = "global" if auto_reset.scope == "global" else auto_reset.account_ids[0]
+                await event_bus.publish(
+                    EventType.STATS_RESET,
+                    reset_scope,
+                    {
+                        "reset_timestamp": auto_reset.reset_timestamp,
+                        "reset_at": get_reset_at_iso(
+                            None if auto_reset.scope == "global" else auto_reset.account_ids[0]
+                        ),
+                        "account_id": None if auto_reset.scope == "global" else auto_reset.account_ids[0],
+                        "scope": auto_reset.scope,
+                        "auto": True,
+                        "daily_stats": daily_stats,
+                        "account_states": account_states_patch,
+                    },
+                    push_state=True,
+                    broadcast_ws=True,
+                )
+                await broadcast.broadcast({"type": "daily_stats", "daily_stats": daily_stats})
+                await _push_state()
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            pass
+        await asyncio.sleep(60.0)
+
+
 async def _startup_background() -> None:
     """Telethon refresh + worker resume — must not block HTTP/WebSocket."""
     from core.worker_persistence import log_reload_event
@@ -251,18 +396,51 @@ async def _startup_background() -> None:
                 await asyncio.sleep(30.0)
 
         asyncio.create_task(_inbox_periodic_sync())
+        asyncio.create_task(_auto_stats_reset_loop())
+
+        try:
+            from core.karthik_inbox_sweep import start as start_karthik_inbox_sweep
+
+            start_karthik_inbox_sweep()
+        except Exception as e:
+            log_reload_event(f"Karthik inbox sweep start failed: {type(e).__name__}: {e}")
     except Exception as e:
         log_reload_event(f"Startup background task error: {type(e).__name__}: {e}")
+
+
+def _repair_inbox_conversation_keys() -> None:
+    """Idempotent: move phone_e164 inbox keys to numeric user_id keys."""
+    from core.config import ACCOUNT_SLOTS
+    from core.dm_store import repair_conversation_keys
+
+    total = 0
+    for slot in ACCOUNT_SLOTS:
+        try:
+            total += len(repair_conversation_keys(slot))
+        except Exception:
+            pass
+    if total:
+        from core.worker_persistence import log_reload_event
+
+        log_reload_event(f"Inbox key repair: {total} conversation(s) fixed")
 
 
 @app.on_event("startup")
 async def startup():
     global _persist_running_task, _health_monitor, _membership_scheduler
+    from core.config import warn_default_telegram_creds
+
+    warn_default_telegram_creds()
+    _repair_inbox_conversation_keys()
     _sync_login_state_slots()
     telegram_client.sync_slots()
     _migrate_legacy_files()
     manager.set_on_change(_push_state)
     event_bus.set_state_push(_push_state)
+    from services.forward_message_service import forward_message_service
+
+    forward_message_service.set_on_change(_push_state)
+    forward_message_service.recover_jobs_after_restart()
 
     from events.subscribers import register_event_subscribers
 
@@ -291,11 +469,28 @@ async def startup():
     _membership_scheduler = JoinedMembershipScheduler(manager, _push_state)
     _membership_scheduler.start()
 
+    try:
+        from core.karthik_inbox_sweep import start as start_karthik_inbox_sweep
+
+        start_karthik_inbox_sweep()
+    except Exception as e:
+        log_reload_event(f"Karthik inbox sweep start failed: {type(e).__name__}: {e}")
+
+    global _shutdown_monitor
+    from core.account_shutdown_monitor import AccountShutdownMonitor
+
+    _shutdown_monitor = AccountShutdownMonitor(manager)
+    _shutdown_monitor.start()
+
 
 @app.on_event("shutdown")
 async def shutdown():
     """Graceful shutdown — persist workers, disconnect Telethon, resume after reload."""
-    global _persist_running_task, _health_monitor, _membership_scheduler
+    global _persist_running_task, _health_monitor, _membership_scheduler, _shutdown_monitor
+
+    if _shutdown_monitor is not None:
+        await _shutdown_monitor.stop()
+        _shutdown_monitor = None
 
     if _membership_scheduler is not None:
         await _membership_scheduler.stop()
@@ -333,7 +528,7 @@ async def _start_all_background(one_shot: bool = False) -> None:
         _start_all_task = None
 
 
-@app.post("/start")
+@app.post("/start", dependencies=[Depends(_require_fleet_admin)])
 async def start_all():
     """Queue start for every logged-in account; return immediately for UI responsiveness."""
     global _start_all_task
@@ -345,7 +540,7 @@ async def start_all():
     return {"status": "queued", "accounts": [], "message": "Starting logged-in accounts in background"}
 
 
-@app.post("/start-test")
+@app.post("/start-test", dependencies=[Depends(_require_fleet_admin)])
 async def start_test_all():
     global _start_all_task
     if _start_all_task is not None and not _start_all_task.done():
@@ -356,33 +551,359 @@ async def start_test_all():
     return {"status": "queued", "accounts": [], "message": "Starting one test cycle in background"}
 
 
-@app.post("/stop")
+@app.post("/stop", dependencies=[Depends(_require_fleet_admin)])
 async def stop_all():
     registry.stop_all()
     await _push_state()
     return {"status": "stopped", **registry.build_ui_state()}
 
 
-@app.post("/account/{slot}/start")
-async def start_account(slot: str, one_shot: bool = Query(False)):
+@app.post("/account/{slot}/start", dependencies=[Depends(_require_fleet_admin)])
+async def start_account(
+    slot: str,
+    one_shot: bool = Query(False),
+    feature: str = Query(""),
+):
     if slot not in ACCOUNTS:
         return {"status": "error", "message": "Invalid slot"}
-    if not await registry.start_account(slot, one_shot=one_shot):
+    campaign = forwarding = None
+    feat = (feature or "").strip().lower()
+    if feat == "campaign":
+        campaign = True
+    elif feat == "forwarding":
+        forwarding = True
+    elif feat and feat not in ("all", "both"):
+        return {"status": "error", "message": "feature must be campaign, forwarding, or empty"}
+    from core.account_shutdown import is_shutdown_active, shutdown_info_for_ui
+
+    if is_shutdown_active(slot):
+        info = shutdown_info_for_ui(slot) or {}
+        return {
+            "status": "error",
+            "message": "Account is on shutdown list (no posts for 6+ hours). Clear shutdown to start.",
+            "shutdown": info,
+        }
+    if not await registry.start_account(
+        slot,
+        one_shot=one_shot,
+        campaign=campaign,
+        forwarding=forwarding,
+    ):
         w = registry.get_worker(slot)
         if not w.state.account_info:
             return {"status": "error", "message": f"{slot} not logged in"}
+        if not (w.state.campaign_running or w.state.forwarding_running):
+            from core.posting_mode import load_posting_mode
+
+            cfg = load_posting_mode(slot)
+            if not cfg.campaign_enabled and not cfg.forwarding_enabled:
+                return {"status": "error", "message": "Enable campaign or forwarding first"}
         return {"status": "already_running"}
     await _push_state()
-    return {"status": "started", "slot": slot}
+    return {"status": "started", "slot": slot, "feature": feat or "all"}
 
 
-@app.post("/account/{slot}/stop")
-async def stop_account(slot: str):
+@app.post("/account/{slot}/shutdown/clear", dependencies=[Depends(_require_fleet_admin)])
+async def clear_account_shutdown(slot: str):
     if slot not in ACCOUNTS:
         return {"status": "error", "message": "Invalid slot"}
-    await registry.stop_account(slot)
+    from core.account_shutdown import clear_shutdown
+
+    if not clear_shutdown(slot):
+        return {"status": "not_found", "slot": slot}
     await _push_state()
-    return {"status": "stopped", "slot": slot, **registry.build_ui_state()}
+    return {"status": "ok", "slot": slot, **registry.build_ui_state()}
+
+
+@app.post("/account/shutdown/clear-all", dependencies=[Depends(_require_fleet_admin)])
+@app.post("/shutdown/clear-all", dependencies=[Depends(_require_fleet_admin)])
+async def clear_all_shutdowns_route(body: dict | None = None):
+    """Return all accounts to Campaign/Forwarding tabs; optional stats reset for shutdown test cycle."""
+    from core.account_shutdown import clear_all_shutdowns
+
+    payload = body or {}
+    cleared = clear_all_shutdowns()
+    if payload.get("reset_stats") and cleared:
+        from core.join_cycle import daily_join_count_for_reset
+        from core.send_stats import invalidate_cache
+        from core.stats_reset import StatsResetDebounced, set_reset_timestamp
+
+        for slot in cleared:
+            if slot not in ACCOUNTS:
+                continue
+            try:
+                set_reset_timestamp(
+                    account_id=slot,
+                    join_baselines={slot: daily_join_count_for_reset(slot)},
+                )
+            except StatsResetDebounced:
+                pass
+            invalidate_cache(slot)
+    await _push_state()
+    return {
+        "status": "ok",
+        "cleared": cleared,
+        "cleared_count": len(cleared),
+        "reset_stats": bool(payload.get("reset_stats")),
+        **registry.build_ui_state(),
+    }
+
+
+@app.post("/account/{slot}/stop", dependencies=[Depends(_require_fleet_admin)])
+async def stop_account(slot: str, feature: str = Query("")):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    feat = (feature or "").strip().lower()
+    campaign = forwarding = None
+    if feat == "campaign":
+        campaign = False
+    elif feat == "forwarding":
+        forwarding = False
+    elif feat and feat not in ("all", "both"):
+        return {"status": "error", "message": "feature must be campaign, forwarding, or empty"}
+    await registry.stop_account(slot, campaign=campaign, forwarding=forwarding)
+    await _push_state()
+    return {"status": "stopped", "slot": slot, "feature": feat or "all", **registry.build_ui_state()}
+
+
+@app.post("/account/{slot}/display-name")
+async def set_account_display_name(slot: str, body: dict):
+    """Set dashboard profile label for one account (does not change Telegram)."""
+    if slot not in ACCOUNTS:
+        return {"success": False, "error": "Invalid slot"}
+    payload = body or {}
+    display_name = str(payload.get("display_name") or "").strip()
+    if not display_name:
+        return {"success": False, "error": "Display name cannot be empty"}
+    if len(display_name) > 48:
+        return {"success": False, "error": "Display name too long (max 48 characters)"}
+
+    info = load_account_info(slot)
+    if not info or not info.get("phone"):
+        return {"success": False, "error": "Account not logged in"}
+
+    save_account_info(slot, {**info, "display_name": display_name})
+    w = registry.get_worker(slot)
+    refreshed = load_account_info(slot)
+    if refreshed:
+        w.state.account_info = refreshed
+    await _push_state()
+    return {"success": True, "account_info": w.state.account_info}
+
+
+@app.get("/account/{slot}/posting-mode")
+async def get_posting_mode(slot: str):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from core.posting_mode import load_posting_mode
+
+    return {"status": "ok", **load_posting_mode(slot).to_dict(slot)}
+
+
+@app.post("/account/{slot}/posting-mode")
+async def set_posting_mode_endpoint(slot: str, body: dict):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from core.posting_mode import set_posting_mode
+
+    payload = body or {}
+    mode = str(payload.get("mode") or "").strip()
+    forward_source_type = payload.get("forward_source_type")
+    if forward_source_type is None:
+        forward_source_type = payload.get("source_type")
+    forward_dispatch = payload.get("forward_dispatch")
+    campaign_enabled = payload.get("campaign_enabled")
+    forwarding_enabled = payload.get("forwarding_enabled")
+    if (
+        not mode
+        and forward_source_type is None
+        and forward_dispatch is None
+        and campaign_enabled is None
+        and forwarding_enabled is None
+    ):
+        return {
+            "status": "error",
+            "message": "mode, campaign_enabled, forwarding_enabled, forward_source_type, or forward_dispatch required",
+        }
+    try:
+        cfg = set_posting_mode(
+            slot,
+            mode,
+            forward_source_type=forward_source_type,
+            forward_dispatch=forward_dispatch,
+            campaign_enabled=campaign_enabled,
+            forwarding_enabled=forwarding_enabled,
+        )
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    w = registry.get_worker(slot)
+    w._sync_posting_mode_ui()
+    await _push_state()
+    return {"status": "ok", **cfg.to_dict(slot)}
+
+
+@app.post("/account/{slot}/forwarding/source")
+async def set_forwarding_source_endpoint(slot: str, body: dict):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from core.posting_mode import set_forwarding_source
+
+    w = registry.get_worker(slot)
+    if w.state.running:
+        return {
+            "status": "error",
+            "message": "Stop the worker before changing forward source",
+        }
+    payload = body or {}
+    try:
+        cfg = set_forwarding_source(
+            slot,
+            source_url=payload.get("source_url"),
+            source_peer=payload.get("source_peer"),
+            source_message_id=payload.get("source_message_id"),
+        )
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    w._sync_posting_mode_ui()
+    await _push_state()
+    return {"status": "ok", **cfg.to_dict(slot)}
+
+
+def _worker_running(slot: str) -> bool:
+    return bool(registry.get_worker(slot).state.running)
+
+
+@app.get("/forward-message/settings")
+async def forward_message_settings_get():
+    from services.forward_message_service import forward_message_service
+
+    return {"status": "ok", "settings": forward_message_service.get_settings()}
+
+
+@app.post("/forward-message/settings")
+async def forward_message_settings_post(body: dict):
+    from services.forward_message_service import forward_message_service
+
+    try:
+        settings = forward_message_service.save_settings(body or {})
+        return {"status": "ok", "settings": settings}
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/account/{slot}/forward-message/groups")
+async def forward_message_groups(slot: str, force_refresh: bool = False):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from services.forward_message_service import forward_message_service
+
+    try:
+        payload = await forward_message_service.list_joined_groups(
+            slot, force_refresh=bool(force_refresh)
+        )
+        return {"status": "ok", **payload}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/account/{slot}/forward-message/preview")
+async def forward_message_preview(slot: str, body: dict):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from services.forward_message_service import forward_message_service
+
+    payload = body or {}
+    try:
+        job = await forward_message_service.resolve_source(
+            slot,
+            source_url=str(payload.get("source_url") or "").strip(),
+            source_peer=str(payload.get("source_peer") or "").strip(),
+            source_message_id=int(payload.get("source_message_id") or 0),
+            worker_running=_worker_running(slot),
+        )
+        return {"status": "ok", "job": job}
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/account/{slot}/forward-message/job")
+async def forward_message_job_status(slot: str):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from services.forward_message_service import forward_message_service
+
+    return {"status": "ok", "job": forward_message_service.job_dict(slot)}
+
+
+@app.post("/account/{slot}/forward-message/start", dependencies=[Depends(_require_fleet_admin)])
+async def forward_message_start(slot: str, body: dict):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from services.forward_message_service import forward_message_service
+
+    payload = body or {}
+    target_ids = payload.get("target_ids") or payload.get("targets") or []
+    try:
+        batch_size = payload.get("batch_size")
+        job = await forward_message_service.start_job(
+            slot,
+            source_url=str(payload.get("source_url") or "").strip(),
+            source_peer=str(payload.get("source_peer") or "").strip(),
+            source_message_id=int(payload.get("source_message_id") or 0),
+            target_ids=target_ids,
+            batch_size=int(batch_size) if batch_size is not None else None,
+            worker_running=_worker_running(slot),
+            use_posting_mode_source=bool(payload.get("use_posting_mode_source", True)),
+            human_pace=bool(payload.get("human_pace", True)),
+        )
+        await _push_state()
+        return {"status": "ok", "job": job}
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/account/{slot}/forward-cycle/selection")
+async def forward_cycle_selection_get(slot: str):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from core.posting_mode import load_posting_mode
+
+    cfg = load_posting_mode(slot)
+    return {
+        "status": "ok",
+        "target_ids": list(cfg.forwarding.forward_selected_target_ids or []),
+        "forward_dispatch": cfg.forwarding.forward_dispatch,
+    }
+
+
+@app.post("/account/{slot}/forward-cycle/selection")
+async def forward_cycle_selection_save(slot: str, body: dict):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from core.posting_mode import save_forward_selection
+
+    ids = (body or {}).get("target_ids") or (body or {}).get("targets") or []
+    cfg = save_forward_selection(slot, ids)
+    await _push_state()
+    return {
+        "status": "ok",
+        "target_ids": list(cfg.forwarding.forward_selected_target_ids or []),
+    }
+
+
+@app.post("/account/{slot}/forward-message/cancel")
+async def forward_message_cancel(slot: str):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from services.forward_message_service import forward_message_service
+
+    job = await forward_message_service.cancel_job(slot)
+    await _push_state()
+    return {"status": "ok", "job": job}
 
 
 @app.post("/account/{slot}/restart")
@@ -404,7 +925,7 @@ async def clear_account_logs(slot: str):
 
 
 @app.get("/state")
-async def get_state():
+async def get_state(request: Request):
     return registry.build_ui_state()
 
 
@@ -445,14 +966,23 @@ async def fleet_alerts(limit: int = Query(50, ge=1, le=200)):
 
 @app.get("/stats/daily")
 async def get_daily_stats():
-    from core.daily_stats import compute_daily_stats
+    from core.daily_stats import refresh_daily_stats
 
-    return {"status": "ok", "daily_stats": compute_daily_stats(list(ACCOUNTS))}
+    daily_stats, auto_reset = await asyncio.to_thread(
+        refresh_daily_stats, list(ACCOUNTS)
+    )
+    if auto_reset:
+        if auto_reset.scope == "global":
+            registry.reset_stats_display_counters(None)
+        else:
+            for slot in auto_reset.account_ids:
+                registry.reset_stats_display_counters(slot)
+    return {"status": "ok", "daily_stats": daily_stats}
 
 
-@app.post("/stats/reset")
+@app.post("/stats/reset", dependencies=[Depends(_require_fleet_admin)])
 async def reset_stats(payload: dict | None = None):
-    """Reset daily stat counters from now. Stats-only — no chat/message data deleted."""
+    """Reset daily stat counters and live tick display from now. Chats/logs are kept."""
     return await _perform_stats_reset(payload or {})
 
 
@@ -499,8 +1029,13 @@ async def _perform_stats_reset(payload: dict):
         }
 
     invalidate_cache(account_id)
+    registry.reset_stats_display_counters(account_id)
     fresh_stats = compute_daily_stats(list(ACCOUNTS))
     reset_scope = account_id or "global"
+    account_states_patch = {
+        slot: registry.get_worker(slot).state.to_dict()
+        for slot in reset_slots
+    }
 
     await event_bus.publish(
         EventType.STATS_RESET,
@@ -511,6 +1046,7 @@ async def _perform_stats_reset(payload: dict):
             "account_id": account_id,
             "scope": "account" if account_id else "global",
             "daily_stats": fresh_stats,
+            "account_states": account_states_patch,
         },
         push_state=True,
         broadcast_ws=True,
@@ -558,19 +1094,41 @@ async def restore_sessions():
 @app.get("/accounts")
 async def list_accounts():
     """Account slots configured on this server (use for dashboard before WebSocket connects)."""
+    from core.config import ACCOUNTS as _accounts, ACCOUNT_SLOTS as _slots
     from core.account_info_store import load_account_info
     from core.subscription_accounts import compute_subscription_slots, enrich_account_info
 
     info_map = {
         s: enrich_account_info(s, load_account_info(s))
-        for s in ACCOUNTS
+        for s in _accounts
     }
 
     return {
-        "account_slots": list(ACCOUNT_SLOTS),
+        "account_slots": list(_slots),
         "subscription_slots": compute_subscription_slots(info_map),
-        "count": len(ACCOUNT_SLOTS),
+        "count": len(_slots),
         "code_version": CODE_VERSION,
+    }
+
+
+@app.post("/accounts/provision-slot")
+async def provision_account_slot():
+    """Add account11+ when all existing slots are logged in."""
+    from core.config import ACCOUNT_SLOTS, provision_next_account_slot, sync_accounts_bindings
+
+    slot = provision_next_account_slot()
+    sync_accounts_bindings()
+    _sync_login_state_slots()
+    registry.register_new_slot(slot)
+    login_state.setdefault(slot, {"phone": None, "phone_code_hash": None})
+    registry.active_account = slot
+    await _push_state()
+    return {
+        "status": "ok",
+        "slot": slot,
+        "account_slots": list(ACCOUNT_SLOTS),
+        "message": f"Added {slot} — log in with phone + OTP below.",
+        **registry.build_ui_state(),
     }
 
 
@@ -678,17 +1236,25 @@ async def get_total_joined_list():
 
         details: list[dict] | None = None
         try:
-            details = await asyncio.wait_for(
+            scan = await asyncio.wait_for(
                 run_with_string_session(slot, fetch_joined_dialog_details, attempts=2),
                 timeout=200,
             )
+            if isinstance(scan, dict):
+                details = list(scan.get("targets") or [])
+            elif isinstance(scan, list):
+                details = scan
         except Exception as e_ss:
             try:
                 await release_session(slot, wait=1.5)
-                details = await asyncio.wait_for(
+                scan = await asyncio.wait_for(
                     run_group_operation(slot, _op, attempts=2),
                     timeout=200,
                 )
+                if isinstance(scan, dict):
+                    details = list(scan.get("targets") or [])
+                elif isinstance(scan, list):
+                    details = scan
             except Exception as e_w:
                 per_account[slot]["error"] = f"string:{type(e_ss).__name__}; worker:{type(e_w).__name__}: {e_w}"
             finally:
@@ -894,6 +1460,78 @@ async def update_groups(payload: dict):
     }
 
 
+# ── Fleet defaults (global forward link / campaign message) ───────────────────
+
+@app.get("/fleet/defaults")
+async def fleet_defaults_get():
+    from core.fleet_defaults import get_fleet_defaults
+
+    return {"status": "ok", **get_fleet_defaults()}
+
+
+@app.post("/fleet/defaults")
+async def fleet_defaults_post(body: dict | None = None):
+    from core.fleet_defaults import get_fleet_defaults, save_fleet_defaults
+
+    payload = body or {}
+    saved = save_fleet_defaults(
+        forward_source_url=payload.get("forward_source_url"),
+        campaign_message=payload.get("campaign_message"),
+    )
+    if payload.get("campaign_message"):
+        from core.message_store import save_message
+
+        save_message(str(payload.get("campaign_message") or "").strip())
+    await _push_state()
+    return {"status": "ok", **saved}
+
+
+@app.post("/fleet/apply-forwarding")
+async def fleet_apply_forwarding(body: dict | None = None):
+    """Enable forwarding + optional t.me link on all logged-in accounts (skips running)."""
+    from services.fleet_setup_service import apply_forwarding_bulk
+
+    payload = body or {}
+    result = apply_forwarding_bulk(
+        registry=registry,
+        source_url=payload.get("source_url"),
+        use_saved_default=bool(payload.get("use_saved_default")),
+        forward_dispatch=str(payload.get("forward_dispatch") or "auto"),
+    )
+    await _push_state()
+    return {"status": "ok", **result, **registry.build_ui_state()}
+
+
+@app.post("/fleet/apply-campaign")
+async def fleet_apply_campaign(body: dict | None = None):
+    """Enable campaign + optional message on all logged-in accounts (skips running)."""
+    from services.fleet_setup_service import apply_campaign_bulk
+
+    payload = body or {}
+    result = apply_campaign_bulk(
+        registry=registry,
+        message=payload.get("message"),
+        use_saved_default=bool(payload.get("use_saved_default")),
+    )
+    await _push_state()
+    return {"status": "ok", **result, **registry.build_ui_state()}
+
+
+@app.post("/fleet/apply-source-url")
+async def fleet_apply_source_url(body: dict | None = None):
+    """Apply t.me post link to logged-in accounts without changing mode (skips running)."""
+    from services.fleet_setup_service import apply_forward_source_only
+
+    payload = body or {}
+    result = apply_forward_source_only(
+        registry=registry,
+        source_url=payload.get("source_url"),
+        use_saved_default=bool(payload.get("use_saved_default")),
+    )
+    await _push_state()
+    return {"status": "ok", **result}
+
+
 # ── Message ───────────────────────────────────────────────────────────────────
 
 @app.get("/message")
@@ -994,12 +1632,30 @@ async def refresh_joined_counts(payload: dict = {}):
         elif not has_counts:
             resp["queued"] = True
             resp["message"] = "Scan in progress — count appears shortly"
+        if info.get("joined_scan_partial"):
+            resp["partial"] = True
+            resp["partial_reason"] = info.get("joined_scan_partial_reason") or (
+                "Group count may be incomplete — scan timed out; try again"
+            )
         return resp
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 # ── Login (per-slot isolated state) ───────────────────────────────────────────
+
+def _duplicate_phone_login_response(phone: str, slot: str) -> dict | None:
+    """Block the same Telegram number on two dashboard slots."""
+    hit = find_logged_in_slot_by_phone(phone, exclude_slot=slot)
+    if not hit:
+        return None
+    existing_slot, info = hit
+    return {
+        "success": False,
+        "error": duplicate_phone_login_message(existing_slot, info),
+        "existing_slot": existing_slot,
+    }
+
 
 @app.post("/login/send-otp")
 async def send_otp(payload: dict):
@@ -1009,15 +1665,24 @@ async def send_otp(payload: dict):
         return {"success": False, "error": "Phone number required"}
     _sync_login_state_slots()
     if not _slot_valid(slot):
-        return {"success": False, "error": "Invalid slot — restart backend (python scripts/dev.py)"}
+        return {
+            "success": False,
+            "error": f"Unknown account slot “{slot}”. Refresh the page, or add the slot again from Accounts.",
+        }
+    dup = _duplicate_phone_login_response(phone, slot)
+    if dup:
+        return dup
     try:
-        await _prepare_login_slot(slot)
+        await asyncio.wait_for(_prepare_login_slot(slot), timeout=45.0)
 
         async def _send_code():
             c = await telegram_client.get_login_client(slot)
             return await c.send_code_request(phone)
 
-        result = await telegram_client.run_login_with_retry(slot, _send_code)
+        result = await asyncio.wait_for(
+            telegram_client.run_login_with_retry(slot, _send_code),
+            timeout=55.0,
+        )
         client = await telegram_client.get_login_client(slot)
         session_string = ""
         try:
@@ -1038,12 +1703,21 @@ async def send_otp(payload: dict):
             session_string=session_string or None,
         )
         return {"success": True}
+    except asyncio.TimeoutError:
+        clear_pending(slot)
+        await telegram_client.finalize_login_exclusive(slot)
+        return {
+            "success": False,
+            "error": "Telegram login timed out. Wait 10 seconds, then tap Send OTP again.",
+        }
     except Exception as e:
         clear_pending(slot)
         await telegram_client.finalize_login_exclusive(slot)
         err = str(e)
         if "database is locked" in err.lower():
             err = "Session file was busy. Wait 10 seconds, then tap Send OTP again."
+        elif "flood" in err.lower() or "wait" in err.lower() and "seconds" in err.lower():
+            err = f"Telegram rate limit: {err}. Try again later or use a different number."
         return {"success": False, "error": err}
 
 
@@ -1051,7 +1725,8 @@ async def send_otp(payload: dict):
 async def verify_otp(payload: dict):
     code = payload.get("code", "").strip()
     slot = (payload.get("slot") or "").strip()
-    if not slot or slot not in ACCOUNTS:
+    _sync_login_state_slots()
+    if not _slot_valid(slot):
         return {"success": False, "error": "Invalid account slot — refresh the page and try again"}
 
     ls = _get_login_pending(slot)
@@ -1068,6 +1743,9 @@ async def verify_otp(payload: dict):
     phone_code_hash = ls.get("phone_code_hash")
     if not all([code, phone, phone_code_hash]):
         return {"success": False, "error": "Missing login state — send OTP again"}
+    dup = _duplicate_phone_login_response(phone, slot)
+    if dup:
+        return dup
     try:
         async def _sign_in() -> None:
             client = await telegram_client.get_login_client(slot)
@@ -1086,6 +1764,12 @@ async def verify_otp(payload: dict):
             return await c.get_me()
 
         me = await telegram_client.run_login_with_retry(slot, _get_me)
+        me_phone = str(getattr(me, "phone", None) or phone or "")
+        dup_me = _duplicate_phone_login_response(me_phone, slot)
+        if dup_me:
+            clear_pending(slot)
+            await telegram_client.finalize_login_exclusive(slot)
+            return dup_me
         await telegram_client.commit_login_session(slot)
         from core.account_info_store import build_info_from_me
 
@@ -1096,6 +1780,32 @@ async def verify_otp(payload: dict):
         clear_pending(slot)
 
         worker_started = await registry.complete_login(slot, info)
+
+        workspace_mode = str(payload.get("workspace_mode") or "").strip().lower()
+        if workspace_mode in ("forwarding", "forward"):
+            from core.posting_mode import set_posting_mode
+
+            set_posting_mode(
+                slot,
+                "forwarding",
+                forward_dispatch="auto",
+                campaign_enabled=False,
+                forwarding_enabled=True,
+            )
+            w = registry.get_worker(slot)
+            w._sync_posting_mode_ui()
+        elif workspace_mode in ("campaign",):
+            from core.posting_mode import set_posting_mode
+
+            set_posting_mode(
+                slot,
+                "campaign",
+                campaign_enabled=True,
+                forwarding_enabled=False,
+            )
+            w = registry.get_worker(slot)
+            w._sync_posting_mode_ui()
+
         await _push_state()
 
         async def _scan_joined_background() -> None:
@@ -1165,7 +1875,7 @@ async def inbox_force_sync(slot: str, user_id: int):
     from core.dm_store import get_messages
     from services.dm_inbox_service import sync_conversation_from_telegram
 
-    added = await sync_conversation_from_telegram(slot, user_id, limit=80)
+    added = await sync_conversation_from_telegram(slot, user_id, limit=200)
     return {
         "status": "ok",
         "added": len(added),
@@ -1224,8 +1934,10 @@ async def inbox_messages(
             pass
         try:
             await asyncio.wait_for(
-                dm_inbox_service.sync_conversation_from_telegram(slot, user_id),
-                timeout=15.0,
+                dm_inbox_service.sync_conversation_from_telegram(
+                    slot, user_id, limit=dm_inbox_service.INBOX_INITIAL_SYNC_LIMIT
+                ),
+                timeout=30.0,
             )
             messages = get_messages(slot, user_id)
         except asyncio.TimeoutError:
@@ -1244,8 +1956,84 @@ async def inbox_messages(
     return {"status": "ok", "slot": slot, "user_id": user_id, "messages": messages}
 
 
+@app.post("/inbox/{slot}/messages/{user_id}/older")
+async def inbox_messages_older(
+    slot: str,
+    user_id: int,
+    before_id: int = Query(..., description="Oldest telegram message id already stored"),
+    limit: int = Query(100, ge=10, le=200),
+):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from core.dm_store import get_messages
+    from services import dm_inbox_service
+
+    if before_id <= 0:
+        return {"status": "error", "message": "Invalid before_id"}
+    try:
+        meta = await dm_inbox_service.sync_older_messages_from_telegram(
+            slot,
+            user_id,
+            before_telegram_id=before_id,
+            limit=limit,
+        )
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    return {
+        "status": "ok",
+        "slot": slot,
+        "user_id": user_id,
+        "messages": get_messages(slot, user_id),
+        **meta,
+    }
+
+
+@app.get("/inbox/{slot}/messages/{user_id}/export")
+async def inbox_export_chat(
+    slot: str,
+    user_id: int,
+    format: str = Query("txt", alias="format"),
+):
+    """Download one stored conversation (txt, csv, or json)."""
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+
+    if slot not in ACCOUNTS:
+        raise HTTPException(status_code=404, detail="Invalid slot")
+    from features.inbox_export import export_conversation
+
+    try:
+        body, mime, filename = export_conversation(slot, int(user_id), format)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return Response(
+        content=body,
+        media_type=mime,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
+
+
+@app.get("/inbox/{slot}/media/{user_id}/{message_id}")
+async def inbox_media(slot: str, user_id: int, message_id: int):
+    from fastapi import HTTPException
+
+    if slot not in ACCOUNTS:
+        raise HTTPException(status_code=404, detail="Invalid slot")
+    from services import dm_inbox_service
+
+    hit = await dm_inbox_service.ensure_inbox_media_file(slot, int(user_id), int(message_id))
+    if not hit:
+        raise HTTPException(status_code=404, detail="Media not found")
+    path, mime = hit
+    from core.dm_media import mime_for_cached_file
+
+    return FileResponse(path, media_type=mime_for_cached_file(path) or mime)
+
+
 @app.post("/inbox/{slot}/reply")
-async def inbox_reply(slot: str, body: dict):
+async def inbox_reply(slot: str, body: dict, request: Request):
     if slot not in ACCOUNTS:
         return {"status": "error", "message": "Invalid slot"}
     user_id = body.get("user_id")
@@ -1256,13 +2044,77 @@ async def inbox_reply(slot: str, body: dict):
     # spoof exotic provenance.
     sent_by_raw = (body.get("sent_by") or "manual").strip().lower()
     sent_by = sent_by_raw if sent_by_raw in {"manual", "ai_approved"} else "manual"
+    from core import dashboard_auth_vps as dashboard_auth
+
+    operator_name = (
+        dashboard_auth.username_from_request_cookies(dict(request.cookies))
+        or (body.get("operator_name") or "").strip()
+        or "Operator"
+    )
     if user_id is None:
         return {"status": "error", "message": "user_id required"}
+    channel = (body.get("channel") or "").strip().lower()
+    if channel == "whatsapp":
+        try:
+            from services.whatsapp_dispatch import dispatch_lead_reply
+            from services.crm_service import enrich_conversation, get_lead
+
+            result = await dispatch_lead_reply(
+                slot,
+                int(user_id),
+                str(text),
+                sent_by=sent_by,
+                channel="whatsapp",
+            )
+            conv = result.get("conversation") or {}
+            uid = int(user_id)
+            summary = enrich_conversation(
+                slot,
+                {
+                    "user_id": uid,
+                    "username": conv.get("username") or "",
+                    "name": conv.get("name") or "",
+                    "last_message": conv.get("last_message") or "",
+                    "last_message_at": conv.get("last_message_at"),
+                    "unread_count": conv.get("unread_count") or 0,
+                    "phone_e164": conv.get("phone_e164"),
+                    "channels": conv.get("channels"),
+                    "whatsapp_linked": conv.get("whatsapp_linked"),
+                },
+            ) if conv else enrich_conversation(
+                slot,
+                {"user_id": uid, "username": "", "name": "", "unread_count": 0},
+            )
+            lead = get_lead(slot, uid)
+            return {
+                "status": "ok",
+                "message": result.get("message"),
+                "conversation": summary,
+                "lead": lead,
+                "channel": "whatsapp",
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    reply_to_raw = body.get("reply_to_message_id") or body.get("reply_to")
+    reply_to_message_id = None
+    if reply_to_raw is not None:
+        try:
+            rid = int(reply_to_raw)
+            if rid > 0:
+                reply_to_message_id = rid
+        except (TypeError, ValueError):
+            pass
     try:
         from messaging.message_router import message_router
 
         result = await message_router.enqueue_dm_send(
-            slot, int(user_id), str(text), wait=True, sent_by=sent_by,
+            slot,
+            int(user_id),
+            str(text),
+            wait=True,
+            sent_by=sent_by,
+            operator_name=operator_name,
+            reply_to_message_id=reply_to_message_id,
         )
         from services.crm_service import enrich_conversation, get_lead
 
@@ -1290,6 +2142,103 @@ async def inbox_reply(slot: str, body: dict):
         return {"status": "error", "message": str(e)}
 
 
+@app.post("/inbox/{slot}/reply-media")
+async def inbox_reply_media(
+    slot: str,
+    request: Request,
+    user_id: int = Form(...),
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+    reply_to_message_id: str = Form(""),
+):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from core.config import STATE_DIR
+    from core.dm_media import OUTBOUND_UPLOAD_MAX_BYTES
+    from core import dashboard_auth_vps as dashboard_auth
+
+    operator_name = (
+        dashboard_auth.username_from_request_cookies(dict(request.cookies))
+        or "Operator"
+    )
+    reply_to_id = None
+    if reply_to_message_id:
+        try:
+            rid = int(str(reply_to_message_id).strip())
+            if rid > 0:
+                reply_to_id = rid
+        except (TypeError, ValueError):
+            pass
+
+    upload_dir = os.path.join(STATE_DIR, slot, "outbound_uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+    safe_name = os.path.basename(file.filename or "upload").replace("..", "_")
+    temp_path = os.path.join(upload_dir, f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}")
+
+    total = 0
+    try:
+        with open(temp_path, "wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > OUTBOUND_UPLOAD_MAX_BYTES:
+                    raise ValueError("Attachment too large (max 25 MB)")
+                out.write(chunk)
+    except Exception as e:
+        try:
+            if os.path.isfile(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
+        return {"status": "error", "message": str(e)}
+
+    try:
+        from messaging.message_router import message_router
+        from services.crm_service import enrich_conversation, get_lead
+
+        result = await message_router.enqueue_dm_send_media(
+            slot,
+            int(user_id),
+            temp_path,
+            caption=str(caption or ""),
+            filename=safe_name,
+            content_type=file.content_type or "",
+            wait=True,
+            sent_by="manual",
+            operator_name=operator_name,
+            reply_to_message_id=reply_to_id,
+        )
+        conv = result.get("conversation") or {}
+        uid = int(user_id)
+        summary = enrich_conversation(
+            slot,
+            {
+                "user_id": uid,
+                "username": conv.get("username") or "",
+                "name": conv.get("name") or "",
+                "last_message": conv.get("last_message") or "",
+                "last_message_at": conv.get("last_message_at"),
+                "unread_count": conv.get("unread_count") or 0,
+            },
+        )
+        lead = get_lead(slot, uid)
+        return {
+            "status": "ok",
+            "message": result.get("message"),
+            "conversation": summary,
+            "lead": lead,
+        }
+    except Exception as e:
+        try:
+            if os.path.isfile(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
+        return {"status": "error", "message": str(e)}
+
+
 @app.get("/ai/smart-reply/config")
 async def ai_smart_reply_get_config():
     from core import ai_smart_reply
@@ -1314,6 +2263,69 @@ async def ai_smart_reply_update_config(body: dict):
         "config": cfg,
         "health": ai_smart_reply.health(),
     }
+
+
+@app.get("/ai/smart-reply/preset/economy")
+async def ai_smart_reply_economy_preset_preview():
+    from core.karthik_economy_preset import economy_preset_preview
+
+    return {
+        "status": "ok",
+        "preview": economy_preset_preview(replace_business_prompt=True),
+        "estimated_monthly_usd": "15-22",
+    }
+
+
+@app.post("/ai/smart-reply/preset/economy")
+async def ai_smart_reply_apply_economy_preset(body: dict | None = None):
+    from core import ai_smart_reply
+    from core.karthik_economy_preset import apply_economy_preset
+
+    body = body or {}
+    replace_prompt = body.get("replace_business_prompt", True)
+    if isinstance(replace_prompt, str):
+        replace_prompt = replace_prompt.strip().lower() in {"1", "true", "yes"}
+    cfg = apply_economy_preset(replace_business_prompt=bool(replace_prompt))
+    return {
+        "status": "ok",
+        "config": cfg,
+        "health": ai_smart_reply.health(),
+        "message": "Economy preset applied — lower caps, group rewrite off, compact master prompt.",
+    }
+
+
+@app.post("/ai/smart-reply/preset/standard-caps")
+async def ai_smart_reply_apply_standard_caps_preset():
+    from core import ai_smart_reply
+    from core.karthik_economy_preset import apply_standard_caps_preset
+
+    cfg = apply_standard_caps_preset()
+    return {
+        "status": "ok",
+        "config": cfg,
+        "health": ai_smart_reply.health(),
+        "message": "Standard caps restored (master prompt unchanged).",
+    }
+
+
+@app.post("/ai/smart-reply/catch-up")
+async def ai_smart_reply_catch_up(body: dict | None = None):
+    """Enqueue Karthik replies for all waiting inbound chats (after outages)."""
+    from core import ai_smart_reply
+
+    if not ai_smart_reply.is_enabled():
+        return {"status": "error", "message": "AI disabled or API key missing"}
+    body = body or {}
+    slot = (body.get("slot") or "").strip() or None
+    if slot and slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    max_replies = int(body.get("max_replies") or 25)
+    result = await ai_smart_reply.catch_up_pending_replies(
+        slot=slot,
+        force=bool(body.get("force", True)),
+        max_replies=max_replies,
+    )
+    return {"status": "ok", **result}
 
 
 @app.post("/ai/smart-reply/leads/{slot}/{user_id}/toggle")
@@ -1533,14 +2545,85 @@ async def inbox_edit_message(slot: str, user_id: int, message_id: int, body: dic
         return {"status": "error", "message": str(e)}
 
 
+@app.delete("/inbox/{slot}/messages/{user_id}/{message_id}")
+async def inbox_delete_message(slot: str, user_id: int, message_id: int):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    try:
+        from services import dm_inbox_service
+
+        result = await dm_inbox_service.run_dm_delete_message(
+            slot, int(user_id), int(message_id),
+        )
+        return {
+            "status": "ok",
+            "message_id": result.get("message_id"),
+            "conversation": result.get("conversation"),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 @app.post("/inbox/{slot}/read/{user_id}")
 async def inbox_mark_read(slot: str, user_id: int):
     if slot not in ACCOUNTS:
         return {"status": "error", "message": "Invalid slot"}
+    from services import crm_service, dm_inbox_service
+
+    uid = int(user_id)
+    await dm_inbox_service.mark_read(slot, uid)
+    lead = crm_service.get_lead(slot, uid)
+    return {
+        "status": "ok",
+        "slot": slot,
+        "user_id": uid,
+        "lead": lead,
+        "crm": crm_service.build_crm_payload() if lead else None,
+    }
+
+
+@app.get("/inbox/delete-config")
+async def inbox_delete_config():
+    """Whether chat delete requires INBOX_DELETE_PASSWORD on the server."""
+    pwd = (os.environ.get("INBOX_DELETE_PASSWORD") or "").strip()
+    return {"status": "ok", "requires_password": bool(pwd)}
+
+
+@app.delete("/inbox/{slot}/conversation/{user_id}")
+async def inbox_delete_conversation(
+    slot: str,
+    user_id: int,
+    body: dict | None = Body(default=None),
+):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    expected = (os.environ.get("INBOX_DELETE_PASSWORD") or "").strip()
+    if expected:
+        got = ""
+        if isinstance(body, dict):
+            got = str(body.get("password") or "").strip()
+        if got != expected:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=403, detail="Incorrect delete password")
     from services import dm_inbox_service
 
-    await dm_inbox_service.mark_read(slot, int(user_id))
-    return {"status": "ok", "slot": slot, "user_id": user_id}
+    result = await dm_inbox_service.delete_conversation(slot, int(user_id))
+    if result.get("status") != "ok":
+        return result
+    from services import call_service
+
+    try:
+        await broadcast.broadcast({
+            "type": "crm",
+            "event": "lead_deleted",
+            "slot": slot,
+            "user_id": int(user_id),
+            "crm": call_service.build_crm_payload(),
+        })
+    except Exception:
+        pass
+    return result
 
 
 # ── CRM (lead management on top of inbox) ─────────────────────────────────────
@@ -1583,6 +2666,55 @@ async def crm_patch_lead(slot: str, user_id: int, body: dict):
         kwargs["mark_handled"] = True
     lead = await crm_service.update_lead(slot, int(user_id), **kwargs)
     return {"status": "ok", "lead": lead, "crm": crm_service.build_crm_payload()}
+
+
+@app.post("/crm/leads/{slot}/{user_id}/link-phone")
+async def crm_link_phone(slot: str, user_id: int, body: dict):
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    phone = body.get("phone") or body.get("phone_e164") or ""
+    from core.contact_link_store import link_phone
+    from core.dm_store import load_inbox, save_inbox
+    from services.crm_service import enrich_conversation
+
+    link = link_phone(slot, int(user_id), str(phone), linked_by="manual")
+    if not link:
+        return {"status": "error", "message": "Invalid phone number"}
+
+    data = load_inbox(slot)
+    key = str(int(user_id))
+    conv = (data.get("conversations") or {}).get(key)
+    if conv:
+        conv["phone_e164"] = link["phone_e164"]
+        channels = set(conv.get("channels") or [])
+        channels.update({"telegram", "whatsapp"})
+        conv["channels"] = sorted(channels)
+        data["conversations"][key] = conv
+        save_inbox(slot, data)
+        summary = enrich_conversation(
+            slot,
+            {
+                "user_id": int(user_id),
+                "username": conv.get("username") or "",
+                "name": conv.get("name") or "",
+                "last_message": conv.get("last_message") or "",
+                "last_message_at": conv.get("last_message_at"),
+                "unread_count": conv.get("unread_count") or 0,
+                "phone_e164": link["phone_e164"],
+                "channels": conv.get("channels"),
+            },
+        )
+    else:
+        summary = enrich_conversation(
+            slot,
+            {
+                "user_id": int(user_id),
+                "phone_e164": link["phone_e164"],
+                "channels": ["telegram", "whatsapp"],
+            },
+        )
+
+    return {"status": "ok", "link": link, "conversation": summary}
 
 
 @app.post("/crm/leads/{slot}/{user_id}/mark-handled")
@@ -1660,6 +2792,45 @@ async def crm_call_now(body: dict):
         return {"status": "error", "message": str(e)}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+@app.post("/crm/karthik/block-spam-chats")
+async def crm_karthik_block_spam_chats(body: dict | None = None):
+    """Karthik spam guard: scan inbox threads and block solicitation/scam chats."""
+    body = body or {}
+    slot = body.get("account_id") or body.get("slot")
+    from services import crm_service
+    from services.spam_guard_service import scan_inbox_and_block_spam
+
+    if slot is not None and slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    result = await scan_inbox_and_block_spam(slot=slot)
+    return {"status": "ok", "crm": crm_service.build_crm_payload(), **result}
+
+
+@app.post("/inbox/{slot}/karthik/block-spam/{user_id}")
+async def inbox_karthik_block_spam(slot: str, user_id: int):
+    """Block the open chat as spam (Karthik guard / operator)."""
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from services import crm_service
+    from services.spam_guard_service import block_chat_as_spam
+
+    result = await block_chat_as_spam(slot, int(user_id))
+    return {"status": "ok", "crm": crm_service.build_crm_payload(), **result}
+
+
+@app.get("/inbox/{slot}/karthik/spam-check/{user_id}")
+async def inbox_karthik_spam_check(slot: str, user_id: int):
+    """Classify whether a stored thread looks like inbound spam."""
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from core.dm_store import load_inbox
+    from services.spam_guard_service import classify_conversation_spam
+
+    conv = (load_inbox(slot).get("conversations") or {}).get(str(int(user_id))) or {}
+    verdict = classify_conversation_spam(slot, conv)
+    return {"status": "ok", "slot": slot, "user_id": int(user_id), **verdict}
 
 
 @app.post("/crm/unblock")
@@ -1758,6 +2929,7 @@ async def login_status():
 
 @app.get("/candidates")
 async def candidates_list(
+    request: Request,
     stage: str | None = Query(default=None),
     task: str | None = Query(default=None),
     search: str | None = Query(default=None),
@@ -1765,8 +2937,10 @@ async def candidates_list(
     pending_only: bool = Query(default=False),
     reference: str | None = Query(default=None),
 ):
+    from core.dashboard_access import handler_reference_scope
     from features import candidate_store
 
+    reference = handler_reference_scope(request, reference)
     rows = candidate_store.list_candidates(
         stage=stage, task=task, search=search, month=month,
         pending_only=pending_only, reference=reference,
@@ -1775,26 +2949,298 @@ async def candidates_list(
 
 
 @app.get("/candidates/stats")
-async def candidates_stats(month: str | None = Query(default=None)):
+async def candidates_stats(
+    request: Request,
+    month: str | None = Query(default=None),
+    reference: str | None = Query(default=None),
+):
+    from core.dashboard_access import handler_reference_scope
     from features import candidate_store
 
-    return {"status": "ok", "stats": candidate_store.stats(month=month)}
+    reference = handler_reference_scope(request, reference)
+    return {"status": "ok", "stats": candidate_store.stats(month=month, reference=reference)}
 
 
-@app.get("/candidates/{cid}")
-async def candidates_get(cid: str):
+@app.get("/candidates/roster")
+async def candidates_active_roster(
+    request: Request,
+    month: str | None = Query(default=None),
+    reference: str | None = Query(default=None),
+):
+    """Active (in_progress) candidates with technology grouping."""
+    from core.dashboard_access import handler_reference_scope
     from features import candidate_store
 
-    row = candidate_store.get_candidate(cid)
+    reference = handler_reference_scope(request, reference)
+    roster = candidate_store.active_roster(month=month, reference=reference)
+    return {"status": "ok", **roster}
+
+
+@app.get("/candidates/roster.csv")
+async def candidates_active_roster_csv(
+    request: Request,
+    month: str | None = Query(default=None),
+    reference: str | None = Query(default=None),
+):
+    """Download active candidates as CSV (name, tech, contact, payment, etc.)."""
+    from fastapi.responses import Response
+
+    from core.dashboard_access import handler_reference_scope
+    from features import candidate_store
+
+    reference = handler_reference_scope(request, reference)
+    roster = candidate_store.active_roster(month=month, reference=reference)
+    csv_text = candidate_store.roster_csv_rows(roster.get("candidates") or [])
+    filename = "active_candidates.csv"
+    if month and month != "all":
+        filename = f"active_candidates_{month}.csv"
+    return Response(
+        content="\ufeff" + csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _viewer_reference(request: Request) -> str | None:
+    from core import dashboard_auth_vps as auth
+    from core.dashboard_access import operator_profile
+
+    return auth.scoped_reference(operator_profile(request))
+
+
+def _ops_by(request: Request) -> str:
+    from core.dashboard_access import operator_profile
+
+    profile = operator_profile(request)
+    return (profile.get("reference") or profile.get("username") or "dashboard").strip()[:120]
+
+
+@app.get("/candidates/bootstrap")
+async def candidates_bootstrap(
+    request: Request,
+    stage: str | None = Query(default=None),
+    task: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    month: str | None = Query(default=None),
+    pending_only: bool = Query(default=False),
+    reference: str | None = Query(default=None),
+    include_global_stats: bool = Query(default=False),
+):
+    from core.dashboard_access import handler_reference_scope
+    from features import candidate_store
+
+    reference = handler_reference_scope(request, reference)
+    payload = candidate_store.bootstrap_data(
+        stage=stage,
+        task=task,
+        search=search,
+        month=month,
+        pending_only=pending_only,
+        reference=reference,
+        include_global_stats=include_global_stats,
+    )
+    return {"status": "ok", **payload}
+
+
+@app.get("/candidates/pending-works")
+async def candidates_pending_works(
+    request: Request,
+    month: str | None = Query(default=None),
+    reference: str | None = Query(default=None),
+):
+    from core.dashboard_access import handler_reference_scope
+    from features import candidate_store
+
+    reference = handler_reference_scope(request, reference)
+    payload = candidate_store.pending_works(month=month, reference=reference)
+    return {"status": "ok", **payload}
+
+
+@app.get("/candidates/interviews/daily")
+async def candidates_interviews_daily(
+    request: Request,
+    date: str | None = Query(default=None),
+    attendee: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    channel: str | None = Query(default=None),
+):
+    from fastapi import HTTPException
+
+    from features import candidate_store
+
+    day = (date or "").strip()[:10]
+    if len(day) != 10:
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    viewer = _viewer_reference(request)
+    try:
+        payload = candidate_store.daily_interview_roster(
+            day,
+            viewer_reference=viewer,
+            filter_attendee=attendee,
+            filter_search=search,
+            filter_channel=channel,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", **payload}
+
+
+@app.get("/candidates/interviews/monitor")
+async def candidates_interviews_monitor(
+    request: Request,
+    from_date: str | None = Query(default=None, alias="from"),
+    to_date: str | None = Query(default=None, alias="to"),
+    attendee: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    channel: str | None = Query(default=None),
+):
+    from fastapi import HTTPException
+
+    from features import candidate_store
+
+    start = (from_date or "").strip()[:10]
+    end = (to_date or "").strip()[:10]
+    if len(start) != 10 or len(end) != 10:
+        raise HTTPException(status_code=400, detail="from and to must be YYYY-MM-DD")
+    viewer = _viewer_reference(request)
+    try:
+        payload = candidate_store.interview_monitor(
+            start,
+            end,
+            viewer_reference=viewer,
+            filter_attendee=attendee,
+            filter_search=search,
+            filter_channel=channel,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", **payload}
+
+
+@app.get("/candidates/interviews/upcoming")
+async def candidates_interviews_upcoming(
+    request: Request,
+    days: int = Query(default=14),
+    search: str | None = Query(default=None),
+    attendee: str | None = Query(default=None),
+    channel: str | None = Query(default=None),
+    include_today: bool = Query(default=True),
+    phase: str | None = Query(default=None),
+    lookback_days: int = Query(default=30),
+):
+    from features import candidate_store
+
+    viewer = _viewer_reference(request)
+    payload = candidate_store.interview_upcoming(
+        days=days,
+        filter_search=search,
+        filter_attendee=attendee,
+        filter_channel=channel,
+        viewer_reference=viewer,
+        include_today_pending=include_today,
+        phase=phase,
+        lookback_days=lookback_days,
+    )
+    return {"status": "ok", **payload}
+
+
+@app.get("/candidates/interviews/global")
+async def candidates_interviews_global(
+    request: Request,
+    from_date: str | None = Query(default=None, alias="from"),
+    to_date: str | None = Query(default=None, alias="to"),
+    attendee: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    channel: str | None = Query(default=None),
+):
+    from fastapi import HTTPException
+
+    from features import candidate_store
+
+    start = (from_date or "").strip()[:10]
+    end = (to_date or "").strip()[:10]
+    if len(start) != 10 or len(end) != 10:
+        raise HTTPException(status_code=400, detail="from and to must be YYYY-MM-DD")
+    viewer = _viewer_reference(request)
+    try:
+        payload = candidate_store.interview_global_summary(
+            start,
+            end,
+            viewer_reference=viewer,
+            filter_attendee=attendee,
+            filter_search=search,
+            filter_channel=channel,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", **payload}
+
+
+@app.get("/candidates/interviews/filter-options")
+async def candidates_interviews_filter_options(
+    request: Request,
+    from_date: str | None = Query(default=None, alias="from"),
+    to_date: str | None = Query(default=None, alias="to"),
+    channel: str | None = Query(default=None),
+    attendee: str | None = Query(default=None),
+):
+    from features import candidate_store
+
+    viewer = _viewer_reference(request)
+    options = candidate_store.interview_candidate_filter_options(
+        from_date=from_date,
+        to_date=to_date,
+        channel=channel,
+        viewer_reference=viewer,
+        filter_attendee=attendee,
+    )
+    return {"status": "ok", "options": options}
+
+
+@app.post("/candidates/{cid}/interview-attendance")
+async def candidates_interview_attendance(cid: str, request: Request, body: dict):
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store
+
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Candidate not found"}
+    assert_candidate_row_access(request, existing)
+    b = body or {}
+    try:
+        row = candidate_store.set_interview_attendance(
+            cid,
+            status=b.get("status") or "",
+            remark=b.get("remark") or "",
+            attended=b.get("attended"),
+            attendee=b.get("attendee"),
+            by=_ops_by(request),
+        )
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
     if not row:
         return {"status": "error", "message": "Candidate not found"}
     return {"status": "ok", "candidate": row}
 
 
-@app.post("/candidates")
-async def candidates_create(body: dict):
+@app.get("/candidates/{cid}")
+async def candidates_get(cid: str, request: Request):
+    from core.dashboard_access import assert_candidate_row_access
     from features import candidate_store
 
+    row = candidate_store.get_candidate(cid)
+    if not row:
+        return {"status": "error", "message": "Candidate not found"}
+    assert_candidate_row_access(request, row)
+    return {"status": "ok", "candidate": row}
+
+
+@app.post("/candidates")
+async def candidates_create(request: Request, body: dict):
+    from core.dashboard_access import prepare_candidate_body
+    from features import candidate_store
+
+    body = prepare_candidate_body(request, body)
     if not (body.get("name") or "").strip():
         return {"status": "error", "message": "Name is required"}
     row = candidate_store.create_candidate(body)
@@ -1802,22 +3248,274 @@ async def candidates_create(body: dict):
 
 
 @app.patch("/candidates/{cid}")
-async def candidates_update(cid: str, body: dict):
+async def candidates_update(cid: str, request: Request, body: dict):
+    from core.dashboard_access import assert_candidate_row_access, prepare_candidate_body
     from features import candidate_store
 
-    row = candidate_store.update_candidate(cid, body or {})
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Candidate not found"}
+    assert_candidate_row_access(request, existing)
+    row = candidate_store.update_candidate(cid, prepare_candidate_body(request, body or {}))
     if not row:
         return {"status": "error", "message": "Candidate not found"}
     return {"status": "ok", "candidate": row}
 
 
 @app.delete("/candidates/{cid}")
-async def candidates_delete(cid: str):
+async def candidates_delete(cid: str, request: Request):
+    from core.dashboard_access import assert_candidate_row_access
     from features import candidate_store
 
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Candidate not found"}
+    assert_candidate_row_access(request, existing)
     ok = candidate_store.delete_candidate(cid)
     if not ok:
         return {"status": "error", "message": "Candidate not found"}
+    return {"status": "ok"}
+
+
+# ── Data room (business opportunities & partners) ─────────────────────────────
+
+def _data_room_admin_only(request: Request) -> bool:
+    from core import dashboard_auth_vps as dashboard_auth
+
+    profile = dashboard_auth.operator_profile_from_cookies(dict(request.cookies))
+    return dashboard_auth.is_admin_profile(profile)
+
+
+@app.get("/data-room")
+async def data_room_list(
+    status: str | None = Query(default=None),
+    opportunity_type: str | None = Query(default=None),
+    query: str | None = Query(default=None),
+):
+    from features import data_room_store
+
+    rows = data_room_store.list_opportunities(
+        status=status,
+        opportunity_type=opportunity_type,
+        query=query,
+    )
+    return {
+        "status": "ok",
+        "opportunities": rows,
+        "count": len(rows),
+        "stats": data_room_store.stats_summary(),
+    }
+
+
+@app.get("/data-room/stats")
+async def data_room_stats():
+    from features import data_room_store
+
+    return {"status": "ok", "stats": data_room_store.stats_summary()}
+
+
+@app.get("/data-room/credentials")
+async def data_room_credentials(request: Request):
+    """Credentials section of the data room (admin only; not partner leads)."""
+    from fastapi import HTTPException
+
+    from features import data_room_credentials_store
+
+    if not _data_room_admin_only(request):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return {"status": "ok", "credentials": data_room_credentials_store.get_credentials()}
+
+
+@app.patch("/data-room/credentials/handlers/{username}")
+async def data_room_update_handler(username: str, body: dict, request: Request):
+    from core.dashboard_access import require_fleet_admin
+    from features import data_room_credentials_store as creds
+
+    require_fleet_admin(request)
+    updated, err = creds.update_handler_login(username, body or {})
+    if err:
+        return {"status": "error", "message": err}
+    if not updated:
+        return {"status": "error", "message": "Handler not found"}
+    return {"status": "ok", "credentials": updated}
+
+
+@app.post("/data-room/credentials/handlers")
+async def data_room_create_handler(body: dict, request: Request):
+    from core.dashboard_access import require_fleet_admin
+    from features import data_room_credentials_store as creds
+
+    require_fleet_admin(request)
+    updated, err = creds.create_handler_login(body or {})
+    if err:
+        return {"status": "error", "message": err}
+    return {"status": "ok", "credentials": updated}
+
+
+@app.delete("/data-room/credentials/handlers/{username}")
+async def data_room_delete_handler(username: str, request: Request):
+    from core.dashboard_access import require_fleet_admin
+    from features import data_room_credentials_store as creds
+
+    require_fleet_admin(request)
+    updated, err = creds.delete_handler_login(username)
+    if err:
+        return {"status": "error", "message": err}
+    return {"status": "ok", "credentials": updated}
+
+
+@app.patch("/data-room/credentials/admin")
+async def data_room_update_admin(body: dict, request: Request):
+    from core.dashboard_access import require_fleet_admin
+    from features import data_room_credentials_store as creds
+
+    require_fleet_admin(request)
+    updated, err = creds.update_admin_login(body or {})
+    if err:
+        return {"status": "error", "message": err}
+    return {"status": "ok", "credentials": updated}
+
+
+@app.patch("/data-room/credentials/vault/{section}/{item_id}")
+async def data_room_update_vault_item(section: str, item_id: str, body: dict, request: Request):
+    from core.dashboard_access import require_fleet_admin
+    from features import data_room_credentials_store as creds
+
+    require_fleet_admin(request)
+    updated = creds.update_vault_item(section, item_id, body or {})
+    if not updated:
+        return {"status": "error", "message": "Vault entry not found"}
+    return {"status": "ok", "credentials": updated}
+
+
+@app.post("/data-room/credentials/vault/{section}")
+async def data_room_create_vault_item(section: str, body: dict, request: Request):
+    from core.dashboard_access import require_fleet_admin
+    from features import data_room_credentials_store as creds
+
+    require_fleet_admin(request)
+    updated, err = creds.create_vault_item(section, body or {})
+    if err:
+        return {"status": "error", "message": err}
+    return {"status": "ok", "credentials": updated}
+
+
+@app.delete("/data-room/credentials/vault/{section}/{item_id}")
+async def data_room_delete_vault_item(section: str, item_id: str, request: Request):
+    from core.dashboard_access import require_fleet_admin
+    from features import data_room_credentials_store as creds
+
+    require_fleet_admin(request)
+    updated = creds.delete_vault_item(section, item_id)
+    if not updated:
+        return {"status": "error", "message": "Vault entry not found"}
+    return {"status": "ok", "credentials": updated}
+
+
+@app.get("/data-room/offer-letters/{item_id}/preview")
+async def data_room_offer_letter_preview(item_id: str, request: Request):
+    from fastapi import HTTPException
+
+    from features import data_room_credentials_store as creds
+
+    if not _data_room_admin_only(request):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    try:
+        path, row = creds.resolve_offer_letter_pdf(item_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    name = (row.get("filename") or row.get("id") or "offer-letter.pdf").replace('"', "")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=name,
+        headers={"Content-Disposition": f'inline; filename="{name}"'},
+    )
+
+
+@app.get("/data-room/offer-letters/{item_id}/download")
+async def data_room_offer_letter_download(item_id: str, request: Request):
+    from fastapi import HTTPException
+
+    from features import data_room_credentials_store as creds
+
+    if not _data_room_admin_only(request):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    try:
+        path, row = creds.resolve_offer_letter_pdf(item_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    name = (row.get("filename") or row.get("id") or "offer-letter.pdf").replace('"', "")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=name,
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@app.post("/data-room/offer-letters/{item_id}/upload")
+async def data_room_offer_letter_upload(
+    item_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+):
+    from core.dashboard_access import require_fleet_admin
+    from features import data_room_credentials_store as creds
+
+    require_fleet_admin(request)
+    try:
+        raw = await file.read()
+        row = creds.save_offer_letter_pdf(item_id, raw)
+    except FileNotFoundError as exc:
+        return {"status": "error", "message": str(exc)}
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+    return {"status": "ok", "offer_letter": row}
+
+
+@app.get("/data-room/{oid}")
+async def data_room_get(oid: str):
+    from features import data_room_store
+
+    row = data_room_store.get_opportunity(oid)
+    if not row or not data_room_store._is_partner_opportunity(row):
+        return {"status": "error", "message": "Opportunity not found"}
+    return {"status": "ok", "opportunity": row}
+
+
+@app.post("/data-room", dependencies=[Depends(_require_fleet_admin)])
+async def data_room_create(body: dict):
+    from features import data_room_store
+
+    summary = (body.get("summary") or body.get("name") or "").strip()
+    if not summary and not (body.get("name") or "").strip():
+        return {"status": "error", "message": "Name or summary is required"}
+    row = data_room_store.create_opportunity(body or {})
+    return {"status": "ok", "opportunity": row}
+
+
+@app.patch("/data-room/{oid}", dependencies=[Depends(_require_fleet_admin)])
+async def data_room_update(oid: str, body: dict):
+    from features import data_room_store
+
+    row = data_room_store.update_opportunity(oid, body or {})
+    if not row:
+        return {"status": "error", "message": "Opportunity not found"}
+    return {"status": "ok", "opportunity": row}
+
+
+@app.delete("/data-room/{oid}", dependencies=[Depends(_require_fleet_admin)])
+async def data_room_delete(oid: str):
+    from features import data_room_store
+
+    ok = data_room_store.delete_opportunity(oid)
+    if not ok:
+        return {"status": "error", "message": "Opportunity not found"}
     return {"status": "ok"}
 
 
@@ -1825,6 +3523,7 @@ async def candidates_delete(cid: str):
 
 @app.post("/candidates/{cid}/proofs")
 async def candidates_upload_proof(
+    request: Request,
     cid: str,
     file: UploadFile = File(...),
     note: str = Form(default=""),
@@ -1835,8 +3534,13 @@ async def candidates_upload_proof(
       - `file`  (required): the screenshot itself.
       - `note`  (optional): a short caption (e.g. "₹10k UPI · 26 May").
     """
+    from core.dashboard_access import assert_candidate_row_access
     from features import candidate_store
 
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Candidate not found"}
+    assert_candidate_row_access(request, existing)
     try:
         raw = await file.read()
         entry = candidate_store.add_proof(
@@ -1855,9 +3559,14 @@ async def candidates_upload_proof(
 
 
 @app.get("/candidates/{cid}/proofs/{pid}")
-async def candidates_serve_proof(cid: str, pid: str):
+async def candidates_serve_proof(cid: str, pid: str, request: Request):
+    from core.dashboard_access import assert_candidate_row_access
     from features import candidate_store
 
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Proof not found"}
+    assert_candidate_row_access(request, existing)
     hit = candidate_store.get_proof(cid, pid)
     if hit is None:
         return {"status": "error", "message": "Proof not found"}
@@ -1870,9 +3579,14 @@ async def candidates_serve_proof(cid: str, pid: str):
 
 
 @app.delete("/candidates/{cid}/proofs/{pid}")
-async def candidates_delete_proof(cid: str, pid: str):
+async def candidates_delete_proof(cid: str, pid: str, request: Request):
+    from core.dashboard_access import assert_candidate_row_access
     from features import candidate_store
 
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Proof not found"}
+    assert_candidate_row_access(request, existing)
     ok = candidate_store.delete_proof(cid, pid)
     if not ok:
         return {"status": "error", "message": "Proof not found"}
@@ -1881,9 +3595,14 @@ async def candidates_delete_proof(cid: str, pid: str):
 
 
 @app.patch("/candidates/{cid}/proofs/{pid}")
-async def candidates_update_proof_note(cid: str, pid: str, body: dict):
+async def candidates_update_proof_note(cid: str, pid: str, body: dict, request: Request):
+    from core.dashboard_access import assert_candidate_row_access
     from features import candidate_store
 
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Proof not found"}
+    assert_candidate_row_access(request, existing)
     note = (body or {}).get("note", "")
     entry = candidate_store.update_proof_note(cid, pid, note)
     if entry is None:
@@ -1891,15 +3610,157 @@ async def candidates_update_proof_note(cid: str, pid: str, body: dict):
     return {"status": "ok", "proof": entry}
 
 
+# ── Resume versions ───────────────────────────────────────────────────────────
+
+def _resume_file_response(path: str, entry: dict, *, inline: bool = False) -> FileResponse:
+    mime = entry.get("mime_type") or "application/octet-stream"
+    name = entry.get("original_name") or entry.get("filename") or "resume"
+    disposition = "inline" if inline else "attachment"
+    return FileResponse(
+        path,
+        media_type=mime,
+        filename=name,
+        headers={"Content-Disposition": f'{disposition}; filename="{name}"'},
+    )
+
+
+def _resolve_resume_hit(cid: str, rid: str):
+    from features import candidate_store
+
+    hit = candidate_store.get_resume(cid, rid)
+    if hit is not None:
+        return hit
+    # File on disk but JSON metadata missing (e.g. after partial restore).
+    folder = os.path.join(candidate_store.RESUMES_DIR, cid)
+    if not os.path.isdir(folder):
+        return None
+    for fname in os.listdir(folder):
+        if not fname.startswith(rid):
+            continue
+        path = os.path.join(folder, fname)
+        if not os.path.isfile(path):
+            continue
+        ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+        mime = {
+            "pdf": "application/pdf",
+            "doc": "application/msword",
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "txt": "text/plain",
+        }.get(ext, "application/octet-stream")
+        return path, {
+            "id": rid,
+            "filename": fname,
+            "original_name": fname,
+            "mime_type": mime,
+        }
+    return None
+
+
+@app.post("/candidates/{cid}/resumes")
+async def candidates_upload_resume(
+    request: Request,
+    cid: str,
+    file: UploadFile = File(...),
+    note: str = Form(default=""),
+):
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store
+
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Candidate not found"}
+    assert_candidate_row_access(request, existing)
+    try:
+        raw = await file.read()
+        entry = candidate_store.add_resume(
+            cid,
+            data=raw,
+            original_name=file.filename or "",
+            mime_type=file.content_type or "",
+            note=note or "",
+        )
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    if entry is None:
+        return {"status": "error", "message": "Candidate not found"}
+    row = candidate_store.get_candidate(cid)
+    return {"status": "ok", "resume": entry, "candidate": row}
+
+
+@app.get("/candidates/{cid}/resumes/{rid}")
+async def candidates_serve_resume(cid: str, rid: str, request: Request):
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store
+
+    existing = candidate_store.get_candidate(cid)
+    if existing:
+        assert_candidate_row_access(request, existing)
+    hit = _resolve_resume_hit(cid, rid)
+    if hit is None:
+        return {"status": "error", "message": "Resume not found"}
+    path, entry = hit
+    return _resume_file_response(path, entry, inline=False)
+
+
+@app.get("/candidates/{cid}/resumes/{rid}/preview")
+async def candidates_serve_resume_preview(cid: str, rid: str, request: Request):
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store
+
+    existing = candidate_store.get_candidate(cid)
+    if existing:
+        assert_candidate_row_access(request, existing)
+    hit = _resolve_resume_hit(cid, rid)
+    if hit is None:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    path, entry = hit
+    return _resume_file_response(path, entry, inline=True)
+
+
+@app.delete("/candidates/{cid}/resumes/{rid}")
+async def candidates_delete_resume(cid: str, rid: str, request: Request):
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store
+
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Resume not found"}
+    assert_candidate_row_access(request, existing)
+    ok = candidate_store.delete_resume(cid, rid)
+    if not ok:
+        return {"status": "error", "message": "Resume not found"}
+    row = candidate_store.get_candidate(cid)
+    return {"status": "ok", "candidate": row}
+
+
+@app.patch("/candidates/{cid}/resumes/{rid}")
+async def candidates_update_resume_note(cid: str, rid: str, body: dict, request: Request):
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store
+
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Resume not found"}
+    assert_candidate_row_access(request, existing)
+    note = (body or {}).get("note", "")
+    entry = candidate_store.update_resume_note(cid, rid, note)
+    if entry is None:
+        return {"status": "error", "message": "Resume not found"}
+    return {"status": "ok", "resume": entry}
+
+
 # ── Handler / reference expenses ────────────────────────────────────────────────
 
 @app.get("/handler-expenses")
 async def handler_expenses_list(
+    request: Request,
     reference: str | None = Query(default=None),
     month: str | None = Query(default=None),
 ):
+    from core.dashboard_access import handler_reference_scope
     from features import handler_expenses
 
+    reference = handler_reference_scope(request, reference)
     rows = handler_expenses.list_expenses(reference=reference, month=month)
     total = sum(int(r.get("amount") or 0) for r in rows)
     return {
@@ -1912,7 +3773,7 @@ async def handler_expenses_list(
     }
 
 
-@app.post("/handler-expenses")
+@app.post("/handler-expenses", dependencies=[Depends(_require_fleet_admin)])
 async def handler_expenses_create(body: dict):
     from features import handler_expenses
 
@@ -1924,7 +3785,7 @@ async def handler_expenses_create(body: dict):
     return {"status": "ok", "expense": row}
 
 
-@app.patch("/handler-expenses/{eid}")
+@app.patch("/handler-expenses/{eid}", dependencies=[Depends(_require_fleet_admin)])
 async def handler_expenses_update(eid: str, body: dict):
     from features import handler_expenses
 
@@ -1934,7 +3795,7 @@ async def handler_expenses_update(eid: str, body: dict):
     return {"status": "ok", "expense": row}
 
 
-@app.delete("/handler-expenses/{eid}")
+@app.delete("/handler-expenses/{eid}", dependencies=[Depends(_require_fleet_admin)])
 async def handler_expenses_delete(eid: str):
     from features import handler_expenses
 
@@ -2028,7 +3889,11 @@ if os.path.exists(STATIC_DIR):
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         # Never serve index.html for API-like paths (avoids JSON parse errors in the UI)
-        api_roots = {"groups", "account", "accounts", "login", "message", "start", "stop", "state", "health", "ws", "inbox", "crm", "stats"}
+        api_roots = {
+            "groups", "account", "accounts", "login", "auth", "message", "start", "stop",
+            "state", "health", "ws", "inbox", "crm", "stats", "admin", "ai", "voice",
+            "candidates", "data-room", "metrics", "alerts", "push", "analytics",
+        }
         first = full_path.split("/")[0] if full_path else ""
         if first in api_roots:
             from fastapi import HTTPException

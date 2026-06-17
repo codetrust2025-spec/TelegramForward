@@ -86,11 +86,140 @@ class MessageRouter:
         text: str,
         *,
         wait: bool = True,
+        sent_by: str = "manual",
+        operator_name: str | None = None,
+        reply_to_message_id: int | None = None,
     ) -> Any:
+        """Enqueue a DM send.
+
+        `sent_by` records provenance on the resulting outbound message:
+          - "manual"       : operator typed and clicked Send.
+          - "ai_approved"  : operator clicked "Suggest reply", reviewed
+                             the AI draft, then clicked Send.
+          - "ai"           : Karthik auto-reply (not used via this enqueue).
+        Anything else is normalised to "manual" upstream.
+        """
+        if str(sent_by or "manual") in {"manual", "ai_approved"}:
+            try:
+                n = await self._runtime_queue(account_id).cancel_ai_auto_reply_for_user(int(user_id))
+                if n:
+                    account_log(
+                        account_id,
+                        f"Manual send cancelled {n} queued AI auto-reply for user {user_id}",
+                    )
+            except Exception:
+                pass
+        payload: dict = {
+            "user_id": int(user_id),
+            "text": str(text),
+            "sent_by": str(sent_by or "manual"),
+            "operator_name": (operator_name or "").strip() or None,
+        }
+        if reply_to_message_id is not None:
+            rid = int(reply_to_message_id)
+            if rid > 0:
+                payload["reply_to_message_id"] = rid
         task = QueueTask(
             account_id=account_id,
             task_type=TaskType.DM_SEND,
-            payload={"user_id": int(user_id), "text": str(text)},
+            payload=payload,
+            wait_result=wait,
+        )
+        if wait:
+            return await self.route_and_wait(task)
+        return await self.route(task)
+
+    async def enqueue_dm_send_media(
+        self,
+        account_id: str,
+        user_id: int,
+        file_path: str,
+        *,
+        caption: str = "",
+        filename: str = "",
+        content_type: str = "",
+        wait: bool = True,
+        sent_by: str = "manual",
+        operator_name: str | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> Any:
+        if str(sent_by or "manual") in {"manual", "ai_approved"}:
+            try:
+                n = await self._runtime_queue(account_id).cancel_ai_auto_reply_for_user(int(user_id))
+                if n:
+                    account_log(
+                        account_id,
+                        f"Manual media send cancelled {n} queued AI auto-reply for user {user_id}",
+                    )
+            except Exception:
+                pass
+        payload: dict = {
+            "user_id": int(user_id),
+            "file_path": str(file_path),
+            "caption": str(caption or ""),
+            "filename": str(filename or ""),
+            "content_type": str(content_type or ""),
+            "sent_by": str(sent_by or "manual"),
+            "operator_name": (operator_name or "").strip() or None,
+        }
+        if reply_to_message_id is not None:
+            rid = int(reply_to_message_id)
+            if rid > 0:
+                payload["reply_to_message_id"] = rid
+        task = QueueTask(
+            account_id=account_id,
+            task_type=TaskType.DM_SEND_MEDIA,
+            payload=payload,
+            wait_result=wait,
+        )
+        if wait:
+            return await self.route_and_wait(task)
+        return await self.route(task)
+
+    async def enqueue_ai_auto_reply(
+        self,
+        account_id: str,
+        user_id: int,
+        *,
+        user_message_id: int | None,
+        user_text: str,
+        force: bool = False,
+        wait: bool = False,
+    ) -> Any:
+        task = QueueTask(
+            account_id=account_id,
+            task_type=TaskType.AI_AUTO_REPLY,
+            payload={
+                "user_id": int(user_id),
+                "user_message_id": int(user_message_id) if user_message_id is not None else None,
+                "user_text": str(user_text or ""),
+                "force": bool(force),
+            },
+            wait_result=wait,
+        )
+        if wait:
+            return await self.route_and_wait(task)
+        return await self.route(task)
+
+    async def enqueue_dm_send_location(
+        self,
+        account_id: str,
+        user_id: int,
+        latitude: float,
+        longitude: float,
+        *,
+        accuracy: float | None = None,
+        wait: bool = True,
+    ) -> Any:
+        task = QueueTask(
+            account_id=account_id,
+            task_type=TaskType.DM_SEND_LOCATION,
+            payload={
+                "user_id": int(user_id),
+                "latitude": float(latitude),
+                "longitude": float(longitude),
+                "accuracy": float(accuracy) if accuracy is not None else None,
+            },
             wait_result=wait,
         )
         if wait:

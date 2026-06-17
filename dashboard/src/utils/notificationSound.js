@@ -1,6 +1,7 @@
 /** Incoming DM notification chime (Web Audio). Requires one user click to unlock autoplay. */
 
 import { isMessageSoundMuted } from './soundQuietHours.js'
+import { getMaxReplyAlertLevel } from './replyAlert.js'
 
 let audioCtx = null
 let unlocked = false
@@ -353,9 +354,18 @@ function startInboxAlertMusic() {
 /**
  * Start/stop looping alert music based on total unread inbox count.
  * Plays continuously while count > 3; stops at 3 or below.
+ * Pauses while CRM reply buzzer/urgent loop is active (avoids horror + beep overlap).
+ *
+ * @param {number} unreadCount
+ * @param {object|null} [inboxState] — when provided, defers to reply SLA buzzer sounds
  */
-export function syncInboxAlertMusic(unreadCount) {
+export function syncInboxAlertMusic(unreadCount, inboxState = null) {
   if (isMessageSoundMuted()) {
+    stopInboxAlertMusic()
+    return
+  }
+  const slaLevel = inboxState ? getMaxReplyAlertLevel(inboxState) : null
+  if (slaLevel === 'buzzer' || slaLevel === 'aggressive') {
     stopInboxAlertMusic()
     return
   }

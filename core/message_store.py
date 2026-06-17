@@ -23,17 +23,15 @@ def load_message() -> str:
 
 
 def load_message_for_account(slot: str) -> str:
-    """Per-account override if present, else shared read-only message."""
+    """Per-account message only — never falls back to the fleet shared message."""
     path = _account_message_path(slot)
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
-                text = f.read().strip()
-                if text:
-                    return text
+                return f.read().strip()
         except Exception:
             pass
-    return load_message()
+    return ""
 
 
 def save_message(text: str) -> None:

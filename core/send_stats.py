@@ -1,4 +1,4 @@
-"""Rolling 24h count of successful message sends per account slot."""
+"""Rolling send history per account slot — campaign cycles vs forwarding."""
 
 from __future__ import annotations
 
@@ -6,14 +6,17 @@ import json
 import os
 import threading
 import time
-from typing import Dict
+from typing import Dict, Literal
 
 from core.config import STATE_DIR
 from core.stats_reset import get_effective_cutoff
 
+SendKind = Literal["campaign", "forward"]
+VALID_KINDS = frozenset({"campaign", "forward"})
+
 WINDOW_SECONDS = 86400  # 24 hours
 _lock = threading.Lock()
-_cache: Dict[str, tuple[float, int]] = {}  # slot -> (cached_at, count)
+_cache: Dict[str, tuple[float, dict[str, int]]] = {}  # slot -> (cached_at, counts)
 
 
 def _stats_path(slot: str) -> str:
@@ -21,27 +24,43 @@ def _stats_path(slot: str) -> str:
     return os.path.join(STATE_DIR, slot, "send_history.json")
 
 
-def _load_timestamps(slot: str) -> list[float]:
+def _normalize_events(data) -> list[dict]:
+    """Migrate legacy timestamp lists to {t, kind} events."""
+    if isinstance(data, list):
+        out = []
+        for item in data:
+            if isinstance(item, (int, float)):
+                out.append({"t": float(item), "kind": "campaign"})
+            elif isinstance(item, dict) and item.get("t") is not None:
+                kind = (item.get("kind") or "campaign").strip().lower()
+                if kind not in VALID_KINDS:
+                    kind = "campaign"
+                out.append({"t": float(item["t"]), "kind": kind})
+        return out
+    if isinstance(data, dict):
+        if isinstance(data.get("events"), list):
+            return _normalize_events(data["events"])
+        if isinstance(data.get("timestamps"), list):
+            return _normalize_events(data["timestamps"])
+    return []
+
+
+def _load_events(slot: str) -> list[dict]:
     path = _stats_path(slot)
     if not os.path.exists(path):
         return []
     try:
         with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return [float(t) for t in data]
-        if isinstance(data, dict) and isinstance(data.get("timestamps"), list):
-            return [float(t) for t in data["timestamps"]]
+            return _normalize_events(json.load(f))
     except Exception:
-        pass
-    return []
+        return []
 
 
-def _save_timestamps(slot: str, timestamps: list[float]) -> None:
+def _save_events(slot: str, events: list[dict]) -> None:
     path = _stats_path(slot)
     try:
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({"timestamps": timestamps}, f, indent=0)
+            json.dump({"events": events}, f, indent=0)
     except Exception:
         pass
 
@@ -56,50 +75,99 @@ def invalidate_cache(slot: str | None = None) -> None:
 
 
 def _filter_since_cutoff(
-    timestamps: list[float],
+    events: list[dict],
     slot: str,
     *,
     now: float | None = None,
-) -> list[float]:
+    kind: SendKind | None = None,
+) -> list[dict]:
     cutoff = get_effective_cutoff(slot, now)
-    return [t for t in timestamps if t >= cutoff]
+    out = []
+    for ev in events:
+        t = float(ev.get("t") or 0)
+        if t < cutoff:
+            continue
+        if kind is not None and (ev.get("kind") or "campaign") != kind:
+            continue
+        out.append(ev)
+    return out
 
 
-def count_since_cutoff(slot: str, cutoff: float) -> int:
-    """Count send timestamps >= explicit cutoff (used by daily_stats)."""
+def count_since_cutoff(slot: str, cutoff: float, kind: SendKind | None = None) -> int:
+    """Count sends since explicit cutoff; optional filter by posting kind."""
     if not slot:
         return 0
-    raw = _load_timestamps(slot)
-    return sum(1 for t in raw if t >= cutoff)
+    raw = _load_events(slot)
+    return sum(
+        1
+        for ev in raw
+        if float(ev.get("t") or 0) >= cutoff
+        and (kind is None or (ev.get("kind") or "campaign") == kind)
+    )
 
 
-def record_send(slot: str) -> int:
-    """Record one successful post; returns count in last 24h."""
+def record_send(slot: str, kind: SendKind = "campaign") -> int:
+    """Record one successful group post; returns total in window for that kind."""
     if not slot:
         return 0
+    k = kind if kind in VALID_KINDS else "campaign"
     now = time.time()
     with _lock:
-        ts = _filter_since_cutoff(_load_timestamps(slot), slot, now=now)
-        ts.append(now)
-        _save_timestamps(slot, ts)
-        count = len(ts)
-        _cache[slot] = (now, count)
-        return count
+        events = _filter_since_cutoff(_load_events(slot), slot, now=now)
+        events.append({"t": now, "kind": k})
+        _save_events(slot, events)
+        counts = {
+            "campaign": len(_filter_since_cutoff(events, slot, now=now, kind="campaign")),
+            "forward": len(_filter_since_cutoff(events, slot, now=now, kind="forward")),
+            "total": len(events),
+        }
+        _cache[slot] = (now, counts)
+        return counts[k]
 
 
-def count_24h(slot: str) -> int:
-    """Successful forwards since last reset, or rolling last 24h if never reset."""
+def get_last_post_timestamp(slot: str) -> float | None:
+    """Latest successful campaign or forward post (and group_send history)."""
+    if not slot:
+        return None
+    last: float | None = None
+    for ev in _load_events(slot):
+        try:
+            t = float(ev.get("t") or 0)
+        except (TypeError, ValueError):
+            continue
+        if t > 0:
+            last = max(last or 0.0, t)
+    try:
+        from core.group_send_stats import get_last_group_send_timestamp
+
+        g = get_last_group_send_timestamp(slot)
+        if g:
+            last = max(last or 0.0, float(g))
+    except Exception:
+        pass
+    return last
+
+
+def count_24h(slot: str, kind: SendKind | None = None) -> int:
+    """Posts since last reset (or rolling 24h); optional kind filter."""
     if not slot:
         return 0
     now = time.time()
     with _lock:
         cached = _cache.get(slot)
-        if cached and now - cached[0] < 30:
-            return cached[1]
-        raw = _load_timestamps(slot)
-        ts = _filter_since_cutoff(raw, slot, now=now)
-        if len(ts) != len(raw):
-            _save_timestamps(slot, ts)
-        count = len(ts)
-        _cache[slot] = (now, count)
-        return count
+        if cached and now - cached[0] < 30 and kind is None:
+            return cached[1].get("total", 0)
+        events = _load_events(slot)
+        filtered = _filter_since_cutoff(events, slot, now=now, kind=kind)
+        if len(filtered) != len(events):
+            _save_events(slot, _filter_since_cutoff(events, slot, now=now))
+        if kind:
+            return len(filtered)
+        total = len(_filter_since_cutoff(events, slot, now=now))
+        counts = {
+            "campaign": len(_filter_since_cutoff(events, slot, now=now, kind="campaign")),
+            "forward": len(_filter_since_cutoff(events, slot, now=now, kind="forward")),
+            "total": total,
+        }
+        _cache[slot] = (now, counts)
+        return total

@@ -1,25 +1,17 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { accountLabel } from '../../utils/accountUi.js'
 import { buildCallLink, callTypeLabel, formatCallScheduleTime } from '../../utils/calls.js'
 import { slotTag } from '../../utils/inboxMessageUtils.js'
 import { isBlockedLead, isSpamStatus } from '../../utils/crm.js'
 import { getLeadScore, leadScoreLabel } from '../../utils/leadUx.js'
+import { formatIstDateTime } from '../../utils/istTime.js'
+import { formatPhoneDisplay } from '../../utils/whatsapp.js'
 import { FollowUpControls } from './FollowUpControls.jsx'
 import { NotesEditor } from './NotesEditor.jsx'
 import { StatusDropdown } from './StatusDropdown.jsx'
 
 function formatActivity(iso) {
-  if (!iso) return '—'
-  try {
-    return new Date(iso).toLocaleString([], {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  } catch {
-    return '—'
-  }
+  return formatIstDateTime(iso)
 }
 
 function leadScoreClass(score) {
@@ -41,9 +33,17 @@ export function LeadDetailsPanel({
   onCallNow,
   onUnblock,
   onStartCall,
+  onDeleteChat,
+  onClose,
   saving,
   followUpLoading,
+  waStatus = null,
+  onLinkPhone,
+  onMoveToWhatsApp,
+  linking = false,
+  sendingWa = false,
 }) {
+  const [phoneInput, setPhoneInput] = useState('')
   if (!selected) {
     return (
       <aside className="crm-lead-panel">
@@ -58,6 +58,9 @@ export function LeadDetailsPanel({
   const isSpam = isBlocked || isSpamStatus(lead?.status)
   const call = scheduledCall || lead?.scheduled_call
   const link = buildCallLink(call)
+  const waEnabled = Boolean(waStatus?.enabled)
+  const waConfigured = Boolean(waStatus?.configured)
+  const linkedPhone = selectedConv?.phone_e164 || lead?.phone_e164 || ''
   const score = getLeadScore(selectedConv || {
     crm_status: lead?.status,
     crm_blocked: lead?.crm_blocked,
@@ -71,7 +74,19 @@ export function LeadDetailsPanel({
 
   return (
     <aside className="crm-lead-panel">
-      <h3 className="crm-lead-panel-title">Lead details</h3>
+      <div className="crm-lead-panel-header">
+        <h3 className="crm-lead-panel-title">Lead details</h3>
+        {onClose && (
+          <button
+            type="button"
+            className="crm-lead-panel-close"
+            onClick={onClose}
+            aria-label="Close lead details"
+          >
+            ✕
+          </button>
+        )}
+      </div>
 
       {!isSpam && (
         <section className="crm-lead-section crm-lead-call-actions crm-lead-call-actions--top">
@@ -90,6 +105,47 @@ export function LeadDetailsPanel({
         <span className="crm-field-label">Lead score</span>
         <span className={leadScoreClass(score)}>{leadScoreLabel(score)}</span>
       </section>
+
+      {waEnabled && !isSpam && (
+        <section className="crm-lead-section crm-lead-whatsapp">
+          <span className="crm-field-label">WhatsApp</span>
+          {linkedPhone ? (
+            <p className="crm-lead-meta">
+              Linked: <strong>{formatPhoneDisplay(linkedPhone)}</strong>
+            </p>
+          ) : (
+            <div className="crm-lead-phone-link">
+              <input
+                type="tel"
+                className="input input--sm"
+                placeholder="9876543210"
+                value={phoneInput}
+                onChange={e => setPhoneInput(e.target.value)}
+                disabled={linking}
+              />
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                disabled={!phoneInput.trim() || linking}
+                onClick={() => onLinkPhone?.(phoneInput)}
+              >
+                {linking ? 'Linking…' : 'Link phone'}
+              </button>
+            </div>
+          )}
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm btn--block"
+            disabled={(!linkedPhone && !selectedConv?.whatsapp_linked) || sendingWa || saving || !waConfigured}
+            onClick={() => onMoveToWhatsApp?.()}
+            title={waConfigured
+              ? 'Send approved template to continue on WhatsApp'
+              : 'Configure WHATSAPP_API_KEY on server first'}
+          >
+            {sendingWa ? 'Sending…' : 'Move to WhatsApp'}
+          </button>
+        </section>
+      )}
 
       <section className="crm-lead-section">
         <span className="crm-field-label">User info</span>
@@ -206,6 +262,22 @@ export function LeadDetailsPanel({
             </>
           )}
         </dl>
+      </section>
+
+      <section className="crm-lead-section crm-lead-delete">
+        <span className="crm-field-label">Danger zone</span>
+        <p className="crm-lead-meta crm-delete-hint">
+          Permanently clears this chat, messages, and CRM record from the dashboard.
+          The conversation stays on Telegram.
+        </p>
+        <button
+          type="button"
+          className="btn btn--danger btn--block crm-delete-chat-btn"
+          onClick={() => onDeleteChat?.()}
+          disabled={saving}
+        >
+          Clear chat
+        </button>
       </section>
     </aside>
   )

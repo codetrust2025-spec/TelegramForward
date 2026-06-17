@@ -25,6 +25,8 @@ def _empty_slot_stats() -> dict:
         "incoming": 0,
         "outgoing": 0,
         "forwarded": 0,
+        "campaign_posts": 0,
+        "forward_posts": 0,
     }
 
 
@@ -54,12 +56,15 @@ def stats_for_inbox_slot(slot: str, cutoff: float) -> dict:
                 if uid is not None:
                     contacts.add(int(uid))
 
-    forwarded = count_since_cutoff(slot, cutoff)
+    campaign_posts = count_since_cutoff(slot, cutoff, "campaign")
+    forward_posts = count_since_cutoff(slot, cutoff, "forward")
     return {
         "contacts": len(contacts),
         "incoming": incoming,
         "outgoing": outgoing,
-        "forwarded": forwarded,
+        "forwarded": campaign_posts + forward_posts,
+        "campaign_posts": campaign_posts,
+        "forward_posts": forward_posts,
     }
 
 
@@ -69,6 +74,14 @@ def _sum_slots(per_slot: dict) -> dict:
         for key in total:
             total[key] += int(row.get(key) or 0)
     return total
+
+
+def refresh_daily_stats(slots: list[str]) -> tuple[dict, object | None]:
+    """Apply automatic 24h rollover if due, then compute dashboard stats."""
+    from core.stats_reset import maybe_auto_reset_24h
+
+    auto = maybe_auto_reset_24h(slots)
+    return compute_daily_stats(slots), auto
 
 
 def compute_daily_stats(slots: list[str]) -> dict:

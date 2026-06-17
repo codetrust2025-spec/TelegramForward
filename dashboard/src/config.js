@@ -1,3 +1,6 @@
+/** Bumped on each production deploy so Vite emits a new app-[hash].js (cache bust). */
+export const BUILD_STAMP = '2026-06-18-ops-toolbar'
+
 /** API base — Vite dev uses the dev-server proxy configured in vite.config.js. */
 export const isDevFrontend = import.meta.env.DEV || window.location.port === '3000'
 export const API = isDevFrontend
@@ -14,6 +17,5 @@ export const SAVED_PHONES = [
   '+919000000001',
   '+918919515419',
   '+919000000005',
-  '+917893898866',
   '+917075074573',
 ]

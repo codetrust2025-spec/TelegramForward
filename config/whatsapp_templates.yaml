@@ -1,0 +1,41 @@
+version: 1
+
+followup_after_telegram:
+  bsp_name: followup_after_telegram
+  params: [name, service]
+  body: "Hi {{1}}, thanks for reaching out about {{2}} support. Reply here to continue — we're happy to help."
+
+payment_details:
+  bsp_name: payment_details
+  params: [name, service, details]
+  body: "Hi {{1}}, payment details for {{2}}: {{3}}. Share screenshot once done."
+
+payment_reminder:
+  bsp_name: payment_reminder
+  params: [name, service]
+  body: "Hi {{1}}, gentle reminder for {{2}} — let us know if you need any help to proceed."
+
+slot_after_payment:
+  bsp_name: slot_after_payment
+  params: [name, service, slot_time, join_info]
+  body: "Hi {{1}}, payment received. Your slot for {{2}} on {{3}} is confirmed. {{4}}"
+
+senior_handoff:
+  bsp_name: senior_handoff
+  params: [name, domain, expert_name]
+  body: "Hi {{1}}, connecting you with our {{2}} expert {{3}} — they'll guide you on call/WhatsApp."
+
+call_reminder:
+  bsp_name: call_reminder
+  params: [name, topic, call_time]
+  body: "Hi {{1}}, reminder: your call about {{2}} is at {{3}} today. Reply if you need to reschedule."
+
+session_expired_reopen:
+  bsp_name: session_expired_reopen
+  params: [name, service]
+  body: "Hi {{1}}, we're here when you're ready — reply to continue your {{2}} enquiry."
+
+whatsapp_move_from_telegram:
+  bsp_name: whatsapp_move_from_telegram
+  params: [name, service]
+  body: "Hi {{1}}, as discussed on Telegram — continue here for {{2}}. What's your interview date/time?"
