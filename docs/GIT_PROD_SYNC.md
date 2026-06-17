@@ -111,4 +111,16 @@ git checkout main
 | `scripts/setup_vps_git.py` | One-time VPS git init |
 | `scripts/verify_git_prod_sync.py` | Drift detector |
 | `scripts/write_production_manifest.py` | Update manifest only |
+| `scripts/cleanup_static_assets.py` | Remove old `app-*.js` / `index-*.css` backups (VPS + local) |
 | `scripts/production_update.sh` | VPS-side build (used by hostinger_one_shot; prefer deploy_prod) |
+
+### Clean old bundle backups
+
+After many deploys, `static/assets/` can accumulate hundreds of stale Vite chunks. Safe cleanup:
+
+```powershell
+python scripts/cleanup_static_assets.py --all          # dry-run
+python scripts/cleanup_static_assets.py --all --execute
+```
+
+Keeps only files referenced in `static/index.html` / `production.manifest.json`.
