@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
+import time as _time
 from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
+APP_TIMEZONE = "Asia/Kolkata"
 
 
 def _to_ist(dt: datetime) -> datetime:
@@ -60,6 +62,24 @@ def ist_now(now: float | None = None) -> datetime:
     if now is not None:
         return datetime.fromtimestamp(float(now), tz=IST)
     return datetime.now(IST)
+
+
+def ist_date_str(now: float | None = None) -> str:
+    """IST calendar date as YYYY-MM-DD."""
+    return ist_now(now).strftime("%Y-%m-%d")
+
+
+def ist_day_start_ts(now: float | None = None) -> float:
+    """Unix timestamp for 00:00 IST on the calendar day containing *now*."""
+    ts = float(now) if now is not None else _time.time()
+    anchor = datetime.fromtimestamp(ts, tz=IST)
+    midnight = datetime.combine(anchor.date(), time.min, tzinfo=IST)
+    return midnight.timestamp()
+
+
+def ist_day_start_iso(now: float | None = None) -> str:
+    """ISO timestamp for 00:00 IST today (or the day containing *now*)."""
+    return format_ist_iso(ist_day_start_ts(now))
 
 
 def format_ist_iso(value: datetime | float | None = None) -> str:
