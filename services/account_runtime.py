@@ -44,17 +44,26 @@ class AccountRuntime:
     def state(self):
         return self.worker.state
 
-    async def start(self, *, one_shot: bool = False, skip_refresh: bool = False) -> bool:
+    async def start(
+        self,
+        *,
+        one_shot: bool = False,
+        skip_refresh: bool = False,
+        campaign: bool | None = None,
+        forwarding: bool | None = None,
+    ) -> bool:
         async with self._lifecycle_lock:
-            if self.worker.state.running:
-                await self._stop_unlocked(wait=0.3, release_session=False)
             if not skip_refresh or not self.worker.state.account_info:
                 await self.worker.refresh_info()
             if not self.worker.state.account_info:
                 account_log(self.account_id, "Cannot start — not logged in", level="warning")
                 return False
             await self.worker.ensure_queue_processor()
-            if self.worker.start(one_shot=one_shot):
+            if self.worker.start(
+                one_shot=one_shot,
+                campaign=campaign,
+                forwarding=forwarding,
+            ):
                 mark_running(self.account_id)
                 account_log(self.account_id, "Worker started", level="info")
                 await event_bus.publish(
@@ -65,12 +74,31 @@ class AccountRuntime:
                 return True
             return False
 
-    async def stop(self, *, wait: float = 1.0, release_session: bool = True) -> None:
+    async def stop(
+        self,
+        *,
+        wait: float = 1.0,
+        release_session: bool = True,
+        campaign: bool | None = None,
+        forwarding: bool | None = None,
+    ) -> None:
         async with self._lifecycle_lock:
-            await self._stop_unlocked(wait=wait, release_session=release_session)
+            await self._stop_unlocked(
+                wait=wait,
+                release_session=release_session,
+                campaign=campaign,
+                forwarding=forwarding,
+            )
 
-    async def _stop_unlocked(self, *, wait: float, release_session: bool) -> None:
-        self.worker.stop()
+    async def _stop_unlocked(
+        self,
+        *,
+        wait: float,
+        release_session: bool,
+        campaign: bool | None = None,
+        forwarding: bool | None = None,
+    ) -> None:
+        self.worker.stop(campaign=campaign, forwarding=forwarding)
         mark_stopped(self.account_id)
         task = self.worker.state.task
         if task is not None and not task.done():

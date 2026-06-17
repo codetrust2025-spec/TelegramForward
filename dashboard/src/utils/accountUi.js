@@ -1,5 +1,12 @@
 /** Shared account / status helpers for dashboard UI */
 
+import {
+  formatIstAge,
+  formatIstLogTime,
+  formatIstShort,
+  parseInstant,
+} from './istTime.js'
+
 export const RUN_UI = {
   text: '#22c55e',
   border: '#166534',
@@ -44,8 +51,15 @@ export function accountLabel(slot) {
   return m ? `Account ${m[1]}` : slot
 }
 
-/** Telegram display name (first + last), or @username, or phone. */
-export function telegramDisplayName(info) {
+/** Inbox UI: which logged-in Telegram account owns this chat (custom or Telegram name). */
+export function inboxAccountOwnerName(slot, accountInfo) {
+  if (!slot) return ''
+  const info = accountInfo?.[slot]
+  return telegramDisplayName(info) || accountLabel(slot)
+}
+
+/** Telegram name from login (ignores dashboard display_name override). */
+export function telegramLegalName(info) {
   if (!info) return null
   const name = String(info.name || '').trim()
   const first = String(info.first_name || '').trim()
@@ -54,9 +68,15 @@ export function telegramDisplayName(info) {
   const user = String(info.username || '').trim().replace(/^@/, '')
   if (full) return full
   if (user) return `@${user}`
-  const phone = String(info.phone || '').trim()
-  if (phone) return phone.startsWith('+') ? phone : `+${phone}`
   return null
+}
+
+/** Profile label in UI — custom display_name if set, else Telegram name. */
+export function telegramDisplayName(info) {
+  if (!info) return null
+  const custom = String(info.display_name || '').trim()
+  if (custom) return custom
+  return telegramLegalName(info)
 }
 
 /** @username line for mini cards (null if no username). */
@@ -93,7 +113,7 @@ export const TELEGRAM_MEMBERSHIP_TOOLTIP =
   'How many chats this account belongs to on Telegram (from a dialog scan). This is your real Telegram membership—not the upload list the bot posts to.'
 
 export const JOINS_TODAY_TOOLTIP =
-  'New groups this bot joined today via automation. Resets at UTC midnight and is rate-limited separately from Telegram membership.'
+  'New groups this bot joined today via automation. Resets at IST (India) midnight and is rate-limited separately from Telegram membership.'
 
 /** Cycle stat tiles on the account detail card. */
 export const CYCLE_METRIC_SENT_TOOLTIP =
@@ -109,19 +129,9 @@ export const CYCLE_METRIC_LIST_TOOLTIP =
   'Groups from your uploaded master list assigned to this account for posting. The bot cycles through these targets—not the same as “On Telegram” membership below.'
 
 function formatScannedAt(iso) {
-  if (!iso) return null
-  try {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return null
-    return d.toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  } catch {
-    return null
-  }
+  if (!iso || !parseInstant(iso)) return null
+  const label = formatIstShort(iso)
+  return label === '—' ? null : label
 }
 
 export { formatScannedAt as formatMembershipScannedAt }
@@ -149,15 +159,7 @@ export function formatJoinStatsToday(acctState) {
 const MEMBERSHIP_STALE_MS = 10 * 60 * 1000
 
 function parseMembershipUpdatedAt(raw) {
-  if (!raw) return null
-  const text = String(raw).trim()
-  if (text.endsWith(' UTC')) {
-    const iso = text.replace(' UTC', ':00Z').replace(' ', 'T')
-    const d = new Date(iso)
-    return Number.isNaN(d.getTime()) ? null : d
-  }
-  const d = new Date(text)
-  return Number.isNaN(d.getTime()) ? null : d
+  return parseInstant(raw)
 }
 
 /** True when On Telegram scan is older than 10 minutes (or never run). */
@@ -171,14 +173,7 @@ export function isMembershipStale(info, thresholdMs = MEMBERSHIP_STALE_MS) {
 }
 
 export function formatMembershipAge(info) {
-  const updated = parseMembershipUpdatedAt(info?.joined_updated_at)
-  if (!updated) return null
-  const mins = Math.floor((Date.now() - updated.getTime()) / 60000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 48) return `${hrs}h ago`
-  return updated.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return formatIstAge(info?.joined_updated_at)
 }
 
 /** Matches backend classify_account_info — manual list + Telegram Premium only. */
@@ -253,15 +248,52 @@ export function sortAccountsForDisplay(slots, accountStates, accountInfo) {
   })
 }
 
-/** running | sleeping | rate_limited | stopped | idle */
-export function getAccountStatus(acctState, loggedIn, accountStatus) {
+export function isAccountOnShutdown(accountShutdown, slot) {
+  const info = accountShutdown?.[slot]
+  return !!(info && info.active)
+}
+
+/** True when slot is on the 1-week auto-rest list (UI or backend). */
+export function isSlotOnShutdownList(accountShutdown, shutdownList, slot) {
+  if (!slot) return false
+  if (isAccountOnShutdown(accountShutdown, slot)) return true
+  return !!(shutdownList && shutdownList[slot])
+}
+
+/** Normalize per-slot shutdown object or full slot→info map for status helpers. */
+export function accountShutdownMapForSlot(accountShutdown, slot) {
+  if (!accountShutdown || !slot) return {}
+  if (accountShutdown.active !== undefined) {
+    return { [slot]: accountShutdown }
+  }
+  return accountShutdown
+}
+
+export function filterSlotsExcludingShutdown(slots, accountShutdown, shutdownList) {
+  return (slots || []).filter(
+    slot => !isSlotOnShutdownList(accountShutdown, shutdownList, slot),
+  )
+}
+
+/** running | sleeping | rate_limited | stopped | idle | shutdown */
+export function getAccountStatus(acctState, loggedIn, accountStatus, accountShutdown, slot) {
+  if (slot && isAccountOnShutdown(accountShutdown, slot)) return 'shutdown'
   if (!loggedIn) return 'idle'
   const lifecycle = accountStatus?.lifecycle
   if (lifecycle === 'ERROR') return 'rate_limited'
   if (lifecycle === 'SLEEPING' || isHeavyRateLimit(acctState)) return 'sleeping'
   if (!acctState) return lifecycle === 'RUNNING' ? 'running' : 'stopped'
   if (acctState.status === 'flood_wait') return 'rate_limited'
-  if (lifecycle === 'RUNNING' || acctState.running) return 'running'
+  if (
+    lifecycle === 'RUNNING'
+    || acctState.running
+    || acctState.campaign_running
+    || acctState.forwarding_running
+    || acctState.campaign?.running
+    || acctState.forwarding?.running
+  ) {
+    return 'running'
+  }
   return 'stopped'
 }
 
@@ -271,10 +303,25 @@ const STATUS_LABELS = {
   rate_limited: 'Rate limited',
   stopped: 'Stopped',
   idle: 'Not logged in',
+  shutdown: 'Shutdown (1 week)',
 }
 
 export function formatAccountStatusLabel(status) {
   return STATUS_LABELS[status] || 'Unknown'
+}
+
+/** Short labels for account grid mini cards (narrow columns). */
+const MINI_STATUS_LABELS = {
+  running: 'Run',
+  sleeping: 'Wait',
+  rate_limited: 'Flood',
+  stopped: 'Stop',
+  idle: 'Off',
+  shutdown: 'Shutdown',
+}
+
+export function formatAccountMiniStatusLabel(status) {
+  return MINI_STATUS_LABELS[status] || formatAccountStatusLabel(status)
 }
 
 /** Compact lines for sidebar mini cards. */
@@ -330,15 +377,38 @@ export function getHealthLevel(acctState) {
 }
 
 export function formatLogTime(time) {
-  if (!time) return '--:--:--'
-  if (typeof time === 'string' && /^\d{2}:\d{2}:\d{2}$/.test(time)) return time
-  try {
-    const d = new Date(time)
-    if (!Number.isNaN(d.getTime())) {
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
-    }
-  } catch { /* ignore */ }
-  return String(time)
+  return formatIstLogTime(time)
+}
+
+/** Human-readable labels for structured log event codes (LogPanel, live feed). */
+export const LOG_EVENT_LABELS = {
+  SEND_FAIL: 'Send failed',
+  SEND_SUCCESS: 'Sent',
+  JOIN_FAIL: 'Join failed',
+  JOIN_SUCCESS: 'Joined',
+  JOIN_ATTEMPT: 'Joining',
+  JOIN_SKIP: 'Join skipped',
+  SKIP: 'Skipped',
+  FLOOD_WAIT: 'Flood wait',
+  CYCLE_START: 'Cycle start',
+  CYCLE_END: 'Cycle end',
+  CYCLE_RESUME: 'Cycle resume',
+  CYCLE_ERROR: 'Cycle error',
+  RETRY_SCHEDULED: 'Retry scheduled',
+  ACCOUNT_SLEEP: 'Account sleep',
+  WORKER_STOP: 'Worker stopped',
+  SESSION_RECONNECT: 'Reconnecting',
+  TELEGRAM_CONNECTED: 'Connected',
+  MSG_VARIANT_READY: 'Message ready',
+  GROUP_SOURCE_EMPTY: 'No groups',
+  WAIT: 'Waiting',
+}
+
+export function formatLogEventLabel(event) {
+  const code = String(event || '').trim()
+  if (!code) return ''
+  if (LOG_EVENT_LABELS[code]) return LOG_EVENT_LABELS[code]
+  return code.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
 export function formatCountdown(seconds) {
@@ -354,4 +424,95 @@ export function accountProfileHint(slot) {
     account8: 'Safe',
   }
   return hints[slot] || null
+}
+
+/** Raw enabled flags (may be stale if both were true in old data). */
+function rawCampaignEnabled(accountStates, slot, postingModes) {
+  const cfg = postingModes?.[slot]
+  if (cfg && typeof cfg.campaign_enabled === 'boolean') return cfg.campaign_enabled
+  const label = accountStates?.[slot]?.posting_mode || cfg?.mode || 'campaign'
+  return label === 'campaign' || label === 'both'
+}
+
+function rawForwardingEnabled(accountStates, slot, postingModes) {
+  const cfg = postingModes?.[slot]
+  if (cfg && typeof cfg.forwarding_enabled === 'boolean') return cfg.forwarding_enabled
+  const label = accountStates?.[slot]?.posting_mode || cfg?.mode || 'campaign'
+  return label === 'forwarding' || label === 'both'
+}
+
+/** At most one feature on per account (forwarding wins if legacy data had both). */
+export function isCampaignEnabled(accountStates, slot, postingModes) {
+  const c = rawCampaignEnabled(accountStates, slot, postingModes)
+  const f = rawForwardingEnabled(accountStates, slot, postingModes)
+  if (c && f) return false
+  return c
+}
+
+export function isForwardingEnabled(accountStates, slot, postingModes) {
+  const c = rawCampaignEnabled(accountStates, slot, postingModes)
+  const f = rawForwardingEnabled(accountStates, slot, postingModes)
+  if (c && f) return true
+  return f
+}
+
+/** Per-slot posting mode for fleet filters and stats views (legacy string). */
+export function postingModeForSlot(accountStates, slot, postingModes) {
+  const c = isCampaignEnabled(accountStates, slot, postingModes)
+  const f = isForwardingEnabled(accountStates, slot, postingModes)
+  if (f) return 'forwarding'
+  if (c) return 'campaign'
+  return 'none'
+}
+
+export function featureRuntime(acctState, feature) {
+  const block = acctState?.[feature]
+  if (block && typeof block === 'object') return block
+  if (feature === 'campaign') {
+    return {
+      running: false,
+      cycle: acctState?.cycle ?? 0,
+      success: acctState?.success ?? 0,
+      failed: acctState?.failed ?? 0,
+      skipped_already_posted: acctState?.skipped_already_posted ?? 0,
+      active_groups: acctState?.my_groups?.length ?? acctState?.active_groups ?? 0,
+      status: acctState?.status ?? 'stopped',
+    }
+  }
+  const fwd = acctState?.forwarding
+  return {
+    running: acctState?.forwarding_running ?? fwd?.running ?? false,
+    cycle: acctState?.forwarding_cycle ?? fwd?.cycle ?? 0,
+    success: fwd?.success ?? acctState?.forwarding_success ?? 0,
+    failed: fwd?.failed ?? acctState?.forwarding_failed ?? 0,
+    skipped_already_posted: fwd?.skipped_already_posted ?? acctState?.forwarding_skipped_already_posted ?? 0,
+    active_groups: fwd?.active_groups ?? acctState?.forwarding_active_groups ?? acctState?.active_groups ?? 0,
+    status: acctState?.forwarding_status ?? fwd?.status ?? acctState?.status ?? 'stopped',
+    forward_batch: acctState?.forward_batch ?? fwd?.forward_batch ?? 0,
+    forward_batch_total: acctState?.forward_batch_total ?? fwd?.forward_batch_total ?? 0,
+    forward_joined_total: acctState?.forward_joined_total ?? fwd?.forward_joined_total ?? 0,
+  }
+}
+
+/** Campaign | forwarding | off — for simplified setup UI. */
+export function accountPrimaryMode(accountStates, slot, postingModes) {
+  const forwardingOn = isForwardingEnabled(accountStates, slot, postingModes)
+  if (forwardingOn) return 'forwarding'
+  const campaignOn = isCampaignEnabled(accountStates, slot, postingModes)
+  if (campaignOn) return 'campaign'
+  return 'off'
+}
+
+/** Setup / stats UI view when Accounts filter is All vs Campaign vs Forwarding. */
+export function setupViewForAccountsFilter(
+  accountsModeFilter,
+  slot,
+  accountStates,
+  postingModes,
+) {
+  if (accountsModeFilter === 'forwarding' || accountsModeFilter === 'campaign') {
+    return accountsModeFilter
+  }
+  if (slot) return postingModeForSlot(accountStates, slot, postingModes)
+  return 'all'
 }

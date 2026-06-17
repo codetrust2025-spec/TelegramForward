@@ -4,12 +4,55 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from core.config import ACCOUNTS, STATE_DIR
 
 
 def _path(slot: str) -> str:
     return os.path.join(STATE_DIR, slot, "account_info.json")
+
+
+def normalize_phone_digits(phone: str) -> str:
+    """Compare phones regardless of + prefix or spacing."""
+    return "".join(c for c in str(phone or "") if c.isdigit())
+
+
+def slot_display_label(slot: str) -> str:
+    m = re.match(r"^account(\d+)$", str(slot), re.I)
+    return f"Account {m.group(1)}" if m else str(slot)
+
+
+def find_logged_in_slot_by_phone(
+    phone: str,
+    *,
+    exclude_slot: str | None = None,
+) -> tuple[str, dict] | None:
+    """Return (slot, account_info) if another slot already has this phone logged in."""
+    key = normalize_phone_digits(phone)
+    if not key:
+        return None
+    from core.config import ACCOUNT_SLOTS
+
+    for slot in ACCOUNT_SLOTS:
+        if exclude_slot and slot == exclude_slot:
+            continue
+        info = load_account_info(slot)
+        if not info:
+            continue
+        if normalize_phone_digits(info.get("phone")) == key:
+            return slot, info
+    return None
+
+
+def duplicate_phone_login_message(existing_slot: str, info: dict) -> str:
+    label = slot_display_label(existing_slot)
+    name = (info.get("display_name") or info.get("name") or "").strip()
+    extra = f" — {name}" if name else ""
+    return (
+        f"This number is already logged in on {label}{extra}. "
+        f"Use that card, or log out there before logging in here."
+    )
 
 
 def build_info_from_me(me, cached: dict | None = None) -> dict:
@@ -70,6 +113,9 @@ def _normalize(data: dict) -> dict:
         out["telegram_premium"] = bool(data.get("telegram_premium"))
     if "is_subscription" in data:
         out["is_subscription"] = bool(data.get("is_subscription"))
+    display_name = str(data.get("display_name") or "").strip()
+    if display_name:
+        out["display_name"] = display_name[:48]
     return out
 
 

@@ -1,10 +1,10 @@
 import React from 'react'
 import { MetricBlock } from '../ui/MetricBlock.jsx'
 
-export function CrmStatsBar({ stats, dueCount, alertCounts = null }) {
+export function CrmStatsBar({ stats, dueCount, alertCounts = null, compact = false }) {
   if (!stats) return null
   return (
-    <div className="crm-stats-bar" role="status">
+    <div className={`crm-stats-bar${compact ? ' crm-stats-bar--compact' : ''}`} role="status">
       <MetricBlock variant="inline" label="Leads today" value={stats.leads_today ?? 0} />
       <MetricBlock variant="inline" label="Replied" value={stats.replied_users ?? 0} />
       <MetricBlock variant="inline" label="Converted" value={stats.converted_users ?? 0} tone="success" />

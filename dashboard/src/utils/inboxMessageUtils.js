@@ -1,17 +1,84 @@
+import {
+  formatIstDateTime,
+  formatIstTime,
+  IST_LOCALE,
+  IST_TIMEZONE,
+  istDayKey,
+  parseInstant,
+} from './istTime.js'
+
 export function formatInboxTime(iso) {
   if (!iso) return ''
-  try {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return ''
-    const now = new Date()
-    const sameDay = d.toDateString() === now.toDateString()
-    if (sameDay) {
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    }
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  } catch {
-    return ''
+  const d = parseInstant(iso)
+  if (!d) return ''
+  if (istDayKey(d) === istDayKey()) {
+    return formatIstTime(d, { hour: '2-digit', minute: '2-digit', second: undefined })
   }
+  return formatIstDateTime(d, { year: undefined })
+}
+
+/** Compact time for chat list rows (Telegram-style). */
+export function formatInboxListTime(iso) {
+  if (!iso) return ''
+  const d = parseInstant(iso)
+  if (!d) return ''
+  const day = istDayKey(d)
+  const today = istDayKey()
+  if (day === today) {
+    return formatIstTime(d, { hour: 'numeric', minute: '2-digit', second: undefined, hour12: true })
+  }
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (day === istDayKey(yesterday)) return 'Yesterday'
+  const days = (Date.now() - d.getTime()) / 86400000
+  if (days < 7) {
+    return d.toLocaleDateString(IST_LOCALE, { weekday: 'short', timeZone: IST_TIMEZONE })
+  }
+  return d.toLocaleDateString(IST_LOCALE, {
+    month: 'short',
+    day: 'numeric',
+    timeZone: IST_TIMEZONE,
+  })
+}
+
+export const LIVE_EVENTS = new Set([
+  'new_message',
+  'reply_sent',
+  'outgoing_message',
+  'message_read',
+  'message_status',
+  'message_edited',
+  'message_deleted',
+])
+
+/** Telegram allows editing own messages for ~48 hours. */
+export const INBOX_MESSAGE_EDIT_WINDOW_MS = 48 * 60 * 60 * 1000
+
+export function canEditOutboundMessage(m, { blocked = false } = {}) {
+  if (!m || m.direction !== 'out' || blocked) return false
+  const id = String(m.id ?? '')
+  if (id.startsWith('pending-')) return false
+  const status = String(m.status || '').toLowerCase()
+  if (status === 'failed' || status === 'sending' || status === 'editing') return false
+  const t = parseInstant(m.timestamp)
+  if (t && Date.now() - t.getTime() > INBOX_MESSAGE_EDIT_WINDOW_MS) return false
+  if (m.media || m.media_type) return false
+  const text = (m.text || '').trim()
+  return Boolean(text)
+}
+
+export function canDeleteOutboundMessage(m, { blocked = false } = {}) {
+  if (!m || m.direction !== 'out' || blocked) return false
+  const id = String(m.id ?? '')
+  if (id.startsWith('pending-')) return false
+  const status = String(m.status || '').toLowerCase()
+  if (status === 'failed' || status === 'sending') return false
+  return true
+}
+
+export function removeMessageById(prev, messageId) {
+  const mid = Number(messageId)
+  return (prev || []).filter(m => Number(m.id) !== mid)
 }
 
 export function slotTag(slot) {
@@ -23,141 +90,107 @@ export function sameUser(a, b) {
   return Number(a) === Number(b)
 }
 
-export const LIVE_EVENTS = new Set([
-  'new_message',
-  'outgoing_message',
-  'reply_sent',
-  'message_read',
-  'message_status',
-])
-
-const OUTBOUND_RANK = { failed: 0, sending: 1, sent: 2, delivered: 3, read: 4 }
-
-export function outboundRank(status) {
-  return OUTBOUND_RANK[status] ?? 2
+export function isUserNearBottom(el, thresholdPx = 80) {
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= thresholdPx
 }
 
-export function defaultOutboundStatus(status) {
-  if (status === 'sent') return 'delivered'
-  return status || 'delivered'
+function messageSortKey(m) {
+  const t = parseInstant(m?.timestamp)
+  if (t) return t.getTime()
+  const id = Number(m?.telegram_id ?? m?.id)
+  return Number.isFinite(id) ? id : 0
 }
 
-export function appendMessageDeduped(prev, message) {
-  if (!message) return prev
-  if (prev.some(m => m.id === message.id)) return prev
-  return [...prev, message]
-}
-
-export function mergeMessageLists(loaded, pending) {
-  const byId = new Map()
-  for (const m of loaded || []) byId.set(m.id, m)
-  for (const m of pending || []) {
-    if (!byId.has(m.id)) byId.set(m.id, m)
-  }
-  return [...byId.values()].sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''))
-}
-
-export function applyReadUpTo(messages, maxId) {
-  if (!maxId) return messages
-  const mid = Number(maxId)
-  return messages.map(m => (
-    m.direction === 'out' && Number(m.id) > 0 && Number(m.id) <= mid
-      ? { ...m, status: 'read', read_at: m.read_at || new Date().toISOString() }
-      : m
-  ))
-}
-
-export function applyMessageStatus(messages, patch) {
-  if (!patch) return messages
-  const msgId = patch.message_id ?? patch.id
-  const nextStatus = patch.status
-  if (!nextStatus) return messages
-  const uid = patch.user_id
-  const rank = outboundRank(nextStatus)
-  if (nextStatus === 'failed' && msgId == null) {
-    return messages.map(m => (
-      m.direction === 'out' && String(m.id).startsWith('pending-') && m.status === 'sending'
-        ? { ...m, status: 'failed' }
-        : m
-    ))
-  }
-  return messages.map(m => {
-    if (m.direction !== 'out') return m
-    if (uid != null && m.chat_id != null && Number(m.chat_id) !== Number(uid)) return m
-    const matchId = msgId != null && Number(m.id) === Number(msgId)
-    const matchFailed = nextStatus === 'failed' && String(m.id).startsWith('pending-')
-    if (!matchId && !matchFailed) return m
-    if (outboundRank(m.status) >= rank && nextStatus !== 'failed') return m
-    return {
-      ...m,
-      status: nextStatus,
-      read_at: patch.read_at ?? m.read_at,
-      id: matchId ? Number(msgId) : m.id,
-      chat_id: patch.chat_id ?? m.chat_id ?? uid,
-      account_id: patch.account_id ?? m.account_id,
-    }
-  })
-}
-
-export function markOutboundReadInThread(messages) {
-  const now = new Date().toISOString()
-  return messages.map(m => (
-    m.direction === 'out' && m.status !== 'failed'
-      ? { ...m, status: 'read', read_at: m.read_at || now }
-      : m
-  ))
-}
-
-export function replacePendingMessage(prev, pendingId, realMessage) {
-  const without = prev.filter(m => m.id !== pendingId)
-  return appendMessageDeduped(without, realMessage)
-}
-
-/** Remove only the oldest in-flight pending outbound (FIFO), not all with the same text. */
-export function removeFirstMatchingPending(prev, text) {
-  if (!text) return prev
-  let removed = false
-  return prev.filter(m => {
-    if (removed) return true
-    if (
-      String(m.id).startsWith('pending-')
-      && m.status === 'sending'
-      && m.text === text
-    ) {
-      removed = true
-      return false
-    }
-    return true
-  })
-}
-
-/** Apply a live outbound/reply_sent row: drop one matching pending, then dedupe-append. */
-export function applyOutboundLiveMessage(prev, message) {
-  if (!message) return prev
-  let base = prev
-  if (message.direction === 'out') {
-    base = removeFirstMatchingPending(prev, message.text)
-  }
-  let next = appendMessageDeduped(base, message)
-  if (message.direction === 'in') next = markOutboundReadInThread(next)
-  return next
-}
-
-export const SCROLL_NEAR_BOTTOM_PX = 100
-
-export function isUserNearBottom(el, threshold = SCROLL_NEAR_BOTTOM_PX) {
-  if (!el) return false
-  return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
-}
-
-export function lastInboundMessage(messages) {
-  const list = messages || []
-  for (let i = list.length - 1; i >= 0; i -= 1) {
-    if (list[i]?.direction === 'in') return list[i]
-  }
+function dedupeKey(m) {
+  if (m?.id != null) return `id:${m.id}`
+  if (m?.telegram_id != null) return `tg:${m.telegram_id}`
   return null
 }
 
-export function countInbound(messages) {
-  return (messages || []).filter(m => m?.direction === 'in').length
+export function mergeMessageLists(incoming, prev) {
+  const map = new Map()
+  for (const m of prev || []) {
+    const k = dedupeKey(m)
+    if (k) map.set(k, m)
+  }
+  for (const m of incoming || []) {
+    const k = dedupeKey(m)
+    if (k) map.set(k, m)
+    else map.set(`row:${map.size}`, m)
+  }
+  return [...map.values()].sort((a, b) => messageSortKey(a) - messageSortKey(b))
+}
+
+export function oldestTelegramMessageId(messages) {
+  let min = null
+  for (const m of messages || []) {
+    const raw = m?.telegram_id ?? m?.message_id ?? m?.id
+    if (raw == null || String(raw).startsWith('pending-')) continue
+    const n = Number(raw)
+    if (!Number.isFinite(n)) continue
+    if (min == null || n < min) min = n
+  }
+  return min
+}
+
+export function replacePendingMessage(prev, pendingId, message) {
+  return (prev || []).map(m => (m.id === pendingId ? { ...m, ...message, id: message.id ?? m.id } : m))
+}
+
+export function applyReadUpTo(prev, maxId) {
+  const max = Number(maxId)
+  if (!Number.isFinite(max)) return prev || []
+  return (prev || []).map(m => {
+    if (m.direction !== 'out') return m
+    const tid = Number(m.telegram_id ?? m.message_id)
+    if (Number.isFinite(tid) && tid <= max) {
+      return { ...m, status: 'read' }
+    }
+    return m
+  })
+}
+
+export function applyMessageStatus(prev, patch) {
+  if (!patch) return prev || []
+  return (prev || []).map(m => {
+    if (patch.id != null && m.id === patch.id) return { ...m, ...patch }
+    if (patch.telegram_id != null && m.telegram_id === patch.telegram_id) return { ...m, ...patch }
+    return m
+  })
+}
+
+export function appendMessageDeduped(prev, msg) {
+  const key = dedupeKey(msg)
+  if (key && (prev || []).some(m => dedupeKey(m) === key)) {
+    return applyOutboundLiveMessage(prev, msg)
+  }
+  return mergeMessageLists([msg], prev || [])
+}
+
+export function applyOutboundLiveMessage(prev, msg) {
+  const key = dedupeKey(msg)
+  let replaced = false
+  const next = (prev || []).map(m => {
+    if (key && dedupeKey(m) === key) {
+      replaced = true
+      return { ...m, ...msg }
+    }
+    if (msg?.id && m.id === msg.id) {
+      replaced = true
+      return { ...m, ...msg }
+    }
+    return m
+  })
+  if (!replaced) next.push(msg)
+  return next.sort((a, b) => messageSortKey(a) - messageSortKey(b))
+}
+
+export function defaultOutboundStatus(status) {
+  const s = String(status || '').toLowerCase()
+  if (s === 'sending') return 'sending'
+  if (s === 'failed' || s === 'error') return 'failed'
+  if (s === 'read') return 'read'
+  if (s === 'delivered') return 'delivered'
+  return 'sent'
 }

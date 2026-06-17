@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING, Callable, Awaitable
 
 from core.account_info_store import load_account_info, save_account_info
@@ -36,6 +37,9 @@ def parse_joined_updated_at(raw: str | None) -> datetime | None:
         return None
     text = str(raw).strip()
     try:
+        if text.endswith(" IST"):
+            dt = datetime.strptime(text, "%Y-%m-%d %H:%M IST")
+            return dt.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
         if text.endswith(" UTC"):
             dt = datetime.strptime(text, "%Y-%m-%d %H:%M UTC")
             return dt.replace(tzinfo=timezone.utc)
@@ -128,6 +132,9 @@ def _apply_stats(slot: str, base: dict, stats: dict, worker: AccountWorker) -> d
     from core.subscription_accounts import enrich_account_info
 
     scan_debug = stats.pop("_scan_debug", None)
+    if scan_debug and scan_debug.get("partial"):
+        stats["joined_scan_partial"] = True
+        stats["joined_scan_partial_reason"] = str(scan_debug.get("partial_reason") or "")
     prev_total = int(base.get("joined_total") or 0)
     if (
         int(stats.get("joined_total") or 0) == 0
@@ -140,6 +147,12 @@ def _apply_stats(slot: str, base: dict, stats: dict, worker: AccountWorker) -> d
     info = enrich_account_info(slot, {**base, **stats})
     worker.state.account_info = info
     save_account_info(slot, info)
+    try:
+        from core.posting_mode import clear_joined_targets_cache
+
+        clear_joined_targets_cache(slot)
+    except Exception:
+        pass
     if scan_debug:
         logger.info(
             "membership_scan %s: total=%s groups=%s channels=%s dialogs=%s elapsed=%ss",

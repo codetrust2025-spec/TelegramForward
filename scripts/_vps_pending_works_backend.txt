@@ -1,0 +1,102 @@
+def _attach_pending_work_stats 42806
+def _pending_work_item 45160
+def _merge_profile_rows_for_pending 45696
+def _pending_collections_from_rows 48479
+def _collect_pending_works_for_row 50055
+def _pending_works_core 50678
+def pending_works 52220
+def _split_pending_interviews_by_slot_phase 61485
+first idx 42884
+in out if not _row_month(r)]
+        else:
+            out = [r for r in out if _row_in_month(r, month)]
+    return out
+
+
+def _attach_pending_work_stats(payload: dict, pw: dict) -> dict:
+    payload["pending_works"] = pw["works"]
+    payload["pending_works_count"] = pw["count"]
+    payload["pending_works_candidates"] = pw["candidate_count"]
+    payload["pending_works_checked"] = pw["candidates_checked"]
+    payload["pending_works_by_kind"] = pw["by_kind"]
+    return payload
+
+
+def list_candidates(*, stage: str | None = None, task: str | None = None,
+                    search: str | None = None, month: str | None = None,
+                    pending_only: bool = False,
+                    reference: str | None = None) -> list[dict]:
+    """Return candidates sorted by most-recent first.
+    Optional filters: by stage, by task, by free-text search across
+    name / technology / reference / phone / notes / follow_up, by month
+    ('YYYY-MM'), `pending_only=True` to keep only rows where the
+    received payment is less than the expected baseline, and `reference`
+    for an exact case-insensitive handler match (so the dashboard can
+    show only one handler's leads)."""
+    data = _load()
+    rows = [_with_computed(r) for r in (data.get("candidates") or [])]
+    return _apply_list_filters(
+        rows,
+        stage=stage,
+        task=task,
+        search=search,
+        month=month,
+        pending_only=pending_only,
+        reference=reference,
+    )
+
+
+def _is_roster_placeholder(row: dict) -> bool:
+    """Skip empty import stubs from the active tech roster (e.g. Unspecified / not started)."""
+    tech = (row.get("technology") or "").strip().lower()
+    task = (row.get("task") or "").strip().lower()
+    phone = (row.get("phone") or "").strip()
+    if tech not in {"", "unspecified"}:
+        return False
+    if task != "not_started":
+        return False
+    return not phone
+
+
+def _hidden_from_candidates_page(name: str) -> bool:
+    """Match dashboard Candidates page — hide Tool-only roster names."""
+    return is_free_service_candidate(name)
+
+
+PENDING_WORK_LABELS = {
+    "missing_reference": "Assign referrer",
+    "missing_resume": "Upload resume",
+    "payment_due": "Payment pending",
+    "missing_follow_up": "Add follow-up remark",
+    "missing_phone": "Add phone number",
+}
+
+PENDING_WORK_PRIORITY = {
+    "missing_reference": 10,
+    "missing_resume": 20,
+    "payment_due": 30,
+    "missing_follow_up": 35,
+    "missing_phone": 50,
+}
+
+
+def _pending_work_item(*, kind: str, row: dict, detail: str = "") -> dict:
+    return {
+        "id": f"{kind}:{row.get('id')}",
+        "kind": kind,
+        "label": PENDING_WORK_LABELS[kind],
+        "detail": detail,
+        "priority": PENDING_WORK_PRIORITY[kind],
+        "candidate_id": row.get("id"),
+        "candidate_name": row.get("name") or "",
+        "reference": row.get("reference") or "",
+        "technology": row.get("technology") or "",
+        "service_type": row.get("service_type") or "profile_service",
+    }
+
+
+def _merge_profile_rows_for_pending(rows: list[dict]) -> dict:
+    """Collapse profile slot clones — same rules as the Candidates table merge."""
+    rep = max(
+        rows,
+        key=l

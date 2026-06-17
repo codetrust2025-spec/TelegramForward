@@ -15,3 +15,10 @@ data/*
 data/.running_workers.json
 data/reload.log
 scripts/_remote_deploy_once.py
+config/dashboard_handlers.yaml
+data/internal/
+deploy-log.txt
+ta-login.txt
+ta-grep.txt
+ta-snippet.txt
+ek-sig.txt

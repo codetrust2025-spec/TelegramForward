@@ -7,7 +7,7 @@ import logging
 import time
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any  # noqa: F401 used in return type
 
 from telethon import TelegramClient
 from telethon.tl import functions, types
@@ -110,15 +110,19 @@ async def _iter_membership_dialogs(client: TelegramClient):
         )
 
 
-async def fetch_joined_dialog_details(client: TelegramClient) -> list[dict]:
+async def fetch_joined_dialog_details(client: TelegramClient) -> dict[str, Any]:
     """
-    Return one record per joined group/channel for this account. Each record:
+    Return joined group/channel rows and scan metadata.
+
+    Each target record:
         {id, type ("group"|"channel"), name, username, link, members?}
-    Skips users (private chats) and forbidden/inaccessible/migrated chats.
+
+    Keys: targets, partial, partial_reason, count
     """
     started = time.monotonic()
     out: list[dict] = []
     seen_ids: set[int] = set()
+    timed_out = False
 
     async for dialog, _folder in _iter_membership_dialogs(client):
         category, _reason = _classify_dialog(dialog)
@@ -143,9 +147,22 @@ async def fetch_joined_dialog_details(client: TelegramClient) -> list[dict]:
         })
         if time.monotonic() - started > JOINED_STATS_TIMEOUT_SECONDS:
             logger.warning("fetch_joined_dialog_details timeout after %s entries", len(out))
+            timed_out = True
             break
 
-    return out
+    partial_reason = ""
+    if timed_out:
+        partial_reason = (
+            f"Scan stopped after {JOINED_STATS_TIMEOUT_SECONDS}s — "
+            f"only {len(out)} groups loaded; refresh again or use fewer accounts"
+        )
+
+    return {
+        "targets": out,
+        "partial": timed_out,
+        "partial_reason": partial_reason,
+        "count": len(out),
+    }
 
 
 async def fetch_joined_counts(client: TelegramClient) -> dict:
@@ -182,9 +199,16 @@ async def fetch_joined_counts(client: TelegramClient) -> dict:
                     f"joined scan exceeded {JOINED_STATS_TIMEOUT_SECONDS}s after {total_dialogs} dialogs"
                 )
 
+    timed_out = False
+    partial_reason = ""
     try:
         await _scan()
     except asyncio.TimeoutError:
+        timed_out = True
+        partial_reason = (
+            f"Scan stopped after {JOINED_STATS_TIMEOUT_SECONDS}s — "
+            f"only {total_dialogs} dialogs scanned; refresh again for full counts"
+        )
         logger.warning(
             "joined_scan partial timeout after %ss — dialogs=%s groups=%s channels=%s",
             int(time.monotonic() - started),
@@ -192,7 +216,6 @@ async def fetch_joined_counts(client: TelegramClient) -> dict:
             groups,
             channels,
         )
-        raise
 
     total = groups + channels
     elapsed_s = round(time.monotonic() - started, 2)
@@ -204,6 +227,8 @@ async def fetch_joined_counts(client: TelegramClient) -> dict:
         "folders_scanned": folder_ids,
         "folder_hits": {str(k): v for k, v in sorted(folder_hits.items())},
         "elapsed_seconds": elapsed_s,
+        "partial": timed_out,
+        "partial_reason": partial_reason,
     }
 
     logger.info(
@@ -234,11 +259,13 @@ async def fetch_joined_counts(client: TelegramClient) -> dict:
         "joined_total": total,
         "telegram_premium": premium,
     }
+    from core.ist_time import format_ist_storage_label
+
     return {
         "joined_groups": groups,
         "joined_channels": channels,
         "joined_total": total,
-        "joined_updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "joined_updated_at": format_ist_storage_label(),
         "telegram_premium": premium,
         "is_subscription": classify_account_info(partial),
         "_scan_debug": scan_debug,

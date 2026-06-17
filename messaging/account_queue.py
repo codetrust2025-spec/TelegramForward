@@ -17,7 +17,7 @@ from messaging.queue_config import (
     QUEUE_HIGH_WATERMARK,
     QUEUE_PUT_TIMEOUT,
 )
-from messaging.task_types import QueueTask, TaskPriority
+from messaging.task_types import QueueTask, TaskPriority, TaskType
 
 
 class QueueBackpressureError(Exception):
@@ -229,6 +229,45 @@ class AccountQueue:
                 fut.cancel()
         self._pending.clear()
         return n
+
+    async def has_pending_ai_auto_reply_for_user(self, user_id: int) -> bool:
+        uid = int(user_id)
+        async with self._lock:
+            return any(
+                entry.task.task_type == TaskType.AI_AUTO_REPLY
+                and int((entry.task.payload or {}).get("user_id") or 0) == uid
+                for entry in self._heap
+            )
+
+    async def cancel_ai_auto_reply_for_user(self, user_id: int) -> int:
+        """Drop pending AI auto-replies for one chat (e.g. operator sent manually)."""
+        uid = int(user_id)
+        async with self._lock:
+            kept: list[_HeapEntry] = []
+            removed = 0
+            for entry in self._heap:
+                task = entry.task
+                if (
+                    task.task_type == TaskType.AI_AUTO_REPLY
+                    and int((task.payload or {}).get("user_id") or 0) == uid
+                ):
+                    removed += 1
+                    fut = self._pending.pop(task.task_id, None)
+                    if fut and not fut.done():
+                        fut.set_result({"ok": False, "reason": "cancelled"})
+                else:
+                    kept.append(entry)
+            if removed:
+                self._heap = kept
+                heapq.heapify(self._heap)
+                if not self._heap:
+                    self._not_empty.clear()
+                account_log(
+                    self.account_id,
+                    f"Cancelled {removed} pending AI_AUTO_REPLY for user {uid}",
+                    level="debug",
+                )
+            return removed
 
 
 class AccountQueueManager:

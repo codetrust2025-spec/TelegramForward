@@ -1,9 +1,40 @@
 """Application constants (read-only at runtime)."""
 
+import logging
 import os
 
-API_ID = 30631910
-API_HASH = "17300a40e543c6ac81d6dc2f6119a2cc"
+logger = logging.getLogger("config")
+
+def _int_env(name: str, default: int) -> int:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+_DEFAULT_API_ID = 30631910
+_DEFAULT_API_HASH = "17300a40e543c6ac81d6dc2f6119a2cc"
+
+API_ID = _int_env("TELEGRAM_API_ID", _DEFAULT_API_ID)
+API_HASH = (os.environ.get("TELEGRAM_API_HASH") or _DEFAULT_API_HASH).strip()
+
+
+def is_production_deploy() -> bool:
+    """True when dashboard auth is enabled (VPS / locked-down deploy)."""
+    return bool(os.environ.get("DASHBOARD_PASSWORD", "").strip())
+
+
+def warn_default_telegram_creds() -> None:
+    """Log when production still uses baked-in Telethon API defaults."""
+    if not is_production_deploy():
+        return
+    if API_ID == _DEFAULT_API_ID or API_HASH == _DEFAULT_API_HASH:
+        logger.warning(
+            "TELEGRAM_API_ID / TELEGRAM_API_HASH still use dev defaults — set env vars in production"
+        )
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -29,6 +60,53 @@ _DEFAULT_ACCOUNTS = {
 ACCOUNTS_CONFIG_FILE = os.path.join(DATA_DIR, "accounts_config.json")
 
 
+def is_whatsapp_enabled() -> bool:
+    """Whether WhatsApp inbox/CRM channel integration is active (VPS may import this)."""
+    return os.environ.get("WHATSAPP_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+WHATSAPP_WEBHOOK_VERIFY_TOKEN = os.environ.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "").strip()
+WHATSAPP_BSP = os.environ.get("WHATSAPP_BSP", "interakt").strip().lower()
+WHATSAPP_API_KEY = os.environ.get("WHATSAPP_API_KEY", "").strip()
+WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "").strip()
+WHATSAPP_DEFAULT_SLOT = os.environ.get("WHATSAPP_DEFAULT_SLOT", "account1").strip() or "account1"
+
+
+def _refresh_whatsapp_env_from_file() -> None:
+    """Re-read WHATSAPP_* from .env (uvicorn workers may skip dotenv)."""
+    env_path = os.path.join(BASE_DIR, ".env")
+    try:
+        if not os.path.isfile(env_path):
+            return
+        with open(env_path, encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key.startswith("WHATSAPP_"):
+                    os.environ[key] = value
+    except OSError:
+        pass
+
+
+def whatsapp_webhook_verify_token() -> str:
+    _refresh_whatsapp_env_from_file()
+    return os.environ.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN", WHATSAPP_WEBHOOK_VERIFY_TOKEN).strip()
+
+
+def whatsapp_api_key() -> str:
+    _refresh_whatsapp_env_from_file()
+    return os.environ.get("WHATSAPP_API_KEY", WHATSAPP_API_KEY).strip()
+
+
+def whatsapp_bsp_name() -> str:
+    _refresh_whatsapp_env_from_file()
+    return os.environ.get("WHATSAPP_BSP", WHATSAPP_BSP).strip().lower()
+
+
 def _load_accounts() -> dict[str, str]:
     if os.path.exists(ACCOUNTS_CONFIG_FILE):
         try:
@@ -48,6 +126,71 @@ ACCOUNTS = _load_accounts()
 
 # Ordered slots for UI and iteration (each maps to an independent asyncio worker)
 ACCOUNT_SLOTS = list(ACCOUNTS.keys())
+
+
+def reload_accounts() -> dict[str, str]:
+    """Re-read accounts_config.json into module-level ACCOUNTS / ACCOUNT_SLOTS."""
+    global ACCOUNTS, ACCOUNT_SLOTS
+    ACCOUNTS = _load_accounts()
+    ACCOUNT_SLOTS = list(ACCOUNTS.keys())
+    sync_accounts_bindings()
+    return ACCOUNTS
+
+
+def sync_accounts_bindings() -> None:
+    """Push reloaded ACCOUNTS into modules that imported it at process startup."""
+    import sys
+
+    acc = ACCOUNTS
+    slots = ACCOUNT_SLOTS
+    for name in (
+        "server",
+        "services.account_manager",
+        "core.telegram_client",
+        "core.session_manager",
+        "core.account_info_store",
+        "core.message_store",
+        "services.dm_inbox_service",
+        "services.forward_message_service",
+        "workers.account_worker",
+        "messaging.account_queue",
+        "messaging.message_router",
+    ):
+        mod = sys.modules.get(name)
+        if mod is None:
+            continue
+        if hasattr(mod, "ACCOUNTS"):
+            setattr(mod, "ACCOUNTS", acc)
+        if hasattr(mod, "ACCOUNT_SLOTS"):
+            setattr(mod, "ACCOUNT_SLOTS", slots)
+
+
+def _next_account_slot_name(accounts: dict[str, str]) -> str:
+    nums: list[int] = []
+    for key in accounts:
+        if key.startswith("account"):
+            try:
+                nums.append(int(key[7:]))
+            except ValueError:
+                pass
+    return f"account{(max(nums) if nums else 0) + 1}"
+
+
+def provision_next_account_slot() -> str:
+    """Append a new account slot to config and on-disk state dir."""
+    import json
+
+    accounts = _load_accounts()
+    slot = _next_account_slot_name(accounts)
+    session_key = f"session_{slot}"
+    accounts[slot] = session_key
+    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(os.path.join(STATE_DIR, slot), exist_ok=True)
+    with open(ACCOUNTS_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(accounts, f, indent=2)
+        f.write("\n")
+    reload_accounts()
+    return slot
 
 # Timing — legacy fixed values (smart engine uses ranges below)
 CYCLE_DELAY_SECONDS = 30          # fallback / docs
@@ -190,15 +333,21 @@ POST_JOIN_DELAY_MED_MAX = 80
 POST_JOIN_DELAY_LOW_MIN = 60
 POST_JOIN_DELAY_LOW_MAX = 120
 
-DEFAULT_MESSAGE = """🚀 IT Career Support | Java | React | Python | Power BI | Salesforce & more
+DEFAULT_MESSAGE = """🔥 Power BI Developer | Data Analyst
+💼 Interview Support — Calls to Offer
 
-Struggling to crack interviews or switch tech domains? We've got you covered.
+Still waiting for interview calls? 👇
 
-Services:
-• End-to-end Interview Support (till you get the job)
-• ATS-friendly Resume Building
-• Real-time Work & Project Support
-• MNC-level Interview Prep
+✅ ATS Resume + Naukri (Power BI / Analyst roles)
+✅ Power BI · SQL · DAX · Dashboard prep
+✅ Technical + client rounds — cleared with you
+✅ Non-IT · Gap · Bench · Fresher — supported
+✅ 3 months help after you join
+✅ BGV + counter-offer tips
 
-DM or WhatsApp: 9032598858
-(Serious candidates only)"""
+🏆 100+ placed | 💯 No result → No pay
+
+⚠️ Serious only
+
+📞 9032388581
+💬 https://wa.me/919032388581"""

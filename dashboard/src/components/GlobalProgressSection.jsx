@@ -4,6 +4,7 @@ import { StatusBadge } from './StatusBadge.jsx'
 import { AccountPerformanceChart } from './AccountPerformanceChart.jsx'
 import { FleetHealthPanel } from './FleetHealthPanel.jsx'
 import { accountLabel, formatCountdown } from '../utils/accountUi'
+import { SABHI_ACCOUNTS, SABHI_ACCOUNTS_COMBINED } from '../utils/sabAccountsUi.js'
 
 const DEFAULT_SECTIONS = {
   summary: true,
@@ -175,7 +176,7 @@ export function GlobalProgressSection({
             {accountCount} accounts total
           </span>
           <span className="progress-count">
-            <span className="progress-count-label">All accounts combined</span>
+            <span className="progress-count-label">{SABHI_ACCOUNTS_COMBINED}</span>
             <span className="progress-count-value">
               {hasAnyCycle ? progressValue : 0} / {progressMax}
             </span>
@@ -188,7 +189,7 @@ export function GlobalProgressSection({
       <ProgressBar
         value={hasAnyCycle ? progressValue : 0}
         max={progressMax}
-        label={`All accounts — groups processed this cycle: ${hasAnyCycle ? progressValue : 0} of ${progressMax}`}
+        label={`${SABHI_ACCOUNTS} — groups processed this cycle: ${hasAnyCycle ? progressValue : 0} of ${progressMax}`}
       />
       )}
 

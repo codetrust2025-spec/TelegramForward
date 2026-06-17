@@ -7,6 +7,10 @@ const wsTarget = `ws://127.0.0.1:${apiPort}`
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    // teleautomation-app.jsx + imported components must share one React (one context).
+    dedupe: ['react', 'react-dom'],
+  },
   server: {
     host: '127.0.0.1',
     port: 3000,
@@ -20,6 +24,7 @@ export default defineConfig({
       '/state': apiTarget,
       '/health': apiTarget,
       '/inbox': apiTarget,
+      '/push': apiTarget,
       '/crm': apiTarget,
       '/stats': apiTarget,
       '/accounts': apiTarget,
@@ -29,5 +34,20 @@ export default defineConfig({
   build: {
     outDir: '../static',   // build output goes to /static next to server.py
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // New URL prefix so browsers drop cached broken index-CwCUIkUq.js bundles.
+        entryFileNames: 'assets/app-[hash].js',
+        chunkFileNames: 'assets/app-[hash].js',
+        // pdf.js worker must be served as application/javascript (nginx maps .js, not .mjs).
+        assetFileNames: (assetInfo) => {
+          const name = assetInfo.names?.[0] || assetInfo.name || ''
+          if (/pdf\.worker/i.test(name)) {
+            return 'assets/pdf.worker.min-[hash].js'
+          }
+          return 'assets/[name]-[hash][extname]'
+        },
+      },
+    },
   },
 })

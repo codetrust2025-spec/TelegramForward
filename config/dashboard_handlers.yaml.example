@@ -1,0 +1,6 @@
+# Copy to dashboard_handlers.yaml and set passwords. Do not commit the real file.
+
+handlers:
+  - username: handler1
+    reference: Handler Display Name
+    password: change-me

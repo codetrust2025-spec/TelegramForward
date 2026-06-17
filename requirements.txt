@@ -5,3 +5,5 @@ watchfiles>=0.21.0
 websockets==13.1
 python-multipart==0.0.9
 aiofiles==24.1.0
+pywebpush>=2.0.0
+py-vapid>=1.9.0

@@ -98,6 +98,7 @@ from features.health_check import check_account_health
 from features.logging_feature import AccountLogger
 
 from workers.account_state import AccountState
+from workers.feature_runtime import campaign_runtime, forwarding_runtime
 
 from events.event_bus import event_bus
 from events.event_types import EventType
@@ -171,6 +172,10 @@ class AccountWorker:
         self._start_lock = threading.Lock()
 
         self._announced_start = False
+        self._announced_start_campaign = False
+        self._announced_start_forwarding = False
+        # Forwarding-only: join at most 1 group after every 2 completed forward ticks.
+        self._forward_ticks_since_join = 0
 
         self._last_log_msg = ""
 
@@ -223,7 +228,7 @@ class AccountWorker:
         self._manager = manager
 
     def _cycle_success_rate(self) -> float | None:
-        st = self.state
+        st = campaign_runtime(self.state)
         total = st.success + st.failed
         if total <= 0:
             return None
@@ -640,13 +645,28 @@ class AccountWorker:
 
 
 
-    async def _wait_countdown(self, seconds: int, status: str, message: str, *, log: bool = True) -> None:
+    async def _wait_countdown(
+        self,
+        seconds: int,
+        status: str,
+        message: str,
+        *,
+        log: bool = True,
+        feature: str | None = None,
+    ) -> None:
 
-        st = self.state
+        acct = self.state
+        if feature == "forwarding":
+            rt = forwarding_runtime(acct)
+            should_continue = acct.should_continue_forwarding
+        else:
+            rt = campaign_runtime(acct)
+            should_continue = acct.should_continue_campaign
 
-        st.status = status
+        rt.status = status
+        acct.status = status
 
-        st.next_cycle_in = seconds
+        rt.next_cycle_in = seconds
 
         self._set_notification(message or f"Waiting {seconds}s")
 
@@ -671,7 +691,7 @@ class AccountWorker:
 
         def on_tick(remaining: int) -> None:
 
-            st.next_cycle_in = remaining
+            rt.next_cycle_in = remaining
 
             if remaining > 0:
 
@@ -683,28 +703,26 @@ class AccountWorker:
 
 
 
-        await wait_with_countdown(seconds, st.should_continue, on_tick=on_tick)
+        await wait_with_countdown(seconds, should_continue, on_tick=on_tick)
 
-
-
-        st.next_cycle_in = 0
+        rt.next_cycle_in = 0
+        acct.status = "active" if should_continue() else "stopped"
 
         self._set_notification("")
 
         await self._notify()
 
+        if should_continue():
 
-
-        if st.running:
-
-            await self._log("", level="info", event=LogEvent.CYCLE_RESUME, cycle=st.cycle)
+            await self._log("", level="info", event=LogEvent.CYCLE_RESUME, cycle=rt.cycle)
 
 
 
     def _clear_flood_pause_state(self, *, heavy: bool, completed: bool = True) -> None:
         """Clear in-memory flood UI; disk join restriction only after a completed heavy pause."""
         st = self.state
-        st.next_cycle_in = 0
+        st.campaign_next_cycle_in = 0
+        st.forwarding_next_cycle_in = 0
         if heavy:
             st.heavy_rate_limit = False
             if completed:
@@ -716,6 +734,10 @@ class AccountWorker:
                     pass
         if st.running and st.status == "flood_wait":
             st.status = "active"
+            if st.campaign_running:
+                st.campaign_status = "active"
+            if st.forwarding_running:
+                st.forwarding_status = "active"
 
     async def _pause_for_flood(self, pause_secs: int, headline: str, *, heavy: bool = False) -> None:
 
@@ -1073,7 +1095,10 @@ class AccountWorker:
                 try:
                     from core.send_stats import record_send
 
-                    record_send(self.slot)
+                    record_send(self.slot, "campaign")
+                    from core.group_send_stats import record_group_send
+
+                    record_group_send(self.slot, group)
                 except Exception:
                     pass
 
@@ -1103,7 +1128,10 @@ class AccountWorker:
                 try:
                     from core.send_stats import record_send
 
-                    record_send(self.slot)
+                    record_send(self.slot, "campaign")
+                    from core.group_send_stats import record_group_send
+
+                    record_group_send(self.slot, group)
                 except Exception:
                     pass
 
@@ -1481,20 +1509,23 @@ class AccountWorker:
 
     async def _execute_cycle(self) -> bool:
 
-        st = self.state
+        acct = self.state
+        st = campaign_runtime(acct)
 
-        if not st.running:
+        if not acct.should_continue_campaign():
 
             return False
 
-        if not self.state.account_info or not self.state.account_info.get("phone"):
-            st.running = False
+        if not acct.account_info or not acct.account_info.get("phone"):
+            acct.campaign_running = False
             return False
 
         from core.telegram_client import is_login_exclusive
 
         if is_login_exclusive(self.slot):
-            st.running = False
+            acct.running = False
+            acct.campaign_running = False
+            acct.forwarding_running = False
             return False
 
         from core.join_cycle import restriction_remaining_seconds
@@ -2040,32 +2071,420 @@ class AccountWorker:
 
 
 
-    async def _run_forever(self) -> None:
+    def _sync_posting_mode_ui(self) -> None:
+        from core.account_features import legacy_mode_label
+        from core.posting_mode import load_posting_mode, SOURCE_TELEGRAM
 
-        st = self.state
+        cfg = load_posting_mode(self.slot)
+        self.state.posting_mode = legacy_mode_label(
+            cfg.campaign_enabled, cfg.forwarding_enabled
+        )
+        fwd = cfg.forwarding
+        if cfg.forwarding_enabled and fwd.is_configured(self.slot):
+            if (fwd.source_type or "").strip().lower() == SOURCE_TELEGRAM:
+                self.state.forward_source_label = fwd.source_label or fwd.source_peer
+                self.state.cycle_message_preview = (
+                    f"Forward t.me: {self.state.forward_source_label} · 10–30m random rest"
+                )
+            else:
+                from core.message_rewrite import prepare_cycle_message
+
+                preview = prepare_cycle_message(
+                    self.slot, max(1, self.state.forwarding_cycle or 1)
+                )
+                self.state.forward_source_label = "Message to send"
+                short = (preview[:60] + "…") if len(preview) > 60 else preview
+                self.state.cycle_message_preview = (
+                    f"Forwarding template · 10–30m random rest · {short}"
+                )
+        elif cfg.forwarding_enabled:
+            self.state.forward_source_label = ""
+            self.state.cycle_message_preview = (
+                "Set Message to send (or a t.me link for native forward)"
+            )
+
+    async def _run_forwarding_forever(self) -> None:
+        """24/7 auto-forward tick loop (only when forward_dispatch=auto)."""
+        from core.posting_mode import (
+            FORWARD_DISPATCH_MANUAL,
+            load_posting_mode,
+            pick_forward_rest_seconds,
+        )
+        from core.telegram_client import get_client, is_login_exclusive, set_login_exclusive
+        from features.interval_forward import run_forward_tick
+
+        acct = self.state
+        st = forwarding_runtime(acct)
+        cfg0 = load_posting_mode(self.slot)
+        if (cfg0.forwarding.forward_dispatch or FORWARD_DISPATCH_MANUAL) == FORWARD_DISPATCH_MANUAL:
+            acct.forwarding_running = False
+            return
+
+        if not self._announced_start_forwarding:
+            st.cycle = 0
+            shot = "one tick (test)" if self._one_shot else "24/7 · 10–30m random rest"
+            await self._log(
+                f"🟢 Forwarding started ({shot})",
+                "success",
+                action="forwarding_start",
+            )
+            self._announced_start_forwarding = True
+
+        set_login_exclusive(self.slot, False)
+        await self.ensure_queue_processor()
+
+        while acct.running and acct.forwarding_running:
+            if is_login_exclusive(self.slot):
+                acct.running = False
+                acct.forwarding_running = False
+                break
+
+            self._sync_posting_mode_ui()
+            cfg = load_posting_mode(self.slot)
+            if not cfg.forwarding_enabled:
+                acct.forwarding_running = False
+                await self._log(
+                    "↷ Forwarding disabled — stopping forwarding loop",
+                    "info",
+                    action="forwarding_disabled",
+                )
+                break
+
+            fwd = cfg.forwarding
+
+            if not fwd.is_configured(self.slot):
+                await self._wait_countdown(
+                    60,
+                    "waiting",
+                    "Set Message to send in the dashboard (or a t.me post link)",
+                    feature="forwarding",
+                )
+                continue
+
+            st.cycle += 1
+            st.success = 0
+            st.failed = 0
+            st.skipped_already_posted = 0
+            st.failed_list = []
+            st.failure_counts = {}
+            st.forward_batch = 0
+            st.forward_batch_total = 0
+            st.forward_batch_size = 0
+            st.forward_joined_total = 0
+            st.last_activity_at = time.time()
+
+            from core.posting_mode import SOURCE_TELEGRAM
+
+            source_label = (
+                (fwd.source_label or fwd.source_peer)
+                if (fwd.source_type or "").strip().lower() == SOURCE_TELEGRAM
+                else "template:message_to_send"
+            )
+            await self._log(
+                "",
+                level="info",
+                event=LogEvent.CYCLE_START,
+                cycle=st.cycle,
+                fields={
+                    "mode": "forwarding",
+                    "rest_sec_range": "600-1800",
+                    "source": source_label,
+                    "source_type": fwd.source_type,
+                },
+            )
+            from core.forward_message_batch import load_forward_batch_settings
+
+            batch_cfg = load_forward_batch_settings()
+            st.forward_batch_size = batch_cfg.batch_size
+            self._set_notification(
+                f"▶ Forward tick {st.cycle} — random 60–100 groups (no repeat this round), "
+                f"then 10–30m random rest"
+            )
+            await self._notify()
+
+            try:
+                client = await get_client(self.slot)
+                me = await client.get_me()
+                my_id = me.id
+            except Exception as exc:
+                recovery_wait = self.intel.compute_error_recovery_wait()
+                await self._wait_countdown(
+                    recovery_wait,
+                    "recovering",
+                    f"Connection failed — retry in {recovery_wait}s",
+                )
+                continue
+
+            async def _on_tick_begin(
+                total: int, total_batches: int, batch_size: int, joined_total: int = 0
+            ) -> None:
+                st.active_groups = total
+                st.forward_batch_total = total_batches
+                st.forward_batch_size = batch_size
+                st.forward_batch = 0
+                st.forward_joined_total = joined_total or total
+                self._set_notification(
+                    f"▶ Forward tick {st.cycle} — 0/{total} · {total_batches} batches"
+                )
+                await self._notify()
+
+            async def _on_batch_begin(batch_num: int, total_batches: int, batch_len: int) -> None:
+                st.forward_batch = batch_num
+                st.forward_batch_total = total_batches
+                processed = st.success + st.failed + st.skipped_already_posted
+                self._set_notification(
+                    f"Forward tick {st.cycle} · batch {batch_num}/{total_batches} "
+                    f"({batch_len} groups) · {processed}/{st.active_groups} done"
+                )
+                await self._notify()
+
+            async def _on_target(label: str) -> None:
+                st.current_group = label
+                await self._notify()
+
+            async def _on_target_done(
+                tick_outcome: str,
+                processed: int,
+                total: int,
+                batch_num: int,
+                *,
+                fail_reason: str | None = None,
+            ) -> None:
+                if tick_outcome == "sent":
+                    st.success += 1
+                elif tick_outcome == "skipped":
+                    st.skipped_already_posted += 1
+                else:
+                    st.failed += 1
+                    label = (st.current_group or "")[:80]
+                    reason = (fail_reason or "unknown")[:120]
+                    st.failed_list.append({"group": label, "reason": reason})
+                    if len(st.failed_list) > 40:
+                        st.failed_list = st.failed_list[-40:]
+                    counts = dict(st.failure_counts or {})
+                    counts[reason] = counts.get(reason, 0) + 1
+                    st.failure_counts = counts
+                st.last_activity_at = time.time()
+                st.forward_batch = batch_num
+                sent = st.success
+                skipped = st.skipped_already_posted
+                failed = st.failed
+                self._set_notification(
+                    f"Tick {st.cycle} batch {batch_num}/{st.forward_batch_total}: "
+                    f"{processed}/{total} · sent {sent} · skip {skipped} · fail {failed}"
+                )
+                await self._notify()
+
+            dead_peers: set[str] = set()
+            for g in acct.invalid_groups | acct.blocked_groups:
+                s = str(g).strip().lower().lstrip("@")
+                if s:
+                    dead_peers.add(s)
+
+            async def _tick_op(client):
+                return await run_forward_tick(
+                    self.slot,
+                    client,
+                    my_id,
+                    self.logger,
+                    fwd,
+                    cycle=st.cycle,
+                    should_continue=acct.should_continue_forwarding,
+                    on_tick_begin=_on_tick_begin,
+                    on_batch_begin=_on_batch_begin,
+                    on_target_start=_on_target,
+                    on_target_done=_on_target_done,
+                    dead_peers=dead_peers or None,
+                )
+
+            from core.telegram_client import run_group_operation
+
+            try:
+                tick_result = await run_group_operation(self.slot, _tick_op)
+            except Exception as e:
+                await self._log(f"Forward tick error: {e}", "error", action="cycle_error")
+                recovery_wait = self.intel.compute_error_recovery_wait()
+                await self._wait_countdown(
+                    recovery_wait,
+                    "recovering",
+                    f"Error — retry in {recovery_wait}s",
+                )
+                continue
+            finally:
+                st.current_group = ""
+                await self._notify()
+
+            st.success = tick_result.forwarded
+            st.skipped_already_posted = tick_result.skipped
+            st.failed = tick_result.failed
+            st.active_groups = tick_result.total_targets
+            st.forward_joined_total = tick_result.joined_total or st.forward_joined_total
+            st.forward_batch_total = tick_result.total_batches
+            st.forward_batch_size = tick_result.batch_size
+
+            from core.posting_mode import load_posting_mode, save_posting_mode
+
+            pm = load_posting_mode(self.slot)
+            pm.forwarding.tick_pending_keys = list(tick_result.next_tick_pending_keys or [])
+            pm.forwarding.tick_group_offset = int(tick_result.next_tick_group_offset or 0)
+            save_posting_mode(self.slot, pm)
+
+            joined_note = (
+                f" · {tick_result.joined_total} joined on Telegram"
+                if tick_result.joined_total > tick_result.total_targets
+                else ""
+            )
+            fail_breakdown = ""
+            if tick_result.failure_counts:
+                parts = [
+                    f"{k}={v}"
+                    for k, v in sorted(
+                        tick_result.failure_counts.items(),
+                        key=lambda x: -x[1],
+                    )[:6]
+                ]
+                fail_breakdown = f" · fail reasons: {', '.join(parts)}"
+            await self._log(
+                f"✓ Forward tick {st.cycle} — sent: {tick_result.forwarded} · "
+                f"skipped: {tick_result.skipped} · failed: {tick_result.failed} · "
+                f"{tick_result.total_targets} groups this tick"
+                f"{joined_note}{fail_breakdown}",
+                "success" if tick_result.forwarded else "info",
+                action="cycle_end",
+                reason=tick_result.end_reason,
+            )
+            st.failure_counts = dict(tick_result.failure_counts or {})
+
+            # Forwarding-only join policy (never used by campaign — campaign uses UAS below).
+            self._forward_ticks_since_join += 1
+            if self._forward_ticks_since_join >= 2 and acct.forwarding_running:
+                self._forward_ticks_since_join = 0
+                from features.interval_forward import try_forward_periodic_join
+
+                join_groups = self._filter_groups(
+                    groups_readonly_snapshot_for_slot(self.slot)
+                )
+                try:
+                    client = await get_client(self.slot)
+
+                    async def _join_op(c):
+                        return await try_forward_periodic_join(
+                            self.slot,
+                            c,
+                            self.logger,
+                            self.intel,
+                            join_groups,
+                            cycle=st.cycle,
+                        )
+
+                    join_result = await run_group_operation(self.slot, _join_op)
+                except Exception as exc:
+                    join_result = None
+                    await self._log(
+                        f"Forward join (tick {st.cycle}) error: {exc}",
+                        "warning",
+                        action="forward_join_error",
+                    )
+
+                if join_result is not None:
+                    if join_result.attempted and join_result.group:
+                        level = (
+                            "success"
+                            if join_result.outcome in ("joined_new", "already_in")
+                            else "warning"
+                        )
+                        await self._log(
+                            f"{'✓' if level == 'success' else '⚠'} Forward join (every 2 ticks) "
+                            f"after tick {st.cycle}: {join_result.group} — {join_result.outcome}",
+                            level,
+                            action="forward_join",
+                            group=join_result.group,
+                            outcome=join_result.outcome,
+                        )
+                        self._set_notification(
+                            f"Forward join after 2 ticks · tick {st.cycle}: "
+                            f"{join_result.group} ({join_result.outcome})"
+                        )
+                    elif join_result.outcome == "join_limited":
+                        self._set_notification(
+                            f"Join skipped (limits): {join_result.message[:80]}"
+                        )
+                    elif join_result.outcome == "skipped_no_candidate":
+                        self._set_notification(
+                            f"Forward join after 2 ticks · tick {st.cycle}: "
+                            "no eligible group in list"
+                        )
+                    await self._notify()
+
+            if tick_result.hard_flood or (
+                tick_result.flood_seconds
+                and tick_result.end_reason == "flood_break"
+            ):
+                pause = min(tick_result.flood_seconds, 3600)
+                await self._pause_for_flood(
+                    pause,
+                    f"🛑 Rate limit — pause {format_duration(pause)}",
+                    heavy=tick_result.hard_flood,
+                )
+
+            if not acct.forwarding_running:
+                break
+
+            if self._one_shot:
+                acct.forwarding_running = False
+                break
+
+            rest_seconds = pick_forward_rest_seconds()
+            rest_m = rest_seconds // 60
+            await self._wait_countdown(
+                rest_seconds,
+                "waiting",
+                f"⏳ Next forward tick in {rest_m}m ({rest_seconds}s)",
+                feature="forwarding",
+            )
+
+        st.status = "stopped"
+        st.current_group = ""
+        st.next_cycle_in = 0
+        self._announced_start_forwarding = False
+        self._forward_ticks_since_join = 0
+
+    async def _run_forever(self) -> None:
+        await asyncio.gather(
+            self._run_campaign_forever(),
+            self._run_forwarding_forever(),
+        )
+
+    async def _run_campaign_forever(self) -> None:
+        """Campaign posting — legacy unified-scheduler joins only (not forward 2-tick joins)."""
+
+        acct = self.state
+        st = campaign_runtime(acct)
 
         st.status = "active"
 
-        if not self._announced_start:
+        if not self._announced_start_campaign:
             st.cycle = 0
 
+        self._sync_posting_mode_ui()
 
+        from core.posting_mode import load_posting_mode
 
-        if not self._announced_start:
+        if not self._announced_start_campaign:
 
             mode = "one cycle (test)" if self._one_shot else "24/7 until STOP"
 
             await self._log(
 
-                f"🟢 Worker started — smart mode {mode}",
+                f"🟢 Campaign started ({mode}) · joins via scheduler (not forward 2-tick rule)",
 
                 "success",
 
-                action="worker_start",
+                action="campaign_start",
 
             )
 
-            self._announced_start = True
+            self._announced_start_campaign = True
 
         from core.telegram_client import set_login_exclusive
 
@@ -2073,14 +2492,26 @@ class AccountWorker:
 
         await self.ensure_queue_processor()
 
-        while st.running:
+        while acct.running and acct.campaign_running:
             from core.telegram_client import is_login_exclusive
 
             if is_login_exclusive(self.slot):
-                st.running = False
+                acct.running = False
+                acct.campaign_running = False
+                acct.forwarding_running = False
                 break
 
-            st.last_activity_at = time.time()
+            cfg = load_posting_mode(self.slot)
+            if not cfg.campaign_enabled:
+                acct.campaign_running = False
+                await self._log(
+                    "↷ Campaign disabled — stopping campaign loop",
+                    "info",
+                    action="campaign_disabled",
+                )
+                break
+
+            acct.last_activity_at = time.time()
 
             try:
                 async with self._cycle_lock:
@@ -2098,15 +2529,11 @@ class AccountWorker:
                     f"Error — retry in {recovery_wait}s",
                 )
 
-            st.last_activity_at = time.time()
+            acct.last_activity_at = time.time()
 
-
-
-            if not st.running:
+            if not acct.campaign_running:
 
                 break
-
-
 
             if self._pending_joined_scan:
                 self._pending_joined_scan = False
@@ -2114,11 +2541,9 @@ class AccountWorker:
 
             if self._one_shot:
 
-                st.running = False
+                acct.campaign_running = False
 
                 break
-
-
 
             if apply_delay:
 
@@ -2133,6 +2558,8 @@ class AccountWorker:
                     cycle_delay, "waiting",
 
                     f"⏳ Next cycle in {cycle_delay}s (last: ✓ {st.success} ✗ {st.failed} {rate}%)",
+
+                    feature="campaign",
 
                 )
 
@@ -2160,26 +2587,28 @@ class AccountWorker:
 
         st.next_cycle_in = 0
 
-        st.heavy_rate_limit = False
+        acct.heavy_rate_limit = False
 
-        self._set_notification("")
+        self._announced_start_campaign = False
 
-        self._announced_start = False
-
-        self._last_log_msg = ""
-
-        await self._log("", level="info", event=LogEvent.WORKER_STOP)
-
+        if not acct.forwarding_running:
+            self._set_notification("")
+            self._last_log_msg = ""
+            await self._log("", level="info", event=LogEvent.WORKER_STOP)
         await self._notify()
+        await self._maybe_release_session()
 
+    async def _maybe_release_session(self) -> None:
+        if self.state.campaign_running or self.state.forwarding_running:
+            return
+        if self.state.running:
+            self.state.running = False
         try:
             from core.telegram_client import release_session
 
             await release_session(self.slot, wait=0.25)
         except Exception:
             pass
-
-
 
     def _task_done_callback(self, task: asyncio.Task) -> None:
 
@@ -2259,7 +2688,36 @@ class AccountWorker:
 
 
 
-    def start(self, one_shot: bool = False) -> bool:
+    def _apply_start_flags(
+        self,
+        *,
+        campaign: bool | None = None,
+        forwarding: bool | None = None,
+    ) -> bool:
+        from core.posting_mode import load_posting_mode
+
+        cfg = load_posting_mode(self.slot)
+        if campaign is None and forwarding is None:
+            self.state.campaign_running = cfg.campaign_enabled
+            self.state.forwarding_running = cfg.forwarding_enabled
+        else:
+            if campaign is True:
+                self.state.campaign_running = True
+            elif campaign is False:
+                self.state.campaign_running = False
+            if forwarding is True:
+                self.state.forwarding_running = True
+            elif forwarding is False:
+                self.state.forwarding_running = False
+        return bool(self.state.campaign_running or self.state.forwarding_running)
+
+    def start(
+        self,
+        one_shot: bool = False,
+        *,
+        campaign: bool | None = None,
+        forwarding: bool | None = None,
+    ) -> bool:
 
         with self._start_lock:
             from core.telegram_client import is_login_exclusive
@@ -2267,25 +2725,28 @@ class AccountWorker:
             if is_login_exclusive(self.slot):
                 return False
 
-            t = self.state.task
-
-            if self.state.running and t is not None and not t.done():
-
+            if not self._apply_start_flags(campaign=campaign, forwarding=forwarding):
                 return False
+
+            t = self.state.task
+            if self.state.running and t is not None and not t.done():
+                return True
 
             self._cancel_task()
 
             self._one_shot = one_shot
             self._clear_flood_pause_state(heavy=True)
             self.state.heavy_rate_limit = False
-
             self.state.running = True
-
+            self.state.worker_started_at = time.time()
             self._launch_task()
-
             return True
 
+    def start_campaign(self, one_shot: bool = False) -> bool:
+        return self.start(one_shot=one_shot, campaign=True)
 
+    def start_forwarding(self, one_shot: bool = False) -> bool:
+        return self.start(one_shot=one_shot, forwarding=True)
 
     def _cancel_task(self) -> None:
 
@@ -2295,40 +2756,65 @@ class AccountWorker:
 
             task.cancel()
 
+    def stop(
+        self,
+        *,
+        campaign: bool | None = None,
+        forwarding: bool | None = None,
+    ) -> None:
+        if campaign is None and forwarding is None:
+            self.state.campaign_running = False
+            self.state.forwarding_running = False
+            self.state.running = False
+        else:
+            if campaign is False:
+                self.state.campaign_running = False
+            if forwarding is False:
+                self.state.forwarding_running = False
+            if not (self.state.campaign_running or self.state.forwarding_running):
+                self.state.running = False
 
-
-    def stop(self) -> None:
-
-        self.state.running = False
         self._one_shot = False
-        st = self.state
-        st.next_cycle_in = 0
-        st.heavy_rate_limit = False
-        if st.status == "flood_wait":
-            st.status = "stopped"
+        acct = self.state
+        acct.campaign_next_cycle_in = 0
+        acct.forwarding_next_cycle_in = 0
+        acct.heavy_rate_limit = False
+        if acct.campaign_status == "flood_wait":
+            acct.campaign_status = "stopped"
+        if acct.forwarding_status == "flood_wait":
+            acct.forwarding_status = "stopped"
 
         self._announced_start = False
-
+        self._forward_ticks_since_join = 0
         self._last_log_msg = ""
-
         self._recent_logs.clear()
 
         task = self.state.task
-
-        if task is not None and not task.done():
-
+        if task is not None and not task.done() and not self.state.running:
             task.cancel()
+
+    def stop_campaign(self) -> None:
+        self.stop(campaign=False)
+
+    def stop_forwarding(self) -> None:
+        self.stop(forwarding=False)
 
     def reset_after_logout(self) -> None:
         """Hard reset UI/worker state after logout — no zombie running/sleep flags."""
         self.stop()
         self.state.account_info = None
-        self.state.status = "stopped"
-        self.state.current_group = ""
-        self.state.next_cycle_in = 0
+        self.state.campaign_status = "stopped"
+        self.state.forwarding_status = "stopped"
+        self.state.campaign_current_group = ""
+        self.state.forwarding_current_group = ""
+        self.state.campaign_next_cycle_in = 0
+        self.state.forwarding_next_cycle_in = 0
+        self.state.worker_started_at = 0.0
         self.state.heavy_rate_limit = False
         self.state.notification = ""
         self.state.running = False
+        self.state.campaign_running = False
+        self.state.forwarding_running = False
         self.state.task = None
         self._pending_joined_scan = False
 
@@ -2591,10 +3077,14 @@ class AccountWorker:
             from services import dm_inbox_service
 
             async with self._execution_gate:
+                reply_to = task.payload.get("reply_to_message_id")
                 result = await dm_inbox_service.run_dm_send(
                     self.slot,
                     int(task.payload["user_id"]),
                     str(task.payload.get("text", "")),
+                    sent_by=str(task.payload.get("sent_by") or "manual"),
+                    operator_name=task.payload.get("operator_name"),
+                    reply_to_message_id=int(reply_to) if reply_to is not None else None,
                 )
             await event_bus.publish(
                 EventType.MESSAGE_SENT,
@@ -2605,6 +3095,55 @@ class AccountWorker:
                 },
             )
             return result
+
+        if task.task_type == TaskType.DM_SEND_MEDIA:
+            import os
+
+            from services import dm_inbox_service
+
+            file_path = str(task.payload.get("file_path") or "")
+            try:
+                async with self._execution_gate:
+                    reply_to = task.payload.get("reply_to_message_id")
+                    result = await dm_inbox_service.run_dm_send_media(
+                        self.slot,
+                        int(task.payload["user_id"]),
+                        file_path,
+                        caption=str(task.payload.get("caption") or ""),
+                        filename=str(task.payload.get("filename") or ""),
+                        content_type=str(task.payload.get("content_type") or ""),
+                        sent_by=str(task.payload.get("sent_by") or "manual"),
+                        operator_name=task.payload.get("operator_name"),
+                        reply_to_message_id=int(reply_to) if reply_to is not None else None,
+                    )
+                await event_bus.publish(
+                    EventType.MESSAGE_SENT,
+                    self.slot,
+                    {
+                        "user_id": task.payload.get("user_id"),
+                        "channel": "dm",
+                        "media": True,
+                    },
+                )
+                return result
+            finally:
+                if file_path and os.path.isfile(file_path):
+                    try:
+                        os.remove(file_path)
+                    except OSError:
+                        pass
+
+        if task.task_type == TaskType.AI_AUTO_REPLY:
+            from core import ai_smart_reply
+
+            async with self._execution_gate:
+                return await ai_smart_reply.generate_and_send(
+                    self.slot,
+                    int(task.payload["user_id"]),
+                    user_message_id=task.payload.get("user_message_id"),
+                    user_text=str(task.payload.get("user_text") or ""),
+                    force=bool(task.payload.get("force")),
+                )
 
         if task.task_type == TaskType.JOIN_GROUP:
             from features.group_operation import _join

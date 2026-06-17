@@ -76,13 +76,36 @@ class AccountManager:
         st = w.state
         if not st.running:
             return LifecycleState.STOPPED
-        if st.status in ("flood_wait", "waiting") or st.heavy_rate_limit or st.next_cycle_in > 0:
+        status = getattr(st, "status", None)
+        if status is None:
+            if st.campaign_running:
+                status = st.campaign_status
+            elif st.forwarding_running:
+                status = st.forwarding_status
+            else:
+                status = "stopped"
+        next_cycle_in = max(
+            int(st.campaign_next_cycle_in or 0),
+            int(st.forwarding_next_cycle_in or 0),
+        )
+        if status in ("flood_wait", "waiting") or st.heavy_rate_limit or next_cycle_in > 0:
             return LifecycleState.SLEEPING
-        if st.status in ("recovering",) or (
+        if status in ("recovering",) or (
             st.notification and "error" in st.notification.lower()
         ):
             return LifecycleState.ERROR
         return LifecycleState.RUNNING
+
+    def register_new_slot(self, slot: str) -> None:
+        """Register lifecycle maps after ACCOUNTS was extended at runtime."""
+        from core.config import ACCOUNTS
+
+        if slot not in ACCOUNTS:
+            raise ValueError(f"Invalid slot: {slot}")
+        if slot not in self._lifecycle:
+            self._lifecycle[slot] = LifecycleState.STOPPED
+        if slot not in self._crash_counts:
+            self._crash_counts[slot] = 0
 
     def get_runtime(self, slot: str) -> AccountRuntime:
         if slot not in ACCOUNTS:
@@ -125,9 +148,20 @@ class AccountManager:
         one_shot: bool = False,
         *,
         skip_refresh: bool = False,
+        campaign: bool | None = None,
+        forwarding: bool | None = None,
     ) -> bool:
+        from core.account_shutdown import is_shutdown_active
+
+        if is_shutdown_active(account_id):
+            return False
         runtime = self.get_runtime(account_id)
-        if await runtime.start(one_shot=one_shot, skip_refresh=skip_refresh):
+        if await runtime.start(
+            one_shot=one_shot,
+            skip_refresh=skip_refresh,
+            campaign=campaign,
+            forwarding=forwarding,
+        ):
             mark_running(account_id)
             self._set_lifecycle(account_id, LifecycleState.RUNNING)
             await event_bus.publish(
@@ -138,8 +172,18 @@ class AccountManager:
             return True
         return False
 
-    async def stop_account(self, account_id: str) -> None:
-        await self.get_runtime(account_id).stop(release_session=False)
+    async def stop_account(
+        self,
+        account_id: str,
+        *,
+        campaign: bool | None = None,
+        forwarding: bool | None = None,
+    ) -> None:
+        await self.get_runtime(account_id).stop(
+            release_session=False,
+            campaign=campaign,
+            forwarding=forwarding,
+        )
         mark_stopped(account_id)
         self._set_lifecycle(account_id, LifecycleState.STOPPED)
         account_log(account_id, "Worker stopped", level="info")
@@ -358,11 +402,16 @@ class AccountManager:
 
         master_groups = load_master_groups()
 
+        from core.posting_mode import load_posting_mode
+
         for s, w in self.all_workers().items():
+            w._sync_posting_mode_ui()
+            pm = load_posting_mode(s)
             account_states[s] = {
                 **w.state.to_dict(),
                 "join_stats": join_stats_for_ui(s),
                 "assigned_groups_count": len(groups_for_slot(s, master_groups)),
+                "posting_mode_config": pm.to_dict(s),
             }
             lifecycle = self._derive_lifecycle(s)
             self._set_lifecycle(s, lifecycle)
@@ -386,6 +435,7 @@ class AccountManager:
         from core.subscription_accounts import compute_subscription_slots, enrich_account_info
 
         account_info = {s: w.state.account_info for s, w in self.all_workers().items()}
+        # Auto 24h rollover runs in server._auto_stats_reset_loop — avoid blocking WS here.
         daily_stats = compute_daily_stats(list(ACCOUNT_SLOTS))
         enriched_info = {
             s: enrich_account_info(s, account_info.get(s)) if account_info.get(s) else None
@@ -426,14 +476,63 @@ class AccountManager:
             "daily_stats": daily_stats,
             "fleet_metrics": metrics_store.all_snapshots(),
             "fleet_alerts": alert_store.recent(limit=30),
+            "posting_modes": {
+                s: load_posting_mode(s).to_dict(s) for s in ACCOUNT_SLOTS
+            },
         }
+        try:
+            from services.forward_message_service import forward_message_service
+
+            ui["forward_message_jobs"] = forward_message_service.all_jobs_dict(
+                list(ACCOUNT_SLOTS)
+            )
+        except Exception:
+            ui["forward_message_jobs"] = {}
         try:
             from core.fleet_rate_coordinator import fleet_rate_coordinator
 
             ui["fleet_rate"] = fleet_rate_coordinator.snapshot()
         except Exception:
             pass
+        from core.account_shutdown import list_shutdowns, shutdown_info_for_ui
+
+        ui["account_shutdown"] = {
+            s: shutdown_info_for_ui(s) for s in ACCOUNT_SLOTS
+        }
+        ui["shutdown_list"] = list_shutdowns()
         return ui
+
+    def reset_stats_display_counters(self, account_id: str | None = None) -> None:
+        """
+        Clear live tick/cycle counters shown in the UI after a stats reset.
+        Does not stop workers or delete Telegram chats; send_history cutoff is separate.
+        """
+        from core.posting_mode import load_posting_mode, save_posting_mode
+
+        slots = [account_id] if account_id else list(ACCOUNTS)
+        for slot in slots:
+            w = self.get_worker(slot)
+            st = w.state
+            st.campaign_success = 0
+            st.campaign_failed = 0
+            st.campaign_skipped_already_posted = 0
+            st.campaign_skipped_cooldown = 0
+            st.campaign_skipped_other = 0
+            st.campaign_active_groups = 0
+            st.campaign_current_group = ""
+            st.campaign_success_list = []
+            st.campaign_failed_list = []
+            st.forwarding_success = 0
+            st.forwarding_failed = 0
+            st.forwarding_skipped_already_posted = 0
+            st.forwarding_active_groups = 0
+            st.forwarding_current_group = ""
+            st.forwarding_batch = 0
+            st.forwarding_batch_total = 0
+            pm = load_posting_mode(slot)
+            pm.forwarding.tick_pending_keys = []
+            pm.forwarding.tick_group_offset = 0
+            save_posting_mode(slot, pm)
 
 
 manager = AccountManager()

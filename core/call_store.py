@@ -186,6 +186,27 @@ def get_last_live_call_attempt(slot: str, user_id: int) -> dict | None:
     return dict(attempts[-1]) if attempts else None
 
 
+def delete_call_records(slot: str, user_id: int) -> None:
+    """Remove scheduled call and live-call log entries for a lead."""
+    key = _call_key(slot, user_id)
+    data = _load()
+    if key in (data.get("calls") or {}):
+        del data["calls"][key]
+        _save(data)
+    log_data = _load_live_log()
+    changed = False
+    if key in (log_data.get("attempts") or {}):
+        del log_data["attempts"][key]
+        changed = True
+    last = log_data.get("last") or {}
+    if isinstance(last, dict) and key in last:
+        del last[key]
+        log_data["last"] = last
+        changed = True
+    if changed:
+        _save_live_log(log_data)
+
+
 def cancel_call(slot: str, user_id: int) -> bool:
     key = _call_key(slot, user_id)
     data = _load()

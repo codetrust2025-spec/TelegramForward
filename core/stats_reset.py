@@ -6,12 +6,14 @@ import json
 import os
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from core.config import DATA_DIR
 
 ROLLING_WINDOW_SECONDS = 86400
 MIN_RESET_INTERVAL_SECONDS = 2.0
+AUTO_RESET_INTERVAL_SECONDS = ROLLING_WINDOW_SECONDS
 
 _RESET_FILE = os.path.join(DATA_DIR, "stats_reset.json")
 _lock = threading.Lock()
@@ -20,6 +22,15 @@ _last_reset_by_key: dict[str, float] = {}
 
 class StatsResetDebounced(Exception):
     """Raised when reset requests arrive too quickly."""
+
+
+@dataclass(frozen=True)
+class AutoResetResult:
+    """Returned when an automatic 24h stats period rollover runs."""
+
+    scope: str  # "global" | "account"
+    account_ids: tuple[str, ...]
+    reset_timestamp: float
 
 
 def _load() -> dict:
@@ -67,7 +78,9 @@ def get_reset_at_iso(account_id: str | None = None) -> str | None:
     ts = get_reset_timestamp(account_id)
     if not ts:
         return None
-    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    from core.ist_time import format_ist_iso
+
+    return format_ist_iso(ts)
 
 
 def get_effective_cutoff(account_id: str | None = None, now: float | None = None) -> float:
@@ -105,47 +118,128 @@ def get_join_reset_baseline(account_id: str) -> int:
             return 0
 
 
+def _is_reset_period_elapsed(reset_ts: float, now: float) -> bool:
+    return reset_ts > 0 and (now - reset_ts) >= AUTO_RESET_INTERVAL_SECONDS
+
+
+def _write_reset_timestamp(
+    data: dict,
+    *,
+    ts: float,
+    account_id: str | None,
+    join_baselines: dict[str, int] | None,
+) -> None:
+    iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    baselines = {
+        str(k): max(0, int(v or 0))
+        for k, v in (join_baselines or {}).items()
+    }
+    if account_id:
+        per = data.setdefault("per_account", {})
+        if not isinstance(per, dict):
+            per = {}
+            data["per_account"] = per
+        per[account_id] = {
+            "reset_timestamp": ts,
+            "reset_at": iso,
+            "join_baseline": baselines.get(account_id, 0),
+        }
+    else:
+        data["reset_timestamp"] = ts
+        data["reset_at"] = iso
+        data["per_account"] = {}
+        data["join_baselines"] = baselines
+
+
 def set_reset_timestamp(
     ts: float | None = None,
     account_id: str | None = None,
     *,
     join_baselines: dict[str, int] | None = None,
+    skip_debounce: bool = False,
 ) -> float:
     """
     Set reset to now (or explicit ts) for one account or globally.
     Global reset clears per-account overrides so all accounts share the same window.
     """
     now = float(ts if ts is not None else time.time())
-    iso = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
     debounce_key = account_id or "__global__"
 
     with _lock:
-        last = _last_reset_by_key.get(debounce_key, 0.0)
-        if time.time() - last < MIN_RESET_INTERVAL_SECONDS:
-            raise StatsResetDebounced("Please wait before resetting stats again.")
+        if not skip_debounce:
+            last = _last_reset_by_key.get(debounce_key, 0.0)
+            if time.time() - last < MIN_RESET_INTERVAL_SECONDS:
+                raise StatsResetDebounced("Please wait before resetting stats again.")
         data = _load()
-        baselines = {
-            str(k): max(0, int(v or 0))
-            for k, v in (join_baselines or {}).items()
-        }
-        if account_id:
-            per = data.setdefault("per_account", {})
-            if not isinstance(per, dict):
-                per = {}
-                data["per_account"] = per
-            per[account_id] = {
-                "reset_timestamp": now,
-                "reset_at": iso,
-                "join_baseline": baselines.get(account_id, 0),
-            }
-        else:
-            data["reset_timestamp"] = now
-            data["reset_at"] = iso
-            data["per_account"] = {}
-            data["join_baselines"] = baselines
+        _write_reset_timestamp(
+            data,
+            ts=now,
+            account_id=account_id,
+            join_baselines=join_baselines,
+        )
         _save(data)
         _last_reset_by_key[debounce_key] = time.time()
     return now
+
+
+def maybe_auto_reset_24h(slots: list[str]) -> AutoResetResult | None:
+    """
+    Advance the stats window when 24h have elapsed since the last reset anchor.
+
+    Only applies when a reset timestamp already exists (manual reset or prior auto reset).
+    Rolling-only installs without stats_reset.json keep their sliding 24h window.
+    """
+    if not slots:
+        return None
+
+    now = time.time()
+    with _lock:
+        data = _load()
+        global_ts = _parse_ts(data.get("reset_timestamp"))
+        per = data.get("per_account") if isinstance(data.get("per_account"), dict) else {}
+
+        if global_ts and _is_reset_period_elapsed(global_ts, now):
+            from core.join_cycle import daily_join_count_for_reset
+
+            baselines = {slot: daily_join_count_for_reset(slot) for slot in slots}
+            ts = now
+            _write_reset_timestamp(data, ts=ts, account_id=None, join_baselines=baselines)
+            _save(data)
+            _last_reset_by_key["__global__"] = now
+            result = AutoResetResult("global", tuple(slots), ts)
+        else:
+            due_accounts: list[str] = []
+            for slot in slots:
+                row = per.get(slot) or {}
+                per_ts = _parse_ts(row.get("reset_timestamp"))
+                if per_ts and _is_reset_period_elapsed(per_ts, now):
+                    due_accounts.append(slot)
+            if not due_accounts:
+                return None
+
+            from core.join_cycle import daily_join_count_for_reset
+
+            ts = now
+            for slot in due_accounts:
+                baselines = {slot: daily_join_count_for_reset(slot)}
+                _write_reset_timestamp(
+                    data,
+                    ts=ts,
+                    account_id=slot,
+                    join_baselines=baselines,
+                )
+                _last_reset_by_key[slot] = now
+            _save(data)
+            result = AutoResetResult("account", tuple(due_accounts), ts)
+
+    from core.send_stats import invalidate_cache
+
+    if result.scope == "global":
+        invalidate_cache()
+    else:
+        for slot in result.account_ids:
+            invalidate_cache(slot)
+    return result
 
 
 def clear_reset_timestamp() -> None:

@@ -11,6 +11,9 @@ from typing import Any
 class TaskType(str, Enum):
     GROUP_POST = "group_post"
     DM_SEND = "dm_send"
+    DM_SEND_MEDIA = "dm_send_media"
+    DM_SEND_LOCATION = "dm_send_location"
+    AI_AUTO_REPLY = "ai_auto_reply"
     JOIN_GROUP = "join_group"
     RUN_CYCLE = "run_cycle"
     RETRY = "retry"
@@ -28,7 +31,12 @@ class TaskPriority(int, Enum):
 def priority_for_task_type(task_type: TaskType, *, is_retry: bool = False) -> TaskPriority:
     if is_retry or task_type == TaskType.RETRY:
         return TaskPriority.RETRY
-    if task_type == TaskType.DM_SEND:
+    if task_type in (
+        TaskType.DM_SEND,
+        TaskType.DM_SEND_MEDIA,
+        TaskType.DM_SEND_LOCATION,
+        TaskType.AI_AUTO_REPLY,
+    ):
         return TaskPriority.HIGH
     if task_type == TaskType.RUN_CYCLE:
         return TaskPriority.LOW

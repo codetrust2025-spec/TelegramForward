@@ -1,9 +1,11 @@
 """WebSocket broadcast — transport only, no business logic."""
 
-from typing import List
+from typing import Any, List
+
 from fastapi import WebSocket
 
 active_connections: List[WebSocket] = []
+connection_profiles: dict[WebSocket, dict[str, Any]] = {}
 
 
 async def broadcast(data: dict) -> None:
@@ -14,5 +16,6 @@ async def broadcast(data: dict) -> None:
         except Exception:
             dead.append(ws)
     for ws in dead:
+        connection_profiles.pop(ws, None)
         if ws in active_connections:
             active_connections.remove(ws)

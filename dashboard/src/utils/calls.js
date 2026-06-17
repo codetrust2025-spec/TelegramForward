@@ -1,5 +1,6 @@
 import { API } from '../config.js'
 import { leadKey } from './crm.js'
+import { formatIstDateTime, formatIstTime, istDayKey } from './istTime.js'
 
 export const LIVE_CALL_MESSAGE = 'Can we connect on a quick call now?'
 
@@ -20,25 +21,26 @@ export function getScheduledCall(crmState, slot, userId) {
 
 export function formatCallScheduleTime(iso) {
   if (!iso) return ''
-  try {
-    const d = new Date(iso)
-    const now = new Date()
-    const isToday = d.toDateString() === now.toDateString()
-    const tomorrow = new Date(now)
-    tomorrow.setDate(tomorrow.getDate() + 1)
-    const isTomorrow = d.toDateString() === tomorrow.toDateString()
-    const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-    if (isToday) return `${time} today`
-    if (isTomorrow) return `${time} tomorrow`
-    return d.toLocaleString([], {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    })
-  } catch {
-    return String(iso)
+  const d = parseInstant(iso)
+  if (!d) return String(iso)
+  const day = istDayKey(d)
+  const time = formatIstTime(d, { hour: 'numeric', minute: '2-digit', second: undefined, hour12: true })
+  if (day === istDayKey()) return `${time} today (IST)`
+  const tomorrow = new Date()
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  if (day === istDayKey(tomorrow)) return `${time} tomorrow (IST)`
+  return `${formatIstDateTime(d)} IST`
+}
+
+/** Prefer Telegram, then WhatsApp, then phone — for one-tap outgoing call UI. */
+export function pickDefaultLiveCallOption(contact) {
+  const options = buildLiveCallOptions(contact || {})
+  const order = ['telegram', 'whatsapp', 'phone']
+  for (const id of order) {
+    const opt = options.find(o => o.id === id && o.can_open)
+    if (opt) return opt
   }
+  return options.find(o => o.can_open) || null
 }
 
 export function buildLiveCallOptions(contact) {

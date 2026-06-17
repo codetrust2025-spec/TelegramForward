@@ -4,6 +4,7 @@ import {
   formatPostsPerHour,
   sortFleetHealthRows,
 } from '../utils/fleetHealth.js'
+import { SABHI_HEALTH } from '../utils/sabAccountsUi.js'
 import { SubscriptionBadge } from './SubscriptionBadge.jsx'
 
 function healthBarClass(health) {
@@ -43,10 +44,10 @@ export function FleetHealthPanel({ perAccount, accountInfo, statsWindow, dailySt
   if (rows.length === 0) return null
 
   return (
-    <section className="fleet-health" aria-label="Fleet health overview">
+    <section className="fleet-health" aria-label={`${SABHI_HEALTH} overview`}>
       <header className="fleet-health-header">
         <div>
-          <h4 className="fleet-health-title">Fleet health</h4>
+          <h4 className="fleet-health-title">{SABHI_HEALTH}</h4>
           <p className="fleet-health-sub">
             Health, forwards, and posts/hour ({windowNote}) — fix flagged accounts first
           </p>
@@ -130,7 +131,7 @@ export function FleetHealthPanel({ perAccount, accountInfo, statsWindow, dailySt
                       <span
                         className="fleet-health-rate-bar"
                         style={{ width: `${Math.max(8, ratePct)}%` }}
-                        title={`${ratePct}% of fleet top rate`}
+                        title={`${ratePct}% of top rate across accounts`}
                       />
                     )}
                   </td>
