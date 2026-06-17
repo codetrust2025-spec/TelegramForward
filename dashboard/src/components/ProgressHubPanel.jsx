@@ -127,18 +127,16 @@ export function ProgressHubPanel({
 
   const alertCount = useMemo(() => {
     const resetTs = dailyStats?.reset_timestamp ?? 0
-    const cutoffTs = dailyStatsCutoff(dailyStats)
     const rows = sortFleetHealthRows(
       buildFleetHealthRows(
         fleet.perAccount,
         accountInfo,
         dailyStats?.window,
         resetTs,
-        { postingModes, accountStates, cutoffTimestamp: cutoffTs },
       ),
     )
     return rows.filter(r => r.attention).length
-  }, [fleet.perAccount, accountInfo, dailyStats, postingModes, accountStates])
+  }, [fleet.perAccount, accountInfo, dailyStats?.window, dailyStats?.reset_timestamp])
 
   const fleetChipsSecondary = (
     <>
@@ -381,7 +379,7 @@ export function ProgressHubPanel({
           totalGroups={accountsModeFilter === 'forwarding' ? fleet.progressMax : (fleet.masterTotal || 0)}
           success={fleet.success}
           failed={fleet.failed}
-          successRate={fleetDisplaySuccessRate(fleet)}
+          successRate={fleet.successRate}
           processed={fleet.processed}
           secondary={fleetChipsSecondary}
           successLabel={accountsModeFilter === 'forwarding' ? 'Sent this tick' : 'Posted OK'}
@@ -423,8 +421,6 @@ export function ProgressHubPanel({
             accountInfo={accountInfo}
             statsWindow={dailyStats?.window}
             dailyStats={dailyStats}
-            postingModes={postingModes}
-            accountStates={accountStates}
           />
         ) : (
           <p className="stat-hint">No logged-in accounts to show {SABHI_HEALTH.toLowerCase()}.</p>
@@ -442,7 +438,6 @@ export function ProgressHubPanel({
             accountInfo={accountInfo}
             statsWindow={dailyStats?.window}
             subscriptionSlots={subs}
-            modeFilter={accountsModeFilter}
             rankingOnly
           />
         ) : (

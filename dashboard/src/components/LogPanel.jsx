@@ -4,20 +4,18 @@ import { SABHI_ACCOUNTS } from '../utils/sabAccountsUi.js'
 import { Button } from './ui/Button.jsx'
 import { SegmentedControl } from './ui/SegmentedControl.jsx'
 
-// Distinct glyphs per level so the user can scan log severity at a glance
-// instead of relying solely on background color.
 const LOG_LEVEL_ICON = {
-  success: '✓',
-  error: '✕',
-  warning: '!',
-  info: '·',
+  success: '●',
+  error: '●',
+  warning: '●',
+  info: '○',
 }
 
-const LogLine = React.memo(function LogLine({ entry }) {
+function LogLine({ entry }) {
   const level = entry.level || 'info'
   const icon = LOG_LEVEL_ICON[level] || LOG_LEVEL_ICON.info
   const event = entry.event || ''
-  const text = (entry.summary || entry.fields?.detail || entry.msg || '').trim()
+  const msg = entry.msg || ''
   return (
     <div className={`log-line log-line--${level}`}>
       <span className="log-line-icon" aria-hidden>{icon}</span>
@@ -27,23 +25,10 @@ const LogLine = React.memo(function LogLine({ entry }) {
           {formatLogEventLabel(event)}
         </span>
       )}
-      <span className="log-line-msg">{text}</span>
+      <span className="log-line-msg">{msg}</span>
     </div>
   )
-})
-
-// Stable key for a log entry across re-renders. Timestamp is microsecond ISO
-// so duplicates are extremely rare; combine with event+account+msg-hash as a
-// tiebreaker so prepending new logs doesn't invalidate every existing key
-// (which would force every LogLine to remount and lose React.memo benefits).
-function logKey(entry, fallback) {
-  const ts = entry?.timestamp || entry?.time
-  if (!ts) return `noid-${fallback}`
-  const tail = (entry.msg || entry.summary || '').slice(0, 16)
-  return `${ts}|${entry.account_id || ''}|${entry.event || ''}|${tail}`
 }
-
-const VISIBLE_LOG_LIMIT = 250
 
 function isCycleBoundary(entry) {
   const event = (entry.event || '').toUpperCase()
@@ -83,15 +68,9 @@ export function LogPanel({
   onScroll,
   toolbarActions,
   activeTabControl,
-  connected = true,
 }) {
-  const [levelFilter, setLevelFilter] = useState('all') // all | issues
+  const [levelFilter, setLevelFilter] = useState('all') // all | errors | account
   const [groupByCycle, setGroupByCycle] = useState(false)
-  const [showAll, setShowAll] = useState(false)
-
-  // Reset render-cap when scope/tab/filter changes so the user always sees
-  // the freshest cropped slice first.
-  React.useEffect(() => { setShowAll(false) }, [activeTab, levelFilter, groupByCycle])
 
   const logsNewestFirst = useMemo(() => [...displayLogs].reverse(), [displayLogs])
   const successNewestFirst = useMemo(() => [...displaySuccessList].reverse(), [displaySuccessList])
@@ -99,27 +78,15 @@ export function LogPanel({
 
   const filteredLogs = useMemo(() => {
     let list = logsNewestFirst
-    if (levelFilter === 'issues') {
-      // "Errors & warnings" — most users opening this filter want to see
-      // anything actionable, not strictly hard errors.
-      list = list.filter(e => e.level === 'error' || e.level === 'warning')
-    }
+    if (levelFilter === 'errors') list = list.filter(e => e.level === 'error')
     return list
   }, [logsNewestFirst, levelFilter])
-
-  const totalFiltered = filteredLogs.length
-  const visibleLogs = useMemo(() => (
-    showAll || totalFiltered <= VISIBLE_LOG_LIMIT
-      ? filteredLogs
-      : filteredLogs.slice(0, VISIBLE_LOG_LIMIT)
-  ), [filteredLogs, showAll, totalFiltered])
-  const hiddenLogCount = Math.max(0, totalFiltered - visibleLogs.length)
 
   const logGroups = useMemo(() => {
     if (!groupByCycle) return null
     const groups = []
     let current = { id: 0, label: 'Recent', entries: [] }
-    for (const entry of visibleLogs) {
+    for (const entry of filteredLogs) {
       if (isCycleBoundary(entry)) {
         if (current.entries.length) groups.push(current)
         const m = (entry.cycle != null ? String(entry.cycle) : (entry.msg || '').match(/cycle=(\d+)/i)?.[1])
@@ -130,16 +97,10 @@ export function LogPanel({
     }
     if (current.entries.length) groups.push(current)
     return groups.length ? groups : null
-  }, [visibleLogs, groupByCycle])
+  }, [filteredLogs, groupByCycle])
 
   return (
     <div className="log-panel-root">
-      {!connected && (
-        <div className="logs-disconnected-banner" role="status" aria-live="polite">
-          <span className="logs-disconnected-dot" aria-hidden />
-          Live feed paused — reconnecting to server… Logs will resume automatically.
-        </div>
-      )}
       <div className="logs-toolbar-row logs-toolbar-row--filters">
         {toolbarActions}
         {activeTabControl}
@@ -169,7 +130,7 @@ export function LogPanel({
               label="Filter logs"
               options={[
                 { value: 'all', label: 'All levels' },
-                { value: 'issues', label: 'Errors & warnings' },
+                { value: 'errors', label: 'Errors only' },
               ]}
               value={levelFilter}
               onChange={setLevelFilter}
@@ -198,24 +159,15 @@ export function LogPanel({
                   </summary>
                   <div className="log-cycle-body">
                     {g.entries.map((entry, i) => (
-                      <LogLine key={logKey(entry, `${g.id}-${i}`)} entry={entry} />
+                      <LogLine key={`${g.id}-${i}-${entry.msg?.slice(0, 24)}`} entry={entry} />
                     ))}
                   </div>
                 </details>
               ))
             ) : (
-              visibleLogs.map((entry, i) => (
-                <LogLine key={logKey(entry, i)} entry={entry} />
+              filteredLogs.map((entry, i) => (
+                <LogLine key={`${i}-${entry.msg?.slice(0, 32)}`} entry={entry} />
               ))
-            )}
-            {hiddenLogCount > 0 && (
-              <button
-                type="button"
-                className="logs-show-more-btn"
-                onClick={() => setShowAll(true)}
-              >
-                Show {hiddenLogCount} older log{hiddenLogCount === 1 ? '' : 's'}
-              </button>
             )}
           </>
         )}
@@ -225,7 +177,7 @@ export function LogPanel({
               <div className="empty-state">No successful forwards yet.</div>
             )}
             {successNewestFirst.map((group, i) => (
-              <div key={`${group}-${i}`} className="log-result-line log-result-line--ok">
+              <div key={`${i}-${group}`} className="log-result-line log-result-line--ok">
                 <span>✓</span>
                 <a href={`https://t.me/${group}`} target="_blank" rel="noreferrer">{group}</a>
               </div>
@@ -238,7 +190,7 @@ export function LogPanel({
               <div className="empty-state">No failures yet.</div>
             )}
             {failedNewestFirst.map((item, i) => (
-              <div key={`${item.group}-${i}`} className="log-result-line log-result-line--fail">
+              <div key={`${i}-${item.group}`} className="log-result-line log-result-line--fail">
                 <span className="log-result-group">✗ {item.group}</span>
                 <span className="log-result-reason">{item.reason}</span>
               </div>
@@ -263,13 +215,6 @@ export function LogToolbarActions({
   onClear,
   onCopy,
 }) {
-  // Per-tab "is anything to copy" check — was previously hard-coded to the
-  // logs tab, so Copy on an empty Success/Fail tab would silently copy "".
-  const copyEmpty =
-    (activeTab === 'logs' && (displayLogs?.length ?? 0) === 0)
-    || (activeTab === 'success' && (displaySuccessNewestFirst?.length ?? 0) === 0)
-    || (activeTab === 'failed' && (displayFailedNewestFirst?.length ?? 0) === 0)
-
   return (
     <div className="logs-toolbar-actions">
       {activeTab === 'logs' && (
@@ -291,7 +236,7 @@ export function LogToolbarActions({
         size="xs"
         className={`logs-toolbar-btn logs-toolbar-btn--copy${copied ? ' logs-toolbar-btn--copied' : ''}`}
         onClick={onCopy}
-        disabled={copyEmpty}
+        disabled={displayLogs.length === 0 && activeTab === 'logs'}
         title="Copy list to clipboard"
       >
         {copied ? 'Copied' : 'Copy'}

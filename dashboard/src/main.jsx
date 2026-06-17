@@ -5,13 +5,13 @@ import { AuthGate } from './components/AuthGate.jsx'
 import { ConfirmProvider } from './context/ConfirmContext.jsx'
 import { AuthProvider } from './context/AuthContext.jsx'
 import './index.css'
+import './teleautomation.css'
 import './inbox/inboxLayout.css'
 import './inbox/outgoingCall.css'
 import './admin.css'
 import './responsive.css'
-import './mobile/mobileDashboard.css'
 import './desktop/desktopDashboard.css'
-import './dailyOps.css'
+import './mobile/mobileDashboard.css'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -22,5 +22,5 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         </AuthGate>
       </ConfirmProvider>
     </AuthProvider>
-  </React.StrictMode>
+  </React.StrictMode>,
 )

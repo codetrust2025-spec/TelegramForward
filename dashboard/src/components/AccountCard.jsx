@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { API, COUNTRY_CODES, SAVED_PHONES } from '../config.js'
-import { ButtonContent, Spinner, InlineLoader } from '../Loader.jsx'
+import { ButtonContent, Spinner } from '../Loader.jsx'
 import { StatusBadge } from './StatusBadge.jsx'
 import { MessageEditor } from './MessageEditor.jsx'
 import { PostingModePanel } from './PostingModePanel.jsx'
@@ -246,6 +246,7 @@ export function AccountCard({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+  const [menuOpen, setMenuOpen] = useState(false)
   const startLoading = accountActionLoading === `${slot}:start`
   const stopLoading = accountActionLoading === `${slot}:stop`
   const campStartLoading = accountActionLoading === `${slot}:campaign:start`
@@ -471,6 +472,7 @@ export function AccountCard({
   const joinsLimit = joinToday?.limit ?? 0
   const joinsTone = joinToday?.restricted ? 'bad' : joinsLimit > 0 && joinsToday >= joinsLimit * 0.8 ? 'warn' : 'good'
   const healthTone = health === 'good' ? 'good' : health === 'warning' ? 'warn' : health === 'bad' ? 'bad' : 'neutral'
+  const nextIn = acctState?.next_cycle_in > 0 ? acctState.next_cycle_in : 0
   const liveClass = status === 'running' ? 'running'
     : (status === 'sleeping' || status === 'rate_limited') ? 'waiting'
       : 'stopped'
@@ -494,26 +496,13 @@ export function AccountCard({
   if (membershipStale) metaParts.push('stale')
   const metaLine = metaParts.join(' · ')
 
-  const campStatLabel = campRunning ? 'Running' : 'Stopped'
-  const campStatDetail = campTotal > 0
-    ? `${campProcessed}/${campTotal} sent · cycle ${campCycle || '—'}`
-    : `cycle ${campCycle || '—'}`
-  const fwdStatLabel = fwdRunning ? 'Running' : 'Stopped'
-  const fwdStatDetail = fwdTotal > 0
-    ? `${fwdProcessed}/${fwdTotal}${fwdBatchTotal ? ` · B${fwdBatch}/${fwdBatchTotal}` : ''}`
-    : `tick ${fwdCycle || '—'}`
-
   const cardClass = [
     'account-card',
     isActive ? 'account-card--active' : '',
     `account-card--${status}`,
     heavyLimit ? 'account-card--sleep' : '',
     isSubAccount ? 'account-card--subscription' : '',
-    loginTab && !info ? 'account-card--login-empty' : '',
   ].filter(Boolean).join(' ')
-
-  const loginSlotTitle = loginTab ? `Connect ${label}` : null
-  const isSwitching = switchingAccount === slot
 
   return (
     <article className={`${cardClass} account-card--dense account-card--v3 account-card--live account-card--live-${liveClass}${compactSetup ? ' account-card--setup-compact' : ''}`}>
@@ -701,21 +690,14 @@ export function AccountCard({
         </>
       ) : step === 'idle' ? (
         <div className="account-card-login">
-          {loginTab && (
-            <>
-              <h3 className="section-title-sm">{loginSlotTitle}</h3>
-              <p className="stat-hint">Enter the Telegram phone number for this slot. You will get one OTP in the Telegram app.</p>
-            </>
-          )}
-          {!loginTab && <p className="stat-hint">Not logged in</p>}
+          <p className="stat-hint">Not logged in</p>
           <button type="button" className="btn btn--success" onClick={() => { resetPhoneFields(); setStep('phone') }}>
-            {loginTab ? 'Connect with phone + OTP' : '+ Login'}
+            + Login
           </button>
         </div>
       ) : step === 'phone' ? (
         <div className="account-card-form" onClick={e => e.stopPropagation()}>
-          {loginTab && <h3 className="section-title-sm">{loginSlotTitle}</h3>}
-          <label className="field-label">Step 1 — Phone number</label>
+          <label className="field-label">Phone number</label>
           <div className="field-row">
             <select className="input input--select" value={countryCode} onChange={e => setCountryCode(e.target.value)}>
               {COUNTRY_CODES.map(c => <option key={c} value={c}>{c}</option>)}
@@ -744,8 +726,7 @@ export function AccountCard({
         </div>
       ) : (
         <div className="account-card-form" onClick={e => e.stopPropagation()}>
-          {loginTab && <h3 className="section-title-sm">{loginSlotTitle}</h3>}
-          <p className="field-hint">Step 2 — OTP sent to <strong>{phone}</strong>. Check the Telegram app on that phone.</p>
+          <p className="field-hint">OTP sent to <strong>{phone}</strong></p>
           <input className="input" placeholder="Enter OTP" value={otp} onChange={e => setOtp(e.target.value)} onKeyDown={e => e.key === 'Enter' && verifyOtp()} />
           {error && <p className="field-error">{error}</p>}
           <div className="btn-row">

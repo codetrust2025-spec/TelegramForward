@@ -236,127 +236,6 @@ export function AccountPanel({
     )
   )
 
-  /** Forward/Campaign column: show every logged-in account; Progress tab may filter by mode. */
-  const showAllLoggedInGrid = hideAccountsModeFilter
-
-  /** Include selected account in the grid even when the workspace mode filter would hide it. */
-  const gridSlots = useMemo(() => {
-    if (showAllLoggedInGrid) {
-      if (
-        visibleActive
-        && isAccountLoggedIn(accountInfo, visibleActive)
-        && !isSlotOnShutdownList(accountShutdown, shutdownList, visibleActive)
-        && !activeLoggedInSlots.includes(visibleActive)
-      ) {
-        return sortAccountsForDisplay(
-          [...activeLoggedInSlots, visibleActive],
-          accountStates,
-          accountInfo,
-        )
-      }
-      return activeLoggedInSlots
-    }
-    if (
-      !visibleActive
-      || !isAccountLoggedIn(accountInfo, visibleActive)
-      || isSlotOnShutdownList(accountShutdown, shutdownList, visibleActive)
-      || filteredSlots.includes(visibleActive)
-    ) {
-      return filteredSlots
-    }
-    return sortAccountsForDisplay(
-      [...filteredSlots, visibleActive],
-      accountStates,
-      accountInfo,
-    )
-  }, [
-    showAllLoggedInGrid,
-    activeLoggedInSlots,
-    filteredSlots,
-    visibleActive,
-    accountInfo,
-    accountStates,
-    accountShutdown,
-    shutdownList,
-  ])
-
-  const loginPanelRef = useRef(null)
-
-  useEffect(() => {
-    if (showAllLoggedInGrid) return
-    if (!visibleActive) return
-    // Empty slot (Add account) — keep selection so phone/OTP login stays visible.
-    if (!isAccountLoggedIn(accountInfo, visibleActive)) return
-    // Logged-in account may be hidden until Forward/Campaign mode is set — do not auto-switch away.
-    if (!filteredSlots.includes(visibleActive)) return
-    const onRest = isSlotOnShutdownList(accountShutdown, shutdownList, visibleActive)
-    if (!onRest) {
-      if (modeFilter === 'all') return
-      if (filteredSlots.includes(visibleActive)) return
-    }
-    const next = filteredSlots[0]
-    if (next && next !== visibleActive) {
-      onSwitchAccount(next)
-    }
-  }, [
-    showAllLoggedInGrid,
-    modeFilter,
-    filteredSlots,
-    visibleActive,
-    onSwitchAccount,
-    accountShutdown,
-    shutdownList,
-    accountInfo,
-  ])
-
-  function scrollToLoginPanel() {
-    window.requestAnimationFrame(() => {
-      loginPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-    })
-  }
-
-  function selectAddAccountSlot() {
-    if (!nextAvailable) return
-    if (!hideAccountsModeFilter && modeFilter !== 'all') setModeFilter('all')
-    onSwitchAccount(nextAvailable)
-    scrollToLoginPanel()
-  }
-
-  async function handleAddAccount() {
-    if (nextAvailable) {
-      selectAddAccountSlot()
-      return
-    }
-    if (!onProvisionSlot) return
-    setProvisioningSlot(true)
-    try {
-      const slot = await onProvisionSlot()
-      if (slot) scrollToLoginPanel()
-    } catch (e) {
-      alert(String(e.message || e))
-    } finally {
-      setProvisioningSlot(false)
-    }
-  }
-
-  const addingAccount = !!(
-    nextAvailable
-    && visibleActive === nextAvailable
-    && !isAccountLoggedIn(accountInfo, nextAvailable)
-  )
-
-  const showActiveCard = !!(
-    visibleActive
-    && !isSlotOnShutdownList(accountShutdown, shutdownList, visibleActive)
-    && (
-      modeFilter === 'all'
-      || filteredSlots.includes(visibleActive)
-      || addingAccount
-      || isAccountLoggedIn(accountInfo, visibleActive)
-    )
-  )
-
-  const sectionTitle = loginTab ? 'Telegram accounts' : 'Accounts'
   const sectionSub = loggedInSlots.length === 0
     ? 'No accounts logged in'
     : (() => {
@@ -552,16 +431,7 @@ export function AccountPanel({
           accountShutdown={accountShutdown}
           forwardJob={state.forward_message_jobs?.[visibleActive]}
           statsWindow={state.daily_stats?.window}
-          sentInWindow={
-            modeFilter === 'forwarding'
-              ? (state.daily_stats?.per_account?.[visibleActive]?.forward_posts ?? 0)
-              : modeFilter === 'campaign'
-                ? (state.daily_stats?.per_account?.[visibleActive]?.campaign_posts ?? 0)
-                : (
-                  (state.daily_stats?.per_account?.[visibleActive]?.forward_posts ?? 0)
-                  + (state.daily_stats?.per_account?.[visibleActive]?.campaign_posts ?? 0)
-                )
-          }
+          sentInWindow={state.daily_stats?.per_account?.[visibleActive]?.forwarded}
           customMessage={state.account_messages?.[visibleActive] ?? state.custom_message ?? ''}
           onMessageSaved={onMessageSaved}
           postingModeConfig={

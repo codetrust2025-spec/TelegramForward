@@ -80,125 +80,31 @@ body,
     font-size: clamp(16px, 4.5vw, 18px);
   }
 
-  /* Title + Sign out/Start on one row; section tabs directly below (no dead gap) */
-  .app-header {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    grid-template-areas:
-      "title actions"
-      "nav nav";
-    align-items: center;
-    gap: 6px 8px;
-    margin-bottom: 6px;
-    padding: 0;
-    min-height: 0;
-  }
-
-  .app-header-left {
-    grid-area: title;
-    width: auto;
-    max-width: none;
-    min-width: 0;
-  }
-
-  .app-header-title h1 {
-    margin: 0;
-  }
-
-  .app-header-right {
-    display: contents;
-  }
-
-  .app-header-toolbar {
-    grid-area: actions;
+  .app-view-nav {
     display: flex;
     flex-wrap: nowrap;
-    align-items: center;
-    justify-content: flex-end;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
     gap: 6px;
-    width: auto;
-    min-width: 0;
+    padding-bottom: 2px;
   }
 
-  .app-header-toolbar .app-header-auth {
-    flex: 0 1 auto;
-    min-width: 0;
+  .app-view-nav::-webkit-scrollbar {
+    display: none;
   }
 
-  .app-header-toolbar .app-header-actions {
+  .app-view-nav-btn {
     flex: 0 0 auto;
-    margin-left: 0;
-  }
-
-  .app-view-nav-root--compact {
-    grid-area: nav;
-    width: 100%;
-    max-width: 100%;
-    margin: 0;
-  }
-
-  .app-view-nav-picklist {
-    gap: 4px;
-  }
-
-  .app-view-nav-picklist .option-pick-list__btn {
-    min-height: 34px;
-    padding: 5px 4px;
-    font-size: 11px;
-  }
-
-  .app-shell--view-dashboard .app-header {
-    display: grid;
-    flex-direction: unset;
-    flex-wrap: unset;
-    align-items: center;
-  }
-
-  .app-shell--view-dashboard .app-header-left {
-    flex: unset;
-    width: auto;
-  }
-
-  .app-shell--view-dashboard .app-header-right {
-    display: contents;
-    flex: unset;
-    flex-wrap: unset;
-    width: auto;
-  }
-
-  .setup-column-nav__tabs-wrap {
-    width: 100%;
+    min-width: max(var(--ta-touch-min), 4.5rem);
+    min-height: var(--ta-touch-min);
+    font-size: 12px;
+    padding-left: 10px;
+    padding-right: 10px;
   }
 
   .app-header-actions .app-header-btn:not(.btn--xs) {
-    min-height: 36px;
-    padding: 0 10px;
-  }
-
-  .app-shell--view-dashboard .app-header {
-    margin-bottom: 4px;
-  }
-
-  .setup-column-nav {
-    margin-bottom: 4px;
-  }
-
-  .setup-column-tabs .btn--segment {
-    min-height: 36px;
-    padding: 6px 8px;
-    font-size: 11px;
-  }
-
-  .setup-account-filter__hint {
-    display: none;
-  }
-
-  .setup-main__heading-sub {
-    display: none;
-  }
-
-  .account-mode-switcher__help {
-    display: none;
+    min-height: var(--ta-touch-min);
   }
 
   .chip,
@@ -563,9 +469,12 @@ body,
 /* Very small phones (iPhone SE class) */
 @media (max-width: 374px) {
   .app-header-actions {
-    flex-direction: row;
-    flex-wrap: nowrap;
-    align-items: center;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .app-header-right-group {
+    width: 100%;
   }
 
   .stats-grid--metrics {
@@ -588,14 +497,14 @@ body,
     padding-right: max(12px, var(--safe-right));
   }
 
+  .app-header {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+
   .app-header-right {
     flex-wrap: wrap;
     gap: 10px;
-  }
-
-  .app-header-actions {
-    margin-left: 0;
-    width: 100%;
   }
 
   .dashboard-column {
@@ -783,86 +692,6 @@ body,
   .inbox-messages,
   .crm-messages {
     min-height: 120px;
-  }
-
-  /* Setup column: workspace on row 1, section tabs on row 2 */
-  .setup-column-nav {
-    flex-wrap: wrap;
-    overflow-x: visible;
-    gap: 8px;
-  }
-
-  .setup-column-nav__group {
-    flex: 1 1 100%;
-    max-width: 100%;
-  }
-
-  .setup-column-nav__workspace {
-    max-width: 100%;
-  }
-
-  .setup-column-nav__workspace .btn--segment {
-    flex: 1;
-    min-height: var(--ta-touch-min);
-    font-size: 12px;
-  }
-
-  .setup-column-nav__divider {
-    display: none;
-  }
-
-  .setup-column-nav__tabs {
-    flex: 1 1 100%;
-    max-width: 100%;
-  }
-
-  .setup-column-tabs .btn--segment {
-    min-height: var(--ta-touch-min);
-    font-size: 12px;
-  }
-
-  /* Progress hub: scroll section tabs */
-  .progress-hub-nav {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
-
-  .progress-hub-nav::-webkit-scrollbar {
-    display: none;
-  }
-
-  .progress-hub-tabs {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  .progress-hub-tabs .btn--segment {
-    flex: 0 0 auto;
-    min-height: var(--ta-touch-min);
-  }
-
-  .progress-hub-layout-toggle {
-    flex-shrink: 0;
-  }
-
-  .progress-stats-help {
-    display: none;
-  }
-
-  .shutdown-list-row {
-    grid-template-columns: 1fr;
-  }
-
-  .shutdown-list-clear-btn {
-    grid-column: 1;
-    grid-row: auto;
-    width: 100%;
-    justify-self: stretch;
-    margin-top: 6px;
   }
 }
 

@@ -2,15 +2,14 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useConfirm } from '../context/ConfirmContext.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
 import { formatIstDateTime } from '../utils/istTime.js'
-import {
-  createHandler,
-  deleteHandler,
-  fetchCredentials,
-  updateAdmin,
-  updateHandler,
-} from '../utils/dataRoomCredentialsApi.js'
-import { API } from '../config.js'
 import { DataRoomVaultSection } from './DataRoomVaultSection.jsx'
+
+const API_BASE =
+  typeof window !== 'undefined' && window.location.port === '3000'
+    ? ''
+    : typeof window !== 'undefined'
+      ? `${window.location.protocol}//${window.location.host}`
+      : ''
 
 const TYPE_LABELS = {
   support_provider: 'Support provider',
@@ -144,10 +143,7 @@ function CopyChip({ label, text, copyKey, activeKey, onCopy }) {
   )
 }
 
-const EMPTY_HANDLER_FORM = { username: '', password: '', reference: '', notes: '' }
-const EMPTY_ADMIN_FORM = { username: '', password: '', reference: '' }
-
-function CredentialRow({ rowKey, site, row, isAdmin, activeKey, onCopy, onEdit, onDelete }) {
+function CredentialRow({ rowKey, site, row, isAdmin, activeKey, onCopy }) {
   const block = formatCredentialBlock(site, row, { isAdmin })
   return (
     <tr>
@@ -164,23 +160,12 @@ function CredentialRow({ rowKey, site, row, isAdmin, activeKey, onCopy, onEdit, 
       <td className="dr-creds-copy-all">
         <CopyChip label="Copy all" text={block} copyKey={`${rowKey}-all`} activeKey={activeKey} onCopy={onCopy} />
       </td>
-      <td className="dr-actions">
-        <button type="button" className="cand-btn cand-btn--sm" onClick={onEdit}>Edit</button>
-        {!isAdmin && onDelete && (
-          <button type="button" className="cand-btn cand-btn--sm cand-btn--danger" onClick={onDelete}>
-            Delete
-          </button>
-        )}
-      </td>
     </tr>
   )
 }
 
-function CredentialsSection({ creds, loading, error, active, onCredentialsChange, onError }) {
-  const { confirm } = useConfirm()
+function CredentialsSection({ creds, loading, active }) {
   const [activeKey, setActiveKey] = useState(null)
-  const [editor, setEditor] = useState(null)
-  const [saving, setSaving] = useState(false)
 
   const onCopy = useCallback(async (key, text) => {
     const ok = await copyToClipboard(text)
@@ -190,91 +175,8 @@ function CredentialsSection({ creds, loading, error, active, onCredentialsChange
     }
   }, [])
 
-  const openHandlerCreate = () => {
-    setEditor({ kind: 'handler', mode: 'create', username: null, form: { ...EMPTY_HANDLER_FORM } })
-  }
-
-  const openHandlerEdit = (row) => {
-    setEditor({
-      kind: 'handler',
-      mode: 'edit',
-      username: row.username,
-      form: {
-        username: row.username || '',
-        password: row.password || '',
-        reference: row.reference || '',
-        notes: row.notes || '',
-      },
-    })
-  }
-
-  const openAdminEdit = (row) => {
-    setEditor({
-      kind: 'admin',
-      mode: 'edit',
-      form: {
-        username: row.username || '',
-        password: row.password || '',
-        reference: row.reference || 'Full dashboard',
-      },
-    })
-  }
-
-  const saveEditor = async () => {
-    if (!editor || saving) return
-    setSaving(true)
-    onError?.('')
-    try {
-      let updated
-      if (editor.kind === 'admin') {
-        updated = await updateAdmin({
-          username: editor.form.username.trim(),
-          password: editor.form.password.trim(),
-          reference: editor.form.reference.trim(),
-        })
-      } else if (editor.mode === 'create') {
-        updated = await createHandler({
-          username: editor.form.username.trim(),
-          password: editor.form.password.trim(),
-          reference: editor.form.reference.trim() || editor.form.username.trim(),
-          notes: editor.form.notes.trim(),
-        })
-      } else {
-        updated = await updateHandler(editor.username, {
-          password: editor.form.password.trim(),
-          reference: editor.form.reference.trim(),
-          notes: editor.form.notes.trim(),
-        })
-      }
-      onCredentialsChange?.(updated)
-      setEditor(null)
-    } catch (e) {
-      onError?.(e.message || 'Save failed')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const removeHandler = async (row) => {
-    const ok = await confirm({
-      title: 'Remove handler?',
-      message: `Delete handler "${row.reference || row.username}"? This removes dashboard login access.`,
-      confirmLabel: 'Delete',
-      variant: 'danger',
-    })
-    if (!ok) return
-    onError?.('')
-    try {
-      const updated = await deleteHandler(row.username)
-      onCredentialsChange?.(updated)
-    } catch (e) {
-      onError?.(e.message || 'Delete failed')
-    }
-  }
-
   if (loading) return <p className="dr-muted">Loading credentials…</p>
-  if (error) return <p className="dr-error" role="alert">{error}</p>
-  if (!creds) return <p className="dr-muted">No credentials available.</p>
+  if (!creds) return null
   const site = creds.site_url || 'https://teleautomation.online'
   const admin = creds.admin
   const handlers = creds.handlers || []
@@ -283,16 +185,11 @@ function CredentialsSection({ creds, loading, error, active, onCredentialsChange
       className={`dr-section dr-credentials-section${active ? ' dr-section--active' : ''}`}
       aria-labelledby="dr-creds-title"
     >
-      <div className="dr-section-head dr-section-head--row">
-        <div>
-          <h2 id="dr-creds-title" className="dr-section-title">Dashboard logins</h2>
-          <p className="dr-section-desc">
-            Admin and handler credentials for teleautomation.online. Use Copy on each row.
-          </p>
-        </div>
-        <button type="button" className="cand-btn cand-btn--sm" onClick={openHandlerCreate}>
-          Add handler
-        </button>
+      <div className="dr-section-head">
+        <h2 id="dr-creds-title" className="dr-section-title">Dashboard logins</h2>
+        <p className="dr-section-desc">
+          Admin and handler credentials for teleautomation.online. Use Copy on each row.
+        </p>
       </div>
       <p className="dr-muted dr-creds-site">
         Site: <a href={site} target="_blank" rel="noopener noreferrer">{site}</a>
@@ -306,7 +203,6 @@ function CredentialsSection({ creds, loading, error, active, onCredentialsChange
               <th>Username</th>
               <th>Password</th>
               <th>Copy</th>
-              <th />
             </tr>
           </thead>
           <tbody>
@@ -318,7 +214,6 @@ function CredentialsSection({ creds, loading, error, active, onCredentialsChange
                 isAdmin
                 activeKey={activeKey}
                 onCopy={onCopy}
-                onEdit={() => openAdminEdit(admin)}
               />
             )}
             {handlers.map((h) => (
@@ -329,8 +224,6 @@ function CredentialsSection({ creds, loading, error, active, onCredentialsChange
                 row={h}
                 activeKey={activeKey}
                 onCopy={onCopy}
-                onEdit={() => openHandlerEdit(h)}
-                onDelete={() => removeHandler(h)}
               />
             ))}
           </tbody>
@@ -348,83 +241,6 @@ function CredentialsSection({ creds, loading, error, active, onCredentialsChange
           />
         </p>
       )}
-
-      {editor && (
-        <div className="dr-modal-backdrop" role="presentation" onClick={() => setEditor(null)}>
-          <div
-            className="dr-modal cand-card"
-            role="dialog"
-            aria-labelledby="dr-creds-modal-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 id="dr-creds-modal-title" className="cand-title">
-              {editor.kind === 'admin'
-                ? 'Edit admin login'
-                : editor.mode === 'create'
-                  ? 'Add handler'
-                  : 'Edit handler'}
-            </h2>
-            <div className="dr-form-grid">
-              {editor.kind !== 'admin' && editor.mode === 'create' && (
-                <label>
-                  Username
-                  <input
-                    className="cand-input"
-                    value={editor.form.username}
-                    onChange={(e) => setEditor((s) => ({ ...s, form: { ...s.form, username: e.target.value } }))}
-                  />
-                </label>
-              )}
-              {editor.kind === 'admin' && (
-                <label>
-                  Username
-                  <input
-                    className="cand-input"
-                    value={editor.form.username}
-                    onChange={(e) => setEditor((s) => ({ ...s, form: { ...s.form, username: e.target.value } }))}
-                  />
-                </label>
-              )}
-              <label>
-                Password
-                <input
-                  className="cand-input"
-                  type="text"
-                  value={editor.form.password}
-                  onChange={(e) => setEditor((s) => ({ ...s, form: { ...s.form, password: e.target.value } }))}
-                />
-              </label>
-              <label>
-                Reference / name
-                <input
-                  className="cand-input"
-                  value={editor.form.reference}
-                  onChange={(e) => setEditor((s) => ({ ...s, form: { ...s.form, reference: e.target.value } }))}
-                />
-              </label>
-              {editor.kind === 'handler' && (
-                <label className="dr-form-full">
-                  Notes
-                  <textarea
-                    className="cand-input"
-                    rows={3}
-                    value={editor.form.notes}
-                    onChange={(e) => setEditor((s) => ({ ...s, form: { ...s.form, notes: e.target.value } }))}
-                  />
-                </label>
-              )}
-            </div>
-            <div className="dr-modal-actions">
-              <button type="button" className="cand-btn" onClick={() => setEditor(null)} disabled={saving}>
-                Cancel
-              </button>
-              <button type="button" className="cand-btn cand-btn--primary" onClick={saveEditor} disabled={saving}>
-                {saving ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </section>
   )
 }
@@ -435,36 +251,21 @@ const DATA_ROOM_TABS = [
   { id: 'partners', label: 'Opportunities', adminOnly: false },
 ]
 
-function parseFetchError(res, data, fallback) {
-  if (res.status === 401) return 'Sign in required — refresh the page or log in again.'
-  if (res.status === 403) return 'Admin access required for this section.'
-  return data?.detail || data?.message || fallback || `Request failed (${res.status})`
-}
-
 export function DataRoomPanel() {
   const { confirm } = useConfirm()
-  const { role, loading: authLoading, authenticated } = useAuth()
+  const { role } = useAuth()
   const isAdmin = role !== 'handler'
-  const canLoadCredentials = isAdmin && !authLoading && authenticated
   const [rows, setRows] = useState([])
   const [stats, setStats] = useState(null)
   const [credentials, setCredentials] = useState(null)
   const [credsLoading, setCredsLoading] = useState(false)
-  const [credsError, setCredsError] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
   const [search, setSearch] = useState('')
-  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [editor, setEditor] = useState(null)
   const [activeTab, setActiveTab] = useState('logins')
-  const [reloadNonce, setReloadNonce] = useState(0)
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300)
-    return () => window.clearTimeout(timer)
-  }, [search])
 
   const visibleTabs = useMemo(
     () => DATA_ROOM_TABS.filter(tab => isAdmin || !tab.adminOnly),
@@ -493,85 +294,58 @@ export function DataRoomPanel() {
     }
   }, [isAdmin, activeTab, visibleTabs])
 
-  useEffect(() => {
-    if (!canLoadCredentials) {
-      if (!isAdmin) {
-        setCredentials(null)
-        setCredsError('')
-      }
-      setCredsLoading(false)
-      return undefined
+  const loadCredentials = useCallback(async () => {
+    if (!isAdmin) {
+      setCredentials(null)
+      return
     }
-
-    const controller = new AbortController()
-    let alive = true
     setCredsLoading(true)
-    setCredsError('')
-
-    fetchCredentials({ signal: controller.signal })
-      .then((creds) => {
-        if (!alive) return
-        setCredentials(creds)
-      })
-      .catch((e) => {
-        if (!alive || e.name === 'AbortError') return
+    try {
+      const res = await fetch(`${API_BASE}/data-room/credentials`, { credentials: 'include' })
+      const data = await res.json()
+      if (res.status === 403) {
         setCredentials(null)
-        setCredsError(e.message || 'Could not load credentials')
-      })
-      .finally(() => {
-        if (alive) setCredsLoading(false)
-      })
-
-    return () => {
-      alive = false
-      controller.abort()
+        return
+      }
+      if (data.status === 'ok') {
+        setCredentials(data.credentials || null)
+      }
+    } catch {
+      setCredentials(null)
+    } finally {
       setCredsLoading(false)
     }
-  }, [canLoadCredentials, isAdmin, reloadNonce])
+  }, [isAdmin])
 
-  useEffect(() => {
-    let alive = true
+  const load = useCallback(async () => {
     setLoading(true)
     setError('')
-
-    const q = new URLSearchParams()
-    if (statusFilter) q.set('status', statusFilter)
-    if (typeFilter) q.set('opportunity_type', typeFilter)
-    if (debouncedSearch) q.set('query', debouncedSearch)
-    const suffix = q.toString() ? `?${q}` : ''
-
-    fetch(`${API}/data-room${suffix}`, { credentials: 'include' })
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok) {
-          throw new Error(parseFetchError(res, data, 'Failed to load opportunities'))
-        }
-        if (data.status !== 'ok') {
-          throw new Error(data.message || 'Failed to load data room')
-        }
-        return { rows: data.opportunities || [], stats: data.stats || null }
-      })
-      .then(({ rows: nextRows, stats: nextStats }) => {
-        if (!alive) return
-        setRows(nextRows)
-        setStats(nextStats)
-      })
-      .catch((e) => {
-        if (!alive) return
-        setError(e.message || String(e))
-      })
-      .finally(() => {
-        if (alive) setLoading(false)
-      })
-
-    return () => {
-      alive = false
+    try {
+      const q = new URLSearchParams()
+      if (statusFilter) q.set('status', statusFilter)
+      if (typeFilter) q.set('opportunity_type', typeFilter)
+      if (search.trim()) q.set('query', search.trim())
+      const suffix = q.toString() ? `?${q}` : ''
+      const [partnersRes] = await Promise.all([
+        fetch(`${API_BASE}/data-room${suffix}`, { credentials: 'include' }),
+        loadCredentials(),
+      ])
+      const data = await partnersRes.json()
+      if (data.status !== 'ok') {
+        throw new Error(data.message || 'Failed to load data room')
+      }
+      setRows(data.opportunities || [])
+      setStats(data.stats || null)
+    } catch (e) {
+      setError(e.message || String(e))
+    } finally {
+      setLoading(false)
     }
-  }, [statusFilter, typeFilter, debouncedSearch, reloadNonce])
+  }, [statusFilter, typeFilter, search, loadCredentials])
 
-  const refreshAll = useCallback(() => {
-    setReloadNonce((n) => n + 1)
-  }, [])
+  useEffect(() => {
+    load()
+  }, [load])
 
   const openNew = () => setEditor({ mode: 'create', form: { ...EMPTY_FORM } })
 
@@ -603,8 +377,8 @@ export function DataRoomPanel() {
     const body = { ...editor.form }
     const url =
       editor.mode === 'create'
-        ? `${API}/data-room`
-        : `${API}/data-room/${editor.id}`
+        ? `${API_BASE}/data-room`
+        : `${API_BASE}/data-room/${editor.id}`
     const method = editor.mode === 'create' ? 'POST' : 'PATCH'
     const res = await fetch(url, {
       method,
@@ -618,7 +392,7 @@ export function DataRoomPanel() {
       return
     }
     setEditor(null)
-    refreshAll()
+    load()
   }
 
   const removeRow = async (row) => {
@@ -629,11 +403,11 @@ export function DataRoomPanel() {
       variant: 'danger',
     })
     if (!ok) return
-    await fetch(`${API}/data-room/${row.id}`, {
+    await fetch(`${API_BASE}/data-room/${row.id}`, {
       method: 'DELETE',
       credentials: 'include',
     })
-    refreshAll()
+    load()
   }
 
   const statCards = useMemo(() => {
@@ -664,7 +438,7 @@ export function DataRoomPanel() {
               Add opportunity
             </button>
           )}
-          <button type="button" className="cand-btn" onClick={refreshAll} disabled={loading || credsLoading}>
+          <button type="button" className="cand-btn" onClick={load} disabled={loading}>
             Refresh
           </button>
         </div>
@@ -686,34 +460,12 @@ export function DataRoomPanel() {
 
       {error && <p className="dr-error dr-page-error" role="alert">{error}</p>}
 
-      {credsError && activeTab === 'logins' && (
-        <p className="dr-error dr-page-error" role="alert">{credsError}</p>
-      )}
-
       {isAdmin && activeTab === 'logins' && (
-        <CredentialsSection
-          creds={credentials}
-          loading={credsLoading}
-          error={credsError}
-          active
-          onCredentialsChange={setCredentials}
-          onError={setCredsError}
-        />
+        <CredentialsSection creds={credentials} loading={credsLoading} active />
       )}
 
-      {isAdmin && activeTab === 'vault' && (
-        <>
-          {credsError && <p className="dr-error dr-page-error" role="alert">{credsError}</p>}
-          {credsLoading && <p className="dr-muted">Loading vault…</p>}
-          {!credsLoading && credentials && (
-            <DataRoomVaultSection
-              creds={credentials}
-              active
-              onCredentialsChange={setCredentials}
-              onError={setCredsError}
-            />
-          )}
-        </>
+      {isAdmin && activeTab === 'vault' && credentials && (
+        <DataRoomVaultSection creds={credentials} active />
       )}
 
       {activeTab === 'partners' && (

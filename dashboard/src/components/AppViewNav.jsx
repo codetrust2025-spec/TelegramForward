@@ -6,7 +6,6 @@ const MAIN_VIEWS = [
   { value: 'dashboard', label: 'Dashboard', shortLabel: 'Dashboard' },
   { value: 'inbox', label: 'Inbox', shortLabel: 'Inbox' },
   { value: 'candidates', label: 'Candidates', shortLabel: 'Candidates' },
-  { value: 'daily-ops', label: 'Daily ops', shortLabel: 'Daily ops' },
   { value: 'data-room', label: 'Data room', shortLabel: 'Data' },
   { value: 'admin', label: 'Admin', shortLabel: 'Admin' },
   { value: 'logs', label: 'Logs', shortLabel: 'Logs' },
@@ -82,9 +81,7 @@ export function AppViewNav({
                       ? 'Live activity logs'
                       : v.value === 'candidates'
                         ? 'Candidates tracker'
-                        : v.value === 'daily-ops'
-                          ? 'Interview roster and daily operations'
-                          : undefined
+                        : undefined
               }
             >
               {v.label}

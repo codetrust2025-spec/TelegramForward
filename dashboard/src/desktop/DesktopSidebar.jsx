@@ -7,7 +7,6 @@ const NAV = [
   { id: 'campaigns', label: 'Campaigns', icon: '📣' },
   { id: 'inbox', label: 'Inbox', icon: '✉', badgeKey: 'inbox' },
   { id: 'candidates', label: 'Candidates', icon: '📇' },
-  { id: 'daily-ops', label: 'Daily ops', icon: '📅' },
   { id: 'data', label: 'Data', icon: '📊' },
   { id: 'logs', label: 'Logs', icon: '📋' },
   { id: 'admin', label: 'Admin', icon: '⚙' },

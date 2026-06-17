@@ -5,7 +5,6 @@ import React from 'react'
 import { Spinner } from '../Loader.jsx'
 import { formatIstDateTime as fmtIstDt } from '../utils/istTime.js'
 import { AiEconomyPresetSection } from './AiEconomyPresetSection.jsx'
-import { InterviewRoster } from '../dailyOps/dailyOpsModule.jsx'
 
 const w = React
 const s = { Fragment: React.Fragment }
@@ -443,9 +442,6 @@ export function AdminPanel() {
     id: "karthik",
     label: "Karthik"
   }, {
-    id: "daily",
-    label: "Daily ops"
-  }, {
     id: "bugs",
     label: "Issues"
   }];
@@ -455,7 +451,7 @@ export function AdminPanel() {
               return <tr className={(A = b.flags) != null && A.length ? "admin-table-row--flagged" : ""} key={`${b.slot}:${b.user_id}`}><td><strong>{b.name}</strong>{b.username && <span className="admin-muted"> @{b.username.replace(/^@/, "")}</span>}</td><td><_Component34 status={b.status} /></td><td>{b.stage}</td><td><Fx temp={b.temperature} /></td><td>{((O = b.flags) == null ? undefined : O.join(", ")) || "—"}</td><td className="admin-cell-truncate" title={b.last_message}>{b.last_message || "—"}</td><td>{ct(b.slot)}</td></tr>;
             })}</tbody></table></div></section>}{e && o === "leads" && <section className="admin-card admin-card--full"><h2>Lead scoring</h2><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>User</th><th>Temp</th><th>Tech</th><th>Experience</th><th>Stage</th><th>CRM</th></tr></thead><tbody>{(e.lead_scoring || []).map(b => <tr key={`${b.slot}:${b.user_id}`}><td>{b.name}</td><td><Fx temp={b.temperature} /></td><td>{b.tech}</td><td>{b.experience}</td><td>{b.stage}</td><td>{b.crm_status}</td></tr>)}</tbody></table></div></section>}{e && o === "karthik" && <div className="admin-grid"><section className="admin-card"><h2>Performance (24h)</h2><ul className="admin-kv"><li><span>Sends</span><strong>{v.sends ?? 0}</strong></li><li><span>Success rate</span><strong>{((k = e.karthik) == null ? undefined : k.success_rate_pct) ?? 0}%</strong></li><li><span>Skipped</span><strong>{v.skipped ?? 0}</strong></li><li><span>Low confidence</span><strong>{v.low_confidence_sends ?? 0}</strong></li><li><span>Long replies</span><strong>{v.long_replies ?? 0}</strong></li><li><span>Queue cancelled</span><strong>{v.queue_cancelled ?? 0}</strong></li></ul></section><section className="admin-card"><h2>Quality control</h2><ul className="admin-kv"><li><span>One-reply guard</span><strong>{(T = e.quality) != null && T.one_reply_guard ? "Active" : "Off"}</strong></li><li><span>Dup blocked</span><strong>{((S = e.quality) == null ? undefined : S.duplicate_prevented_24h) ?? 0}</strong></li><li><span>Knowledge entries</span><strong>{g.knowledge_entries ?? 0}</strong></li><li><span>Work hours</span><strong>{g.work_hours_enabled ? `${g.work_hours_start}–${g.work_hours_end}` : "Off"}</strong></li></ul></section><section className="admin-card admin-card--wide"><h2>Recent AI events</h2><ul className="admin-event-list">{(((E = e.karthik) == null ? undefined : E.recent_events) || []).map((b, A) => <li key={`${b.t}-${A}`}><span className="admin-event-type">{b.type}</span>{b.slot && <span>{b.slot}</span>}{b.reason && <span className="admin-muted">{b.reason}</span>}<time>{b.t ? new Date(b.t).toLocaleTimeString("en-IN", {
                 timeZone: "Asia/Kolkata"
-              }) : ""}</time></li>)}</ul></section></div>}{e && o === "daily" && <InterviewRoster />}{e && o === "bugs" && <section className="admin-card admin-card--full"><h2>Bug & error monitor</h2><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Issue</th><th>Location</th><th>Impact</th><th>Status</th></tr></thead><tbody>{(e.bugs || []).map((b, A) => {
+              }) : ""}</time></li>)}</ul></section></div>}{e && o === "bugs" && <section className="admin-card admin-card--full"><h2>Bug & error monitor</h2><div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Issue</th><th>Location</th><th>Impact</th><th>Status</th></tr></thead><tbody>{(e.bugs || []).map((b, A) => {
               var O;
               return <tr key={`${b.issue_type}-${A}`}><td>{(O = b.issue_type) == null ? undefined : O.replace(/_/g, " ")}</td><td><code>{b.location}</code></td><td>{b.user_impact || b.root_cause}</td><td><span className={`admin-bug-status admin-bug-status--${b.status || "open"}`}>{b.status || "open"}</span></td></tr>;
             })}</tbody></table></div></section>}<AiSmartReplySettingsModal open={l} onClose={() => {

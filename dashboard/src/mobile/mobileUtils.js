@@ -80,6 +80,11 @@ export function activeFleetSlots(state, loggedInSlots) {
   )
 }
 
+/** Fleet grid ordering — same active slot list used by dashboard stats. */
+export function sortedFleetSlots(state, loggedInSlots) {
+  return activeFleetSlots(state, loggedInSlots)
+}
+
 /** Same running signal as account list rows / start-stop buttons for a workspace mode. */
 export function isAccountActiveForModeFilter(acct, slot, state, postingModes, modeFilter = 'all') {
   if (!acct || !slot) return false

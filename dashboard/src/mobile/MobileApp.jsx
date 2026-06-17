@@ -4,7 +4,6 @@ import { InboxPanel } from '../components/InboxPanel.jsx'
 import { CandidatesPanel } from '../components/CandidatesPanel.jsx'
 import { DataRoomPanel } from '../components/DataRoomPanel.jsx'
 import { AdminPanel } from '../components/AdminPanel.jsx'
-import { DailyOpsPanel } from '../dailyOps/dailyOpsModule.jsx'
 import { LogPanel, LogsToolbarTabs, LogToolbarActions } from '../components/LogPanel.jsx'
 import { ProgressHubPanel } from '../components/ProgressHubPanel.jsx'
 import { SetupMainPanel } from '../components/SetupMainPanel.jsx'
@@ -92,7 +91,6 @@ export function MobileApp({
   shutdownListCount,
   modesProps,
   inboxProps,
-  dailyOpsProps,
   logsProps,
   progressHubProps,
   confirm,
@@ -152,8 +150,6 @@ export function MobileApp({
     )
   } else if (mainView === 'admin') {
     mainContent = <AdminPanel />
-  } else if (mainView === 'daily-ops') {
-    mainContent = <DailyOpsPanel {...dailyOpsProps} />
   } else if (mainView === 'candidates') {
     mainContent = <CandidatesPanel />
   } else if (mainView === 'data-room') {

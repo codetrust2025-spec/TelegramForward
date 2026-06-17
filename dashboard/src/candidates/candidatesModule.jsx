@@ -9,8 +9,6 @@ import { formatIstDate as fmtIstD, formatIstDateTime as fmtIstDt } from '../util
 import { CandidatesActiveRoster } from './CandidatesActiveRoster.jsx'
 import { triggerRosterDownload } from './candidatesRosterUtils.js'
 
-import { consumePendingWorkOpenIntent } from '../dailyOps/dailyOpsModule.jsx'
-
 const w = React
 const s = { Fragment: React.Fragment }
 
@@ -643,8 +641,6 @@ function J8({
   stats: e,
   scopeLabel: t,
   onPayoutsClick: r,
-  onAnalyticsClick: analyticsClick = null,
-  compact: compactStats = false,
   handlerView: n = false,
   handlerName: a = null,
   scopeReference: scopeRef = null
@@ -670,7 +666,7 @@ function J8({
   const companyCompleted = scopedPerf ? scopedPerf.company_revenue_completed || Math.max(0, (scopedPerf.revenue_completed || 0) - (scopedPerf.auto_earnings_completed || 0)) : e.company_revenue_completed ?? Math.max(0, (e.revenue_completed || 0) - referralCommission);
   const pendingTotal = scopedPerf ? scopedPerf.pending_total || 0 : e.pending_total;
   const pendingCount = scopedPerf ? scopedPerf.pending_count || 0 : e.pending_count;
-  return <div className={compactStats ? "cand-stats cand-stats--compact" : "cand-stats"}><div className="cand-stat-card"><div className="cand-stat-label">Total candidates{t && <span className="cand-stat-scope">{t}</span>}</div><div className="cand-stat-value">{i}</div><div className="cand-stat-sub">{l} done · {c} active · {o} failed</div>{(e.consultancy_count || 0) > 0 && <div className="cand-stat-channel"><span className="cand-channel-pill cand-channel-pill--direct" title={`Direct leads · ₹${(e.default_expected_payment || 20000).toLocaleString("en-IN")} baseline`}>Direct <strong>{e.direct_count || 0}</strong></span><span className="cand-channel-pill cand-channel-pill--consultancy" title={`Consultancy leads · ₹${(e.consultancy_expected_payment || 15000).toLocaleString("en-IN")} baseline`}>Consultancy <strong>{e.consultancy_count || 0}</strong></span></div>}</div><div className="cand-stat-card"><div className="cand-stat-label">Total revenue{t && <span className="cand-stat-scope">{t}</span>}</div><div className="cand-stat-value cand-stat-value--money">{cr(revenueTotal)}</div><div className="cand-stat-sub">From completed: {cr(revenueCompleted)}</div></div><div className="cand-stat-card"><div className="cand-stat-label">Company revenue{t && <span className="cand-stat-scope">{t}</span>}</div><div className="cand-stat-value cand-stat-value--money">{cr(companyRevenue)}</div><div className="cand-stat-sub" title={`After referral ${cr(referralCommission)} · completed ${cr(companyCompleted)}`}>{compactStats ? `Completed: ${cr(companyCompleted)}` : `After referral ${cr(referralCommission)} · completed ${cr(companyCompleted)}`}</div></div><div className="cand-stat-card"><div className="cand-stat-label">Conversion{t && <span className="cand-stat-scope">{t}</span>}</div><div className="cand-stat-value">{u}%</div><div className="cand-stat-sub">{l} of {i} reached completed</div></div><div className={`cand-stat-card${(pendingCount || 0) > 0 ? " cand-stat-card--alert" : ""}`}><div className="cand-stat-label">Pending collections{t && <span className="cand-stat-scope">{t}</span>}</div><div className="cand-stat-value cand-stat-value--money cand-stat-value--alert">{cr(pendingTotal)}</div><div className="cand-stat-sub">{(pendingCount || 0) === 0 ? <s.Fragment>All candidates paid the ₹{(e.default_expected_payment || 20000).toLocaleString("en-IN")} baseline.</s.Fragment> : <s.Fragment><strong>{pendingCount}</strong> short of baseline{(e.pending_no_remark || 0) > 0 && <s.Fragment> · <strong className="cand-stat-warn">{e.pending_no_remark}</strong> missing remark</s.Fragment>}</s.Fragment>}</div></div>{!compactStats && (() => {
+  return <div className="cand-stats"><div className="cand-stat-card"><div className="cand-stat-label">Total candidates{t && <span className="cand-stat-scope">{t}</span>}</div><div className="cand-stat-value">{i}</div><div className="cand-stat-sub">{l} done · {c} active · {o} failed</div>{(e.consultancy_count || 0) > 0 && <div className="cand-stat-channel"><span className="cand-channel-pill cand-channel-pill--direct" title={`Direct leads · ₹${(e.default_expected_payment || 20000).toLocaleString("en-IN")} baseline`}>Direct <strong>{e.direct_count || 0}</strong></span><span className="cand-channel-pill cand-channel-pill--consultancy" title={`Consultancy leads · ₹${(e.consultancy_expected_payment || 15000).toLocaleString("en-IN")} baseline`}>Consultancy <strong>{e.consultancy_count || 0}</strong></span></div>}</div><div className="cand-stat-card"><div className="cand-stat-label">Total revenue{t && <span className="cand-stat-scope">{t}</span>}</div><div className="cand-stat-value cand-stat-value--money">{cr(revenueTotal)}</div><div className="cand-stat-sub">From completed: {cr(revenueCompleted)}</div></div><div className="cand-stat-card"><div className="cand-stat-label">Company revenue{t && <span className="cand-stat-scope">{t}</span>}</div><div className="cand-stat-value cand-stat-value--money">{cr(companyRevenue)}</div><div className="cand-stat-sub">After referral {cr(referralCommission)} · completed {cr(companyCompleted)}</div></div><div className="cand-stat-card"><div className="cand-stat-label">Conversion{t && <span className="cand-stat-scope">{t}</span>}</div><div className="cand-stat-value">{u}%</div><div className="cand-stat-sub">{l} of {i} reached completed</div></div><div className={`cand-stat-card${(pendingCount || 0) > 0 ? " cand-stat-card--alert" : ""}`}><div className="cand-stat-label">Pending collections{t && <span className="cand-stat-scope">{t}</span>}</div><div className="cand-stat-value cand-stat-value--money cand-stat-value--alert">{cr(pendingTotal)}</div><div className="cand-stat-sub">{(pendingCount || 0) === 0 ? <s.Fragment>All candidates paid the ₹{(e.default_expected_payment || 20000).toLocaleString("en-IN")} baseline.</s.Fragment> : <s.Fragment><strong>{pendingCount}</strong> short of baseline{(e.pending_no_remark || 0) > 0 && <s.Fragment> · <strong className="cand-stat-warn">{e.pending_no_remark}</strong> missing remark</s.Fragment>}</s.Fragment>}</div></div>{(() => {
       const x = scopedPerf ? Number(scopedPerf.auto_earnings_total) || 0 : e.handler_auto_earnings_total ?? e.handler_earnings_total ?? 0;
       const v = scopedPerf ? Number(scopedPerf.paid_out_total) || 0 : e.handler_paid_out_total ?? e.handler_deductions_total ?? 0;
       const g = scopedPerf ? Number(scopedPerf.net_payable) || 0 : x - v;
@@ -690,7 +686,7 @@ function J8({
         over: Math.max(0, -(Number(y.net_payable) || 0))
       })).filter(y => y.over > 0).sort((y, k) => k.over - y.over);
       return <button type="button" className={`cand-stat-card cand-stat-card--clickable cand-stat-card--payouts${g > 0 ? " cand-stat-card--owe" : g < 0 ? " cand-stat-card--alert" : ""}`} onClick={() => r == null ? undefined : r()} title={n ? "View your earnings breakdown" : "Click to view payout board — admin password required"}><div className="cand-stat-label">{n ? "My earnings" : "Handler payouts"}{t && <span className="cand-stat-scope">{t}</span>}<span className="cand-stat-arrow" aria-hidden={true}>→</span></div><div className={`cand-stat-value cand-stat-value--money ${g > 0 ? "cand-stat-value--earn" : g === 0 ? "" : "cand-stat-value--alert"}`}>{n ? g > 0 ? `Pending ${cr(g)}` : g === 0 ? "Settled" : `Overpaid ${cr(Math.abs(g))}` : <s.Fragment>{g > 0 ? "Owe " : g === 0 ? "Settled" : "Overpaid "}{g !== 0 && cr(Math.abs(g))}</s.Fragment>}</div>{m.length > 0 ? <ul className="cand-payto-list" aria-label={n ? "Your earnings breakdown" : "Handlers still owed money"}>{m.slice(0, 4).map(y => <li className="cand-payto-row" key={y.name}>{!n && <span className="cand-payto-action">Pay</span>}<span className="cand-payto-name">{n ? "Your share" : y.name}{y.salary > 0 && <em className="cand-payto-mix" title={`Salary ${cr(y.salary)} + commission ${cr(y.commission)} − paid ${cr(y.paid)}`}>salary {cr(y.salary)} + comm. {cr(y.commission)}</em>}</span><span className="cand-payto-amount">{cr(y.owe)}</span></li>)}{m.length > 4 && <li className="cand-payto-more">+ {m.length - 4} more · click for full list</li>}</ul> : g === 0 ? <div className="cand-payto-empty cand-payto-empty--settled">✓ Everyone is paid up.</div> : null}{_.length > 0 && <ul className="cand-payto-list cand-payto-list--over" aria-label="Handlers who have been over-paid">{_.slice(0, 3).map(y => <li className="cand-payto-row cand-payto-row--over" key={y.name}><span className="cand-payto-action">Recover from</span><span className="cand-payto-name">{y.name}</span><span className="cand-payto-amount">{cr(y.over)}</span></li>)}</ul>}<div className="cand-stat-sub"><strong className="cand-net-pos">{cr(x)}</strong> owed{salaryTotal > 0 ? <span title="Owed = salaries + 50% commission on receipts"> ({cr(salaryTotal)} salary + {cr(commissionTotal)} comm.)</span> : <s.Fragment> ({p}%)</s.Fragment>} · <strong className="cand-net-neg">{cr(v)}</strong> paid out</div></button>;
-    })()}{compactStats && analyticsClick && <button type="button" className="cand-stat-card cand-stat-card--analytics" onClick={() => analyticsClick()}><div className="cand-stat-label">Analytics<span className="cand-stat-arrow" aria-hidden={true}>→</span></div><div className="cand-stat-value">Details</div><div className="cand-stat-sub">Payouts & performers</div></button>}{!compactStats && <div className="cand-stat-card cand-stat-card--list"><div className="cand-stat-label">Top technologies (company share){t && <span className="cand-stat-scope">{t}</span>}</div><ul className="cand-stat-list">{(e.top_technologies || []).slice(0, 5).map(x => <li key={x.name}><span className="cand-stat-list-name">{x.name}</span><span className="cand-stat-list-value">{cr(x.revenue)}</span></li>)}{(e.top_technologies || []).length === 0 && <li className="cand-stat-list-empty">No data yet.</li>}</ul></div>}</div>;
+    })()}<div className="cand-stat-card cand-stat-card--list"><div className="cand-stat-label">Top technologies (company share){t && <span className="cand-stat-scope">{t}</span>}</div><ul className="cand-stat-list">{(e.top_technologies || []).slice(0, 5).map(x => <li key={x.name}><span className="cand-stat-list-name">{x.name}</span><span className="cand-stat-list-value">{cr(x.revenue)}</span></li>)}{(e.top_technologies || []).length === 0 && <li className="cand-stat-list-empty">No data yet.</li>}</ul></div></div>;
 }
 function $a(e) {
   const t = Number(e) || 0;
@@ -1635,310 +1631,6 @@ function pR(e) {
     return e;
   }
 }
-
-const PENDING_WORK_KIND_ICONS = {
-  missing_resume: "📄",
-  payment_due: "₹",
-  missing_follow_up: "💬",
-  missing_reference: "👤",
-  missing_phone: "📞",
-};
-const PENDING_WORK_KIND_ORDER = [
-  "missing_resume",
-  "payment_due",
-  "missing_follow_up",
-  "missing_reference",
-  "missing_phone",
-];
-
-function normalizeCandName(name) {
-  return String(name || "").trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function compactStageMeta(stage) {
-  const meta = fR(stage);
-  const icons = {
-    completed: "✓",
-    in_progress: "●",
-    fail: "✕",
-    dropped: "—",
-  };
-  const signCls = {
-    completed: "cand-badge__sign--done",
-    in_progress: "cand-badge__sign--active",
-    fail: "cand-badge__sign--fail",
-    dropped: "cand-badge__sign--dropped",
-  };
-  return {
-    ...meta,
-    icon: icons[stage] || "?",
-    signCls: signCls[stage] || "cand-badge__sign--dropped",
-  };
-}
-
-function CandStageDot({ stage }) {
-  if (stage !== "completed" && stage !== "in_progress") {
-    return null;
-  }
-  const meta = compactStageMeta(stage);
-  return <span className={`cand-stage-dot cand-stage-dot--${stage}`} title={meta.label} aria-hidden={true} />;
-}
-
-function CandCompactStatusBadge({ stage }) {
-  const meta = compactStageMeta(stage);
-  return (
-    <span className={`cand-badge ${meta.cls}`} title={meta.label}>
-      <span className={`cand-badge__sign ${meta.signCls}`.trim()} aria-hidden={true}>{meta.icon}</span>
-      <span className="cand-badge__text">{meta.label}</span>
-    </span>
-  );
-}
-
-function CandServiceTypeCell({ row }) {
-  if (row.service_type === "round_wise") {
-    const round = row.interview_round ? `R${row.interview_round}` : null;
-    return (
-      <span className="cand-svc cand-svc--round" title="Round-wise interview support">
-        <span className="cand-svc__kind">Round</span>
-        {round && <span className="cand-svc__round">{round}</span>}
-      </span>
-    );
-  }
-  return <span className="cand-svc cand-svc--profile" title="Profile service">Profile</span>;
-}
-
-function formatCompactCandDate(value) {
-  if (!value) {
-    return "—";
-  }
-  try {
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) {
-      return value;
-    }
-    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-  } catch {
-    return value;
-  }
-}
-
-function CandResumeCellCompact({ row }) {
-  const count = Number(row.resume_count) || (Array.isArray(row.resumes) ? row.resumes.length : 0);
-  return (
-    <div className="cand-resume-cell cand-resume-cell--compact">
-      {count > 0 ? (
-        <span className="cand-pay-proofs cand-pay-proofs--btn cand-resume-view cand-resume-view--compact" title={`${count} resume version${count === 1 ? "" : "s"}`}>
-          <span aria-hidden={true}>📄</span>
-        </span>
-      ) : (
-        <span className="cand-btn cand-btn--ghost cand-btn--xs cand-resume-upload cand-resume-upload--compact" title="No resume uploaded yet">↑</span>
-      )}
-    </div>
-  );
-}
-
-function groupPendingWorks(works) {
-  const groups = new Map();
-  for (const item of works || []) {
-    const kind = item.kind || "other";
-    if (!groups.has(kind)) {
-      groups.set(kind, { kind, label: item.label || kind, items: [] });
-    }
-    groups.get(kind).items.push(item);
-  }
-  return PENDING_WORK_KIND_ORDER.filter((kind) => groups.has(kind)).map((kind) => groups.get(kind));
-}
-
-function collectPendingWorksFromRows(rows, isAdmin) {
-  const works = [];
-  for (const row of rows || []) {
-    if (row.stage !== "in_progress") {
-      continue;
-    }
-    const base = {
-      candidate_id: row.id,
-      candidate_name: row.name || "",
-      reference: row.reference || "",
-      technology: row.technology || "",
-    };
-    const resumeCount = Number(row.resume_count) || (Array.isArray(row.resumes) ? row.resumes.length : 0);
-    if (resumeCount === 0) {
-      works.push({ ...base, id: `missing_resume:${row.id}`, kind: "missing_resume", label: "Upload resume", detail: "" });
-    }
-    if (row.needs_followup) {
-      works.push({ ...base, id: `payment_due:${row.id}`, kind: "payment_due", label: "Payment pending", detail: row.follow_up || "" });
-    }
-    if (!String(row.follow_up || "").trim() && row.needs_followup) {
-      works.push({ ...base, id: `missing_follow_up:${row.id}`, kind: "missing_follow_up", label: "Add follow-up remark", detail: "" });
-    }
-    if (!String(row.phone || "").trim()) {
-      works.push({ ...base, id: `missing_phone:${row.id}`, kind: "missing_phone", label: "Add phone number", detail: "" });
-    }
-    if (isAdmin && !String(row.reference || "").trim()) {
-      works.push({ ...base, id: `missing_reference:${row.id}`, kind: "missing_reference", label: "Assign referrer", detail: "" });
-    }
-  }
-  return works;
-}
-
-function CandPendingWorksSidebar({
-  works = [],
-  loading = false,
-  onOpenCandidate,
-  onFilterWorks,
-  filterActive = false,
-}) {
-  const [collapsed, setCollapsed] = w.useState(false);
-  const groups = w.useMemo(() => groupPendingWorks(works), [works]);
-  const taskCount = works.length;
-  const candidateCount = w.useMemo(() => new Set(works.map((item) => normalizeCandName(item.candidate_name))).size, [works]);
-  const filterTitle = candidateCount !== taskCount
-    ? `Show ${candidateCount} candidates with ${taskCount} pending tasks`
-    : `Show ${taskCount} candidate${taskCount === 1 ? "" : "s"} with pending work`;
-
-  if (!loading && works.length === 0) {
-    return (
-      <section className="cand-pending-works cand-pending-works--sidebar">
-        <header className="cand-pending-works__head">
-          <h3 className="cand-pending-works__title">Pending works</h3>
-        </header>
-        <div className="cand-pending-works__body">
-          <p className="cand-pending-works__empty">All clear — no pending tasks.</p>
-        </div>
-      </section>
-    );
-  }
-
-  return (
-    <section className={`cand-pending-works${collapsed ? " cand-pending-works--collapsed" : ""} cand-pending-works--sidebar`}>
-      <header className="cand-pending-works__head">
-        <div>
-          <h3 className="cand-pending-works__title">Pending works</h3>
-        </div>
-        <div className="cand-pending-works__actions">
-          {works.length > 0 && onFilterWorks && (
-            <button
-              type="button"
-              className={`cand-btn cand-btn--ghost cand-btn--xs${filterActive ? " cand-btn--active" : ""}`}
-              onClick={onFilterWorks}
-              title={filterTitle}
-            >
-              {filterActive ? "Show all" : `Filter (${taskCount})`}
-            </button>
-          )}
-          <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => setCollapsed((v) => !v)} aria-expanded={!collapsed}>
-            {collapsed ? "Expand" : "Collapse"}
-          </button>
-        </div>
-      </header>
-      {!collapsed && (
-        <div className="cand-pending-works__body">
-          {loading && <p className="cand-pending-works__empty">Loading pending works…</p>}
-          {!loading && groups.map((group) => (
-            <div className="cand-pending-works__group" key={group.kind}>
-              <h4 className="cand-pending-works__group-title">
-                <span aria-hidden={true}>{PENDING_WORK_KIND_ICONS[group.kind] || "•"}</span>
-                {group.label}
-                <span className="cand-pending-works__group-count">{group.items.length}</span>
-              </h4>
-              <ul className="cand-pending-works__list">
-                {group.items.map((item) => (
-                  <li className="cand-pending-works__item" key={item.id}>
-                    <button type="button" className="cand-pending-works__link" onClick={() => onOpenCandidate == null ? undefined : onOpenCandidate(item)}>
-                      <span className="cand-pending-works__name">{item.candidate_name}</span>
-                      {item.technology && <span className="cand-pending-works__tech">{item.technology}</span>}
-                      {item.reference && <span className="cand-pending-works__ref">{item.reference}</span>}
-                      {item.detail && <span className="cand-pending-works__detail">{item.detail}</span>}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function CandAnalyticsDrawer({
-  open,
-  onClose,
-  stats,
-  scopeLabel,
-  onPayoutsClick,
-  handlerView = false,
-  handlerName = null,
-  month,
-  onMonthChange,
-  monthOptions,
-  onExpensesChanged,
-  onShowEarnings,
-  onEditPayout,
-  scopeReference = null,
-}) {
-  w.useEffect(() => {
-    if (!open) {
-      return undefined;
-    }
-    const onKey = (ev) => {
-      if (ev.key === "Escape") {
-        onClose == null ? undefined : onClose();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prev;
-    };
-  }, [open, onClose]);
-
-  if (!open) {
-    return null;
-  }
-
-  return (
-    <s.Fragment>
-      <div className="cand-analytics-drawer-backdrop" onClick={onClose} role="presentation" aria-hidden={true} />
-      <aside className="cand-analytics-drawer" role="dialog" aria-modal={true} aria-labelledby="cand-analytics-title">
-        <header className="cand-analytics-drawer__head">
-          <div>
-            <h2 id="cand-analytics-title" className="cand-analytics-drawer__title">Analytics</h2>
-            <p className="cand-analytics-drawer__sub">
-              Top performers, handler payouts, and technology breakdown
-              {scopeLabel ? ` · ${scopeLabel}` : ""}
-            </p>
-          </div>
-          <button type="button" className="cand-modal-close" onClick={onClose} aria-label="Close analytics">×</button>
-        </header>
-        <div className="cand-analytics-drawer__body">
-          {stats && (
-            <_Component26
-              stats={stats}
-              month={month}
-              onMonthChange={onMonthChange}
-              monthOptions={monthOptions}
-              onExpensesChanged={onExpensesChanged}
-              onShowEarnings={onShowEarnings}
-              onEditPayout={onEditPayout}
-              handlerView={handlerView}
-              handlerName={handlerName}
-              scopeReference={scopeReference}
-            />
-          )}
-          {onPayoutsClick && (
-            <button type="button" className="cand-btn cand-btn--ghost cand-btn--sm" style={{ marginTop: 10 }} onClick={onPayoutsClick}>
-              Open full payout board →
-            </button>
-          )}
-        </div>
-      </aside>
-    </s.Fragment>
-  );
-}
-
 function mR() {
   const e = new Date();
   return `${e.getUTCFullYear()}-${String(e.getUTCMonth() + 1).padStart(2, "0")}`;
@@ -1959,14 +1651,6 @@ export function CandidatesPanel() {
   const [g, p] = w.useState("all");
   const [m, _] = w.useState(() => mR());
   const [y, k] = w.useState(false);
-  w.useEffect(() => {
-    try {
-      if (sessionStorage.getItem('cand-works-pending') === '1') {
-        sessionStorage.removeItem('cand-works-pending');
-        k(true);
-      }
-    } catch {}
-  }, []);
   const [T, S] = w.useState("all");
   const [E, b] = w.useState("");
   const [A, O] = w.useState("");
@@ -1977,7 +1661,6 @@ export function CandidatesPanel() {
   const [B, Z] = w.useState(null);
   const [P, j] = w.useState(null);
   const [ro, setRo] = w.useState(false);
-  const [analyticsOpen, setAnalyticsOpen] = w.useState(false);
   const {
     confirm: U
   } = nc();
@@ -2076,13 +1759,6 @@ export function CandidatesPanel() {
     Y(ge);
     M(true);
   };
-  w.useEffect(() => {
-    const intent = consumePendingWorkOpenIntent();
-    if (!intent || f) return;
-    const key = normalizeCandName(intent.candidate_name || '');
-    const match = i.find((row) => normalizeCandName(row.name) === key || row.id === intent.candidate_id);
-    if (match) I(match);
-  }, [f, i]);
   const Oe = () => {
     M(false);
     Y(null);
@@ -2178,158 +1854,12 @@ export function CandidatesPanel() {
       label: Be.count > 0 ? `${Be.name} · ${Be.count}` : Be.name
     }))];
   }, [c, u]);
-  const pendingWorks = w.useMemo(() => {
-    const fromStats = (c == null ? undefined : c.pending_works) || [];
-    return fromStats.length ? fromStats : collectPendingWorksFromRows(i, a);
-  }, [c, i, a]);
-  const pendingWorkNames = w.useMemo(() => new Set(pendingWorks.map((work) => normalizeCandName(work.candidate_name))), [pendingWorks]);
-  const pendingWorksBadge = (c == null ? undefined : c.pending_works_candidates) ?? pendingWorkNames.size;
-  const pendingWorksTitle = (c == null ? undefined : c.pending_count) > 0
-    ? "Show only candidates with a pending balance"
-    : "Show candidates with pending work tasks";
-  const openPendingWorkCandidate = w.useCallback((work) => {
-    const key = normalizeCandName(work.candidate_name);
-    const match = i.find((row) => normalizeCandName(row.name) === key || row.id === work.candidate_id);
-    if (match) {
-      I(match);
-      return;
-    }
-    v(`Could not open ${work.candidate_name || "candidate"} — try “All time” month filter.`);
-  }, [i]);
-  return (
-    <div className="cand-page cand-page--compact">
-      <div className="cand-page-sticky">
-        <header className="cand-header cand-header--compact">
-          <div className="cand-header-titles">
-            <h2 className="cand-title">Candidates</h2>
-            <p className="cand-subtitle">{n ? `Your referred candidates and earnings${t ? ` — ${t}` : ""}.` : "Tracker for every profile you take on — replaces the old Profiles list update Form sheet."}</p>
-          </div>
-          <div className="cand-header-actions">
-            <button type="button" className="cand-btn cand-btn--ghost cand-btn--icon" onClick={() => setRo(true)} title="Active list">☰</button>
-            <button type="button" className="cand-btn cand-btn--ghost cand-btn--icon" onClick={() => triggerRosterDownload({ month: "all", reference: T })} title="Download active CSV">↓</button>
-            {a && <button type="button" className="cand-btn cand-btn--ghost cand-btn--icon" onClick={ue} title="Manage expenses"><span aria-hidden={true}>₹</span></button>}
-            <button type="button" className="cand-btn cand-btn--primary" onClick={q}><span aria-hidden={true}>＋</span> Add</button>
-          </div>
-        </header>
-        <div className="cand-toolbar cand-toolbar--top" role="region" aria-label="Candidate filters">
-          <input className="cand-input cand-input--search" placeholder="Search name, tech, reference, phone, notes…" value={E} onChange={ge => b(ge.target.value)} />
-          <select className="cand-input" value={m} onChange={ge => _(ge.target.value)} aria-label="Filter by month">{Le.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select>
-          <select className="cand-input" value={g} onChange={ge => p(ge.target.value)}>{dR.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select>
-          {a && <select className={`cand-input${T !== "all" ? " cand-input--active" : ""}`} value={T} onChange={ge => S(ge.target.value)} aria-label="Filter by handler / reference" title="Show only candidates referred by this handler">{st.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select>}
-          <label className={`cand-toggle${y ? " cand-toggle--on" : ""}${(c == null ? undefined : c.pending_count) > 0 ? " cand-toggle--has-pending" : ""}`} title={pendingWorksTitle}>
-            <input type="checkbox" checked={y} onChange={ge => k(ge.target.checked)} />
-            <span>Works pending</span>
-            {(c == null ? undefined : c.pending_count) > 0 && <span className="cand-toggle-badge">{c.pending_count}</span>}
-          </label>
-          <div className="cand-toolbar-spacer" />
-          <span className="cand-toolbar-count">
-            {$e && <span className="cand-toolbar-scope">{$e} ·</span>}
-            {T !== "all" && <span className="cand-toolbar-scope cand-toolbar-scope--ref">{T} ·</span>}
-            {De === ye ? `${ye} candidate${ye === 1 ? "" : "s"}` : `${De} of ${ye}`}
-          </span>
-        </div>
-        {x && <div className="cand-error">{x}</div>}
-        {c && <J8 stats={c} scopeLabel={$e} onPayoutsClick={pe} onAnalyticsClick={() => setAnalyticsOpen(true)} compact={true} handlerView={n} handlerName={t} scopeReference={T !== "all" ? T : n ? t : null} />}
-      </div>
-      <div className="cand-workspace">
-        <div className="cand-workspace__main">
-          <div className="cand-table-wrap cand-table-wrap--compact">
-            <table className="cand-table cand-table--compact">
-              <thead>
-                <tr>
-                  <th>Candidate</th>
-                  <th>Type</th>
-                  <th>Status</th>
-                  <th>Phone</th>
-                  <th>Date</th>
-                  <th>Payment</th>
-                  <th>Resume</th>
-                  <th>Owner</th>
-                  <th aria-label="Actions" />
-                </tr>
-              </thead>
-              <tbody>
-                {f && i.length === 0 ? (
-                  <tr><td colSpan={9} className="cand-table-empty">Loading…</td></tr>
-                ) : i.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="cand-table-empty">
-                      No candidates match these filters. <button type="button" className="cand-link" onClick={q}>Add one</button>.
-                    </td>
-                  </tr>
-                ) : i.map(ge => {
-                  const rowTitle = [ge.follow_up, ge.notes].filter(Boolean).join(" · ") || undefined;
-                  return (
-                    <tr
-                      className={`cand-row${ge.needs_followup || pendingWorkNames.has(normalizeCandName(ge.name)) ? " cand-row--pending" : ""}${ge.stage === "completed" ? " cand-row--completed" : ge.stage === "in_progress" ? " cand-row--active" : ""}`}
-                      onClick={() => I(ge)}
-                      title={rowTitle}
-                      key={ge.id}
-                    >
-                      <td data-label="Candidate" className="cand-cell-candidate">
-                        <CandStageDot stage={ge.stage} />
-                        <div className="cand-cell-candidate__body cand-cell-candidate__body--inline">
-                          <span className="cand-name">{ge.name}</span>
-                          <span className="cand-cell-tech-sep" aria-hidden={true}>·</span>
-                          <span className="cand-cell-tech-inline">{ge.technology || "—"}</span>
-                        </div>
-                      </td>
-                      <td data-label="Type" className="cand-cell-type"><CandServiceTypeCell row={ge} /></td>
-                      <td data-label="Status"><CandCompactStatusBadge stage={ge.stage} /></td>
-                      <td data-label="Phone" className="cand-cell-phone" onClick={Ze => Ze.stopPropagation()}><_Component23 phone={ge.phone} inline={true} /></td>
-                      <td data-label="Date" className="cand-cell-date">{formatCompactCandDate(ge.date)}</td>
-                      <td data-label="Payment"><_Component27 row={ge} onViewProofs={Z} /></td>
-                      <td data-label="Resume" className="cand-cell-resume" onClick={Ze => Ze.stopPropagation()}><CandResumeCellCompact row={ge} /></td>
-                      <td data-label="Owner" className="cand-cell-owner">{ge.reference || "—"}</td>
-                      <td data-label="" className="cand-cell-actions" onClick={Ze => Ze.stopPropagation()}>
-                        <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => I(ge)} title="Edit">✎</button>
-                        {a && <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs cand-btn--danger-ghost" onClick={() => Pe(ge)} title="Delete">🗑</button>}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <aside className="cand-workspace__rail">
-          <CandPendingWorksSidebar
-            works={pendingWorks}
-            loading={f && pendingWorks.length === 0}
-            onOpenCandidate={openPendingWorkCandidate}
-            onFilterWorks={() => k((checked) => !checked)}
-            filterActive={y}
-          />
-        </aside>
-      </div>
-      <CandAnalyticsDrawer
-        open={analyticsOpen}
-        onClose={() => setAnalyticsOpen(false)}
-        stats={c}
-        scopeLabel={$e}
-        onPayoutsClick={pe}
-        handlerView={n}
-        handlerName={t}
-        month={m}
-        onMonthChange={_}
-        monthOptions={Le}
-        onExpensesChanged={fe}
-        onShowEarnings={a ? pe : undefined}
-        onEditPayout={a ? me : undefined}
-        scopeReference={T !== "all" ? T : n ? t : null}
-      />
-      {L && <X8 initial={C} handlerReference={n ? t : null} lockReference={n} isAdmin={a} onClose={Oe} onSave={Re} />}
-      {ce && <_Component28 stats={c} scopeLabel={$e} onClose={() => ee(false)} onManage={a ? ue : undefined} />}
-      {J && a && <_Component29 handlerNames={((c == null ? undefined : c.top_performers) || []).map(ge => ge.name).filter(Boolean)} ownedSummary={{
-        owed: (c == null ? undefined : c.handler_auto_earnings_total) ?? (c == null ? undefined : c.handler_earnings_total) ?? 0,
-        paid: (c == null ? undefined : c.handler_paid_out_total) ?? (c == null ? undefined : c.handler_deductions_total) ?? 0,
-        net: (c == null ? undefined : c.net_handler_payout) ?? 0
-      }} onClose={() => G(false)} onChanged={fe} />}
-      {P && a && <_Component30 handler={P} onClose={() => j(null)} onChanged={fe} />}
-      {B && <_Component31 candidate={B} onClose={() => Z(null)} onEdit={ge => I(ge)} />}
-      <CandidatesActiveRoster open={ro} onClose={() => setRo(false)} reference={T} />
-      <_Component32 open={!!W} title={W == null ? undefined : W.title} message={W == null ? undefined : W.message} onVerified={W == null ? undefined : W.onVerified} onCancel={H} />
-    </div>
-  );
-
+  return <div className="cand-page"><header className="cand-header"><div className="cand-header-titles"><h2 className="cand-title">Candidates</h2><p className="cand-subtitle">{n ? `Your referred candidates and earnings${t ? ` — ${t}` : ""}.` : "Tracker for every profile you take on — replaces the old Profiles list update Form sheet."}</p></div><div className="cand-header-actions"><button type="button" className="cand-btn cand-btn--ghost" onClick={() => setRo(true)} title="View all in-progress candidates grouped by technology">Active list</button><button type="button" className="cand-btn cand-btn--ghost" onClick={() => triggerRosterDownload({ month: "all", reference: T })} title="Download CSV of all active (in-progress) candidates">Download active CSV</button>{a && <button type="button" className="cand-btn cand-btn--ghost" onClick={ue} title="View, edit, or delete every handler earning + deduction (admin password required)"><span aria-hidden={true}>₹</span> Manage expenses{((c == null ? undefined : c.handler_deductions_total) > 0 || (c == null ? undefined : c.handler_earnings_total) > 0) && <span className="cand-btn-badge">{(c.handler_earnings_total || 0) + (c.handler_deductions_total || 0) > 0 ? "●" : ""}</span>}</button>}<button type="button" className="cand-btn cand-btn--primary" onClick={q}><span aria-hidden={true}>＋</span> Add candidate</button></div></header>{c && <J8 stats={c} scopeLabel={$e} onPayoutsClick={pe} handlerView={n} handlerName={t} scopeReference={T !== "all" ? T : n ? t : null} />}{c && <_Component26 stats={c} month={m} onMonthChange={_} monthOptions={Le} onExpensesChanged={fe} onShowEarnings={a ? pe : undefined} onEditPayout={a ? me : undefined} handlerView={n} handlerName={t} />}<div className="cand-toolbar" role="region" aria-label="Candidate filters"><input className="cand-input cand-input--search" placeholder="Search name, tech, reference, phone, notes…" value={E} onChange={ge => b(ge.target.value)} /><select className="cand-input" value={m} onChange={ge => _(ge.target.value)} aria-label="Filter by month">{Le.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select><select className="cand-input" value={g} onChange={ge => p(ge.target.value)}>{dR.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select>{a && <select className={`cand-input${T !== "all" ? " cand-input--active" : ""}`} value={T} onChange={ge => S(ge.target.value)} aria-label="Filter by handler / reference" title="Show only candidates referred by this handler">{st.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select>}<label className={`cand-toggle${y ? " cand-toggle--on" : ""}${(c == null ? undefined : c.pending_count) > 0 ? " cand-toggle--has-pending" : ""}`} title="Show only candidates with a pending balance"><input type="checkbox" checked={y} onChange={ge => k(ge.target.checked)} /><span>Pending only</span>{(c == null ? undefined : c.pending_count) > 0 && <span className="cand-toggle-badge">{c.pending_count}</span>}</label><div className="cand-toolbar-spacer" /><span className="cand-toolbar-count">{$e && <span className="cand-toolbar-scope">{$e} ·</span>}{T !== "all" && <span className="cand-toolbar-scope cand-toolbar-scope--ref">{T} ·</span>}{De === ye ? `${ye} candidate${ye === 1 ? "" : "s"}` : `${De} of ${ye}`}</span></div>{x && <div className="cand-error">{x}</div>}<div className="cand-table-wrap"><table className="cand-table"><thead><tr><th>Name</th><th>Technology</th><th>Stage</th><th>Payment</th><th>Date</th><th>Phone</th><th>Slot</th>{a && <th>Reference</th>}<th aria-label="Actions" /></tr></thead><tbody>{f && i.length === 0 ? <tr><td colSpan={a ? 9 : 8} className="cand-table-empty">Loading…</td></tr> : i.length === 0 ? <tr><td colSpan={a ? 9 : 8} className="cand-table-empty">No candidates match these filters. <button type="button" className="cand-link" onClick={q}>Add one</button>.</td></tr> : i.map(ge => {
+            const Ge = fR(ge.stage);
+            return <tr className={`cand-row${ge.needs_followup ? " cand-row--pending" : ""}`} onClick={() => I(ge)} key={ge.id}><td className="cand-cell-name"><span className="cand-name">{ge.name}</span>{ge.consultancy && <span className="cand-channel-tag cand-channel-tag--consultancy" title="Came via a consultancy partner — ₹15,000 baseline">Consultancy</span>}{ge.service_type === "round_wise" && <span className="cand-channel-tag cand-channel-tag--roundwise" title="Round-wise interview support">Round-wise{Eu(ge.interview_scope) ? " · internal" : ""}</span>}{(!ge.service_type || ge.service_type === "profile_service") && !ge.consultancy && <span className="cand-channel-tag cand-channel-tag--profile" title="Profile service — ₹20,000 baseline">Profile</span>}{ge.notes && <span className="cand-cell-note" title={ge.notes}>· {ge.notes.slice(0, 30)}{ge.notes.length > 30 ? "…" : ""}</span>}{ge.follow_up && <span className="cand-cell-followup" title={ge.follow_up}><span aria-hidden={true}>⟳</span> {ge.follow_up.slice(0, 60)}{ge.follow_up.length > 60 ? "…" : ""}</span>}</td><td>{ge.technology || "—"}</td><td><span className={`cand-badge ${Ge.cls}`}>{Ge.label}</span></td><td><_Component27 row={ge} onViewProofs={Z} /></td><td className="cand-cell-mono">{pR(ge.date)}</td><td className="cand-cell-mono cand-cell-phone" onClick={Ze => Ze.stopPropagation()}><_Component23 phone={ge.phone} /></td><td>{ge.slot_confirmed ? <span className="cand-slot-badge cand-slot-badge--ok" title="Slot confirmed (owner + payment + date)">✓ Slot</span> : <span className="cand-slot-badge cand-slot-badge--pending" title={ge.slot_confirm_block_reason || "Not confirmed"}>—</span>}</td>{a && <td className="cand-cell-ref">{ge.reference || "—"}</td>}<td className="cand-cell-actions" onClick={Ze => Ze.stopPropagation()}><button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => I(ge)} title="Edit">✎</button>{a && <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs cand-btn--danger-ghost" onClick={() => Pe(ge)} title="Delete">🗑</button>}</td></tr>;
+          })}</tbody></table></div>{L && <X8 initial={C} handlerReference={n ? t : null} lockReference={n} isAdmin={a} onClose={Oe} onSave={Re} />}{ce && <_Component28 stats={c} scopeLabel={$e} onClose={() => ee(false)} onManage={a ? ue : undefined} />}{J && a && <_Component29 handlerNames={((c == null ? undefined : c.top_performers) || []).map(ge => ge.name).filter(Boolean)} ownedSummary={{
+      owed: (c == null ? undefined : c.handler_auto_earnings_total) ?? (c == null ? undefined : c.handler_earnings_total) ?? 0,
+      paid: (c == null ? undefined : c.handler_paid_out_total) ?? (c == null ? undefined : c.handler_deductions_total) ?? 0,
+      net: (c == null ? undefined : c.net_handler_payout) ?? 0
+    }} onClose={() => G(false)} onChanged={fe} />}{P && a && <_Component30 handler={P} onClose={() => j(null)} onChanged={fe} />}{B && <_Component31 candidate={B} onClose={() => Z(null)} onEdit={ge => I(ge)} />}<CandidatesActiveRoster open={ro} onClose={() => setRo(false)} reference={T} /><_Component32 open={!!W} title={W == null ? undefined : W.title} message={W == null ? undefined : W.message} onVerified={W == null ? undefined : W.onVerified} onCancel={H} /></div>;
 }

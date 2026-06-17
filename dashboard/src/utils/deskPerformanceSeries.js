@@ -1,24 +1,4 @@
 const HOUR_MS = 3600 * 1000
-const IST_TZ = 'Asia/Kolkata'
-
-/** Format a UTC ms timestamp as 24h clock time in IST (e.g. 14:35). */
-export function formatIstClock(tsMs) {
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: IST_TZ,
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(new Date(tsMs))
-}
-
-/** X-axis labels: IST times for each hourly bucket (every 6h + latest). */
-export function buildIstHourlyLabels(bucketCount = 24, nowMs = Date.now()) {
-  return Array.from({ length: bucketCount }, (_, i) => {
-    if (i % 6 !== 0 && i !== bucketCount - 1) return ''
-    const ageHours = bucketCount - 1 - i
-    return formatIstClock(nowMs - ageHours * HOUR_MS)
-  })
-}
 
 function parseLogTs(entry) {
   const raw = entry?.timestamp || entry?.time
@@ -93,7 +73,10 @@ export function buildDeskPerformanceSeries({
   modeFilter = 'all',
   bucketCount = 24,
 }) {
-  const labels = buildIstHourlyLabels(bucketCount)
+  const labels = dailyStats?.hourly?.labels || Array.from({ length: bucketCount }, (_, i) => {
+    const age = bucketCount - 1 - i
+    return age === 0 ? 'now' : age % 6 === 0 ? `-${age}h` : ''
+  })
 
   const backendSent = pickHourlySent(dailyStats, modeFilter)
   const logBuckets = bucketLogsByHour(logs, bucketCount)

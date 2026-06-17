@@ -183,11 +183,7 @@ export function aggregateFleetStats(state, slots, options = {}) {
     const status = getAccountStatus(acct, loggedIn, acctStatus, state.account_shutdown, slot)
     const m = featureMetrics(acct, modeFilter)
 
-    if (modeFilter === 'forwarding') {
-      queueTotal += acctStatus?.queue_depth ?? 0
-    } else {
-      queueTotal += acct?.my_groups?.length ?? acctStatus?.queue_depth ?? 0
-    }
+    queueTotal += acctStatus?.queue_depth ?? 0
 
     if (status === 'running') runningCount += 1
     else if (status === 'sleeping') sleepingCount += 1
@@ -280,7 +276,6 @@ export function aggregateFleetStats(state, slots, options = {}) {
     needResend,
     processed: modeFilter === 'forwarding' ? tickTried : processed,
     successRate,
-    averageSuccessRate,
     progressValue: Math.min(progressMax, progressValue),
     progressMax,
     hasAnyCycle,

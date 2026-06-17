@@ -81,31 +81,6 @@ export function removeMessageById(prev, messageId) {
   return (prev || []).filter(m => Number(m.id) !== mid)
 }
 
-/** Compact time for chat list rows (Telegram-style). */
-export function formatInboxListTime(iso) {
-  if (!iso) return ''
-  try {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return ''
-    const now = new Date()
-    if (d.toDateString() === now.toDateString()) {
-      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-    }
-    const yesterday = new Date(now)
-    yesterday.setDate(now.getDate() - 1)
-    if (d.toDateString() === yesterday.toDateString()) {
-      return 'Yesterday'
-    }
-    const days = (now - d) / 86400000
-    if (days < 7) {
-      return d.toLocaleDateString([], { weekday: 'short' })
-    }
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
-  } catch {
-    return ''
-  }
-}
-
 export function slotTag(slot) {
   const m = String(slot).match(/^account(\d+)$/i)
   return m ? `A${m[1]}` : slot
@@ -218,20 +193,4 @@ export function defaultOutboundStatus(status) {
   if (s === 'read') return 'read'
   if (s === 'delivered') return 'delivered'
   return 'sent'
-}
-
-export function canDeleteOutboundMessage(message, { blocked = false } = {}) {
-  if (!message || message.direction !== 'out' || blocked) return false
-  if (message.status === 'sending') return false
-  return true
-}
-
-export function canEditOutboundMessage(message, { blocked = false } = {}) {
-  if (!canDeleteOutboundMessage(message, { blocked })) return false
-  if (message.media_type || message.has_media) return false
-  return Boolean((message.text || '').trim())
-}
-
-export function removeMessageById(messages, messageId) {
-  return (messages || []).filter(m => String(m.id) !== String(messageId))
 }

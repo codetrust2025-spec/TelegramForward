@@ -71,8 +71,6 @@ export function GlobalProgressSection({
   statsWindow,
   dailyStats,
   subscriptionSlots = [],
-  postingModes = {},
-  accountStates = {},
   sections: sectionsProp,
 }) {
   const sections = { ...DEFAULT_SECTIONS, ...sectionsProp }
@@ -201,8 +199,6 @@ export function GlobalProgressSection({
           accountInfo={accountInfo}
           statsWindow={statsWindow}
           dailyStats={dailyStats}
-          postingModes={postingModes}
-          accountStates={accountStates}
         />
       )}
 
