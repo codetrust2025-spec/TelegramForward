@@ -241,3 +241,6 @@ export function buildDeskDashSummary({
     countdown: fleet?.minCountdown ?? 0,
   }
 }
+
+/** @deprecated alias — desktop home imports this name */
+export const computeDashboardStats = buildDeskDashSummary

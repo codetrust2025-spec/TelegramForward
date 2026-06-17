@@ -52,13 +52,17 @@ if [ -f "$PROJECT_DIR/.env" ]; then
 fi
 echo "      Backup saved to $BACKUP_DIR"
 
-# ── 3. Pull latest code (skip if uploaded directly, no .git) ─
-echo "[3/7] Updating code..."
+# ── 3. Pull latest code (required — git is source of truth) ─
+echo "[3/7] Updating code from GitHub..."
 if [ -d "$PROJECT_DIR/.git" ]; then
   git fetch origin main
-  git pull origin main
+  git pull --ff-only origin main
 else
-  echo "      Skipping git pull — using code already on disk"
+  echo "ERROR: $PROJECT_DIR is not a git repository."
+  echo "       Drift happens when code is uploaded without git."
+  echo "       On your PC run:  python scripts/setup_vps_git.py"
+  echo "       Then deploy via: python scripts/deploy_prod.py"
+  exit 1
 fi
 
 # ── 4. Python deps ───────────────────────────────────────────
@@ -86,6 +90,11 @@ cd "$PROJECT_DIR"
 if [ ! -f "$PROJECT_DIR/static/index.html" ]; then
   echo "ERROR: dashboard build failed — static/index.html missing"
   exit 1
+fi
+
+if [ -f "$PROJECT_DIR/scripts/write_production_manifest.py" ]; then
+  echo "      Writing production.manifest.json..."
+  python3 "$PROJECT_DIR/scripts/write_production_manifest.py" || echo "WARN: manifest write failed"
 fi
 
 # TeleAutomation monolith can bundle two React copies; patch useConfirm to read global fallback.

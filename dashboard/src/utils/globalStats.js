@@ -23,6 +23,12 @@ export function formatSuccessRateDisplay(rate) {
   return String(rate)
 }
 
+/** Fleet-level success % for dashboard home stats bar. */
+export function fleetDisplaySuccessRate(fleet) {
+  if (!fleet || typeof fleet !== 'object') return null
+  return computeSuccessRatePct(fleet.success, fleet.failed)
+}
+
 function featureMetrics(acct, modeFilter) {
   if (!acct) {
     return {
