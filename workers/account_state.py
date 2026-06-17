@@ -105,7 +105,7 @@ class AccountState:
 
     def to_dict(self) -> dict:
         try:
-            from core.send_stats import count_24h
+            from core.send_stats import count_24h, count_24h_for_mode
 
             messages_sent_24h = count_24h(self.slot)
             forward_posts_24h = count_24h(self.slot, "forward")

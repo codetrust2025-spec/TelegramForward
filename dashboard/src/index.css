@@ -9975,9 +9975,14 @@ body {
 /* ── Stats strip ───────────────────────────────────────────────────────────── */
 
 .cand-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
 }
 
 /* Candidates dashboard — keep all 7 summary cards on one row */
@@ -10011,6 +10016,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 1 0 150px;
+  min-width: 150px;
 }
 .cand-stat-label {
   font-size: 11px;
@@ -10031,6 +10038,10 @@ body {
 .cand-stat-sub {
   font-size: 11px;
   color: var(--text-dim, #94a3b8);
+}
+.cand-stat-card--list {
+  flex: 1.15 0 170px;
+  min-width: 170px;
 }
 .cand-stat-card--list .cand-stat-value {
   display: none;
@@ -11773,6 +11784,20 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   /* let the card grow with the pay-to list */
   text-align: left;
   align-items: stretch;
+  flex: 1.2 0 200px;
+  min-width: 200px;
+}
+
+.cand-stat-card--expenses {
+  text-align: left;
+  border-color: rgba(248, 113, 113, 0.35);
+  background: linear-gradient(140deg, rgba(248, 113, 113, 0.12), rgba(248, 113, 113, 0.04));
+  flex: 1 0 150px;
+  min-width: 150px;
+}
+
+.cand-stat-value--expenses {
+  color: #fca5a5;
 }
 .cand-payto-list {
   list-style: none;
@@ -12715,7 +12740,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   .cand-input--search { min-width: 100%; flex: 1 1 100%; }
 }
 @media (max-width: 360px) {
-  .cand-stats { grid-template-columns: 1fr; }
+  .cand-stat-card { min-width: 120px; }
 }
 
 /* ============================================================================

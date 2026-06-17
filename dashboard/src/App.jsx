@@ -944,7 +944,11 @@ export default function App() {
     }),
     [state, loggedInSlots, workspaceMode],
   )
-  const sentWindowLabel = state.daily_stats?.window === 'since_reset' ? 'Since reset' : 'Last 24h'
+  const sentWindowLabel = state.daily_stats?.window === 'since_reset'
+    ? 'Since reset'
+    : state.daily_stats?.window === 'ist_day'
+      ? 'Today IST'
+      : 'Last 24h'
   const inboxUnreadTotal = useMemo(
     () => computeInboxUnreadTotal(inboxState),
     [inboxState],
@@ -2482,13 +2486,9 @@ export default function App() {
                 const incoming = full?.account_states
                 if (incoming && prev.account_states) {
                   const account_states = { ...prev.account_states }
-                  for (const slot of Object.keys(account_states)) {
-                    const patch = incoming[slot]
-                    if (!patch?.join_stats) continue
-                    account_states[slot] = {
-                      ...account_states[slot],
-                      join_stats: patch.join_stats,
-                    }
+                  for (const [slot, patch] of Object.entries(incoming)) {
+                    if (!patch || typeof patch !== 'object') continue
+                    account_states[slot] = { ...(account_states[slot] || {}), ...patch }
                   }
                   next.account_states = account_states
                 }
@@ -2584,6 +2584,11 @@ export default function App() {
           stopIncomingCallRing()
           setIncomingCall(null)
         }}
+      />
+
+      <ChangePasswordModal
+        open={changePasswordOpen}
+        onClose={() => setChangePasswordOpen(false)}
       />
 
     </div>

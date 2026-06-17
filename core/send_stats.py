@@ -19,8 +19,22 @@ _lock = threading.Lock()
 _cache: Dict[str, tuple[float, dict[str, int]]] = {}  # slot -> (cached_at, counts)
 
 
-def _stats_path(slot: str) -> str:
+def _normalize_mode(mode: str | None) -> str | None:
+    if not mode:
+        return None
+    m = str(mode).strip().lower()
+    if m in ("forward", "forwarding"):
+        return "forward"
+    if m in ("campaign", "camp"):
+        return "campaign"
+    return m
+
+
+def _stats_path(slot: str, mode: str | None = None) -> str:
     os.makedirs(os.path.join(STATE_DIR, slot), exist_ok=True)
+    norm = _normalize_mode(mode)
+    if norm in ("forward", "campaign"):
+        return os.path.join(STATE_DIR, slot, f"send_history_{norm}.json")
     return os.path.join(STATE_DIR, slot, "send_history.json")
 
 
@@ -66,10 +80,11 @@ def _save_events(slot: str, events: list[dict]) -> None:
 
 
 def invalidate_cache(slot: str | None = None) -> None:
-    """Clear cached counts after a stats reset."""
     with _lock:
         if slot:
-            _cache.pop(slot, None)
+            keys = [k for k in _cache if k[0] == slot]
+            for key in keys:
+                _cache.pop(key, None)
         else:
             _cache.clear()
 
@@ -152,6 +167,7 @@ def count_24h(slot: str, kind: SendKind | None = None) -> int:
     """Posts since last reset (or rolling 24h); optional kind filter."""
     if not slot:
         return 0
+    norm = _normalize_mode(mode)
     now = time.time()
     with _lock:
         cached = _cache.get(slot)

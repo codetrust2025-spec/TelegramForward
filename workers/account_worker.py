@@ -70,6 +70,7 @@ from core.groups_store import (
     groups_readonly_snapshot_for_slot,
     load_account_dead,
     load_master_groups,
+    mark_group_blocked,
     purge_invalid_from_master,
     purge_stored_invalid_groups,
     save_account_dead,
@@ -447,8 +448,9 @@ class AccountWorker:
 
     async def _finalize_cycle_metrics(self, groups_total: int, groups_processed: int) -> None:
         from core.cycle_metrics import cycle_metrics_store
+        from workers.feature_runtime import campaign_runtime
 
-        st = self.state
+        st = campaign_runtime(self.state)
         skipped = (
             st.skipped_already_posted + st.skipped_cooldown + st.skipped_other
         )
@@ -901,7 +903,9 @@ class AccountWorker:
 
         """Run one atomic group operation; update this account's state only."""
 
-        st = self.state
+        from workers.feature_runtime import campaign_runtime
+
+        st = campaign_runtime(self.state)
 
         delay_used: int | None = None
 
@@ -1189,7 +1193,7 @@ class AccountWorker:
 
             elif result == "blocked":
 
-                st.blocked_groups.add(group)
+                mark_group_blocked(self.slot, group, st.blocked_groups)
 
                 st.failed += 1
 
@@ -1342,7 +1346,7 @@ class AccountWorker:
 
             elif result == "cant_write":
 
-                st.blocked_groups.add(group)
+                mark_group_blocked(self.slot, group, st.blocked_groups)
 
                 st.failed += 1
 
@@ -2047,6 +2051,7 @@ class AccountWorker:
 
             return self._cycle_end_reason in ("complete", "cycle_wall_limit")
 
+        except Exception as e:
             await self._log(f"Cycle error (recovered): {e}", "error", action="cycle_error")
             self._cycle_end_reason = "error"
             if self._cycle_metrics_active:

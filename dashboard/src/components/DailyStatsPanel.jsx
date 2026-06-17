@@ -34,9 +34,46 @@ function windowLabel(dailyStats, scopeAccount) {
         return `${who} · since reset · ${formatIstDateTime(d.reset_at)} IST`
       }
     } catch { /* ignore */ }
-    return `${who} · since last reset`
+    return `${who} · since last reset (IST)`
   }
-  return `${who} · rolling last 24 hours`
+  return `${who} · today · midnight IST – now`
+}
+
+function sumScopedStats(dailyStats, accountSlots, accountStates, scopeAccount, pick) {
+  if (scopeAccount) {
+    const row = dailyStats?.per_account?.[scopeAccount] || {}
+    return pick(row)
+  }
+  let total = 0
+  for (const slot of accountSlots) {
+    const row = dailyStats?.per_account?.[slot] || {}
+    total += pick(row)
+  }
+  return total
+}
+
+function sumByPostingMode(dailyStats, accountSlots, accountStates, postingModes, mode, pick) {
+  let total = 0
+  for (const slot of accountSlots) {
+    if (mode === 'campaign' && !isCampaignEnabled(accountStates, slot, postingModes)) continue
+    if (mode === 'forwarding' && !isForwardingEnabled(accountStates, slot, postingModes)) continue
+    const row = dailyStats?.per_account?.[slot] || {}
+    total += pick(row)
+  }
+  return total
+}
+
+function accountMatchesReachView(mode, reachView) {
+  if (reachView === 'forwarding') return mode === 'forwarding'
+  if (reachView === 'campaign') return mode === 'campaign'
+  return true
+}
+
+function countAccountsInMode(accountSlots, accountStates, postingModes, mode) {
+  if (mode === 'campaign') {
+    return accountSlots.filter(s => isCampaignEnabled(accountStates, s, postingModes)).length
+  }
+  return accountSlots.filter(s => isForwardingEnabled(accountStates, s, postingModes)).length
 }
 
 function sumScopedStats(dailyStats, accountSlots, accountStates, scopeAccount, pick) {
@@ -276,8 +313,8 @@ export function DailyStatsPanel({
           onClick={() => (scopeAccount ? handleReset('account', scopeAccount) : handleReset('global'))}
           disabled={!!resetting}
           title={scopeAccount
-            ? `Reset daily counters for ${accountLabel(scopeAccount)}`
-            : 'Reset all daily counters to zero from now'}
+            ? `Reset today's counters for ${accountLabel(scopeAccount)} (IST day)`
+            : 'Reset all daily counters from now until midnight IST'}
         >
           <ButtonContent loading={scopeAccount ? accountResetting : globalResetting} loadingLabel="Resetting…">
             ⟳ Reset 24h
@@ -481,7 +518,7 @@ export function DailyStatsPanel({
                     className="btn btn--ghost btn--sm daily-stats-account-reset"
                     onClick={() => handleReset('account', row.slot)}
                     disabled={!!resetting}
-                    title={`Reset 24-hour stats for ${accountLabel(row.slot)} only`}
+                    title={`Reset today's stats for ${accountLabel(row.slot)} (IST day)`}
                   >
                     <ButtonContent loading={rowResetting} loadingLabel="…">
                       Reset

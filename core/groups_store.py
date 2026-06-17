@@ -4,6 +4,7 @@ import json
 import os
 import re
 import threading
+import time
 from typing import Iterable, List, Set
 
 from core.config import ACCOUNTS, BASE_DIR, DATA_DIR, GROUPS_FILE, STATE_DIR
@@ -12,6 +13,9 @@ from core.group_assignment import groups_for_slot, partition_summary
 LEGACY_GROUPS_TXT = os.path.join(BASE_DIR, "groups_list.txt")
 INVALID_REGISTRY_FILE = os.path.join(DATA_DIR, "invalid_username_registry.json")
 _master_write_lock = threading.Lock()
+
+# Retry blocked groups after this many seconds (admin/broadcast bans may lift).
+BLOCKED_GROUP_TTL_SECONDS = 14 * 86400
 
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,}$")
 _HEADER_WORDS = frozenset({
@@ -313,20 +317,87 @@ def _account_dead_file(slot: str, kind: str) -> str:
     return os.path.join(STATE_DIR, slot, f"{kind}_groups.json")
 
 
+def _load_blocked_meta(path: str, *, now: float | None = None) -> dict[str, float]:
+    """group -> blocked_at unix timestamp."""
+    if not os.path.exists(path):
+        return {}
+    now = now or time.time()
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    if isinstance(data, list):
+        return {str(g): now for g in data if g}
+    if isinstance(data, dict):
+        if data.get("version") == 2 and isinstance(data.get("groups"), dict):
+            return {
+                str(g): float(ts)
+                for g, ts in data["groups"].items()
+                if g and ts is not None
+            }
+        if "groups" not in data:
+            return {
+                str(g): float(ts)
+                for g, ts in data.items()
+                if g not in ("version",) and ts is not None
+            }
+    return {}
+
+
+def _active_blocked_meta(meta: dict[str, float], *, now: float | None = None) -> dict[str, float]:
+    now = now or time.time()
+    ttl = BLOCKED_GROUP_TTL_SECONDS
+    return {
+        g: ts
+        for g, ts in meta.items()
+        if now - float(ts) < ttl
+    }
+
+
+def _write_blocked_meta(path: str, meta: dict[str, float]) -> None:
+    payload = {
+        "version": 2,
+        "groups": {g: float(ts) for g, ts in sorted(meta.items())},
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+
+def load_blocked_groups(slot: str) -> Set[str]:
+    path = _account_dead_file(slot, "blocked")
+    meta = _load_blocked_meta(path)
+    active = _active_blocked_meta(meta)
+    if len(active) != len(meta):
+        _write_blocked_meta(path, active)
+    return set(active)
+
+
+def mark_group_blocked(slot: str, group: str, blocked: Set[str]) -> None:
+    """Persist a blocked group with timestamp so it can retry after TTL."""
+    if not group:
+        return
+    blocked.add(group)
+    path = _account_dead_file(slot, "blocked")
+    meta = _load_blocked_meta(path)
+    active = _active_blocked_meta(meta)
+    active[group] = time.time()
+    _write_blocked_meta(path, active)
+
+
 def load_account_dead(slot: str) -> tuple[Set[str], Set[str]]:
     """Per-account invalid/blocked sets — fully isolated."""
     invalid_path = _account_dead_file(slot, "invalid")
-    blocked_path = _account_dead_file(slot, "blocked")
-    invalid, blocked = set(), set()
-    for path, target in ((invalid_path, invalid), (blocked_path, blocked)):
-        if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        target.update(data)
-            except Exception:
-                pass
+    invalid: Set[str] = set()
+    if os.path.exists(invalid_path):
+        try:
+            with open(invalid_path, encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    invalid.update(data)
+        except Exception:
+            pass
+    blocked = load_blocked_groups(slot)
     return invalid, blocked
 
 
@@ -357,10 +428,15 @@ def build_group_lists(slot: str) -> dict:
 
 def save_account_dead(slot: str, invalid: Set[str], blocked: Set[str]) -> None:
     _ensure_dirs(slot)
-    for kind, data in (("invalid", sorted(invalid)), ("blocked", sorted(blocked))):
-        path = _account_dead_file(slot, kind)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+    invalid_path = _account_dead_file(slot, "invalid")
+    with open(invalid_path, "w", encoding="utf-8") as f:
+        json.dump(sorted(invalid), f, indent=2)
+    blocked_path = _account_dead_file(slot, "blocked")
+    meta = _load_blocked_meta(blocked_path)
+    active = _active_blocked_meta(meta)
+    now = time.time()
+    kept = {g: active.get(g, meta.get(g, now)) for g in blocked if g}
+    _write_blocked_meta(blocked_path, kept)
 
 
 def _read_group_intelligence(slot: str) -> dict:
