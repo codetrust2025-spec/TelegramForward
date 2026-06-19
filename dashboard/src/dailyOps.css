@@ -509,14 +509,14 @@
 
 /* Full-height daily ops — table grows to fill viewport */
 @media (min-width:901px){
-.desktop-body--daily-ops{padding:6px 10px 10px;overflow:hidden;display:flex;flex-direction:column}
+.desktop-body--daily-ops{padding:6px 10px 10px;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column}
 .desktop-body--daily-ops>.daily-ops-page--dashboard,.app-shell--view-daily-ops .daily-ops-page--dashboard{flex:1 1 auto;min-height:0;height:100%}
 .desktop-body--daily-ops .ops-dashboard--v3,.app-shell--view-daily-ops .ops-dashboard--v3{flex:1 1 auto;min-height:0}
 .desktop-body--daily-ops .ops-dash-board,.app-shell--view-daily-ops .ops-dash-board{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
 .desktop-body--daily-ops .ops-dash-grid12--ops,.app-shell--view-daily-ops .ops-dash-grid12--ops{flex:1 1 auto;min-height:0;align-items:stretch;grid-template-columns:minmax(0,1fr) minmax(260px,300px)}
 .desktop-body--daily-ops .ops-dash-span-8,.app-shell--view-daily-ops .ops-dash-span-8{display:flex;flex-direction:column;min-height:0;gap:var(--ops-space)}
 .desktop-body--daily-ops .ops-dash-span-8>.ops-dash-kpi-row--v3,.app-shell--view-daily-ops .ops-dash-span-8>.ops-dash-kpi-row--v3{flex:0 0 auto;margin-bottom:0}
-.desktop-body--daily-ops .ops-dash-roster,.app-shell--view-daily-ops .ops-dash-roster{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.desktop-body--daily-ops .ops-dash-roster,.app-shell--view-daily-ops .ops-dash-roster{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:visible}
 .desktop-body--daily-ops .ops-dash-roster .ops-dash-table-wrap,.app-shell--view-daily-ops .ops-dash-roster .ops-dash-table-wrap{flex:1 1 auto;min-height:0;overflow:auto;border-radius:6px;border:1px solid rgba(255,255,255,.06)}
 .desktop-body--daily-ops .ops-dash-sidebar,.app-shell--view-daily-ops .ops-dash-sidebar{min-height:0;overflow-y:auto;max-height:100%}
 .ops-dash-roster__title{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto auto;gap:2px 10px;align-items:center}

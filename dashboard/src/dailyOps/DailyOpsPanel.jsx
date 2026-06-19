@@ -183,6 +183,7 @@ export function DailyOpsPanel({
         )}
 
         <InterviewRoster
+          key={`${fromDate}|${toDate}`}
           variant="dashboard"
           dashboardFromDate={fromDate}
           dashboardToDate={toDate}

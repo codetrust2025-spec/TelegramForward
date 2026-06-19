@@ -1,0 +1,53 @@
+"""Patch static daily-ops bundle for roster reload + upcoming date range."""
+from pathlib import Path
+
+BUNDLE = Path("static/assets/app-Dks3ojat.js")
+CSS = Path("static/assets/index-X8Z7CYT5.css")
+DAILY_CSS = Path("dashboard/src/dailyOps.css")
+
+s = BUNDLE.read_text(encoding="utf-8")
+orig = s
+
+# 1) Upcoming preset: include last 7 days so local synced data is visible.
+old_upcoming = 'case"upcoming":return{from:t,to:Fd(t,14)}'
+new_upcoming = 'case"upcoming":return{from:A$(),to:Fd(t,14)}'
+if old_upcoming not in s:
+    raise SystemExit(f"upcoming preset not found")
+s = s.replace(old_upcoming, new_upcoming, 1)
+
+# 2) Default tab: last 7 days instead of empty upcoming-only window.
+old_default = 'f=Wh("upcoming"),[h,m]=b.useState(f.from),[g,p]=b.useState(f.to),[w,x]=b.useState("upcoming")'
+new_default = 'f=Wh("last7"),[h,m]=b.useState(f.from),[g,p]=b.useState(f.to),[w,x]=b.useState("last7")'
+if old_default not in s:
+    raise SystemExit("default preset init not found")
+s = s.replace(old_default, new_default, 1)
+
+# 3) Force roster remount when date range / preset changes.
+old_roster = "a.jsx(S$,{variant:\"dashboard\",dashboardFromDate:h,dashboardToDate:g,"
+new_roster = 'a.jsx(S$,{key:h+"|"+g+"|"+w,variant:"dashboard",dashboardFromDate:h,dashboardToDate:g,'
+if old_roster not in s:
+    raise SystemExit("S$ mount not found")
+s = s.replace(old_roster, new_roster, 1)
+
+if s == orig:
+    raise SystemExit("no bundle changes applied")
+BUNDLE.write_text(s, encoding="utf-8")
+print("patched", BUNDLE)
+
+# 4) CSS scroll trap — source + built bundle.
+for css_path in (DAILY_CSS, CSS):
+    if not css_path.exists():
+        continue
+    css = css_path.read_text(encoding="utf-8")
+    css2 = css
+    css2 = css2.replace(
+        ".desktop-body--daily-ops{padding:6px 10px 10px;overflow:hidden;display:flex;flex-direction:column}",
+        ".desktop-body--daily-ops{padding:6px 10px 10px;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column}",
+    )
+    css2 = css2.replace(
+        ".desktop-body--daily-ops .ops-dash-roster,.app-shell--view-daily-ops .ops-dash-roster{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}",
+        ".desktop-body--daily-ops .ops-dash-roster,.app-shell--view-daily-ops .ops-dash-roster{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:visible}",
+    )
+    if css2 != css:
+        css_path.write_text(css2, encoding="utf-8")
+        print("patched", css_path)

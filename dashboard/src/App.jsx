@@ -81,6 +81,7 @@ import { computeInboxUnreadTotal, formatUnreadBadgeCount } from './utils/inboxUn
 import { syncTabUnreadBadge, resetTabUnreadBadge } from './utils/tabUnreadBadge.js'
 import { fetchCrmState } from './utils/crm.js'
 import { useCompactLayout } from './utils/useCompactLayout.js'
+import { useMobileShell } from './utils/useMobileShell.js'
 import { MobileApp } from './mobile/MobileApp.jsx'
 import { DesktopApp } from './desktop/DesktopApp.jsx'
 
@@ -1528,7 +1529,7 @@ export default function App() {
     : 0
 
   const showBootOverlay = initialLoading && !connected
-  const compactMobileUi = useCompactLayout()
+  const compactMobileUi = useMobileShell()
   const [mobilePage, setMobilePage] = useState('home')
   const [desktopPage, setDesktopPage] = useState('home')
 
