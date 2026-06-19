@@ -6,9 +6,11 @@ import json
 import os
 import threading
 import time
+from datetime import datetime
 from typing import Dict, Literal
 
 from core.config import STATE_DIR
+from core.ist_time import IST
 from core.stats_reset import get_effective_cutoff
 
 SendKind = Literal["campaign", "forward"]
@@ -59,8 +61,7 @@ def _normalize_events(data) -> list[dict]:
     return []
 
 
-def _load_events(slot: str) -> list[dict]:
-    path = _stats_path(slot)
+def _load_events_from_path(path: str) -> list[dict]:
     if not os.path.exists(path):
         return []
     try:
@@ -68,6 +69,17 @@ def _load_events(slot: str) -> list[dict]:
             return _normalize_events(json.load(f))
     except Exception:
         return []
+
+
+def _load_events(slot: str) -> list[dict]:
+    return _load_events_from_path(_stats_path(slot))
+
+
+def _load_slot_events(slot: str, mode: str | None = None) -> list[dict]:
+    norm = _normalize_mode(mode)
+    if norm in ("forward", "campaign"):
+        return _load_events_from_path(_stats_path(slot, norm))
+    return _load_events(slot)
 
 
 def _save_events(slot: str, events: list[dict]) -> None:
@@ -163,11 +175,59 @@ def get_last_post_timestamp(slot: str) -> float | None:
     return last
 
 
+def hourly_bucket_labels(bucket_count: int = 24, now: float | None = None) -> list[str]:
+    """Sparse IST axis labels for the last *bucket_count* hours (matches dashboard chart)."""
+    now_ts = time.time() if now is None else float(now)
+    labels: list[str] = []
+    for i in range(bucket_count):
+        age_hours = bucket_count - 1 - i
+        if age_hours == 0:
+            labels.append("now")
+        elif age_hours % 6 == 0:
+            dt = datetime.fromtimestamp(now_ts - age_hours * 3600, tz=IST)
+            labels.append(dt.strftime("%I%p").lstrip("0").lower())
+        else:
+            labels.append("")
+    return labels
+
+
+def hourly_buckets(
+    slots: list[str],
+    mode: str | None = None,
+    *,
+    bucket_count: int = 24,
+    now: float | None = None,
+) -> list[int]:
+    """Count sends per hour for *slots*; bucket 0 is oldest, last bucket is current hour."""
+    now_ts = time.time() if now is None else float(now)
+    window = bucket_count * 3600
+    buckets = [0] * bucket_count
+    norm = _normalize_mode(mode)
+
+    for slot in slots:
+        if not slot:
+            continue
+        events = _load_slot_events(slot, norm)
+        for ev in events:
+            try:
+                t = float(ev.get("t") or 0)
+            except (TypeError, ValueError):
+                continue
+            if norm is None and (ev.get("kind") or "campaign") not in VALID_KINDS:
+                continue
+            age = now_ts - t
+            if age < 0 or age >= window:
+                continue
+            idx = bucket_count - 1 - int(age // 3600)
+            if 0 <= idx < bucket_count:
+                buckets[idx] += 1
+    return buckets
+
+
 def count_24h(slot: str, kind: SendKind | None = None) -> int:
     """Posts since last reset (or rolling 24h); optional kind filter."""
     if not slot:
         return 0
-    norm = _normalize_mode(mode)
     now = time.time()
     with _lock:
         cached = _cache.get(slot)

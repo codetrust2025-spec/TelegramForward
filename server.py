@@ -3208,6 +3208,119 @@ async def candidates_interviews_filter_options(
     return {"status": "ok", "options": options}
 
 
+@app.post("/candidates/interviews/slots")
+async def candidates_interviews_slots_create(request: Request, body: dict):
+    from features import candidate_store
+
+    b = body or {}
+    name = (b.get("name") or "").strip()
+    candidate_id = (b.get("candidate_id") or "").strip()
+    date = (b.get("date") or "").strip()
+    time = (b.get("time") or "").strip()
+    time_end = (b.get("time_end") or "").strip()
+    notes = (b.get("notes") or "").strip()
+    interview_round = (b.get("interview_round") or "").strip()
+    technology = (b.get("technology") or "").strip()
+    service_type = (b.get("service_type") or "").strip().lower()
+    try:
+        if name:
+            row = candidate_store.create_interview_slot(
+                name=name,
+                date=date,
+                time=time,
+                time_end=time_end,
+                technology=technology,
+                notes=notes,
+                interview_round=interview_round,
+            )
+        elif candidate_id:
+            row = candidate_store.assign_interview_slot(
+                candidate_id=candidate_id,
+                date=date,
+                time=time,
+                time_end=time_end,
+                notes=notes,
+                interview_round=interview_round,
+            )
+        else:
+            raise ValueError("Candidate name or id is required")
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+    return {"status": "ok", "candidate": row}
+
+
+@app.patch("/candidates/interviews/slots/{cid}")
+async def candidates_interviews_slots_update(cid: str, request: Request, body: dict):
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store
+
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Candidate not found"}
+    assert_candidate_row_access(request, existing)
+    b = body or {}
+    target_id = (b.get("candidate_id") or cid).strip() or cid
+    try:
+        row = candidate_store.update_interview_slot(
+            candidate_id=target_id,
+            date=b.get("date") or "",
+            time=b.get("time") or "",
+            time_end=b.get("time_end") or "",
+            notes=b.get("notes") or "",
+            interview_round=b.get("interview_round") or "",
+        )
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+    return {"status": "ok", "candidate": row}
+
+
+@app.delete("/candidates/interviews/slots/{cid}")
+async def candidates_interviews_slots_delete(cid: str, request: Request):
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store
+
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Candidate not found"}
+    assert_candidate_row_access(request, existing)
+    try:
+        row = candidate_store.cancel_interview_slot(candidate_id=cid)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+    return {"status": "ok", "candidate": row}
+
+
+@app.post("/candidates/{cid}/slot-screenshot")
+async def candidates_slot_screenshot(cid: str, request: Request):
+    from fastapi import HTTPException, UploadFile
+
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store
+
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    assert_candidate_row_access(request, existing)
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not isinstance(upload, UploadFile):
+        raise HTTPException(status_code=400, detail="file is required")
+    data = await upload.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    entry = candidate_store.attach_public_slot_screenshot(
+        cid,
+        data=data,
+        original_name=upload.filename or "slot-screenshot.jpg",
+        mime_type=upload.content_type or "image/jpeg",
+        source="dashboard-upload",
+    )
+    if not entry:
+        raise HTTPException(status_code=400, detail="Screenshot upload failed")
+    row = candidate_store.get_candidate(cid) or existing
+    return {"status": "ok", "proof": entry, "candidate": row}
+
+
 @app.post("/candidates/{cid}/interview-attendance")
 async def candidates_interview_attendance(cid: str, request: Request, body: dict):
     from core.dashboard_access import assert_candidate_row_access

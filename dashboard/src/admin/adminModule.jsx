@@ -406,19 +406,23 @@ export function AdminPanel() {
   const [o, u] = w.useState("overview");
   const d = w.useCallback(async () => {
     try {
-      const b = await fetch(`${ve}/admin/dashboard?window_hours=24`);
-      const A = await b.json();
-      if (!b.ok || A.status === "error") {
-        throw new Error(A.message || `HTTP ${b.status}`);
+      const b = await fetch(`${ve}/admin/dashboard?window_hours=24`, { credentials: 'include' })
+      const ct = b.headers.get('content-type') || ''
+      if (!ct.includes('application/json')) {
+        throw new Error(b.ok ? 'Admin API returned non-JSON — hard refresh and try again' : `Admin dashboard unavailable (${b.status})`)
       }
-      t(A);
-      i("");
+      const A = await b.json()
+      if (!b.ok || A.status === 'error') {
+        throw new Error(A.message || A.detail || `HTTP ${b.status}`)
+      }
+      t(A)
+      i('')
     } catch (b) {
-      i(String(b.message || b));
+      i(String(b.message || b))
     } finally {
-      n(false);
+      n(false)
     }
-  }, []);
+  }, [])
   w.useEffect(() => {
     d();
     const b = window.setInterval(d, 15000);

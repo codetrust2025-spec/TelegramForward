@@ -37,8 +37,12 @@
 
 .admin-tabs {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
 }
 
 .admin-tab {
@@ -50,6 +54,8 @@
   font-size: 13px;
   cursor: pointer;
   font-family: inherit;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .admin-tab--active {
