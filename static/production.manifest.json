@@ -1,14 +1,14 @@
 {
   "version": 2,
   "description": "Pinned production assets \u2014 live site must match these hashes.",
-  "git_commit": "c098dd3431c4579510ec840dbce07c75cd2f3e6f",
-  "git_commit_short": "c098dd3",
-  "deployed_at": "2026-06-19T11:10:12Z",
+  "git_commit": "b2a6966e06fe6f5ff0c74708bb7ecbbe6b3afbc9",
+  "git_commit_short": "b2a6966",
+  "deployed_at": "2026-06-19T12:45:48Z",
   "js": "assets/app-Dks3ojat.js",
   "css": "assets/index-X8Z7CYT5.css",
-  "js_sha256": "b39e9afb5a29de08d9045a1e4eacdd28257de42f0ca6d4b5c9cca97c118a72ea",
-  "css_sha256": "030b7fa954e772e6510a4ac555ed9f339c965e7bba41614a353804b0436806f4",
-  "js_bytes": 1116987,
-  "css_bytes": 475570,
+  "js_sha256": "e29396b20cbc3ea5fa2888ed3dae5168f4b608fea7d157ba749f2bf3fe220d03",
+  "css_sha256": "0ff714b8f3e5eef2eebcfd5815db1c4f9f8be1fdb8f11324d7ee39b793401d17",
+  "js_bytes": 1118618,
+  "css_bytes": 475953,
   "server_py_sha256": "365e8cede460e667e8846a2255cc2cd6cdeda6e0d18800c3adb6fa6c74d572b6"
 }
