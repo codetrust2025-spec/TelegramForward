@@ -1,14 +1,14 @@
 {
   "version": 2,
   "description": "Pinned production assets \u2014 live site must match these hashes.",
-  "git_commit": "c5cf5c1b0d01b5000012d22e3c4f12a924c74dee",
-  "git_commit_short": "c5cf5c1",
-  "deployed_at": "2026-06-18T15:21:20Z",
+  "git_commit": "91d7e4afcb39aca82162a688a465b0d7d7909717",
+  "git_commit_short": "91d7e4a",
+  "deployed_at": "2026-06-19T10:23:06Z",
   "js": "assets/app-Dks3ojat.js",
   "css": "assets/index-X8Z7CYT5.css",
-  "js_sha256": "85b769e15ce6d93eaf2d09b28b9f2746f6eff24659a03ed62f51aa84be0c5329",
-  "css_sha256": "c338d63679f879f3100f7393c53563fd3e2e11590eb65dd34a4ea82e08878910",
-  "js_bytes": 1116584,
-  "css_bytes": 475099,
-  "server_py_sha256": "eab0b9797598f4651995e81bb8f26db7692bcb8848959ecec55d7d4a912416ea"
+  "js_sha256": "250d5551e293009f15a2670aacf754c9f68297da6de32e2a39caf1b0a1bc93c5",
+  "css_sha256": "c4719a25664a32b34999a039a9872468114fd6e11b7a75512a5f511bb8e2c396",
+  "js_bytes": 1117008,
+  "css_bytes": 475192,
+  "server_py_sha256": "8706e2c65fcb83417fad30e6b664cf5e91b9667b7f1a11cae1b5fa13497de097"
 }
