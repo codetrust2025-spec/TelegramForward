@@ -1712,6 +1712,18 @@ def _interview_slot_still_upcoming(
     return now_dt < slot_end
 
 
+def _filter_upcoming_only_rows(rows: list[dict]) -> list[dict]:
+    """Daily ops Upcoming tab — pending slots only (exclude resolved attendance)."""
+    out: list[dict] = []
+    for row in rows:
+        status = row_interview_attendance_status(row)
+        if status in ("attended", "not_attended", "cancelled", "rescheduled"):
+            continue
+        out.append(row)
+    out.sort(key=_slot_chronological_sort_key)
+    return out
+
+
 def _split_pending_interviews_by_slot_phase(rows: list[dict]) -> tuple[list[dict], list[dict]]:
     """Pending rows split into scheduled (slot not ended) vs awaiting status update."""
     scheduled: list[dict] = []
@@ -2091,6 +2103,7 @@ def interview_monitor(
     filter_search: str | None = None,
     filter_channel: str | None = None,
     include_unconfirmed: bool = False,
+    upcoming_only: bool = False,
 ) -> dict:
     """All confirmed interview slots in a date range — admin monitor view."""
     rows = _interview_rows_for_range(
@@ -2105,6 +2118,8 @@ def interview_monitor(
         filter_search=filter_search,
         filter_channel=filter_channel,
     )
+    if upcoming_only:
+        rows = _filter_upcoming_only_rows(rows)
     counts = _interview_attendance_counts(rows)
     rows = _enrich_interview_rows_with_slot_screenshots(rows)
     by_date: dict[str, list[dict]] = {}
@@ -2258,6 +2273,7 @@ def interview_global_summary(
     filter_search: str | None = None,
     filter_channel: str | None = None,
     include_unconfirmed: bool = False,
+    upcoming_only: bool = False,
 ) -> dict:
     """Ops snapshot — interviews by attendee/referrer/tech + tasks (scoped per viewer)."""
     start = (from_date or "").strip()[:10]
@@ -2279,6 +2295,8 @@ def interview_global_summary(
         filter_search=filter_search,
         filter_channel=filter_channel,
     )
+    if upcoming_only:
+        rows = _filter_upcoming_only_rows(rows)
     interview_counts = _interview_attendance_counts(rows)
 
     def _empty_bucket() -> dict[str, int]:

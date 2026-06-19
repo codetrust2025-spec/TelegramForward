@@ -3104,6 +3104,7 @@ async def candidates_interviews_monitor(
     attendee: str | None = Query(default=None),
     search: str | None = Query(default=None),
     channel: str | None = Query(default=None),
+    upcoming_only: bool = Query(default=False),
 ):
     from fastapi import HTTPException
 
@@ -3122,6 +3123,7 @@ async def candidates_interviews_monitor(
             filter_attendee=attendee,
             filter_search=search,
             filter_channel=channel,
+            upcoming_only=upcoming_only,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3163,6 +3165,7 @@ async def candidates_interviews_global(
     attendee: str | None = Query(default=None),
     search: str | None = Query(default=None),
     channel: str | None = Query(default=None),
+    upcoming_only: bool = Query(default=False),
 ):
     from fastapi import HTTPException
 
@@ -3181,6 +3184,7 @@ async def candidates_interviews_global(
             filter_attendee=attendee,
             filter_search=search,
             filter_channel=channel,
+            upcoming_only=upcoming_only,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -8,12 +8,13 @@ DAILY_CSS = Path("dashboard/src/dailyOps.css")
 s = BUNDLE.read_text(encoding="utf-8")
 orig = s
 
-# 1) Upcoming preset: include last 7 days so local synced data is visible.
+# 1) Upcoming preset: today through +14 days (not past week).
 old_upcoming = 'case"upcoming":return{from:t,to:Fd(t,14)}'
-new_upcoming = 'case"upcoming":return{from:A$(),to:Fd(t,14)}'
+new_upcoming = 'case"upcoming":return{from:t,to:Fd(t,14)}'
 if old_upcoming not in s:
-    raise SystemExit(f"upcoming preset not found")
-s = s.replace(old_upcoming, new_upcoming, 1)
+    print("upcoming preset already correct or not found — skip")
+else:
+    pass  # no-op; kept for documentation
 
 # 2) Default tab: last 7 days instead of empty upcoming-only window.
 old_default = 'f=Wh("upcoming"),[h,m]=b.useState(f.from),[g,p]=b.useState(f.to),[w,x]=b.useState("upcoming")'
