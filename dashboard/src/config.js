@@ -1,5 +1,5 @@
 /** Bumped on each production deploy so Vite emits a new app-[hash].js (cache bust). */
-export const BUILD_STAMP = '2026-06-19T120000Z'
+export const BUILD_STAMP = '2026-06-19T140000Z'
 
 /** API base — Vite dev uses the dev-server proxy configured in vite.config.js. */
 export const isDevFrontend = import.meta.env.DEV || window.location.port === '3000'

@@ -22,12 +22,7 @@ if old_default not in s:
     raise SystemExit("default preset init not found")
 s = s.replace(old_default, new_default, 1)
 
-# 3) Force roster remount when date range / preset changes.
-old_roster = "a.jsx(S$,{variant:\"dashboard\",dashboardFromDate:h,dashboardToDate:g,"
-new_roster = 'a.jsx(S$,{key:h+"|"+g+"|"+w,variant:"dashboard",dashboardFromDate:h,dashboardToDate:g,'
-if old_roster not in s:
-    raise SystemExit("S$ mount not found")
-s = s.replace(old_roster, new_roster, 1)
+# 3) Roster refetches via useEffect when dashboardFromDate/To change — no remount key needed.
 
 if s == orig:
     raise SystemExit("no bundle changes applied")
