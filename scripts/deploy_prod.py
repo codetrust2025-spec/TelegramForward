@@ -99,7 +99,8 @@ def main() -> int:
     # ── Build ──────────────────────────────────────────────────────────
     if not args.skip_build:
         bump_build_stamp()
-        run(["npm", "run", "build"], cwd=REPO / "dashboard", timeout=300)
+        npm = "npm.cmd" if os.name == "nt" else "npm"
+        run([npm, "run", "build"], cwd=REPO / "dashboard", timeout=300)
 
     if not (STATIC_DIR / "index.html").is_file():
         print("static/index.html missing — build failed?", file=sys.stderr)
