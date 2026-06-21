@@ -29,6 +29,8 @@ export function DesktopHeader({
   authEnabled,
   authLogout,
   connected,
+  theme,
+  onToggleTheme,
 }) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
@@ -235,8 +237,15 @@ export function DesktopHeader({
           )}
         </button>
 
-        <button type="button" className="desktop-header__icon-btn" aria-label="Theme" title="Theme">
-          ☀
+        <button
+          type="button"
+          className="desktop-header__icon-btn desktop-header__theme-btn"
+          aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
+          aria-pressed={theme === 'light'}
+          title={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
+          onClick={onToggleTheme}
+        >
+          <span aria-hidden>{theme === 'light' ? '☾' : '☀'}</span>
         </button>
 
         <div className="desktop-header__user-wrap" ref={userMenuRef}>

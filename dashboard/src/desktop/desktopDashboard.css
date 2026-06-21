@@ -1204,6 +1204,128 @@
   color: #93c5fd;
 }
 
+/* Light theme — dark remains the default and the user's choice is persisted. */
+:root[data-theme='light'] .app-shell--desktop-ui,
+:root[data-theme='light'] .desktop-app {
+  background: #f4f7fb;
+  color: #172033;
+}
+
+:root[data-theme='light'] .desktop-sidebar,
+:root[data-theme='light'] .desktop-sidebar--sigma {
+  background: #eef3f9;
+  border-color: #d7e0eb;
+}
+
+:root[data-theme='light'] .desktop-header,
+:root[data-theme='light'] .desktop-header--sigma {
+  background: #ffffff;
+  border-color: #d7e0eb;
+}
+
+:root[data-theme='light'] .desktop-body {
+  background: #f4f7fb;
+}
+
+:root[data-theme='light'] :is(
+  .desktop-header__account,
+  .desktop-header__icon-btn,
+  .desk-user-menu,
+  .desk-account-picker,
+  .desk-stat-card,
+  .desk-panel,
+  .desk-kpi-card
+) {
+  background: #ffffff;
+  border-color: #d7e0eb;
+  color: #172033;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+:root[data-theme='light'] .desktop-header__icon-btn:hover,
+:root[data-theme='light'] .desktop-sidebar__brand:hover,
+:root[data-theme='light'] .desktop-sidebar__link:hover,
+:root[data-theme='light'] .desk-account-row:hover,
+:root[data-theme='light'] .desk-user-menu__item:hover {
+  background: #e8eef7;
+}
+
+:root[data-theme='light'] .desktop-sidebar__link {
+  color: #475569;
+}
+
+:root[data-theme='light'] .desktop-sidebar__link:hover {
+  color: #172033;
+}
+
+:root[data-theme='light'] .desktop-sidebar__link--active {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+:root[data-theme='light'] :is(
+  .desktop-header__status-text,
+  .desktop-header__account-name,
+  .desktop-sidebar__title,
+  .desktop-sidebar__user-name,
+  .desk-panel__title,
+  .desk-kpi-card__value,
+  .desk-stat-card__value,
+  .desk-activity-item__title,
+  .desk-alert-item__title,
+  .desk-user-menu__name
+) {
+  color: #172033;
+}
+
+:root[data-theme='light'] :is(
+  .desktop-sidebar__footer,
+  .desktop-sidebar__uptime,
+  .desktop-sidebar__version,
+  .desktop-sidebar__user-role,
+  .desk-kpi-card__label,
+  .desk-kpi-card__sub,
+  .desk-stat-card__label,
+  .desk-stat-card__sub,
+  .desk-panel__meta,
+  .desk-panel__subtitle,
+  .desk-panel__hint,
+  .desk-activity-item__meta,
+  .desk-alert-item__meta,
+  .desk-user-menu__label,
+  .desk-user-menu__hint
+) {
+  color: #64748b;
+}
+
+:root[data-theme='light'] .desk-account-row,
+:root[data-theme='light'] .desk-activity-item,
+:root[data-theme='light'] .desk-alert-item,
+:root[data-theme='light'] .desktop-sidebar__footer {
+  border-color: #e2e8f0;
+}
+
+:root[data-theme='light'] .desk-user-menu__item,
+:root[data-theme='light'] .desk-quick-btn--util {
+  background: #eef2f7;
+  color: #172033;
+}
+
+:root[data-theme='light'] .desk-donut__hole {
+  background: #ffffff;
+}
+
+.desktop-header__theme-btn span {
+  display: inline-block;
+  font-size: 18px;
+  line-height: 1;
+  transition: transform 0.2s ease;
+}
+
+.desktop-header__theme-btn:hover span {
+  transform: rotate(18deg) scale(1.05);
+}
+
 @media (max-width: 1280px) {
   .desk-kpi-row {
     grid-template-columns: repeat(3, minmax(0, 1fr));
