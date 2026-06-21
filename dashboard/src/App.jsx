@@ -84,6 +84,7 @@ import { useCompactLayout } from './utils/useCompactLayout.js'
 import { useMobileShell } from './utils/useMobileShell.js'
 import { MobileApp } from './mobile/MobileApp.jsx'
 import { DesktopApp } from './desktop/DesktopApp.jsx'
+import { PendingWorksProvider } from './dailyOps/PendingWorksProvider.jsx'
 
 
 function mergeInboxConversationList(convs, conversation, { clearUnread = false } = {}) {
@@ -1579,10 +1580,11 @@ export default function App() {
 
   if (compactMobileUi) {
     return (
-      <div
-        className={`app-shell app-shell--mobile-ui app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}
-      >
-        <MobileApp
+      <PendingWorksProvider mainView={mainView}>
+        <div
+          className={`app-shell app-shell--mobile-ui app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}
+        >
+          <MobileApp
           showBootOverlay={showBootOverlay}
           connected={connected}
           mainView={mainView}
@@ -1800,16 +1802,18 @@ export default function App() {
             />
           )}
         />
-      </div>
+        </div>
+      </PendingWorksProvider>
     )
   }
 
   if (!compactMobileUi) {
     return (
-      <div
-        className={`app-shell app-shell--desktop-ui app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}
-      >
-        <DesktopApp
+      <PendingWorksProvider mainView={mainView}>
+        <div
+          className={`app-shell app-shell--desktop-ui app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}
+        >
+          <DesktopApp
           showBootOverlay={showBootOverlay}
           connected={connected}
           mainView={mainView}
@@ -2071,7 +2075,8 @@ export default function App() {
             />
           )}
         />
-      </div>
+        </div>
+      </PendingWorksProvider>
     )
   }
 

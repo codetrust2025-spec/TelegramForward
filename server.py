@@ -3327,7 +3327,7 @@ async def candidates_slot_screenshot(cid: str, request: Request):
 
 @app.post("/candidates/{cid}/interview-attendance")
 async def candidates_interview_attendance(cid: str, request: Request, body: dict):
-    from core.dashboard_access import assert_candidate_row_access
+    from core.dashboard_access import assert_candidate_row_access, operator_profile
     from features import candidate_store
 
     existing = candidate_store.get_candidate(cid)
@@ -3335,6 +3335,9 @@ async def candidates_interview_attendance(cid: str, request: Request, body: dict
         return {"status": "error", "message": "Candidate not found"}
     assert_candidate_row_access(request, existing)
     b = body or {}
+    profile = operator_profile(request)
+    role = (profile.get("role") or "").strip().lower()
+    allow_future = role in {"admin", "handler"}
     try:
         row = candidate_store.set_interview_attendance(
             cid,
@@ -3343,6 +3346,7 @@ async def candidates_interview_attendance(cid: str, request: Request, body: dict
             attended=b.get("attended"),
             attendee=b.get("attendee"),
             by=_ops_by(request),
+            allow_future=allow_future,
         )
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}

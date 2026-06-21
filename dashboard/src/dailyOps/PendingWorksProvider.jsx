@@ -119,7 +119,7 @@ export function PendingWorksProvider({ children, mainView = 'dashboard' }) {
   })
   const pendingInterviews = usePendingInterviewsQuery({
     enabled: authReady,
-    deferMs: mainView === 'daily-ops' ? 60000 : 8000,
+    deferMs: 8000,
   })
 
   const value = {

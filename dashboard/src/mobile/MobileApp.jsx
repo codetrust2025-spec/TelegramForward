@@ -11,9 +11,15 @@ import { ShutdownListPanel } from '../components/ShutdownListPanel.jsx'
 import { FleetDefaultsPanel } from '../components/FleetDefaultsPanel.jsx'
 import { ResponsiveOptions } from '../components/ui/ResponsiveOptions.jsx'
 import { MobileDashboardHome } from './MobileDashboardHome.jsx'
+import { DailyOpsPanel } from '../dailyOps/DailyOpsPanel.jsx'
 import { API } from '../config.js'
 import { formatLogTime } from '../utils/accountUi.js'
 import { statsResetConfirmOptions } from '../utils/statsResetConfirm.js'
+import {
+  WORKSPACE_CAMPAIGN,
+  WORKSPACE_FLEET,
+  WORKSPACE_FORWARDING,
+} from '../utils/workspaceMode.js'
 import './mobileDashboard.css'
 
 const NAV_ITEMS = [
@@ -22,6 +28,20 @@ const NAV_ITEMS = [
   { id: 'accounts', label: 'Accounts', icon: '👥' },
   { id: 'logs', label: 'Logs', icon: '📋' },
   { id: 'admin', label: 'Admin', icon: '⚙' },
+]
+
+const MORE_NAV_ITEMS = [
+  { id: 'dashboard', label: 'Dashboard', icon: '▣' },
+  { id: 'accounts', label: 'Accounts', icon: '👤' },
+  { id: 'forwarding', label: 'Forwarding', icon: '↻' },
+  { id: 'campaigns', label: 'Campaigns', icon: '📣' },
+  { id: 'inbox', label: 'Inbox', icon: '✉' },
+  { id: 'candidates', label: 'Candidates', icon: '📇' },
+  { id: 'daily-ops', label: 'Daily ops', icon: '📅' },
+  { id: 'data', label: 'Data', icon: '📊' },
+  { id: 'logs', label: 'Logs', icon: '📋' },
+  { id: 'admin', label: 'Admin', icon: '⚙' },
+  { id: 'settings', label: 'Settings', icon: '⚙' },
 ]
 
 function navToMainView(tab) {
@@ -36,6 +56,9 @@ function mainViewToNav(mainView, mobilePage) {
   if (mainView === 'inbox') return 'inbox'
   if (mainView === 'logs') return 'logs'
   if (mainView === 'admin') return 'admin'
+  if (mainView === 'candidates' || mainView === 'daily-ops' || mainView === 'data-room') {
+    return 'home'
+  }
   if (mobilePage === 'setup' || mobilePage === 'progress' || mobilePage === 'shutdown') return 'accounts'
   return 'home'
 }
@@ -115,6 +138,71 @@ export function MobileApp({
     [setMainView, setMobilePage, fetchInbox, unlockNotificationSound],
   )
 
+  const handleMoreNav = useCallback(
+    id => {
+      unlockNotificationSound?.()
+      setMenuOpen(false)
+      switch (id) {
+        case 'dashboard':
+          setWorkspaceMode(WORKSPACE_FLEET)
+          onSelectAllAccounts?.()
+          setMainView('dashboard')
+          setMobilePage('home')
+          break
+        case 'accounts':
+          setMainView('dashboard')
+          setMobilePage('setup')
+          setSetupTab?.('login')
+          break
+        case 'forwarding':
+          setWorkspaceMode(WORKSPACE_FORWARDING)
+          setMainView('dashboard')
+          setMobilePage('home')
+          break
+        case 'campaigns':
+          setWorkspaceMode(WORKSPACE_CAMPAIGN)
+          setMainView('dashboard')
+          setMobilePage('home')
+          break
+        case 'inbox':
+          setMainView('inbox')
+          fetchInbox?.()
+          break
+        case 'candidates':
+          setMainView('candidates')
+          break
+        case 'daily-ops':
+          setMainView('daily-ops')
+          break
+        case 'data':
+          setMainView('data-room')
+          break
+        case 'logs':
+          setMainView('logs')
+          break
+        case 'admin':
+          setMainView('admin')
+          break
+        case 'settings':
+          setMainView('dashboard')
+          setMobilePage('shutdown')
+          setSetupTab?.('shutdown')
+          break
+        default:
+          break
+      }
+    },
+    [
+      setMainView,
+      setMobilePage,
+      setWorkspaceMode,
+      onSelectAllAccounts,
+      setSetupTab,
+      fetchInbox,
+      unlockNotificationSound,
+    ],
+  )
+
   async function handleResetReach() {
     const ok = await confirm?.(
       statsResetConfirmOptions({ scope: 'global', accountLabel: 'All accounts' }),
@@ -154,6 +242,20 @@ export function MobileApp({
     mainContent = <CandidatesPanel />
   } else if (mainView === 'data-room') {
     mainContent = <DataRoomPanel />
+  } else if (mainView === 'daily-ops') {
+    mainClass.push('mobile-app__main--daily-ops')
+    mainContent = (
+      <DailyOpsPanel
+        loggedInSlots={loggedInSlots}
+        activeAccount={state.active_account}
+        accountInfo={state.account_info}
+        onSelectAccount={switchAccount}
+        onStartAll={onStartAll}
+        startAllBusy={bulkActionLoading === 'start'}
+        showFleetControls
+        onNavCandidates={() => setMainView('candidates')}
+      />
+    )
   } else if (mobilePage === 'progress') {
     mainContent = (
       <div className="mob-setup-wrap">
@@ -414,33 +516,27 @@ export function MobileApp({
                 Signed in as {authUsername || 'operator'}
               </p>
             )}
+            {MORE_NAV_ITEMS.map(item => (
+              <button
+                key={item.id}
+                type="button"
+                className="mobile-drawer__item"
+                onClick={() => handleMoreNav(item.id)}
+              >
+                <span className="mobile-drawer__item-icon" aria-hidden>
+                  {item.icon}
+                </span>
+                {item.label}
+              </button>
+            ))}
             <button
               type="button"
-              className="mobile-drawer__item"
-              onClick={() => {
-                setMenuOpen(false)
-                onNavigateExtra?.('candidates')
-              }}
-            >
-              Candidates
-            </button>
-            <button
-              type="button"
-              className="mobile-drawer__item"
-              onClick={() => {
-                setMenuOpen(false)
-                onNavigateExtra?.('data-room')
-              }}
-            >
-              Data room
-            </button>
-            <button
-              type="button"
-              className="mobile-drawer__item"
+              className="mobile-drawer__item mobile-drawer__item--secondary"
               onClick={() => {
                 setMenuOpen(false)
                 setMobilePage('setup')
                 setMainView('dashboard')
+                setSetupTab?.('setup')
               }}
             >
               Full setup

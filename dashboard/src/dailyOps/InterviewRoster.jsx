@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { API } from '../config.js'
 import { useAuth } from '../context/AuthContext.jsx'
 
@@ -77,6 +77,7 @@ export function InterviewRoster({
   dashboardAttendeeFilter = '',
   dashboardCandidateSearch = '',
   dashboardCandidateTypeFilter = '',
+  upcomingOnly = false,
   onRosterMutate,
   onRosterCountsChange,
 }) {
@@ -107,6 +108,9 @@ export function InterviewRoster({
   const [channelFilter, setChannelFilter] = useState('')
   const [candidateOptions, setCandidateOptions] = useState([])
 
+  const rosterCountsRef = useRef(onRosterCountsChange)
+  rosterCountsRef.current = onRosterCountsChange
+
   const effectiveAttendee = isDashboard ? dashboardAttendeeFilter : attendeeFilter
   const effectiveSearch = isDashboard ? dashboardCandidateSearch : candidateFilter
   const effectiveChannel = isDashboard ? dashboardCandidateTypeFilter : channelFilter
@@ -127,6 +131,7 @@ export function InterviewRoster({
       const search = effectiveSearch.trim()
       if (search) params.set('search', search)
       if (effectiveChannel) params.set('channel', effectiveChannel)
+      if (upcomingOnly) params.set('upcoming_only', 'true')
 
       const res = await fetch(`${url}?${params}`, { credentials: 'include' })
       if (!(res.headers.get('content-type') || '').includes('application/json')) {
@@ -145,7 +150,7 @@ export function InterviewRoster({
         scheduled_count: data.scheduled_count || 0,
       }
       setCounts(nextCounts)
-      onRosterCountsChange?.(nextCounts, { isUpcomingView: false })
+      rosterCountsRef.current?.(nextCounts, { isUpcomingView: upcomingOnly })
       setError('')
     } catch (err) {
       if (!silent) {
@@ -164,7 +169,7 @@ export function InterviewRoster({
     effectiveChannel,
     hasRange,
     isSingleDayRange,
-    onRosterCountsChange,
+    upcomingOnly,
   ])
 
   const loadCandidateOptions = useCallback(async () => {

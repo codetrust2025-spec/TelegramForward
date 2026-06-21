@@ -1,11 +1,8 @@
-import re
 import urllib.request
 
-html = urllib.request.urlopen("https://teleautomation.online/", timeout=20).read().decode()
-m = re.search(r"/assets/(app-[^\"]+\.js)", html)
-print("bundle:", m.group(1) if m else "not found")
-if m:
-    js = urllib.request.urlopen("https://teleautomation.online/assets/" + m.group(1), timeout=30).read().decode("utf-8", "replace")
-    print("embeddedfolderview:", "embeddedfolderview" in js)
-    print("data-room-creds-fix:", "data-room-creds-fix" in js)
-    print("offer-single-preview:", "offer-single-preview" in js)
+url = "https://teleautomation.online/assets/app-Dks3ojat.js"
+req = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
+body = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "ignore")
+print("portal", "ops-row-menu__list--portal" in body)
+print("update", "Update status & attendee" in body)
+print("createPortal", "ops-row-menu__list--portal" in body and "is.createPortal" in body)

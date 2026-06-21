@@ -1,78 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { API } from '../config.js'
 import { useAuth } from '../context/AuthContext.jsx'
 import { InterviewRoster } from './InterviewRoster.jsx'
-import {
-  navigatePendingWorkToCandidates,
-  usePendingWorksContext,
-} from './PendingWorksProvider.jsx'
-
-function todayIso() {
-  return new Date().toISOString().slice(0, 10)
-}
-
-function weekAgoIso() {
-  const d = new Date()
-  d.setDate(d.getDate() - 7)
-  return d.toISOString().slice(0, 10)
-}
-
-function PendingWorksStrip({ onOpenCandidates, maxPreview = 4 }) {
-  const { works, count, candidateCount, loading, error } = usePendingWorksContext()
-  const preview = useMemo(() => works.slice(0, maxPreview), [works, maxPreview])
-
-  if (!loading && count === 0) return null
-
-  return (
-    <section className="pending-works-strip" aria-label="Pending works">
-      <div className="pending-works-strip__row">
-        <span className="pending-works-strip__pulse" aria-hidden />
-        <div className="pending-works-strip__text">
-          <strong className="pending-works-strip__title">Pending works</strong>
-          <span className="pending-works-strip__meta">
-            {loading
-              ? 'Checking…'
-              : `${count} task${count === 1 ? '' : 's'} · ${candidateCount} candidate${candidateCount === 1 ? '' : 's'}`}
-          </span>
-        </div>
-        {!loading && count > 0 && (
-          <button
-            type="button"
-            className="pending-works-strip__cta"
-            onClick={() => navigatePendingWorkToCandidates(null, { onNavCandidates: onOpenCandidates })}
-          >
-            Open
-          </button>
-        )}
-      </div>
-      {error && <p className="pending-works-strip__error" role="alert">{error}</p>}
-      {!loading && preview.length > 0 && (
-        <div className="pending-works-strip__chips">
-          {preview.map(work => (
-            <button
-              type="button"
-              key={work.id || `${work.candidate_name}-${work.label}`}
-              className="pending-works-strip__chip"
-              title={work.label}
-              onClick={() => navigatePendingWorkToCandidates(work, { onNavCandidates: onOpenCandidates })}
-            >
-              {work.candidate_name || work.label}
-            </button>
-          ))}
-          {works.length > maxPreview && (
-            <button
-              type="button"
-              className="pending-works-strip__chip pending-works-strip__chip--more"
-              onClick={() => navigatePendingWorkToCandidates(null, { onNavCandidates: onOpenCandidates })}
-            >
-              +{works.length - maxPreview} more
-            </button>
-          )}
-        </div>
-      )}
-    </section>
-  )
-}
+import { PendingWorksStrip } from './PendingWorksStrip.jsx'
+import { PRESETS, detectPresetFromRange, resolvePresetRange } from './dateRangePresets.js'
 
 function KpiCard({ label, value, tone = 'default', loading = false }) {
   return (
@@ -96,14 +27,36 @@ export function DailyOpsPanel({
   const { role, reference } = useAuth()
   const handlerScoped = role === 'handler' && !!reference?.trim()
 
-  const [fromDate, setFromDate] = useState(weekAgoIso())
-  const [toDate, setToDate] = useState(todayIso())
+  const initialRange = resolvePresetRange('upcoming')
+  const [fromDate, setFromDate] = useState(initialRange.from)
+  const [toDate, setToDate] = useState(initialRange.to)
+  const [rangePreset, setRangePreset] = useState('upcoming')
   const [attendeeFilter, setAttendeeFilter] = useState(handlerScoped ? reference : '')
   const [candidateSearch, setCandidateSearch] = useState('')
   const [globalStats, setGlobalStats] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [rosterCounts, setRosterCounts] = useState(null)
+
+  const upcomingOnly = rangePreset === 'upcoming'
+
+  function applyPreset(presetId) {
+    const range = resolvePresetRange(presetId)
+    if (!range) return
+    setRangePreset(presetId)
+    setFromDate(range.from)
+    setToDate(range.to)
+  }
+
+  function applyManualFrom(value) {
+    setFromDate(value)
+    setRangePreset(detectPresetFromRange(value, toDate))
+  }
+
+  function applyManualTo(value) {
+    setToDate(value)
+    setRangePreset(detectPresetFromRange(fromDate, value))
+  }
 
   const loadGlobal = useCallback(async () => {
     setLoading(true)
@@ -112,6 +65,7 @@ export function DailyOpsPanel({
       if (attendeeFilter) params.set('attendee', attendeeFilter)
       const search = candidateSearch.trim()
       if (search) params.set('search', search)
+      if (upcomingOnly) params.set('upcoming_only', 'true')
       const res = await fetch(`${API}/candidates/interviews/global?${params}`, { credentials: 'include' })
       if (!(res.headers.get('content-type') || '').includes('application/json')) {
         throw new Error(`Global data ${res.status}`)
@@ -125,7 +79,7 @@ export function DailyOpsPanel({
     } finally {
       setLoading(false)
     }
-  }, [fromDate, toDate, attendeeFilter, candidateSearch])
+  }, [fromDate, toDate, attendeeFilter, candidateSearch, upcomingOnly])
 
   useEffect(() => { loadGlobal() }, [loadGlobal])
 
@@ -142,8 +96,28 @@ export function DailyOpsPanel({
             <p className="ops-dash-sub">Interview roster, attendance, and pending work</p>
           </div>
           <div className="ops-dash-toolbar__filters">
-            <input className="cand-input" type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} aria-label="From date" />
-            <input className="cand-input" type="date" value={toDate} onChange={e => setToDate(e.target.value)} aria-label="To date" />
+            <div className="ops-date-range">
+              <div className="ops-date-range__presets" role="tablist" aria-label="Date range">
+                {PRESETS.map(preset => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={rangePreset === preset.id}
+                    className={`ops-date-range__preset${rangePreset === preset.id ? ' ops-date-range__preset--active' : ''}`}
+                    onClick={() => applyPreset(preset.id)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              <div className="ops-date-range__inputs">
+                <span className="ops-date-range__label">Range</span>
+                <input className="cand-input" type="date" value={fromDate} onChange={e => applyManualFrom(e.target.value)} aria-label="From date" />
+                <span className="ops-date-range__sep">—</span>
+                <input className="cand-input" type="date" value={toDate} onChange={e => applyManualTo(e.target.value)} aria-label="To date" />
+              </div>
+            </div>
             {!handlerScoped && (
               <input
                 className="cand-input"
@@ -173,22 +147,14 @@ export function DailyOpsPanel({
           <KpiCard label="Not attended" value={interviews.not_attended_count ?? 0} tone="red" loading={loading} />
         </div>
 
-        {showFleetControls && loggedInSlots.length > 0 && (
-          <div className="ops-dash-fleet-hint">
-            Fleet: {loggedInSlots.length} logged-in account{loggedInSlots.length === 1 ? '' : 's'}
-            {activeAccount && accountInfo?.[activeAccount] && (
-              <> · active {accountInfo[activeAccount].display_name || activeAccount}</>
-            )}
-          </div>
-        )}
-
         <InterviewRoster
-          key={`${fromDate}|${toDate}`}
+          key={`${fromDate}|${toDate}|${upcomingOnly}`}
           variant="dashboard"
           dashboardFromDate={fromDate}
           dashboardToDate={toDate}
           dashboardAttendeeFilter={attendeeFilter}
           dashboardCandidateSearch={candidateSearch}
+          upcomingOnly={upcomingOnly}
           onRosterCountsChange={setRosterCounts}
           onRosterMutate={loadGlobal}
         />

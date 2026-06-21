@@ -21,6 +21,7 @@ import { getDashboardModeFilter } from '../utils/workspaceDashboard.js'
 import { API } from '../config.js'
 import { statsResetConfirmOptions } from '../utils/statsResetConfirm.js'
 import { accountRowsForDashboard } from '../dashboard/dashboardStats.js'
+import { DailyOpsPanel } from '../dailyOps/DailyOpsPanel.jsx'
 import './desktopDashboard.css'
 
 function sidebarActiveId(mainView, desktopPage, workspaceMode) {
@@ -28,6 +29,7 @@ function sidebarActiveId(mainView, desktopPage, workspaceMode) {
   if (mainView === 'logs') return 'logs'
   if (mainView === 'admin') return 'admin'
   if (mainView === 'candidates') return 'candidates'
+  if (mainView === 'daily-ops') return 'daily-ops'
   if (mainView === 'data-room') return 'data'
   if (desktopPage === 'setup' || desktopPage === 'login') return 'accounts'
   if (desktopPage === 'fleet') return 'accounts'
@@ -130,6 +132,9 @@ export function DesktopApp({
         case 'candidates':
           setMainView('candidates')
           break
+        case 'daily-ops':
+          setMainView('daily-ops')
+          break
         case 'data':
           setMainView('data-room')
           break
@@ -206,6 +211,20 @@ export function DesktopApp({
     content = <AdminPanel />
   } else if (mainView === 'candidates') {
     content = <CandidatesPanel />
+  } else if (mainView === 'daily-ops') {
+    bodyClass += ' desktop-body--daily-ops'
+    content = (
+      <DailyOpsPanel
+        loggedInSlots={loggedInSlots}
+        activeAccount={state.active_account}
+        accountInfo={state.account_info}
+        onSelectAccount={switchAccount}
+        onStartAll={onStartAll}
+        startAllBusy={bulkActionLoading === 'start'}
+        showFleetControls
+        onNavCandidates={() => setMainView('candidates')}
+      />
+    )
   } else if (mainView === 'data-room') {
     content = <DataRoomPanel />
   } else if (desktopPage === 'progress') {
@@ -325,6 +344,7 @@ export function DesktopApp({
         }}
         onNavLogs={() => setMainView('logs')}
         onNavData={() => setMainView('data-room')}
+        onNavCandidates={() => setMainView('candidates')}
         tickOverview={tickOverview}
         recentLogs={recentLogs}
         workspaceMode={workspaceMode}
