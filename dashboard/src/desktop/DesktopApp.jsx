@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { Spinner } from '../Loader.jsx'
 import { DesktopSidebar } from './DesktopSidebar.jsx'
 import { DesktopHeader } from './DesktopHeader.jsx'
@@ -23,6 +23,16 @@ import { statsResetConfirmOptions } from '../utils/statsResetConfirm.js'
 import { accountRowsForDashboard } from '../dashboard/dashboardStats.js'
 import { DailyOpsPanel } from '../dailyOps/DailyOpsPanel.jsx'
 import './desktopDashboard.css'
+
+const THEME_STORAGE_KEY = 'teleautomation-theme'
+
+function initialTheme() {
+  try {
+    return window.localStorage.getItem(THEME_STORAGE_KEY) === 'light' ? 'light' : 'dark'
+  } catch {
+    return 'dark'
+  }
+}
 
 function sidebarActiveId(mainView, desktopPage, workspaceMode) {
   if (mainView === 'inbox') return 'inbox'
@@ -98,7 +108,22 @@ export function DesktopApp({
   groupsModal,
   incomingCallModal,
 }) {
+  const [theme, setTheme] = useState(initialTheme)
   const activeId = sidebarActiveId(mainView, desktopPage, workspaceMode)
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    document.documentElement.style.colorScheme = theme
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme)
+    } catch {
+      // Theme still works when storage is disabled.
+    }
+  }, [theme])
+
+  const toggleTheme = useCallback(() => {
+    setTheme(current => (current === 'dark' ? 'light' : 'dark'))
+  }, [])
 
   const handleSidebar = useCallback(
     id => {
@@ -399,6 +424,8 @@ export function DesktopApp({
             authEnabled={authEnabled}
             authLogout={authLogout}
             connected={connected}
+            theme={theme}
+            onToggleTheme={toggleTheme}
           />
           <div className={bodyClass}>{content}</div>
         </div>
