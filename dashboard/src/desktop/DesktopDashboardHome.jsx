@@ -3,6 +3,7 @@ import { formatCountdown } from '../utils/accountUi.js'
 import { buildFleetHealthRows } from '../utils/fleetHealth.js'
 import { getDashboardModeConfig } from '../utils/workspaceDashboard.js'
 import { MobSparkline } from '../mobile/MobSparkline.jsx'
+import { PendingWorksStrip } from '../dailyOps/PendingWorksStrip.jsx'
 import {
   accountRowsForDashboard,
   computeDashboardStats,
@@ -35,6 +36,7 @@ export function DesktopDashboardHome({
   onNavShutdown,
   onNavLogs,
   onNavData,
+  onNavCandidates,
   tickOverview,
   recentLogs,
   workspaceMode,
@@ -120,6 +122,7 @@ export function DesktopDashboardHome({
 
   return (
     <div className={`desk-dash desk-dash--sigma${mode.isCampaign ? ' desk-dash--campaign' : ''}${mode.isForwarding ? ' desk-dash--forwarding' : ''}`}>
+      <PendingWorksStrip onOpenCandidates={onNavCandidates} />
       <div className="desk-kpi-row">
         <div className={`desk-kpi-card${kpiHighlight('accounts')}`}>
           <div className="desk-kpi-card__head">

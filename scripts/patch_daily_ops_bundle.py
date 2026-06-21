@@ -16,19 +16,24 @@ if old_upcoming not in s:
 else:
     pass  # no-op; kept for documentation
 
-# 2) Default tab: last 7 days instead of empty upcoming-only window.
-old_default = 'f=Wh("upcoming"),[h,m]=b.useState(f.from),[g,p]=b.useState(f.to),[w,x]=b.useState("upcoming")'
-new_default = 'f=Wh("last7"),[h,m]=b.useState(f.from),[g,p]=b.useState(f.to),[w,x]=b.useState("last7")'
+# 2) Default tab: upcoming interviews (today through +14 days).
+old_default = 'f=Wh("last7"),[h,m]=b.useState(f.from),[g,p]=b.useState(f.to),[w,x]=b.useState("last7")'
+new_default = 'f=Wh("upcoming"),[h,m]=b.useState(f.from),[g,p]=b.useState(f.to),[w,x]=b.useState("upcoming")'
 if old_default not in s:
-    raise SystemExit("default preset init not found")
-s = s.replace(old_default, new_default, 1)
+    if new_default.split(",[h,m]")[0] in s:
+        print("default already upcoming — skip")
+    else:
+        raise SystemExit("default preset init not found")
+else:
+    s = s.replace(old_default, new_default, 1)
 
 # 3) Roster refetches via useEffect when dashboardFromDate/To change — no remount key needed.
 
 if s == orig:
-    raise SystemExit("no bundle changes applied")
-BUNDLE.write_text(s, encoding="utf-8")
-print("patched", BUNDLE)
+    print("no bundle changes needed")
+else:
+    BUNDLE.write_text(s, encoding="utf-8")
+    print("patched", BUNDLE)
 
 # 4) CSS scroll trap — source + built bundle.
 for css_path in (DAILY_CSS, CSS):

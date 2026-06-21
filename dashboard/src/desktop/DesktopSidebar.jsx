@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { usePendingWorksContextOptional } from '../dailyOps/PendingWorksProvider.jsx'
 
 const NAV = [
   { id: 'dashboard', label: 'Dashboard', icon: '▣' },
@@ -6,7 +7,8 @@ const NAV = [
   { id: 'forwarding', label: 'Forwarding', icon: '↻' },
   { id: 'campaigns', label: 'Campaigns', icon: '📣' },
   { id: 'inbox', label: 'Inbox', icon: '✉', badgeKey: 'inbox' },
-  { id: 'candidates', label: 'Candidates', icon: '📇' },
+  { id: 'candidates', label: 'Candidates', icon: '📇', badgeKey: 'pendingWorks' },
+  { id: 'daily-ops', label: 'Daily ops', icon: '📅', badgeKey: 'pendingInterviews' },
   { id: 'data', label: 'Data', icon: '📊' },
   { id: 'logs', label: 'Logs', icon: '📋' },
   { id: 'admin', label: 'Admin', icon: '⚙' },
@@ -24,6 +26,9 @@ export function DesktopSidebar({
 }) {
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const userMenuRef = useRef(null)
+  const pendingWorks = usePendingWorksContextOptional()
+  const pendingWorksCount = pendingWorks?.count || 0
+  const pendingInterviewCount = pendingWorks?.pendingInterviewCount || 0
   const userInitials = (authUsername || 'AD').slice(0, 2).toUpperCase()
   const displayName = authUsername || 'Administrator'
 
@@ -62,6 +67,16 @@ export function DesktopSidebar({
             {item.badgeKey === 'inbox' && inboxUnreadTotal > 0 && (
               <span className="desktop-sidebar__badge">
                 {inboxUnreadTotal > 99 ? '99+' : inboxUnreadTotal}
+              </span>
+            )}
+            {item.badgeKey === 'pendingWorks' && pendingWorksCount > 0 && (
+              <span className="desktop-sidebar__badge">
+                {pendingWorksCount > 99 ? '99+' : pendingWorksCount}
+              </span>
+            )}
+            {item.badgeKey === 'pendingInterviews' && pendingInterviewCount > 0 && (
+              <span className="desktop-sidebar__badge">
+                {pendingInterviewCount > 99 ? '99+' : pendingInterviewCount}
               </span>
             )}
           </button>

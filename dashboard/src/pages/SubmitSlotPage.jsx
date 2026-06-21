@@ -54,9 +54,33 @@ export function SubmitSlotPage() {
   const [paymentFile, setPaymentFile] = useState(null)
   const [sessionFile, setSessionFile] = useState(null)
   const [sessionPreview, setSessionPreview] = useState('')
+  const [manualDate, setManualDate] = useState('')
+  const [manualTime, setManualTime] = useState('')
 
-  const selected = candidates.find(c => c.name === name)
-  const canConfirm = Boolean(name && parsedSlot?.date && parsedSlot?.time && !busy && !parsing)
+  const effectiveName = name.trim()
+  const selected = useMemo(() => {
+    if (!effectiveName) return null
+    const key = effectiveName.toLowerCase()
+    return candidates.find(c => c.name.toLowerCase() === key) || null
+  }, [effectiveName, candidates])
+  const bookingSlot = useMemo(() => {
+    if (parsedSlot?.date && parsedSlot?.time) return parsedSlot
+    if (manualDate && manualTime) {
+      return {
+        ...parsedSlot,
+        date: manualDate,
+        time: manualTime,
+        time_end: parsedSlot?.time_end || '',
+      }
+    }
+    return null
+  }, [parsedSlot, manualDate, manualTime])
+  const canConfirm = Boolean(
+    effectiveName && slotFile && !busy && !parsing,
+  )
+  const showManualSlotFields = Boolean(
+    slotFile && !parsing && (!parsedSlot?.date || !parsedSlot?.time),
+  )
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -99,11 +123,13 @@ export function SubmitSlotPage() {
       const data = await res.json()
       if (!res.ok) {
         setParsedSlot(null)
-        setError(data.message || 'Could not read the screenshot')
+        setError('Auto-read failed — enter date & time below or upload a clearer screenshot.')
         return
       }
       setParsedSlot(data.slot || null)
-      setSuccess('Slot detected from your invite.')
+      setManualDate('')
+      setManualTime('')
+      setSuccess('Date & time detected — tap Confirm slot below to save.')
     } catch {
       setParsedSlot(null)
       setError('Network error while reading screenshot')
@@ -116,6 +142,8 @@ export function SubmitSlotPage() {
     if (slotPreview) URL.revokeObjectURL(slotPreview)
     setSlotFile(file || null)
     setParsedSlot(null)
+    setManualDate('')
+    setManualTime('')
     setSuccess('')
     if (file) {
       setSlotPreview(URL.createObjectURL(file))
@@ -133,8 +161,8 @@ export function SubmitSlotPage() {
   }
 
   async function uploadPaymentProof() {
-    if (!name || !paymentFile) {
-      setError('Select your name and a payment screenshot first.')
+    if (!effectiveName || !paymentFile) {
+      setError('Enter your name and attach a payment screenshot first.')
       return
     }
     setBusy(true)
@@ -142,7 +170,7 @@ export function SubmitSlotPage() {
     setSuccess('')
     try {
       const fd = new FormData()
-      fd.append('name', name)
+      fd.append('name', effectiveName)
       fd.append('file', paymentFile)
       const res = await fetch(`${API_BASE}/public/slots/payment-proof`, { method: 'POST', body: fd })
       const data = await res.json()
@@ -162,17 +190,16 @@ export function SubmitSlotPage() {
 
   async function submitBook(ev) {
     ev.preventDefault()
-    if (!name) {
-      setError('Select your name.')
+    if (!effectiveName) {
+      setError('Enter your name.')
       return
     }
     if (!slotFile) {
       setError('Upload your interview invite screenshot.')
       return
     }
-    if (!parsedSlot?.date || !parsedSlot?.time) {
-      setError('Could not read date and time — try a clearer screenshot.')
-      return
+    if (!bookingSlot?.date || !bookingSlot?.time) {
+      // Server re-parses screenshot on book when date/time omitted
     }
     if (selected?.needs_payment_proof && !paymentProofId) {
       setError(`Upload payment proof first (₹${(selected.balance_due || 0).toLocaleString('en-IN')} due).`)
@@ -183,12 +210,12 @@ export function SubmitSlotPage() {
     setSuccess('')
     try {
       const fd = new FormData()
-      fd.append('name', name)
-      fd.append('date', parsedSlot.date)
-      fd.append('time', parsedSlot.time)
-      if (parsedSlot.time_end) fd.append('time_end', parsedSlot.time_end)
-      if (parsedSlot.interview_round) fd.append('interview_round', parsedSlot.interview_round)
-      if (parsedSlot.technology) fd.append('technology', parsedSlot.technology)
+      fd.append('name', effectiveName)
+      if (bookingSlot?.date) fd.append('date', bookingSlot.date)
+      if (bookingSlot?.time) fd.append('time', bookingSlot.time)
+      if (bookingSlot?.time_end) fd.append('time_end', bookingSlot.time_end)
+      if (bookingSlot?.interview_round) fd.append('interview_round', bookingSlot.interview_round)
+      if (bookingSlot?.technology) fd.append('technology', bookingSlot.technology)
       if (paymentProofId) fd.append('payment_proof_id', paymentProofId)
       fd.append('file', slotFile)
       const res = await fetch(`${API_BASE}/public/slots/book`, { method: 'POST', body: fd })
@@ -197,11 +224,12 @@ export function SubmitSlotPage() {
         setError(data.payment_due ? (data.message || 'Payment required before booking.') : (data.message || 'Could not book slot'))
         return
       }
-      setSuccess('Slot booked successfully.')
       if (slotPreview) URL.revokeObjectURL(slotPreview)
       setSlotFile(null)
       setSlotPreview('')
       setParsedSlot(null)
+      setManualDate('')
+      setManualTime('')
       setPaymentProofId('')
       await refresh()
     } catch {
@@ -213,8 +241,8 @@ export function SubmitSlotPage() {
 
   async function submitSessionComplete(ev) {
     ev.preventDefault()
-    if (!name || !sessionFile) {
-      setError('Select your name and upload the session complete screenshot.')
+    if (!effectiveName || !sessionFile) {
+      setError('Enter your name and upload the session complete screenshot.')
       return
     }
     setBusy(true)
@@ -222,7 +250,7 @@ export function SubmitSlotPage() {
     setSuccess('')
     try {
       const fd = new FormData()
-      fd.append('name', name)
+      fd.append('name', effectiveName)
       fd.append('file', sessionFile)
       const res = await fetch(`${API_BASE}/public/slots/session-complete`, { method: 'POST', body: fd })
       const data = await res.json()
@@ -287,21 +315,23 @@ export function SubmitSlotPage() {
           <div className="submit-slot-body">
             <label className="submit-slot-field">
               <span className="submit-slot-field-label">Your name</span>
-              <div className="submit-slot-select-wrap">
-                <select
-                  className="submit-slot-select"
-                  value={name}
-                  onChange={ev => { setName(ev.target.value); setPaymentProofId('') }}
-                  disabled={busy || parsing}
-                >
-                  <option value="">Choose candidate…</option>
-                  {candidates.map(c => (
-                    <option key={c.name} value={c.name}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <input
+                className="submit-slot-select submit-slot-name-input"
+                list="slot-candidate-names"
+                value={name}
+                onChange={ev => { setName(ev.target.value); setPaymentProofId('') }}
+                placeholder="Choose or type your name"
+                disabled={busy || parsing}
+                autoComplete="name"
+              />
+              <datalist id="slot-candidate-names">
+                {candidates.map(c => (
+                  <option key={c.name} value={c.name} />
+                ))}
+              </datalist>
+              <span className="submit-slot-field-hint">
+                Pick from the list or type a new client name.
+              </span>
             </label>
 
             {tab === 'book' ? (
@@ -372,7 +402,39 @@ export function SubmitSlotPage() {
                   </div>
                 ) : null}
 
-                {error ? <p className="submit-slot-alert submit-slot-alert--error" role="alert">{error}</p> : null}
+                {showManualSlotFields ? (
+                  <div className="submit-slot-manual">
+                    <p className="submit-slot-manual-hint">
+                      Include the date line in your screenshot (e.g. Sat, Jun 20, 2:00 PM), or enter date &amp; time manually.
+                    </p>
+                    <div className="submit-slot-manual-grid">
+                      <label className="submit-slot-field">
+                        <span className="submit-slot-field-label">Interview date</span>
+                        <input
+                          className="submit-slot-select submit-slot-name-input"
+                          type="date"
+                          value={manualDate}
+                          onChange={ev => setManualDate(ev.target.value)}
+                          disabled={busy || parsing}
+                        />
+                      </label>
+                      <label className="submit-slot-field">
+                        <span className="submit-slot-field-label">Start time</span>
+                        <input
+                          className="submit-slot-select submit-slot-name-input"
+                          type="time"
+                          value={manualTime}
+                          onChange={ev => setManualTime(ev.target.value)}
+                          disabled={busy || parsing}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                ) : null}
+
+                {error && !showManualSlotFields ? (
+                  <p className="submit-slot-alert submit-slot-alert--error" role="alert">{error}</p>
+                ) : null}
                 {success ? <p className="submit-slot-alert submit-slot-alert--success">{success}</p> : null}
 
                 <button
@@ -397,8 +459,8 @@ export function SubmitSlotPage() {
                 {success ? <p className="submit-slot-alert submit-slot-alert--success">{success}</p> : null}
                 <button
                   type="submit"
-                  className={`submit-slot-cta${name && sessionFile ? ' submit-slot-cta--ready' : ''}`}
-                  disabled={busy || !name || !sessionFile}
+                  className={`submit-slot-cta${name.trim() && sessionFile ? ' submit-slot-cta--ready' : ''}`}
+                  disabled={busy || !name.trim() || !sessionFile}
                 >
                   {busy ? <Spinner size={18} /> : 'Submit session proof'}
                 </button>

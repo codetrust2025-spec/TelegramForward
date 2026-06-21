@@ -13,6 +13,7 @@ import './admin.css'
 import './responsive.css'
 import './desktop/desktopDashboard.css'
 import './mobile/mobileDashboard.css'
+import './dailyOps.css'
 
 const isSubmitSlot =
   typeof window !== 'undefined' &&

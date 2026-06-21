@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_MONTH_PATTERN = (
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+)
+_WEEKDAY_PATTERN = r"(?:mon|tue|wed|thu|fri|sat|sun)"
+
 
 _MONTHS = {
     "jan": 1, "january": 1,
@@ -30,6 +39,126 @@ _MONTHS = {
 }
 
 
+def _month_num(token: str) -> int:
+    t = (token or "").strip().lower()
+    if not t:
+        return 0
+    if len(t) > 3:
+        return _MONTHS.get(t, _MONTHS.get(t[:3], 0))
+    return _MONTHS.get(t[:3], 0)
+
+
+def _infer_year(month: int, day: int, ref: datetime | None = None) -> int:
+    ref = ref or datetime.now()
+    y = ref.year
+    try:
+        candidate = datetime(y, month, day).date()
+    except ValueError:
+        return y
+    if (ref.date() - candidate).days > 7:
+        return y + 1
+    return y
+
+
+def _parse_labeled_interview_block(blob: str) -> tuple[str, str, str]:
+    """Bullet-list invites: Date: 20-06-2026, Saturday / Time: 5:00 pm IST."""
+    text = (blob or "").replace("\n", " ")
+    date = ""
+    time_start = ""
+    time_end = ""
+
+    dm = re.search(
+        r"\bdate\s*:\s*(\d{1,2})[/.-](\d{1,2})[/.-](20\d{2})\b",
+        text,
+        re.IGNORECASE,
+    )
+    if dm:
+        d, m, y = int(dm.group(1)), int(dm.group(2)), int(dm.group(3))
+        if m > 12 and d <= 12:
+            d, m = m, d
+        date = f"{y:04d}-{_pad2(m)}-{_pad2(d)}"
+
+    tm = re.search(
+        r"\btime\s*:\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if tm:
+        sh, sm = _to_24h(int(tm.group(1)), int(tm.group(2) or 0), tm.group(3))
+        time_start = _fmt_hhmm(sh, sm)
+        end_total = sh * 60 + sm + 30
+        time_end = _fmt_hhmm(end_total // 60, end_total % 60)
+
+    return date, time_start, time_end
+
+
+def _parse_gmail_calendar_line(blob: str) -> tuple[str, str, str]:
+    """Gmail / Google Calendar card: Sat, Jun 20, 2:00 PM"""
+    text = (blob or "").replace("\n", " ")
+    pat = re.compile(
+        rf"\b{_WEEKDAY_PATTERN},?\s+({_MONTH_PATTERN})\s+(\d{{1,2}}),?\s+"
+        rf"(\d{{1,2}})(?::(\d{{2}}))?\s*(am|pm)\b",
+        re.IGNORECASE,
+    )
+    m = pat.search(text)
+    if not m:
+        return "", "", ""
+    mon = _month_num(m.group(1))
+    day = int(m.group(2))
+    if not mon:
+        return "", "", ""
+    y = _infer_year(mon, day)
+    date = f"{y:04d}-{_pad2(mon)}-{_pad2(day)}"
+    sh, sm = _to_24h(int(m.group(3)), int(m.group(4) or 0), m.group(5))
+    start = _fmt_hhmm(sh, sm)
+    end_total = sh * 60 + sm + 30
+    end = _fmt_hhmm(end_total // 60, end_total % 60)
+    return date, start, end
+
+
+def _parse_longform_invite_line(blob: str) -> tuple[str, str, str]:
+    """Email body: Monday, 22 June, 2026, 3:30 PM to 4:00 PM (IST)"""
+    text = (blob or "").replace("\n", " ")
+    range_pat = re.compile(
+        rf"(?:{_WEEKDAY_PATTERN},?\s+)?(\d{{1,2}})\s+({_MONTH_PATTERN})\s*,?\s*"
+        rf"(20\d{{2}}),?\s+"
+        rf"(\d{{1,2}})(?::(\d{{2}}))?\s*(am|pm)\s*(?:-|to|–|—)\s*"
+        rf"(\d{{1,2}})(?::(\d{{2}}))?\s*(am|pm)\b",
+        re.IGNORECASE,
+    )
+    m = range_pat.search(text)
+    if m:
+        mon = _month_num(m.group(2))
+        day = int(m.group(1))
+        y = int(m.group(3))
+        if mon:
+            date = f"{y:04d}-{_pad2(mon)}-{_pad2(day)}"
+            sh, sm = _to_24h(int(m.group(4)), int(m.group(5) or 0), m.group(6))
+            eh, em = _to_24h(int(m.group(7)), int(m.group(8) or 0), m.group(9))
+            return date, _fmt_hhmm(sh, sm), _fmt_hhmm(eh, em)
+
+    single_pat = re.compile(
+        rf"(?:{_WEEKDAY_PATTERN},?\s+)?(\d{{1,2}})\s+({_MONTH_PATTERN})\s*,?\s*"
+        rf"(20\d{{2}}),?\s+"
+        rf"(\d{{1,2}})(?::(\d{{2}}))?\s*(am|pm)\b",
+        re.IGNORECASE,
+    )
+    m = single_pat.search(text)
+    if not m:
+        return "", "", ""
+    mon = _month_num(m.group(2))
+    day = int(m.group(1))
+    y = int(m.group(3))
+    if not mon:
+        return "", "", ""
+    date = f"{y:04d}-{_pad2(mon)}-{_pad2(day)}"
+    sh, sm = _to_24h(int(m.group(4)), int(m.group(5) or 0), m.group(6))
+    start = _fmt_hhmm(sh, sm)
+    end_total = sh * 60 + sm + 30
+    end = _fmt_hhmm(end_total // 60, end_total % 60)
+    return date, start, end
+
+
 def _env_api_key() -> str:
     return (os.getenv("AI_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
 
@@ -40,6 +169,57 @@ def _env_api_base() -> str:
         or os.getenv("OPENAI_BASE_URL")
         or "https://api.openai.com/v1"
     ).rstrip("/")
+
+
+def _local_ocr_text(data: bytes) -> str:
+    """Tesseract OCR fallback when vision API is unavailable or rate-limited."""
+    try:
+        from PIL import Image
+        import pytesseract
+    except ImportError:
+        return ""
+    try:
+        img = Image.open(io.BytesIO(data))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        text = pytesseract.image_to_string(img) or ""
+        return str(text).strip()
+    except Exception as exc:
+        logger.warning("slot screenshot local OCR failed: %s", exc)
+        return ""
+
+
+def _vision_chat_completion(payload: dict[str, Any], *, label: str) -> dict[str, Any] | None:
+    api_key = _env_api_key()
+    if not api_key:
+        return None
+    body_bytes = json.dumps(payload).encode("utf-8")
+    retries = max(1, int(os.getenv("SLOT_PARSE_VISION_RETRIES", "3")))
+    for attempt in range(retries):
+        req = urllib.request.Request(
+            f"{_env_api_base()}/chat/completions",
+            data=body_bytes,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=35) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < retries - 1:
+                delay = 1.5 * (attempt + 1)
+                logger.warning("slot screenshot %s rate-limited; retry in %.1fs", label, delay)
+                time.sleep(delay)
+                continue
+            logger.warning("slot screenshot %s failed: HTTP %s", label, exc.code)
+            return None
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            logger.warning("slot screenshot %s failed: %s", label, exc)
+            return None
+    return None
 
 
 def _pad2(n: int) -> str:
@@ -103,6 +283,17 @@ def _parse_date_token(text: str) -> str:
         d = int(named2.group(2))
         y = int(named2.group(3))
         if mon:
+            return f"{y:04d}-{_pad2(mon)}-{_pad2(d)}"
+    named3 = re.search(
+        rf"(?:{_WEEKDAY_PATTERN},?\s+)?({_MONTH_PATTERN})\s+(\d{{1,2}})\b",
+        blob,
+        re.IGNORECASE,
+    )
+    if named3:
+        mon = _month_num(named3.group(1))
+        d = int(named3.group(2))
+        if mon:
+            y = _infer_year(mon, d)
             return f"{y:04d}-{_pad2(mon)}-{_pad2(d)}"
     return ""
 
@@ -173,9 +364,19 @@ def _parse_platform_from_blob(blob: str) -> str:
 
 def parse_invite_text(blob: str) -> dict[str, Any]:
     """Regex extraction from OCR or vision text."""
-    date = _parse_date_token(blob)
-    start, end = _parse_times_from_blob(blob)
-    return {
+    labeled_date, labeled_start, labeled_end = _parse_labeled_interview_block(blob)
+    g_date, g_start, g_end = _parse_gmail_calendar_line(blob)
+    lf_date, lf_start, lf_end = _parse_longform_invite_line(blob)
+    date = labeled_date or g_date or lf_date or _parse_date_token(blob)
+    if labeled_start:
+        start, end = labeled_start, labeled_end
+    elif g_start:
+        start, end = g_start, g_end
+    elif lf_start:
+        start, end = lf_start, lf_end
+    else:
+        start, end = _parse_times_from_blob(blob)
+    out = {
         "date": date,
         "time": start,
         "time_end": end,
@@ -184,6 +385,9 @@ def parse_invite_text(blob: str) -> dict[str, Any]:
         "platform": _parse_platform_from_blob(blob),
         "raw_text": (blob or "")[:2000],
     }
+    if labeled_start:
+        out["_labeled"] = True
+    return out
 
 
 def _vision_extract_json(data: bytes, mime: str) -> dict[str, Any]:
@@ -194,6 +398,9 @@ def _vision_extract_json(data: bytes, mime: str) -> dict[str, Any]:
     safe_mime = mime if mime.startswith("image/") else "image/jpeg"
     prompt = (
         "Read this interview invite / calendar / Teams / Zoom / Gmail screenshot. "
+        "Gmail often shows 'Sat, Jun 20, 2:00 PM' without a year — infer the correct year. "
+        "For bullet lists like 'Date: 20-06-2026' and 'Time: 5:00 pm IST', use those lines — "
+        "ignore the email received time in the Gmail header (e.g. '3:09 pm' next to the sender). "
         "Return JSON only with keys: date (YYYY-MM-DD), time (HH:MM 24h), "
         "time_end (HH:MM 24h), interview_round (L1|L2|HR|Final|Screening or empty), "
         "technology (short stack or empty), platform (teams|zoom|gmail|google_calendar|barraiser|other). "
@@ -212,20 +419,8 @@ def _vision_extract_json(data: bytes, mime: str) -> dict[str, Any]:
         "temperature": 0,
         "response_format": {"type": "json_object"},
     }
-    req = urllib.request.Request(
-        f"{_env_api_base()}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=35) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        logger.warning("slot screenshot vision failed: %s", exc)
+    body = _vision_chat_completion(payload, label="vision-json")
+    if not body:
         return {}
     try:
         content = (body.get("choices") or [{}])[0].get("message", {}).get("content") or "{}"
@@ -233,6 +428,51 @@ def _vision_extract_json(data: bytes, mime: str) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except (json.JSONDecodeError, TypeError, IndexError):
         return {}
+
+
+def _vision_extract_raw_text(data: bytes, mime: str) -> str:
+    """OCR-style fallback: return all visible text from the screenshot."""
+    api_key = _env_api_key()
+    if not api_key:
+        return ""
+    b64 = base64.b64encode(data).decode("ascii")
+    safe_mime = mime if mime.startswith("image/") else "image/jpeg"
+    prompt = (
+        "Transcribe ALL visible text from this interview invite screenshot exactly as shown. "
+        "Include calendar lines like 'Sat, Jun 20, 2:00 PM'. Return plain text only."
+    )
+    payload = {
+        "model": os.getenv("SLOT_PARSE_VISION_MODEL", "gpt-4o-mini"),
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:{safe_mime};base64,{b64}"}},
+            ],
+        }],
+        "max_tokens": 500,
+        "temperature": 0,
+    }
+    body = _vision_chat_completion(payload, label="vision-ocr")
+    if not body:
+        return ""
+    try:
+        content = (body.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+        return str(content).strip()
+    except (TypeError, IndexError):
+        return ""
+
+
+def _apply_text_to_merged(merged: dict[str, Any], raw_text: str, *, method: str) -> dict[str, Any]:
+    if not raw_text:
+        return merged
+    text_parsed = parse_invite_text(raw_text)
+    merged = _merge_parsed(text_parsed, merged)
+    if not merged.get("raw_text"):
+        merged["raw_text"] = raw_text[:2000]
+    if method:
+        merged["method"] = method
+    return merged
 
 
 def _norm_time_field(val: str) -> str:
@@ -255,12 +495,16 @@ def _merge_parsed(vision: dict[str, Any], regex: dict[str, Any]) -> dict[str, An
         "platform": "",
         "raw_text": regex.get("raw_text") or "",
     }
+    labeled = bool(regex.get("_labeled"))
     for key in out:
         if key == "raw_text":
             continue
-        val = str(vision.get(key) or "").strip()
-        if not val:
-            val = str(regex.get(key) or "").strip()
+        regex_val = str(regex.get(key) or "").strip()
+        vision_val = str(vision.get(key) or "").strip()
+        if labeled and key in ("date", "time", "time_end") and regex_val:
+            val = regex_val
+        else:
+            val = vision_val or regex_val
         out[key] = val
     out["date"] = _parse_date_token(out["date"]) or out["date"]
     out["time"] = _norm_time_field(out["time"])
@@ -291,6 +535,19 @@ def parse_invite_screenshot(data: bytes, mime: str = "image/jpeg") -> dict[str, 
     )
     regex = parse_invite_text(regex_blob)
     merged = _merge_parsed(vision, regex)
+    method = "vision" if vision else ""
+
+    if not merged.get("date") or not merged.get("time"):
+        ocr_text = _local_ocr_text(data)
+        if ocr_text:
+            merged = _apply_text_to_merged(merged, ocr_text, method="ocr")
+            method = "ocr"
+
+    if not merged.get("date") or not merged.get("time"):
+        raw_text = _vision_extract_raw_text(data, mime)
+        if raw_text:
+            merged = _apply_text_to_merged(merged, raw_text, method="vision-ocr")
+            method = "vision-ocr" if not method else method
 
     from features.candidate_store import canonical_technology, normalise_interview_round
 
@@ -304,8 +561,8 @@ def parse_invite_screenshot(data: bytes, mime: str = "image/jpeg") -> dict[str, 
     if not merged.get("date") or not merged.get("time"):
         raise ValueError(
             "Could not read date and time from the screenshot — "
-            "use a clear invite image (Teams, Gmail, Calendar, Zoom)."
+            "enter date & time manually, or upload a clearer invite image."
         )
     merged["parsed"] = True
-    merged["method"] = "vision" if vision else "regex"
+    merged["method"] = method or ("vision" if vision else "regex")
     return merged

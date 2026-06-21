@@ -1964,7 +1964,7 @@ def public_add_payment_proof_for_name(
     """Attach a payment screenshot from the public submit-slot page."""
     canon = canonical_candidate_name(_clean_str(name))
     if not canon:
-        raise ValueError("Select your name from the list")
+        raise ValueError("Enter your name")
     due = merged_balance_due_for_name(canon)
     if due <= 0:
         raise ValueError("No payment due — you can book your interview slot directly.")
@@ -2118,9 +2118,9 @@ def interview_monitor(
         filter_search=filter_search,
         filter_channel=filter_channel,
     )
+    counts = _interview_attendance_counts(rows)
     if upcoming_only:
         rows = _filter_upcoming_only_rows(rows)
-    counts = _interview_attendance_counts(rows)
     rows = _enrich_interview_rows_with_slot_screenshots(rows)
     by_date: dict[str, list[dict]] = {}
     by_attendee: dict[str, int] = {}
@@ -2399,6 +2399,7 @@ def set_interview_attendance(
     attended: bool | None = None,
     attendee: str | None = None,
     by: str,
+    allow_future: bool = False,
 ) -> dict | None:
     data = _load()
     rows = data.get("candidates") or []
@@ -2410,7 +2411,11 @@ def set_interview_attendance(
             resolved_status = "attended" if attended else ""
         else:
             resolved_status = normalise_interview_attendance_status(status)
-        if resolved_status in {"attended", "not_attended"} and _interview_slot_is_future(r):
+        if (
+            not allow_future
+            and resolved_status in {"attended", "not_attended"}
+            and _interview_slot_is_future(r)
+        ):
             raise ValueError("Attendance can only be logged on or after the interview date")
         remark_text = _clean_str(remark)[:500]
         r["interview_attendance_status"] = resolved_status
@@ -2420,7 +2425,11 @@ def set_interview_attendance(
             r["interview_attended_at"] = _now_iso()
             r["interview_attended_by"] = (by or "").strip()[:120]
             if attendee is not None:
-                r["interview_attendee"] = normalise_interview_attendee_name(attendee)
+                try:
+                    r["interview_attendee"] = normalise_interview_attendee_name(attendee)
+                except ValueError:
+                    fallback = row_interview_attendee(r) or "Tool"
+                    r["interview_attendee"] = normalise_interview_attendee_name(fallback)
             else:
                 r["interview_attendee"] = row_interview_attendee(r)
         elif resolved_status in {"cancelled", "rescheduled"}:
