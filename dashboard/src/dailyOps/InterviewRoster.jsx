@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { API } from '../config.js'
 import { useAuth } from '../context/AuthContext.jsx'
 
@@ -68,16 +69,35 @@ function AttendanceSelect({ value, disabled, onChange, ariaLabel }) {
 
 function RowActions({ row, busy, onEditAttendee, onEditSlot, onRemove }) {
   const [open, setOpen] = useState(false)
+  const [position, setPosition] = useState(null)
+  const triggerRef = useRef(null)
+  const menuRef = useRef(null)
+  useEffect(() => {
+    if (!open) return undefined
+    function closeOnOutsideClick(event) {
+      if (!triggerRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) setOpen(false)
+    }
+    function closeOnEscape(event) { if (event.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', closeOnOutsideClick)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => { document.removeEventListener('mousedown', closeOnOutsideClick); document.removeEventListener('keydown', closeOnEscape) }
+  }, [open])
+  function toggleMenu() {
+    if (open) { setOpen(false); return }
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (rect) setPosition({ top: rect.bottom + 4, left: Math.max(8, rect.right - 196) })
+    setOpen(true)
+  }
+  const menu = open && position && createPortal(
+    <ul ref={menuRef} className="ops-row-menu__list ops-row-menu__list--portal" style={{ top: position.top, left: position.left }} role="menu">
+      <li role="none"><button type="button" role="menuitem" className="ops-row-menu__item" onClick={() => { setOpen(false); onEditAttendee(row) }}>Edit attendee</button></li>
+      <li role="none"><button type="button" role="menuitem" className="ops-row-menu__item" onClick={() => { setOpen(false); onEditSlot(row) }}>Edit slot</button></li>
+      <li role="none"><button type="button" role="menuitem" className="ops-row-menu__item ops-row-menu__item--danger" onClick={() => { setOpen(false); onRemove(row) }}>Remove slot</button></li>
+    </ul>, document.body)
   return (
     <div className="ops-row-menu">
-      <button type="button" className="ops-row-menu__trigger" aria-label={`Actions for ${row.name}`} aria-haspopup="menu" aria-expanded={open} disabled={busy} onClick={() => setOpen(value => !value)}>⋮</button>
-      {open && (
-        <ul className="ops-row-menu__list" role="menu">
-          <li role="none"><button type="button" role="menuitem" className="ops-row-menu__item" onClick={() => { setOpen(false); onEditAttendee(row) }}>Edit attendee</button></li>
-          <li role="none"><button type="button" role="menuitem" className="ops-row-menu__item" onClick={() => { setOpen(false); onEditSlot(row) }}>Edit slot</button></li>
-          <li role="none"><button type="button" role="menuitem" className="ops-row-menu__item ops-row-menu__item--danger" onClick={() => { setOpen(false); onRemove(row) }}>Remove slot</button></li>
-        </ul>
-      )}
+      <button ref={triggerRef} type="button" className="ops-row-menu__trigger" aria-label={`Actions for ${row.name}`} aria-haspopup="menu" aria-expanded={open} disabled={busy} onClick={toggleMenu}>⋮</button>
+      {menu}
     </div>
   )
 }
