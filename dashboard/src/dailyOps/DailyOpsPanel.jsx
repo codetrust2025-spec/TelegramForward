@@ -90,12 +90,12 @@ export function DailyOpsPanel({
       <PendingWorksStrip onOpenCandidates={onNavCandidates} />
 
       <div className="ops-dashboard ops-dashboard--v3">
-        <header className="ops-dash-toolbar">
-          <div>
+        <header className="ops-dash-toolbar ops-dash-toolbar--v3 ops-dash-toolbar--legacy">
+          <div className="ops-dash-toolbar__intro">
             <h1 className="ops-dash-title">Daily ops</h1>
             <p className="ops-dash-sub">Interview roster, attendance, and pending work</p>
           </div>
-          <div className="ops-dash-toolbar__filters">
+          <div className="ops-dash-toolbar__main ops-dash-toolbar__main--legacy">
             <div className="ops-date-range">
               <div className="ops-date-range__presets" role="tablist" aria-label="Date range">
                 {PRESETS.map(preset => (
@@ -134,7 +134,9 @@ export function DailyOpsPanel({
               onChange={e => setCandidateSearch(e.target.value)}
               aria-label="Candidate search"
             />
-            <button type="button" className="btn btn--ghost btn--sm" onClick={loadGlobal}>Refresh</button>
+            <div className="ops-dash-toolbar__actions">
+              <button type="button" className="btn btn--ghost btn--sm" onClick={loadGlobal}>Refresh</button>
+            </div>
           </div>
         </header>
 
