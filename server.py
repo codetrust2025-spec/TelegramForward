@@ -3355,6 +3355,29 @@ async def candidates_interview_attendance(cid: str, request: Request, body: dict
     return {"status": "ok", "candidate": row}
 
 
+@app.patch("/candidates/{cid}/interview-attendee")
+async def candidates_interview_attendee(cid: str, request: Request, body: dict):
+    """Change the assigned interview attendee without changing attendance."""
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store
+
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Candidate not found"}
+    assert_candidate_row_access(request, existing)
+    try:
+        row = candidate_store.set_interview_attendee(
+            cid,
+            attendee=(body or {}).get("attendee") or "",
+            by=_ops_by(request),
+        )
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+    if not row:
+        return {"status": "error", "message": "Candidate not found"}
+    return {"status": "ok", "candidate": row}
+
+
 @app.get("/candidates/{cid}")
 async def candidates_get(cid: str, request: Request):
     from core.dashboard_access import assert_candidate_row_access

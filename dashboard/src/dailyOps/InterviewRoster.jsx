@@ -66,6 +66,53 @@ function AttendanceSelect({ value, disabled, onChange, ariaLabel }) {
   )
 }
 
+function RowActions({ row, busy, onEditAttendee, onEditSlot, onRemove }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="ops-row-menu">
+      <button type="button" className="ops-row-menu__trigger" aria-label={`Actions for ${row.name}`} aria-haspopup="menu" aria-expanded={open} disabled={busy} onClick={() => setOpen(value => !value)}>⋮</button>
+      {open && (
+        <ul className="ops-row-menu__list" role="menu">
+          <li role="none"><button type="button" role="menuitem" className="ops-row-menu__item" onClick={() => { setOpen(false); onEditAttendee(row) }}>Edit attendee</button></li>
+          <li role="none"><button type="button" role="menuitem" className="ops-row-menu__item" onClick={() => { setOpen(false); onEditSlot(row) }}>Edit slot</button></li>
+          <li role="none"><button type="button" role="menuitem" className="ops-row-menu__item ops-row-menu__item--danger" onClick={() => { setOpen(false); onRemove(row) }}>Remove slot</button></li>
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function SlotEditModal({ row, mode, busy, onClose, onSave }) {
+  const [attendee, setAttendee] = useState(row.interview_attendee || row.interview_attended_by || row.reference || '')
+  const [date, setDate] = useState(row.date || '')
+  const [time, setTime] = useState(row.time || '')
+  const [timeEnd, setTimeEnd] = useState(row.time_end || '')
+  const [notes, setNotes] = useState(row.notes || '')
+  const [error, setError] = useState('')
+  const attendeeOnly = mode === 'attendee'
+  async function submit(event) {
+    event.preventDefault()
+    setError('')
+    try {
+      await onSave(attendeeOnly ? { attendee } : { date, time, time_end: timeEnd, notes, interview_round: row.interview_round || '' })
+    } catch (err) {
+      setError(err.message || 'Save failed')
+    }
+  }
+  return (
+    <div className="cand-modal-backdrop" onMouseDown={event => event.target === event.currentTarget && onClose()}>
+      <form className="cand-modal ops-slot-modal" onSubmit={submit}>
+        <header className="cand-modal-header"><div><h3 className="cand-modal-title">{attendeeOnly ? 'Edit attendee' : 'Edit interview slot'}</h3><p className="cand-modal-sub">{row.name}</p></div><button type="button" className="cand-modal-close" onClick={onClose} aria-label="Close">×</button></header>
+        <div className="cand-modal-body">
+          {attendeeOnly ? <label className="cand-field cand-field--span2"><span className="cand-field-label">Attendee</span><input className="cand-input" list="ops-attendee-options" value={attendee} onChange={event => setAttendee(event.target.value)} required autoFocus /><datalist id="ops-attendee-options">{ATTENDEES.map(name => <option key={name} value={name} />)}</datalist></label> : <><label className="cand-field"><span className="cand-field-label">Date</span><input className="cand-input" type="date" value={date} onChange={event => setDate(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Start time</span><input className="cand-input" type="time" value={time} onChange={event => setTime(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">End time</span><input className="cand-input" type="time" value={timeEnd} onChange={event => setTimeEnd(event.target.value)} required /></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Notes</span><input className="cand-input" value={notes} onChange={event => setNotes(event.target.value)} /></label></>}
+          {error && <p className="admin-error cand-field--span2">{error}</p>}
+        </div>
+        <footer className="cand-modal-footer"><button type="button" className="cand-btn cand-btn--ghost" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="cand-btn cand-btn--primary" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button></footer>
+      </form>
+    </div>
+  )
+}
+
 export function InterviewRoster({
   variant = 'default',
   focusDay = null,
@@ -103,6 +150,7 @@ export function InterviewRoster({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busyId, setBusyId] = useState(null)
+  const [editing, setEditing] = useState(null)
   const [attendeeFilter, setAttendeeFilter] = useState('')
   const [candidateFilter, setCandidateFilter] = useState('')
   const [channelFilter, setChannelFilter] = useState('')
@@ -222,6 +270,47 @@ export function InterviewRoster({
     }
   }
 
+  async function saveAttendee(row, attendee) {
+    setBusyId(row.id)
+    try {
+      const res = await fetch(`${API}/candidates/${row.id}/interview-attendee`, {
+        method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ attendee }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Update failed')
+      setEditing(null)
+      await load({ silent: true })
+      onRosterMutate?.()
+    } finally { setBusyId(null) }
+  }
+
+  async function saveSlot(row, values) {
+    setBusyId(row.id)
+    try {
+      const res = await fetch(`${API}/candidates/interviews/slots/${row.id}`, {
+        method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
+      })
+      const data = await res.json()
+      if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Update failed')
+      setEditing(null)
+      await load({ silent: true })
+      onRosterMutate?.()
+    } finally { setBusyId(null) }
+  }
+
+  async function removeSlot(row) {
+    if (!window.confirm(`Remove interview slot for ${row.name}? The candidate record stays in Candidates.`)) return
+    setBusyId(row.id)
+    setError('')
+    try {
+      const res = await fetch(`${API}/candidates/interviews/slots/${row.id}`, { method: 'DELETE', credentials: 'include' })
+      const data = await res.json()
+      if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Remove failed')
+      await load({ silent: true })
+      onRosterMutate?.()
+    } catch (err) { setError(err.message || 'Remove failed') } finally { setBusyId(null) }
+  }
+
   const title = isDashboard
     ? (hasRange && dashboardFromDate !== dashboardToDate
       ? `${formatDayLabel(dashboardFromDate)} – ${formatDayLabel(dashboardToDate)}`
@@ -316,6 +405,7 @@ export function InterviewRoster({
                   <th>Technology</th>
                   {!handlerView && !effectiveAttendee && <th>Attendee</th>}
                   <th>Attendance</th>
+                  {canManage && <th aria-label="Actions" />}
                 </tr>
               </thead>
               <tbody>
@@ -347,6 +437,7 @@ export function InterviewRoster({
                           </span>
                         </div>
                       </td>
+                      {canManage && <td data-label="Actions" className="ops-dash-attend-cell"><RowActions row={row} busy={busyId === row.id} onEditAttendee={() => setEditing({ row, mode: 'attendee' })} onEditSlot={() => setEditing({ row, mode: 'slot' })} onRemove={removeSlot} /></td>}
                     </tr>
                   )
                 })}
@@ -355,6 +446,7 @@ export function InterviewRoster({
           </div>
         </div>
       )}
+      {editing && <SlotEditModal row={editing.row} mode={editing.mode} busy={busyId === editing.row.id} onClose={() => setEditing(null)} onSave={values => editing.mode === 'attendee' ? saveAttendee(editing.row, values.attendee) : saveSlot(editing.row, values)} />}
     </section>
   )
 }
