@@ -200,44 +200,6 @@ ${b.note || b.original_name || b.filename}`)) {
     }
   }
   w.useEffect(() => {
-    if (!e) return undefined;
-    const root = document.querySelector('.cand-modal .cand-proofs');
-    if (!root || root.querySelector('.cand-resume-inline')) return undefined;
-    const wrap = document.createElement('div');
-    wrap.className = 'cand-resume-inline';
-    const label = document.createElement('span');
-    label.className = 'cand-field-label';
-    label.textContent = 'Resume';
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-    input.hidden = true;
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'cand-btn cand-btn--primary';
-    button.textContent = 'Upload resume';
-    const hint = document.createElement('span');
-    hint.className = 'cand-field-hint';
-    hint.textContent = 'PDF, DOC, or DOCX · up to 10 MB';
-    button.onclick = () => input.click();
-    input.onchange = async () => {
-      const file = input.files && input.files[0];
-      if (!file) return;
-      button.disabled = true;
-      button.textContent = 'Uploading…';
-      try {
-        const body = new FormData(); body.append('file', file);
-        const result = await (await fetch(`${ve}/candidates/${e}/resumes`, { method: 'POST', body })).json();
-        if (result.status !== 'ok') throw new Error(result.message || 'Resume upload failed');
-        hint.textContent = 'Resume uploaded — pending task cleared.';
-      } catch (err) { hint.textContent = err.message || 'Resume upload failed'; }
-      finally { button.disabled = false; button.textContent = 'Upload resume'; input.value = ''; }
-    };
-    wrap.append(label, input, button, hint);
-    root.append(wrap);
-    return () => wrap.remove();
-  }, [e]);
-  w.useEffect(() => {
     function b(A) {
       if (A.key === "Escape") {
         d(null);
@@ -1854,6 +1816,51 @@ export function CandidatesPanel() {
   w.useEffect(() => {
     fe();
   }, [fe]);
+  w.useEffect(() => {
+    const timer = setTimeout(() => {
+      const table = document.querySelector(".cand-page .cand-table");
+      if (!table) return;
+      const header = table.querySelector("thead tr");
+      if (header && !header.querySelector("[data-resume-column]")) {
+        const cell = document.createElement("th");
+        cell.dataset.resumeColumn = "true";
+        cell.textContent = "Resume";
+        const actions = header.querySelector('th[aria-label="Actions"]');
+        header.insertBefore(cell, actions || null);
+      }
+      const rows = Array.from(table.querySelectorAll("tbody tr"));
+      rows.forEach((row, index) => {
+        row.querySelector(".cand-cell-resume")?.remove();
+        const candidate = i[index];
+        if (!candidate || !candidate.id) return;
+        const cell = document.createElement("td");
+        cell.className = "cand-cell-resume";
+        cell.onclick = event => event.stopPropagation();
+        const resumes = Array.isArray(candidate.resumes) ? candidate.resumes : [];
+        const count = Number(candidate.resume_count) || resumes.length;
+        const latest = candidate.latest_resume || resumes[resumes.length - 1];
+        if (count && latest && latest.id) {
+          const link = document.createElement("a");
+          link.className = "cand-resume-link";
+          link.href = `${ve}/candidates/${candidate.id}/resumes/${latest.id}`;
+          link.target = "_blank";
+          link.rel = "noreferrer";
+          link.title = `Open latest resume (${count} version${count === 1 ? "" : "s"})`;
+          link.innerHTML = `<span aria-hidden="true">📄</span><span>${count} ${count === 1 ? "resume" : "resumes"}</span>`;
+          cell.append(link);
+        } else {
+          const empty = document.createElement("span");
+          empty.className = "cand-resume-empty";
+          empty.title = "No resume saved";
+          empty.textContent = "—";
+          cell.append(empty);
+        }
+        const actions = row.querySelector(".cand-cell-actions");
+        row.insertBefore(cell, actions || null);
+      });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [i, f]);
   const q = () => {
     Y(null);
     M(true);
