@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "description": "Pinned production assets \u2014 live site must match these hashes.",
+  "git_commit": "ad96f48f838701bec135f1895ea928c802f34de4",
+  "git_commit_short": "ad96f48",
+  "deployed_at": "2026-06-22T09:53:37Z",
+  "js": "assets/app-GBCb2U7N.js",
+  "css": "assets/index-CHE3vlyo.css",
+  "js_sha256": "20145240019618dffe95b40d9c73b89b914e04e149e6243c8ec7f777d80aafcb",
+  "css_sha256": "cf2c8103dc1bc85ee0fee5b0e92cfe88475f18ca9176768a5a8a31ce0ad538c0",
+  "js_bytes": 1107536,
+  "css_bytes": 476751,
+  "server_py_sha256": "71248453bf6439cca4494e860c6af227212a107a756afdc1fa43d3491df8bc8a"
+}
