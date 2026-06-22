@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "description": "Pinned production assets \u2014 live site must match these hashes.",
+  "git_commit": "bb65e72c1ef0410329ffeea0c41b2bf04c7ccede",
+  "git_commit_short": "bb65e72",
+  "deployed_at": "2026-06-22T13:31:47Z",
+  "js": "assets/app-KxWlSnTq.js",
+  "css": "assets/index-DfXEoSpN.css",
+  "js_sha256": "92fefb037cfd6f5d1937599b3d417ea0628273ae0a6bc4b05f458be7d3054be3",
+  "css_sha256": "56b51df54908706ba045234df6489411c063e4597407cfa09d1675590b1453ee",
+  "js_bytes": 1118603,
+  "css_bytes": 476883,
+  "server_py_sha256": "f7c398e7d856e2674eba37aee4c3adbc096340870a38bc023b5a43d10e041fd1"
+}
