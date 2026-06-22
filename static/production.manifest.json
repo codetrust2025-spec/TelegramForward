@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "description": "Pinned production assets \u2014 live site must match these hashes.",
+  "git_commit": "129da00f3907dd17a686542e589ce995d0521f6b",
+  "git_commit_short": "129da00",
+  "deployed_at": "2026-06-22T12:22:21Z",
+  "js": "assets/app-CtOX8XXT.js",
+  "css": "assets/index-CHE3vlyo.css",
+  "js_sha256": "e0c85ef34376652528a250a79911ced19b0131f20254c7962e142fdfd52ed6a6",
+  "css_sha256": "cf2c8103dc1bc85ee0fee5b0e92cfe88475f18ca9176768a5a8a31ce0ad538c0",
+  "js_bytes": 1112747,
+  "css_bytes": 476751,
+  "server_py_sha256": "f7c398e7d856e2674eba37aee4c3adbc096340870a38bc023b5a43d10e041fd1"
+}
