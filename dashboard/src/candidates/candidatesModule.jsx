@@ -1855,6 +1855,36 @@ export function CandidatesPanel() {
           empty.textContent = "—";
           cell.append(empty);
         }
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        input.hidden = true;
+        const upload = document.createElement("button");
+        upload.type = "button";
+        upload.className = "cand-btn cand-btn--ghost cand-btn--xs cand-resume-upload-btn";
+        upload.textContent = count ? "Update" : "Upload resume";
+        upload.title = count ? "Upload a newer resume version" : "Upload resume";
+        upload.onclick = () => input.click();
+        input.onchange = async () => {
+          const file = input.files && input.files[0];
+          if (!file) return;
+          upload.disabled = true;
+          upload.textContent = "Uploading…";
+          try {
+            const body = new FormData();
+            body.append("file", file);
+            const result = await (await fetch(`${ve}/candidates/${candidate.id}/resumes`, { method: "POST", body })).json();
+            if (result.status !== "ok") throw new Error(result.message || "Resume upload failed");
+            await fe();
+          } catch (error) {
+            window.alert(error.message || "Resume upload failed");
+          } finally {
+            upload.disabled = false;
+            upload.textContent = count ? "Update" : "Upload resume";
+            input.value = "";
+          }
+        };
+        cell.append(input, upload);
         const actions = row.querySelector(".cand-cell-actions");
         row.insertBefore(cell, actions || null);
       });
