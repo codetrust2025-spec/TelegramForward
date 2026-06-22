@@ -200,6 +200,44 @@ ${b.note || b.original_name || b.filename}`)) {
     }
   }
   w.useEffect(() => {
+    if (!e) return undefined;
+    const root = document.querySelector('.cand-modal .cand-proofs');
+    if (!root || root.querySelector('.cand-resume-inline')) return undefined;
+    const wrap = document.createElement('div');
+    wrap.className = 'cand-resume-inline';
+    const label = document.createElement('span');
+    label.className = 'cand-field-label';
+    label.textContent = 'Resume';
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    input.hidden = true;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'cand-btn cand-btn--primary';
+    button.textContent = 'Upload resume';
+    const hint = document.createElement('span');
+    hint.className = 'cand-field-hint';
+    hint.textContent = 'PDF, DOC, or DOCX · up to 10 MB';
+    button.onclick = () => input.click();
+    input.onchange = async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      button.disabled = true;
+      button.textContent = 'Uploading…';
+      try {
+        const body = new FormData(); body.append('file', file);
+        const result = await (await fetch(`${ve}/candidates/${e}/resumes`, { method: 'POST', body })).json();
+        if (result.status !== 'ok') throw new Error(result.message || 'Resume upload failed');
+        hint.textContent = 'Resume uploaded — pending task cleared.';
+      } catch (err) { hint.textContent = err.message || 'Resume upload failed'; }
+      finally { button.disabled = false; button.textContent = 'Upload resume'; input.value = ''; }
+    };
+    wrap.append(label, input, button, hint);
+    root.append(wrap);
+    return () => wrap.remove();
+  }, [e]);
+  w.useEffect(() => {
     function b(A) {
       if (A.key === "Escape") {
         d(null);
@@ -228,6 +266,31 @@ ${b.note || b.original_name || b.filename}`)) {
             v(b.note || "");
           }} title="Click to edit">{b.note || <em>add a note…</em>}</button>}<div className="cand-proof-sub"><span>{Nx(b.uploaded_at)}</span><span>·</span><span>{kx(b.size)}</span></div></div><button type="button" className="cand-proof-delete" onClick={() => S(b)} title="Delete proof" aria-label="Delete proof">×</button></li>)}</ul>}{u && <div className="cand-proof-lightbox" onClick={() => d(null)} role="dialog" aria-label="Payment proof preview"><button type="button" className="cand-proof-lightbox-close" onClick={() => d(null)} aria-label="Close preview">×</button><img src={`${ve}${u.url}`} alt={u.note || u.original_name} onClick={b => b.stopPropagation()} /><div className="cand-proof-lightbox-caption" onClick={b => b.stopPropagation()}>{u.note && <strong>{u.note}</strong>}<span>{Nx(u.uploaded_at)} · {kx(u.size)}</span><a href={`${ve}${u.url}`} download={u.original_name || u.filename} className="cand-btn cand-btn--ghost cand-btn--xs">Download</a></div></div>}</div>;
 }
+function ResumeUpload({ candidateId, resumes = [] }) {
+  const [busy, setBusy] = w.useState(false)
+  const [message, setMessage] = w.useState('')
+  const inputRef = w.useRef(null)
+  const disabled = !candidateId
+  async function upload(file) {
+    if (!file || disabled) return
+    setBusy(true)
+    setMessage('')
+    try {
+      const body = new FormData()
+      body.append('file', file)
+      const result = await (await fetch(`${ve}/candidates/${candidateId}/resumes`, { method: 'POST', body })).json()
+      if (result.status !== 'ok') throw new Error(result.message || 'Resume upload failed')
+      setMessage('Resume uploaded. The pending task is cleared.')
+    } catch (err) {
+      setMessage(err.message || 'Resume upload failed')
+    } finally {
+      setBusy(false)
+      if (inputRef.current) inputRef.current.value = ''
+    }
+  }
+  return <div className="cand-proofs cand-resume-upload"><div className="cand-proofs-header"><span className="cand-field-label">Resume<span className="cand-proofs-count">{resumes.length}</span></span></div>{disabled ? <div className="cand-proofs-empty cand-proofs-empty--blocked"><strong>Save the candidate first</strong>, then upload the resume.</div> : <><input ref={inputRef} type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden onChange={event => upload(event.target.files?.[0])} disabled={busy} /><button type="button" className="cand-btn cand-btn--primary" onClick={() => inputRef.current?.click()} disabled={busy}>{busy ? 'Uploading…' : 'Upload resume'}</button><span className="cand-field-hint">PDF, DOC, or DOCX · up to 10 MB</span></>}{message && <div className="cand-proofs-error">{message}</div>}</div>
+}
+
 function _Component23({
   phone: e,
   defaultCountry: t = "91",
