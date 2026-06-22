@@ -1165,6 +1165,38 @@ def _slim_list_row(row: dict) -> dict:
     return slim
 
 
+def _collapse_profile_candidates(rows: list[dict]) -> list[dict]:
+    """Show one Candidates-page record per profile candidate.
+
+    Multiple interview slots are stored as separate rows for scheduling, but
+    they are not separate profile candidates.  Keep round-wise support rows
+    independent and merge only profile-service rows by normalised name.
+    """
+    grouped: dict[str, list[dict]] = {}
+    result: list[dict] = []
+    for row in rows:
+        if _normalise_service_type(row.get("service_type"), row) == "round_wise":
+            result.append(row)
+            continue
+        key = " ".join((row.get("name") or "").strip().lower().split())
+        if not key:
+            result.append(row)
+            continue
+        grouped.setdefault(key, []).append(row)
+    for group in grouped.values():
+        newest = max(group, key=lambda r: (r.get("updated_at") or "", r.get("date") or ""))
+        merged = dict(newest)
+        merged["slot_count"] = len(group)
+        all_resumes = {item.get("id"): item for r in group for item in (r.get("resumes") or []) if item.get("id")}
+        if all_resumes:
+            merged["resumes"] = list(all_resumes.values())
+            merged["resume_count"] = len(all_resumes)
+            merged["latest_resume"] = max(all_resumes.values(), key=lambda item: item.get("uploaded_at") or "")
+        result.append(merged)
+    result.sort(key=lambda r: (r.get("date") or "", r.get("updated_at") or ""), reverse=True)
+    return result
+
+
 def _in_progress_rows(rows: list[dict], month: str | None) -> list[dict]:
     out = [r for r in rows if r.get("stage") == "in_progress"]
     if month and month != "all":
@@ -1197,7 +1229,7 @@ def list_candidates(*, stage: str | None = None, task: str | None = None,
     show only one handler's leads)."""
     data = _load()
     rows = [_with_computed(r) for r in (data.get("candidates") or [])]
-    return _apply_list_filters(
+    rows = _apply_list_filters(
         rows,
         stage=stage,
         task=task,
@@ -1206,6 +1238,7 @@ def list_candidates(*, stage: str | None = None, task: str | None = None,
         pending_only=pending_only,
         reference=reference,
     )
+    return _collapse_profile_candidates(rows)
 
 
 def _is_roster_placeholder(row: dict) -> bool:
