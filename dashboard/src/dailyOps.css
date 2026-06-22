@@ -509,6 +509,14 @@
 .ops-dashboard--v3 .ops-dash-checklist-preview{max-height:72px}
 .ops-dashboard--v3 .ops-dash-unified{gap:6px}
 .ops-dash-error{margin:0;font-size:11px}
+
+/* Keep the responsive card transformation on small screens only.  The shared
+   rule made desktop roster tables display as blocks, so they collapsed to the
+   width of their first row and left most of Daily Ops empty. */
+@media (min-width:901px){
+.ops-dash-table-wrap.ta-table-responsive--cards .ops-interview-table{display:table!important;width:100%;table-layout:fixed}
+}
+
 @media (max-width:900px){
 .ops-dash-span-8,.ops-dash-span-4,.ops-dash-span-12{grid-column:span 12}
 .ops-dash-kpi-row--v3{grid-template-columns:repeat(2,minmax(0,1fr))}
