@@ -14932,7 +14932,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 .submit-slot-name-input{cursor:text}.submit-slot-field-hint{font-size:.72rem;color:var(--text-muted,#a8b4c4);line-height:1.35}
 /* Candidate resume column: show the stored resume count without widening the grid. */
 .cand-cell-resume { white-space: nowrap; }
-.cand-resume-link { display: inline-flex; align-items: center; gap: 5px; color: var(--accent, #7f83ff); font-size: 12px; font-weight: 700; text-decoration: none; }
+.cand-resume-link { display: inline-flex; align-items: center; gap: 5px; color: var(--accent, #7f83ff); font-size: 12px; font-weight: 700; text-decoration: none; background:none; border:none; padding:0; font-family:inherit; cursor:pointer; }
 .cand-resume-link:hover { color: #a9adff; text-decoration: underline; }
 .cand-resume-empty { color: var(--muted, #7e879d); }
 .cand-resume-upload-btn { margin-left: 6px; white-space: nowrap; }
