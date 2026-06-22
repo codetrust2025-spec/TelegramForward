@@ -346,6 +346,11 @@
 .ops-dash-toolbar__intro{min-width:11rem;max-width:100%}
 .ops-dash-toolbar__intro .ops-dash-title,.ops-dash-toolbar__intro .ops-dash-sub{white-space:nowrap}
 .ops-dash-toolbar__main{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;min-width:0}
+.ops-dash-toolbar__main--legacy .ops-date-range{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;min-width:0}
+.ops-dash-toolbar__main--legacy .ops-date-range__presets,.ops-dash-toolbar__main--legacy .ops-date-range__inputs{margin:0}
+.ops-dash-toolbar__main--legacy .cand-input{min-width:132px;max-width:172px;min-height:30px;padding:5px 9px;font-size:11px}
+.ops-dash-toolbar__main--legacy .ops-date-range__inputs .cand-input{width:140px;min-width:140px}
+.ops-dash-toolbar__main--legacy .ops-dash-toolbar__actions{margin-left:auto}
 .ops-dash-toolbar__actions{display:inline-flex;align-items:center;gap:8px;flex-shrink:1;flex-wrap:wrap;min-width:0;justify-content:flex-end;padding-left:12px;border-left:1px solid rgba(255,255,255,.08)}
 .ops-dash-toolbar__actions .btn--ghost{min-width:34px;justify-content:center}
 .ops-dash-toolbar__candidate-field{display:inline-flex;align-items:center;gap:8px;flex-shrink:0;padding:4px 8px;border-radius:8px;background:#00000030;border:1px solid rgba(255,255,255,.06)}
@@ -529,8 +534,8 @@
 .desktop-body--daily-ops .ops-dash-grid12--ops,.app-shell--view-daily-ops .ops-dash-grid12--ops{flex:1 1 auto;min-height:0;align-items:stretch;grid-template-columns:minmax(0,1fr) minmax(260px,300px)}
 .desktop-body--daily-ops .ops-dash-span-8,.app-shell--view-daily-ops .ops-dash-span-8{display:flex;flex-direction:column;min-height:0;gap:var(--ops-space)}
 .desktop-body--daily-ops .ops-dash-span-8>.ops-dash-kpi-row--v3,.app-shell--view-daily-ops .ops-dash-span-8>.ops-dash-kpi-row--v3{flex:0 0 auto;margin-bottom:0}
-.desktop-body--daily-ops .ops-dash-roster,.app-shell--view-daily-ops .ops-dash-roster{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:visible}
-.desktop-body--daily-ops .ops-dash-roster .ops-dash-table-wrap,.app-shell--view-daily-ops .ops-dash-roster .ops-dash-table-wrap{flex:1 1 auto;min-height:0;overflow:visible;border-radius:6px;border:1px solid rgba(255,255,255,.06)}
+.desktop-body--daily-ops .ops-dash-roster,.app-shell--view-daily-ops .ops-dash-roster{flex:0 0 auto;min-height:0;display:flex;flex-direction:column;overflow:visible}
+.desktop-body--daily-ops .ops-dash-roster .ops-dash-table-wrap,.app-shell--view-daily-ops .ops-dash-roster .ops-dash-table-wrap{flex:0 1 auto;min-height:0;max-height:min(56vh,560px);overflow:auto;border-radius:6px;border:1px solid rgba(255,255,255,.06)}
 .ops-dash-table-scroll{overflow-x:auto;overflow-y:visible;-webkit-overflow-scrolling:touch}
 .ops-dash-attend-cell .ops-row-menu{position:relative;z-index:2}
 .ops-row-menu__list.ops-row-menu__list--portal{position:fixed;z-index:12000;bottom:auto}
