@@ -1242,6 +1242,7 @@ def list_candidates(*, stage: str | None = None, task: str | None = None,
     received payment is less than the expected baseline, and `reference`
     for an exact case-insensitive handler match (so the dashboard can
     show only one handler's leads)."""
+    reconcile_resume_metadata()
     data = _load()
     rows = [_with_computed(r) for r in (data.get("candidates") or [])]
     # Consolidate before filtering.  Otherwise a Thrilok filter can select an
@@ -2540,6 +2541,7 @@ def roster_csv_rows(rows: list[dict]) -> str:
 
 
 def get_candidate(cid: str) -> dict | None:
+    reconcile_resume_metadata()
     for r in _load().get("candidates") or []:
         if r.get("id") == cid:
             return _with_computed(r)
@@ -4241,6 +4243,63 @@ def update_proof_note(cid: str, pid: str, note: str) -> dict | None:
 
 def _resume_dir(cid: str) -> str:
     return os.path.join(RESUMES_DIR, cid)
+
+
+def reconcile_resume_metadata() -> int:
+    """Restore metadata for resume files that survived an incomplete restore.
+
+    Earlier deployments preserved the documents in ``candidates_resumes`` but
+    dropped their JSON records.  Recreate a minimal version record only when a
+    folder belongs to an existing candidate; unknown folders are left untouched
+    rather than risk assigning a document to the wrong person.
+    """
+    if not os.path.isdir(RESUMES_DIR):
+        return 0
+    data = _load()
+    changed = 0
+    for row in data.get("candidates") or []:
+        cid = _clean_str(row.get("id"))
+        if not cid:
+            continue
+        folder = _resume_dir(cid)
+        if not os.path.isdir(folder):
+            continue
+        entries = list(row.get("resumes") or [])
+        known = {_clean_str(item.get("filename")) for item in entries}
+        row_changed = False
+        for filename in sorted(os.listdir(folder)):
+            path = os.path.join(folder, filename)
+            if not os.path.isfile(path) or filename in known:
+                continue
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            mime = {
+                "pdf": "application/pdf",
+                "doc": "application/msword",
+                "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "txt": "text/plain",
+            }.get(ext)
+            if not mime:
+                continue
+            entries.append({
+                "id": filename.rsplit(".", 1)[0][:32],
+                "filename": filename,
+                "original_name": filename,
+                "mime_type": mime,
+                "size": os.path.getsize(path),
+                "note": "",
+                "uploaded_at": datetime.fromtimestamp(
+                    os.path.getmtime(path), timezone.utc
+                ).isoformat(),
+                "url": f"/candidates/{cid}/resumes/{filename.rsplit('.', 1)[0][:32]}",
+            })
+            known.add(filename)
+            changed += 1
+            row_changed = True
+        if row_changed:
+            row["resumes"] = entries
+    if changed:
+        _save(data)
+    return changed
 
 
 def _resume_storage_candidate_id(candidate_id: str, entry: dict) -> str:
