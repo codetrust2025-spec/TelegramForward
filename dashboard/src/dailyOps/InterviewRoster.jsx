@@ -201,7 +201,7 @@ export function InterviewRoster({
       if (effectiveChannel) params.set('channel', effectiveChannel)
       if (upcomingOnly) params.set('upcoming_only', 'true')
 
-      const res = await fetch(`${url}?${params}`, { credentials: 'include' })
+      const res = await fetch(`${url}?${params}`, { credentials: 'include', cache: 'no-store' })
       if (!(res.headers.get('content-type') || '').includes('application/json')) {
         throw new Error(`Server returned ${res.status} — hard refresh and try again`)
       }
@@ -257,6 +257,10 @@ export function InterviewRoster({
   }, [day, attendeeFilter, channelFilter, hasRange])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => {
+    const timer = setInterval(() => load({ silent: true }), 5000)
+    return () => clearInterval(timer)
+  }, [load])
   useEffect(() => { loadCandidateOptions() }, [loadCandidateOptions])
   useEffect(() => {
     if (focusDay) {
