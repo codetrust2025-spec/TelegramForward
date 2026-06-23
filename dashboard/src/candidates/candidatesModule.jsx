@@ -1707,8 +1707,9 @@ export function CandidatesPanel() {
     reference: t,
     enabled: r
   } = wu();
-  const n = false;
-  const a = !r || e === "admin" || e === "handler";
+  // Handlers can see their own earnings, never the payout board for everyone.
+  const n = e === "handler";
+  const a = !r || e === "admin";
   const [i, l] = w.useState([]);
   const [c, o] = w.useState(null);
   const [u, d] = w.useState(null);

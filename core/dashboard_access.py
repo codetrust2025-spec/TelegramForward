@@ -45,6 +45,21 @@ def handler_reference_scope(request: Request, reference: str | None) -> str | No
     return ref or None
 
 
+def handler_payout_reference_scope(request: Request, reference: str | None = None) -> str | None:
+    """Return the only payout ledger a handler may read.
+
+    Candidate data can be shared operationally, but the payout ledger and
+    earnings totals are private to each handler.  This scope is deliberately
+    independent from ``handler_reference_scope`` so it cannot be weakened by a
+    candidate-list visibility change.
+    """
+    profile = operator_profile(request)
+    if profile.get("role") == "handler":
+        return (profile.get("reference") or profile.get("username") or "").strip() or None
+    ref = (reference or "").strip()
+    return ref or None
+
+
 def assert_candidate_row_access(request: Request, row: dict) -> None:
     """All authenticated operators may access any candidate row."""
     return
