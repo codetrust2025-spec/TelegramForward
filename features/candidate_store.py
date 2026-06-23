@@ -4243,6 +4243,20 @@ def _resume_dir(cid: str) -> str:
     return os.path.join(RESUMES_DIR, cid)
 
 
+def _resume_storage_candidate_id(candidate_id: str, entry: dict) -> str:
+    """Find the folder that actually owns a stored resume file.
+
+    Profile de-duplication can give a candidate a new visible ID while their
+    older resume record keeps its original URL.  Keep that legacy folder link
+    intact so existing files remain viewable instead of looking "missing".
+    """
+    stored = _clean_str(entry.get("storage_candidate_id"))
+    if stored:
+        return stored
+    match = re.search(r"/candidates/([^/]+)/resumes/", _clean_str(entry.get("url")))
+    return match.group(1) if match else candidate_id
+
+
 def _ext_from_resume_mime(mime: str, fallback_name: str = "") -> str:
     mime = (mime or "").lower().split(";")[0].strip()
     if mime in _ALLOWED_RESUME_MIME:
@@ -4306,7 +4320,8 @@ def get_resume(cid: str, rid: str) -> tuple[str, dict] | None:
             continue
         for item in (r.get("resumes") or []):
             if item.get("id") == rid:
-                path = os.path.join(_resume_dir(cid), item["filename"])
+                storage_cid = _resume_storage_candidate_id(cid, item)
+                path = os.path.join(_resume_dir(storage_cid), item["filename"])
                 if not os.path.exists(path):
                     return None
                 return path, dict(item)
@@ -4323,7 +4338,8 @@ def delete_resume(cid: str, rid: str) -> bool:
         resumes = list(r.get("resumes") or [])
         for i, item in enumerate(resumes):
             if item.get("id") == rid:
-                path = os.path.join(_resume_dir(cid), item["filename"])
+                storage_cid = _resume_storage_candidate_id(cid, item)
+                path = os.path.join(_resume_dir(storage_cid), item["filename"])
                 try:
                     if os.path.exists(path):
                         os.remove(path)
