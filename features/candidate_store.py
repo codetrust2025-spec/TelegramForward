@@ -2093,19 +2093,10 @@ def _filter_interview_rows(
     search_filter = (filter_search or "").strip()
     channel_filter = (filter_channel or "").strip().lower()
     viewer = (viewer_reference or "").strip()
-    if viewer and _is_interview_attender_reference(viewer):
-        key = viewer.lower()
-        rows = [
-            r for r in rows
-            if _reference_key(row_interview_attendee(r)) == key
-        ]
-    elif viewer:
-        needle = viewer.lower()
-        rows = [
-            r for r in rows
-            if (r.get("reference") or "").strip().lower() == needle
-        ]
-    elif attendee_filter:
+    # Daily Ops is a shared operations roster.  Do not hide another
+    # handler's booked interview from a handler session; every authenticated
+    # operator needs the same live schedule as admin.
+    if attendee_filter:
         needle = attendee_filter.lower()
         rows = [
             r for r in rows
