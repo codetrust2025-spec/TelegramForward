@@ -1136,9 +1136,9 @@ def _apply_list_filters(
         rows = [r for r in rows if r.get("task") == task]
     if month and month != "all":
         if month == "undated":
-            rows = [r for r in rows if not _row_month(r)]
+            rows = [r for r in rows if not _row_month(r) and not _row_display_month(r)]
         else:
-            rows = [r for r in rows if _row_month(r) == month]
+            rows = [r for r in rows if _row_in_month(r, month)]
     if pending_only:
         rows = [r for r in rows if r.get("balance_due", 0) > 0]
     if reference and reference != "all":
@@ -3598,11 +3598,24 @@ def _row_month(row: dict) -> str:
     return ""
 
 
+def _row_display_month(row: dict) -> str:
+    """Month of the date shown in the Candidates table."""
+    visible = _clean_str(row.get("date"))[:10]
+    if len(visible) >= 7 and visible[4] == "-":
+        return visible[:7]
+    return ""
+
+
 def _row_in_month(row: dict, month: str) -> bool:
-    """`month` is 'all', '' (no filter, alias for 'all'), or 'YYYY-MM'."""
+    """Match either the original lead date or the visible profile date.
+
+    Imports and profile merges can preserve an older ``logged_date`` while the
+    candidate row correctly displays the current profile/interview date.  Both
+    dates must make the profile discoverable in the corresponding month.
+    """
     if not month or month == "all":
         return True
-    return _row_month(row) == month
+    return _row_month(row) == month or _row_display_month(row) == month
 
 
 def _handler_reference_options(
@@ -3683,10 +3696,8 @@ def available_months(rows: list[dict] | None = None) -> list[dict]:
         rows = list_candidates()
     counts: dict[str, int] = {}
     for r in rows:
-        m = _row_month(r)
-        if not m:
-            continue
-        counts[m] = counts.get(m, 0) + 1
+        for m in {_row_month(r), _row_display_month(r)} - {""}:
+            counts[m] = counts.get(m, 0) + 1
 
     # Ensure current month + last month are present even when empty.
     today = datetime.now(timezone.utc)
