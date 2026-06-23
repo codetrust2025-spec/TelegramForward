@@ -4046,9 +4046,12 @@ def stats(
             for p in sorted(perf.values(), key=lambda b: b["count"], reverse=True)[:5]
         ],
         "top_performers": top_performers,
+        # Build selector counts from the same final, merged records returned
+        # by /candidates.  Raw stats rows can retain an old referrer on a
+        # duplicate profile, which makes a badge disagree with the table.
         "handler_references": _handler_reference_options(
-            all_rows,
-            month=month,
+            list_candidates(month=month),
+            month=None,
             scope_key=scope_key,
         ),
         "updated_at": store_data.get("updated_at"),
