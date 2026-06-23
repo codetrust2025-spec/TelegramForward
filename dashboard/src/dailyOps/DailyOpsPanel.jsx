@@ -63,6 +63,9 @@ export function DailyOpsPanel({
     setRangePreset(detectPresetFromRange(fromDate, value))
   }
 
+  // When range is custom, disable upcoming_only filter to show all interviews in the range
+  const effectiveUpcomingOnly = rangePreset === 'upcoming' ? upcomingOnly : false
+
   const loadGlobal = useCallback(async () => {
     setLoading(true)
     try {
@@ -70,7 +73,7 @@ export function DailyOpsPanel({
       if (attendeeFilter) params.set('attendee', attendeeFilter)
       const search = candidateSearch.trim()
       if (search) params.set('search', search)
-      if (upcomingOnly) params.set('upcoming_only', 'true')
+      if (effectiveUpcomingOnly) params.set('upcoming_only', 'true')
       const res = await fetch(`${API}/candidates/interviews/global?${params}`, { credentials: 'include' })
       if (!(res.headers.get('content-type') || '').includes('application/json')) {
         throw new Error(`Global data ${res.status}`)
@@ -84,7 +87,7 @@ export function DailyOpsPanel({
     } finally {
       setLoading(false)
     }
-  }, [fromDate, toDate, attendeeFilter, candidateSearch, upcomingOnly])
+  }, [fromDate, toDate, attendeeFilter, candidateSearch, effectiveUpcomingOnly])
 
   useEffect(() => { loadGlobal() }, [loadGlobal])
 
