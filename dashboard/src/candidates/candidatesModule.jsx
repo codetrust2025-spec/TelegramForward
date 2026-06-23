@@ -2014,7 +2014,8 @@ export function CandidatesPanel() {
           const complete = document.createElement("span");
           complete.className = "cand-row-complete";
           complete.title = "All required candidate details are entered";
-          complete.textContent = "✓ Details complete";
+          complete.setAttribute("aria-label", "Details complete");
+          complete.textContent = "✓";
           nameCell.append(complete);
         }
         const serviceCell = row.children[6];
