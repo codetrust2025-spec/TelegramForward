@@ -2058,39 +2058,19 @@ export function CandidatesPanel() {
     }
   }, [m, Le]);
   const st = w.useMemo(() => {
-    const ge = new Map();
-    for (const Be of (c == null ? undefined : c.top_performers) || []) {
-      const Xe = (Be.name || "").trim();
-      if (Xe) {
-        ge.set(Xe.toLowerCase(), {
-          name: Xe,
-          count: Be.count || 0
-        });
-      }
-    }
-    const Ge = new Map();
-    for (const Be of (u == null ? undefined : u.top_performers) || (c == null ? undefined : c.top_performers) || []) {
-      const Xe = (Be.name || "").trim();
-      if (!Xe) {
-        continue;
-      }
-      const je = Xe.toLowerCase();
-      const Tt = ge.get(je);
-      Ge.set(je, {
-        name: Xe,
-        count: Tt ? Tt.count : 0
-      });
-    }
-    const Ze = Array.from(Ge.values());
-    Ze.sort((Be, Xe) => Xe.count !== Be.count ? Xe.count - Be.count : Be.name.localeCompare(Xe.name));
+    const ge = ((c == null ? undefined : c.handler_references) || []).map(Be => ({
+      name: Be.name,
+      count: m === "all" ? Be.total_count || 0 : Be.month_count || 0
+    }));
+    ge.sort((Be, Xe) => Xe.count !== Be.count ? Xe.count - Be.count : Be.name.localeCompare(Xe.name));
     return [{
       value: "all",
       label: "All handlers"
-    }, ...Ze.map(Be => ({
+    }, ...ge.map(Be => ({
       value: Be.name,
       label: Be.count > 0 ? `${Be.name} · ${Be.count}` : Be.name
     }))];
-  }, [c, u]);
+  }, [c, m]);
   return <div className="cand-page"><header className="cand-header"><div className="cand-header-titles"><h2 className="cand-title">Candidates</h2><p className="cand-subtitle">{n ? `Your referred candidates and earnings${t ? ` — ${t}` : ""}.` : "Tracker for every profile you take on — replaces the old Profiles list update Form sheet."}</p></div><div className="cand-header-actions"><button type="button" className="cand-btn cand-btn--ghost" onClick={() => setRo(true)} title="View all in-progress candidates grouped by technology">Active list</button><button type="button" className="cand-btn cand-btn--ghost" onClick={() => triggerRosterDownload({ month: "all", reference: T })} title="Download CSV of all active (in-progress) candidates">Download active CSV</button>{a && <button type="button" className="cand-btn cand-btn--ghost" onClick={ue} title="View, edit, or delete every handler earning + deduction (admin password required)"><span aria-hidden={true}>₹</span> Manage expenses{((c == null ? undefined : c.handler_deductions_total) > 0 || (c == null ? undefined : c.handler_earnings_total) > 0) && <span className="cand-btn-badge">{(c.handler_earnings_total || 0) + (c.handler_deductions_total || 0) > 0 ? "●" : ""}</span>}</button>}<button type="button" className="cand-btn cand-btn--primary" onClick={q}><span aria-hidden={true}>＋</span> Add candidate</button></div></header>{c && <J8 stats={c} scopeLabel={$e} onPayoutsClick={pe} handlerView={n} handlerName={t} scopeReference={T !== "all" ? T : n ? t : null} />}{c && <_Component26 stats={c} month={m} onMonthChange={_} monthOptions={Le} onExpensesChanged={fe} onShowEarnings={a ? pe : undefined} onEditPayout={a ? me : undefined} handlerView={n} handlerName={t} />}<div className="cand-toolbar" role="region" aria-label="Candidate filters"><input className="cand-input cand-input--search" placeholder="Search name, tech, reference, phone, notes…" value={E} onChange={ge => b(ge.target.value)} /><select className="cand-input" value={m} onChange={ge => _(ge.target.value)} aria-label="Filter by month">{Le.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select><select className="cand-input" value={g} onChange={ge => p(ge.target.value)}>{dR.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select>{a && <select className={`cand-input${T !== "all" ? " cand-input--active" : ""}`} value={T} onChange={ge => S(ge.target.value)} aria-label="Filter by handler / reference" title="Show only candidates referred by this handler">{st.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select>}<label className={`cand-toggle${y ? " cand-toggle--on" : ""}${(c == null ? undefined : c.pending_count) > 0 ? " cand-toggle--has-pending" : ""}`} title="Show only candidates with a pending balance"><input type="checkbox" checked={y} onChange={ge => k(ge.target.checked)} /><span>Pending only</span>{(c == null ? undefined : c.pending_count) > 0 && <span className="cand-toggle-badge">{c.pending_count}</span>}</label><div className="cand-toolbar-spacer" /><span className="cand-toolbar-count">{$e && <span className="cand-toolbar-scope">{$e} ·</span>}{T !== "all" && <span className="cand-toolbar-scope cand-toolbar-scope--ref">{T} ·</span>}{De === ye ? `${ye} candidate${ye === 1 ? "" : "s"}` : `${De} of ${ye}`}</span></div>{x && <div className="cand-error">{x}</div>}<div className="cand-table-wrap"><table className="cand-table"><thead><tr><th>Name</th><th>Technology</th><th>Stage</th><th>Payment</th><th>Date</th><th>Phone</th><th>Slot</th>{a && <th>Reference</th>}<th aria-label="Actions" /></tr></thead><tbody>{f && i.length === 0 ? <tr><td colSpan={a ? 9 : 8} className="cand-table-empty">Loading…</td></tr> : i.length === 0 ? <tr><td colSpan={a ? 9 : 8} className="cand-table-empty">No candidates match these filters. <button type="button" className="cand-link" onClick={q}>Add one</button>.</td></tr> : i.map(ge => {
             const Ge = fR(ge.stage);
             return <tr className={`cand-row${ge.needs_followup ? " cand-row--pending" : ""}`} onClick={() => I(ge)} key={ge.id}><td className="cand-cell-name"><span className="cand-name">{ge.name}</span>{ge.consultancy && <span className="cand-channel-tag cand-channel-tag--consultancy" title="Came via a consultancy partner — ₹15,000 baseline">Consultancy</span>}{ge.service_type === "round_wise" && <span className="cand-channel-tag cand-channel-tag--roundwise" title="Round-wise interview support">Round-wise{Eu(ge.interview_scope) ? " · internal" : ""}</span>}{(!ge.service_type || ge.service_type === "profile_service") && !ge.consultancy && <span className="cand-channel-tag cand-channel-tag--profile" title="Profile service — ₹20,000 baseline">Profile</span>}{ge.notes && <span className="cand-cell-note" title={ge.notes}>· {ge.notes.slice(0, 30)}{ge.notes.length > 30 ? "…" : ""}</span>}{ge.follow_up && <span className="cand-cell-followup" title={ge.follow_up}><span aria-hidden={true}>⟳</span> {ge.follow_up.slice(0, 60)}{ge.follow_up.length > 60 ? "…" : ""}</span>}</td><td>{ge.technology || "—"}</td><td><span className={`cand-badge ${Ge.cls}`}>{Ge.label}</span></td><td><_Component27 row={ge} onViewProofs={Z} /></td><td className="cand-cell-mono">{pR(ge.date)}</td><td className="cand-cell-mono cand-cell-phone" onClick={Ze => Ze.stopPropagation()}><_Component23 phone={ge.phone} /></td><td>{ge.slot_confirmed ? <span className="cand-slot-badge cand-slot-badge--ok" title="Slot confirmed (owner + payment + date)">✓ Slot</span> : <span className="cand-slot-badge cand-slot-badge--pending" title={ge.slot_confirm_block_reason || "Not confirmed"}>—</span>}</td>{a && <td className="cand-cell-ref">{ge.reference || "—"}</td>}<td className="cand-cell-actions" onClick={Ze => Ze.stopPropagation()}><button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => I(ge)} title="Edit">✎</button>{a && <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs cand-btn--danger-ghost" onClick={() => Pe(ge)} title="Delete">🗑</button>}</td></tr>;
