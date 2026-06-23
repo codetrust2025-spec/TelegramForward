@@ -10437,6 +10437,20 @@ select.cand-input {
   margin-right: 4px;
   opacity: 0.8;
 }
+.cand-row-complete {
+  display: inline-flex;
+  align-items: center;
+  margin: 4px 0 0 6px;
+  padding: 2px 7px;
+  border: 1px solid rgba(52, 211, 153, .38);
+  border-radius: 999px;
+  color: #6ee7b7;
+  background: rgba(6, 78, 59, .32);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.3;
+  white-space: nowrap;
+}
 .cand-cell-money {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
