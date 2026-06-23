@@ -1187,6 +1187,15 @@ def _collapse_profile_candidates(rows: list[dict]) -> list[dict]:
         newest = max(group, key=lambda r: (r.get("updated_at") or "", r.get("date") or ""))
         merged = dict(newest)
         merged["slot_count"] = len(group)
+        # A profile may have old interview-slot duplicates.  Keep its explicit
+        # Ravinder referral instead of letting a newer duplicate (for example
+        # one imported with Thrilok) replace it in the consolidated row.
+        ravinder_row = next(
+            (r for r in group if _reference_key(r.get("reference") or "") == "ravinder"),
+            None,
+        )
+        if ravinder_row:
+            merged["reference"] = "Ravinder"
         all_resumes = {item.get("id"): item for r in group for item in (r.get("resumes") or []) if item.get("id")}
         if all_resumes:
             merged["resumes"] = list(all_resumes.values())
