@@ -1446,7 +1446,6 @@ function _Component30({
     date: new Date().toISOString().slice(0, 10)
   }));
   const [y, k] = w.useState(false);
-  const [service, setService] = w.useState("all");
   const T = w.useCallback(async () => {
     if (e != null && e.name) {
       o(true);
@@ -1718,6 +1717,7 @@ export function CandidatesPanel() {
   const [g, p] = w.useState("all");
   const [m, _] = w.useState(() => mR());
   const [y, k] = w.useState(false);
+  const [service, setService] = w.useState("all");
   const [T, S] = w.useState("all");
   const [E, b] = w.useState("");
   const [A, O] = w.useState("");
