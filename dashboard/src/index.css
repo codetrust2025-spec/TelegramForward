@@ -15248,3 +15248,70 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 .cand-service-filter{display:inline-flex;align-items:center;border:1px solid rgba(129,140,248,.34);border-radius:8px;overflow:hidden;background:#0f172a}
 .cand-service-filter__btn{display:inline-flex;align-items:center;gap:4px;border:0;border-right:1px solid rgba(129,140,248,.24);background:transparent;color:#94a3b8;padding:6px 8px;font:600 11px/1 inherit;cursor:pointer}
 .cand-service-filter__btn:last-child{border-right:0}.cand-service-filter__btn:hover{background:#ffffff0d;color:#e2e8f0}.cand-service-filter__btn--active{background:#4f46e533;color:#c7d2fe}
+
+/* Final narrow-screen Candidates layout lock: these rules intentionally win
+   over the legacy toolbar styles that are loaded above. */
+@media (max-width: 599px) {
+  .cand-page .cand-toolbar {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+  .cand-page .cand-toolbar > select.cand-input {
+    display: block !important;
+    order: 1;
+    grid-column: span 1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 44px !important;
+    padding-inline: 9px !important;
+    font-size: 11px !important;
+  }
+  .cand-page .cand-toolbar > select.cand-input:nth-of-type(2) { order: 2; }
+  .cand-page .cand-toolbar > select.cand-input:nth-of-type(3) { order: 3; grid-column: span 1 !important; }
+  .cand-page .cand-toolbar .cand-service-filter {
+    order: 4;
+    grid-column: span 2 !important;
+    width: 100%;
+    justify-self: stretch !important;
+  }
+  .cand-page .cand-toolbar .cand-service-filter__btn { flex: 1 1 0; justify-content: center; min-height: 40px; }
+  .cand-page .cand-toolbar .cand-toggle {
+    order: 5;
+    grid-column: span 1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 40px !important;
+    padding-inline: 6px !important;
+    font-size: 11px !important;
+  }
+  .cand-page .cand-toolbar .cand-input--search {
+    order: 6;
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 46px !important;
+  }
+  .cand-page .cand-toolbar .cand-toolbar-spacer,
+  .cand-page .cand-toolbar .cand-toolbar-count { display: none !important; }
+
+  .cand-page .cand-stats {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+    overflow: visible !important;
+  }
+  .cand-page .cand-stats .cand-stat-card {
+    display: flex !important;
+    flex: none !important;
+    width: auto !important;
+    height: 148px !important;
+    min-height: 148px !important;
+    margin: 0 !important;
+  }
+  .cand-page .cand-stats .cand-stat-card:nth-child(n + 5) { display: none !important; }
+}
