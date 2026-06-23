@@ -1871,6 +1871,11 @@ export function CandidatesPanel() {
         const actions = header.querySelector('th[aria-label="Actions"]');
         header.insertBefore(cell, actions || null);
       }
+      const serviceHeader = Array.from(header?.querySelectorAll("th") || []).find(cell => cell.textContent.trim() === "Slot");
+      if (serviceHeader) {
+        serviceHeader.textContent = "Service type";
+        serviceHeader.title = "Profile-wise or round-wise support";
+      }
       const openResumeManager = async candidate => {
         const backdrop = document.createElement("div");
         backdrop.className = "cand-modal-backdrop cand-resume-manager";
@@ -1931,6 +1936,12 @@ export function CandidatesPanel() {
         row.querySelector(".cand-cell-resume")?.remove();
         const candidate = i[index];
         if (!candidate || !candidate.id) return;
+        const serviceCell = row.children[6];
+        if (serviceCell) {
+          const isRoundWise = candidate.service_type === "round_wise";
+          serviceCell.innerHTML = `<span class="cand-channel-tag ${isRoundWise ? "cand-channel-tag--roundwise" : "cand-channel-tag--profile"}">${isRoundWise ? "Round-wise" : "Profile-wise"}</span>`;
+          serviceCell.title = isRoundWise ? "Round-wise interview support" : "Profile service";
+        }
         const cell = document.createElement("td");
         cell.className = "cand-cell-resume";
         cell.onclick = event => event.stopPropagation();
