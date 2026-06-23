@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "description": "Pinned production assets \u2014 live site must match these hashes.",
+  "git_commit": "1eb148a2bdbe256268be909dac93afd7917cbabc",
+  "git_commit_short": "1eb148a",
+  "deployed_at": "2026-06-23T06:25:23Z",
+  "js": "assets/app-7LRmz13A.js",
+  "css": "assets/index-BTERhLBk.css",
+  "js_sha256": "d08104e20553f3351afd41384277538a53e2cfcf5b073b5bfa8b9b0339f26c1f",
+  "css_sha256": "5a3219e49b17f24e22d4e444a1e1317e4dac07f03968f73d67380a38fc3cbabc",
+  "js_bytes": 1119570,
+  "css_bytes": 477106,
+  "server_py_sha256": "f7c398e7d856e2674eba37aee4c3adbc096340870a38bc023b5a43d10e041fd1"
+}
