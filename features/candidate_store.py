@@ -3632,7 +3632,10 @@ def _handler_reference_options(
     if month and month != "all":
         month_rows = [r for r in all_rows if _row_in_month(r, month)]
 
-    month_rows = _stats_rows_deduped(month_rows)
+    # The filter badge must describe the same consolidated profile rows that
+    # the Candidates table renders.  Counting raw interview-slot duplicates
+    # here made labels such as "Referrer One · 4" disagree with a 3-row table.
+    month_rows = _collapse_profile_candidates(month_rows)
 
     month_counts: dict[str, int] = {}
     for r in month_rows:
@@ -3652,7 +3655,7 @@ def _handler_reference_options(
         key = _reference_key(name)
         display_names[key] = name
         total_counts.setdefault(key, 0)
-    for r in _stats_rows_deduped(all_rows):
+    for r in _collapse_profile_candidates(all_rows):
         ref_raw = (r.get("reference") or "").strip()
         if not ref_raw or ref_raw.lower() == "unknown":
             continue
