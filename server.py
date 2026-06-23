@@ -2966,10 +2966,11 @@ async def candidates_stats(
     month: str | None = Query(default=None),
     reference: str | None = Query(default=None),
 ):
-    from core.dashboard_access import handler_reference_scope
+    from core.dashboard_access import handler_payout_reference_scope
     from features import candidate_store
 
-    reference = handler_reference_scope(request, reference)
+    # Earnings and payout totals must never expose another handler's figures.
+    reference = handler_payout_reference_scope(request, reference)
     return {"status": "ok", "stats": candidate_store.stats(month=month, reference=reference)}
 
 
@@ -3913,10 +3914,10 @@ async def handler_expenses_list(
     reference: str | None = Query(default=None),
     month: str | None = Query(default=None),
 ):
-    from core.dashboard_access import handler_reference_scope
+    from core.dashboard_access import handler_payout_reference_scope
     from features import handler_expenses
 
-    reference = handler_reference_scope(request, reference)
+    reference = handler_payout_reference_scope(request, reference)
     rows = handler_expenses.list_expenses(reference=reference, month=month)
     total = sum(int(r.get("amount") or 0) for r in rows)
     return {
@@ -3962,10 +3963,22 @@ async def handler_expenses_delete(eid: str):
 
 
 @app.get("/handler-expenses/summary")
-async def handler_expenses_summary(month: str | None = Query(default=None)):
+async def handler_expenses_summary(
+    request: Request,
+    month: str | None = Query(default=None),
+    reference: str | None = Query(default=None),
+):
+    from core.dashboard_access import handler_payout_reference_scope
     from features import handler_expenses
 
+    scoped_reference = handler_payout_reference_scope(request, reference)
     summary = handler_expenses.summary_by_handler(month=month)
+    if scoped_reference:
+        key = scoped_reference.strip().lower()
+        summary = {
+            name: bucket for name, bucket in summary.items()
+            if name.strip().lower() == key
+        }
     total = sum(b["total"] for b in summary.values())
     return {
         "status": "ok",
