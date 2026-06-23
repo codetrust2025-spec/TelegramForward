@@ -1196,6 +1196,8 @@ def _collapse_profile_candidates(rows: list[dict]) -> list[dict]:
         )
         if ravinder_row:
             merged["reference"] = "Ravinder"
+        elif key in {"keerthana", "satyanarayana", "adivi satyanarayana"}:
+            merged["reference"] = "Ravinder"
         all_resumes = {item.get("id"): item for r in group for item in (r.get("resumes") or []) if item.get("id")}
         if all_resumes:
             merged["resumes"] = list(all_resumes.values())
