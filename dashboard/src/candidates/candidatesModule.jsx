@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext.jsx'
 import { formatIstDate as fmtIstD, formatIstDateTime as fmtIstDt } from '../utils/istTime.js'
 import { CandidatesActiveRoster } from './CandidatesActiveRoster.jsx'
 import { triggerRosterDownload } from './candidatesRosterUtils.js'
+import { consumePendingWorkOpenIntent } from '../dailyOps/PendingWorksProvider.jsx'
 
 const w = React
 const s = { Fragment: React.Fragment }
@@ -1816,6 +1817,23 @@ export function CandidatesPanel() {
   w.useEffect(() => {
     fe();
   }, [fe]);
+  w.useEffect(() => {
+    if (f || !i.length) return;
+    const intent = consumePendingWorkOpenIntent();
+    if (!intent) return;
+    const targetName = String(intent.candidate_name || '').trim().toLowerCase();
+    const targetId = String(intent.candidate_id || '');
+    const target = i.find(row => String(row.id) === targetId) || i.find(row => String(row.name || '').trim().toLowerCase() === targetName);
+    if (!target) return;
+    const frame = requestAnimationFrame(() => {
+      const row = Array.from(document.querySelectorAll('.cand-page .cand-table tbody tr')).find(node => node.textContent?.toLowerCase().includes(String(target.name || '').toLowerCase()));
+      if (!row) return;
+      row.classList.add('cand-row--pending-focus');
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setTimeout(() => row.classList.remove('cand-row--pending-focus'), 5000);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [i, f]);
   w.useEffect(() => {
     const timer = setTimeout(() => {
       const table = document.querySelector(".cand-page .cand-table");
