@@ -3129,7 +3129,7 @@ def _find_existing_slot_row(rows: list[dict], name: str, date: str, time: str) -
 
 
 def _find_assignable_profile_row(rows: list[dict], name: str) -> dict | None:
-    """Profile row without a confirmed slot — may already have a logged date."""
+    """Profile row without a confirmed slot — must have a scheduled interview date."""
     key = _normalise_candidate_name_key(canonical_candidate_name(name))
     matches: list[dict] = []
     for row in rows:
@@ -3139,12 +3139,12 @@ def _find_assignable_profile_row(rows: list[dict], name: str) -> dict | None:
             continue
         if _candidate_has_confirmed_slot(row):
             continue
+        # Only assign slots to candidates who have a scheduled interview date
+        if not (row.get("date") or "").strip():
+            continue
         matches.append(row)
     if not matches:
         return None
-    undated = [r for r in matches if not (r.get("date") or "").strip()]
-    if undated:
-        return undated[0]
     return matches[0]
 
 
