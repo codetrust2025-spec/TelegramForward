@@ -1,7 +1,7 @@
 const PRESETS = [
   { id: 'today', label: 'Today' },
   { id: 'upcoming', label: 'Upcoming' },
-  { id: 'yesterday', label: 'Yesterday' },
+  { id: 'currentMonth', label: new Date().toLocaleDateString('en-IN', { month: 'long', timeZone: 'Asia/Kolkata' }) },
   { id: 'thisWeek', label: 'This week' },
   { id: 'last7', label: 'Last 7 days' },
 ]
@@ -30,15 +30,23 @@ function endOfWeekIso(iso) {
   return d.toISOString().slice(0, 10)
 }
 
+function currentMonthRangeIso(iso) {
+  const d = new Date(`${iso.slice(0, 10)}T12:00:00`)
+  const from = new Date(d.getFullYear(), d.getMonth(), 1, 12)
+  const to = new Date(d.getFullYear(), d.getMonth() + 1, 0, 12)
+  return {
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10),
+  }
+}
+
 export function resolvePresetRange(presetId) {
   const today = todayIso()
   switch (presetId) {
     case 'today':
       return { from: today, to: today }
-    case 'yesterday': {
-      const y = addDaysIso(today, -1)
-      return { from: y, to: y }
-    }
+    case 'currentMonth':
+      return currentMonthRangeIso(today)
     case 'upcoming':
       return { from: today, to: addDaysIso(today, 14) }
     case 'thisWeek':
