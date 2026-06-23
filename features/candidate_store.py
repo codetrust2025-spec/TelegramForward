@@ -1238,7 +1238,10 @@ def list_candidates(*, stage: str | None = None, task: str | None = None,
     show only one handler's leads)."""
     data = _load()
     rows = [_with_computed(r) for r in (data.get("candidates") or [])]
-    rows = _apply_list_filters(
+    # Consolidate before filtering.  Otherwise a Thrilok filter can select an
+    # old duplicate slot before the profile's current Ravinder referral wins.
+    rows = _collapse_profile_candidates(rows)
+    return _apply_list_filters(
         rows,
         stage=stage,
         task=task,
@@ -1247,7 +1250,6 @@ def list_candidates(*, stage: str | None = None, task: str | None = None,
         pending_only=pending_only,
         reference=reference,
     )
-    return _collapse_profile_candidates(rows)
 
 
 def _is_roster_placeholder(row: dict) -> bool:
