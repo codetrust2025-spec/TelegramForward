@@ -534,8 +534,9 @@ def _interview_attendance_counts(rows: list[dict]) -> dict[str, int]:
 def row_interview_attendee(row: dict) -> str:
     explicit = (row.get("interview_attendee") or "").strip()
     if candidate_defaults_to_tool_attendee(row.get("name") or ""):
-        if not explicit or explicit.lower() == "bhavana":
+        if not explicit:
             return "Tool"
+        # Respect explicit attendee value even if it's Bhavana/Nikhila
         return explicit
     if explicit:
         return explicit
