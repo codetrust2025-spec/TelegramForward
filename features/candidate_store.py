@@ -3356,31 +3356,11 @@ def import_confirmed_interview_slot(
             source=source,
         )
 
-    row = create_candidate({
-        "name": canon,
-        "stage": "in_progress",
-        "task": "in_progress",
-        "technology": tech or "Unspecified",
-        "reference": "",
-        "phone": "",
-        "notes": note,
-        "interview_round": rnd,
-        "service_type": "profile_service",
-        "date": day,
-        "time": slot_time,
-        "time_end": slot_end,
-        "slot_confirmed": True,
-        "slots_group_posted": True,
-    }, allow_slot_without_rules=True)
-    return _finish_public_slot_import(
-        row,
-        "created",
-        technology=tech,
-        interview_round=rnd,
-        slot_image=slot_image,
-        slot_image_name=slot_image_name,
-        slot_image_mime=slot_image_mime,
-        source=source,
+    # Never create a candidate or a confirmed Daily Ops slot from an unmatched
+    # public/import name.  A real candidate must exist first; otherwise a
+    # malformed upload can silently book someone who has no interview.
+    raise ValueError(
+        f"No existing candidate matched {canon}. Add/select the candidate before booking an interview slot."
     )
 
 
