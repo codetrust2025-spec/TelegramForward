@@ -5,6 +5,8 @@ import { InterviewRoster } from './InterviewRoster.jsx'
 import { PendingWorksStrip } from './PendingWorksStrip.jsx'
 import { PRESETS, detectPresetFromRange, resolvePresetRange } from './dateRangePresets.js'
 
+const ATTENDEES = ['Nikhila', 'Bhavana', 'Tool']
+
 function KpiCard({ label, value, tone = 'default', loading = false }) {
   return (
     <div className={`ops-dash-kpi ops-dash-kpi--${tone}${loading ? ' ops-dash-kpi--loading' : ''}`}>
@@ -122,13 +124,17 @@ export function DailyOpsPanel({
               </div>
             </div>
             {!handlerScoped && (
-              <input
+              <select
                 className="cand-input"
-                placeholder="Filter attendee"
                 value={attendeeFilter}
                 onChange={e => setAttendeeFilter(e.target.value)}
                 aria-label="Attendee filter"
-              />
+              >
+                <option value="">All attendees</option>
+                {ATTENDEES.map(name => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
             )}
             <input
               className="cand-input"
