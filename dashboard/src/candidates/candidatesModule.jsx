@@ -1446,6 +1446,7 @@ function _Component30({
     date: new Date().toISOString().slice(0, 10)
   }));
   const [y, k] = w.useState(false);
+  const [service, setService] = w.useState("all");
   const T = w.useCallback(async () => {
     if (e != null && e.name) {
       o(true);
@@ -1776,6 +1777,9 @@ export function CandidatesPanel() {
       if (y) {
         ge.set("pending_only", "1");
       }
+      if (service !== "all") {
+        ge.set("service_type", service);
+      }
       if (T !== "all") {
         ge.set("reference", T);
       }
@@ -1813,10 +1817,30 @@ export function CandidatesPanel() {
     } finally {
       h(false);
     }
-  }, [g, m, y, T, A, a]);
+  }, [g, m, y, service, T, A, a]);
   w.useEffect(() => {
     fe();
   }, [fe]);
+  w.useEffect(() => {
+    const toolbar = document.querySelector('.cand-page .cand-toolbar');
+    if (!toolbar) return;
+    toolbar.querySelector('.cand-service-filter')?.remove();
+    const filter = document.createElement('div');
+    filter.className = 'cand-service-filter';
+    filter.setAttribute('role', 'group');
+    filter.setAttribute('aria-label', 'Candidate service filter');
+    [["profile_service", "◀", "Profile"], ["all", "●", "All"], ["round_wise", "▶", "Round"]].forEach(([value, icon, label]) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `cand-service-filter__btn${service === value ? ' cand-service-filter__btn--active' : ''}`;
+      button.title = `${label} candidates`;
+      button.innerHTML = `<span aria-hidden="true">${icon}</span><span>${label}</span>`;
+      button.onclick = () => setService(value);
+      filter.append(button);
+    });
+    const stage = toolbar.querySelector('select');
+    toolbar.insertBefore(filter, stage || toolbar.firstChild);
+  }, [service]);
   w.useEffect(() => {
     if (f || !i.length) return;
     const intent = consumePendingWorkOpenIntent();

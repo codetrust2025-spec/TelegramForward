@@ -1128,6 +1128,7 @@ def _apply_list_filters(
     month: str | None = None,
     pending_only: bool = False,
     reference: str | None = None,
+    service_type: str | None = None,
 ) -> list[dict]:
     if stage and stage != "all":
         rows = [r for r in rows if r.get("stage") == stage]
@@ -1143,6 +1144,8 @@ def _apply_list_filters(
     if reference and reference != "all":
         needle = reference.strip().lower()
         rows = [r for r in rows if (r.get("reference") or "").strip().lower() == needle]
+    if service_type and service_type != "all":
+        rows = [r for r in rows if _normalise_service_type(r.get("service_type"), r) == service_type]
     if search:
         q = search.strip().lower()
         if q:
@@ -1230,7 +1233,8 @@ def _attach_pending_work_stats(payload: dict, pw: dict) -> dict:
 def list_candidates(*, stage: str | None = None, task: str | None = None,
                     search: str | None = None, month: str | None = None,
                     pending_only: bool = False,
-                    reference: str | None = None) -> list[dict]:
+                    reference: str | None = None,
+                    service_type: str | None = None) -> list[dict]:
     """Return candidates sorted by most-recent first.
     Optional filters: by stage, by task, by free-text search across
     name / technology / reference / phone / notes / follow_up, by month
@@ -1251,6 +1255,7 @@ def list_candidates(*, stage: str | None = None, task: str | None = None,
         month=month,
         pending_only=pending_only,
         reference=reference,
+        service_type=service_type,
     )
 
 
