@@ -154,6 +154,7 @@ DEFAULT_EXPECTED_PAYMENT       = 20_000
 CONSULTANCY_EXPECTED_PAYMENT   = 15_000
 ROUND_WISE_EXTERNAL_PAYMENT = 5_000
 ROUND_WISE_INTERNAL_PAYMENT = 9_000
+BGV_CERTIFICATES_PAYMENT = 30_000
 # Legacy aliases (domestic/non_domestic → external/internal)
 ROUND_WISE_DOMESTIC_PAYMENT = ROUND_WISE_EXTERNAL_PAYMENT
 ROUND_WISE_NON_DOMESTIC_PAYMENT = ROUND_WISE_INTERNAL_PAYMENT
@@ -184,15 +185,18 @@ def baseline_for_service(
     *,
     consultancy: bool = False,
     interview_scope: str = "external",
+    bgv_certificates: bool = False,
 ) -> int:
     if service_type == "round_wise":
         scope = _normalise_interview_scope(interview_scope)
-        return (
+        base = (
             ROUND_WISE_INTERNAL_PAYMENT
             if scope == "internal"
             else ROUND_WISE_EXTERNAL_PAYMENT
         )
-    return baseline_for(consultancy)
+    else:
+        base = baseline_for(consultancy)
+    return base + (BGV_CERTIFICATES_PAYMENT if bgv_certificates else 0)
 
 # The referrer (handler) is paid this share of every rupee the client pays
 # the business. The operator does not log commissions by hand — they're
@@ -246,6 +250,7 @@ def prescribed_baseline(row: dict) -> int:
         service_type,
         consultancy=consultancy,
         interview_scope=interview_scope,
+        bgv_certificates=_coerce_bool(row.get("bgv_certificates")),
     )
 
 
@@ -260,6 +265,7 @@ def effective_expected_payment(row: dict) -> int:
         service_type,
         consultancy=consultancy,
         interview_scope=interview_scope,
+        bgv_certificates=_coerce_bool(row.get("bgv_certificates")),
     )
     expected = int(row.get("expected_payment") or 0)
     if expected <= 0:
@@ -714,7 +720,7 @@ def _coerce_bool(value) -> bool:
 
 _ALLOWED_FIELDS = {
     "name", "stage", "technology", "task", "phone", "reference",
-    "consultancy",
+    "consultancy", "bgv_certificates",
     "payment", "expected_payment", "follow_up",
     "date", "logged_date", "time", "time_end", "expenses", "notes",
     "telegram_slot", "telegram_user_id",
@@ -827,6 +833,7 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
     # `consultancy` flips the default baseline: True → ₹15k, False → ₹20k.
     # Stored as a clean bool so the UI doesn't have to guess from strings.
     consultancy = _coerce_bool(record.get("consultancy", base.get("consultancy", False)))
+    bgv_certificates = _coerce_bool(record.get("bgv_certificates", base.get("bgv_certificates", False)))
     service_type = _normalise_service_type(record.get("service_type"), base)
     interview_scope = _normalise_interview_scope(record.get("interview_scope"), base)
     if service_type == "round_wise":
@@ -836,6 +843,7 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         service_type,
         consultancy=consultancy,
         interview_scope=interview_scope,
+        bgv_certificates=bgv_certificates,
     )
     exp_raw = record.get("expected_payment",
                          base.get("expected_payment", default_for_channel))
@@ -875,6 +883,7 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
             _clean_str(record.get("reference", base.get("reference")))
         ),
         "consultancy":      consultancy,
+        "bgv_certificates": bgv_certificates,
         "service_type":     service_type,
         "interview_scope":  interview_scope if service_type == "round_wise" else "",
         "payment":          _coerce_payment(record.get("payment", base.get("payment"))),
@@ -951,6 +960,7 @@ def _with_computed(row: dict) -> dict:
         service_type,
         consultancy=consultancy,
         interview_scope=interview_scope,
+        bgv_certificates=_coerce_bool(row.get("bgv_certificates")),
     )
     expected = effective_expected_payment(row)
     received = int(row.get("payment") or 0)
@@ -963,6 +973,7 @@ def _with_computed(row: dict) -> dict:
         status = "partial"
     enriched = dict(row)
     enriched["consultancy"] = consultancy
+    enriched["bgv_certificates"] = _coerce_bool(row.get("bgv_certificates"))
     enriched["service_type"] = service_type
     enriched["interview_scope"] = interview_scope if service_type == "round_wise" else ""
     enriched["expected_payment"] = expected

@@ -472,6 +472,7 @@ function G8() {
     service_type: "profile_service",
     interview_scope: "external",
     consultancy: false,
+    bgv_certificates: false,
     payment: "",
     expected_payment: String(Cu),
     follow_up: "",
@@ -499,6 +500,7 @@ function K8(e) {
     service_type: r,
     interview_scope: n,
     consultancy: r === "round_wise" ? false : t,
+    bgv_certificates: !!e.bgv_certificates,
     payment: e.payment ? String(e.payment) : "",
     expected_payment: e.expected_payment ? String(e.expected_payment) : String(os(r, t, n)),
     follow_up: e.follow_up || "",
@@ -601,7 +603,7 @@ function X8({
   function p(C) {
     const Y = Number(C.expected_payment) || 0;
     if (U8.has(Y)) {
-      return String(os(C.service_type, C.consultancy, C.interview_scope));
+      return String(os(C.service_type, C.consultancy, C.interview_scope) + (C.bgv_certificates ? 30000 : 0));
     } else {
       return C.expected_payment;
     }
@@ -643,6 +645,27 @@ function X8({
       };
     });
   }
+  function B(C) {
+    c(Y => ({
+      ...Y,
+      bgv_certificates: C,
+      expected_payment: String(os(Y.service_type, Y.consultancy, Y.interview_scope) + (C ? 30000 : 0))
+    }));
+  }
+  w.useEffect(() => {
+    const body = document.querySelector('.cand-modal .cand-modal-body');
+    if (!body) return;
+    body.querySelector('.cand-bgv-option')?.remove();
+    const expected = Array.from(body.querySelectorAll('label')).find(node => node.textContent?.includes('Expected ₹'));
+    if (!expected) return;
+    const field = document.createElement('label');
+    field.className = `cand-field cand-field--span2 cand-consultancy-field cand-bgv-option${l.bgv_certificates ? ' cand-consultancy-field--on' : ''}`;
+    field.innerHTML = '<span class="cand-field-label">Additional services</span><div class="cand-consultancy-toggle"><input type="checkbox" id="cand-bgv-cb"><label for="cand-bgv-cb" class="cand-consultancy-label"><span class="cand-consultancy-pip"></span><span class="cand-consultancy-text"><strong>BGV certificates</strong><em>Separate ₹30,000 charge · added to the expected total</em></span></label></div>';
+    const input = field.querySelector('#cand-bgv-cb');
+    input.checked = !!l.bgv_certificates;
+    input.onchange = () => B(input.checked);
+    body.insertBefore(field, expected);
+  }, [l.bgv_certificates]);
   const k = Number(l.payment) || 0;
   const T = Number(l.expected_payment) || os(l.service_type, l.consultancy, l.interview_scope);
   const P = os(l.service_type, l.consultancy, l.interview_scope);
@@ -678,6 +701,7 @@ function X8({
         service_type: l.service_type,
         interview_scope: l.service_type === "round_wise" ? l.interview_scope : "",
         consultancy: l.service_type === "round_wise" ? false : !!l.consultancy,
+        bgv_certificates: !!l.bgv_certificates,
         payment: l.payment === "" ? 0 : Number(l.payment),
         expected_payment: l.expected_payment === "" ? os(l.service_type, l.consultancy, l.interview_scope) : Number(l.expected_payment),
         follow_up: b ? l.follow_up.trim() : "",
