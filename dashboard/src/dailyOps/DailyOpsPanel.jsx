@@ -25,13 +25,16 @@ export function DailyOpsPanel({
   onNavCandidates,
 }) {
   const { role, reference } = useAuth()
-  const handlerScoped = role === 'handler' && !!reference?.trim()
+  // Daily Ops is shared across all authenticated operators.  Do not prefill
+  // a handler's own name as an attendee filter or their roster looks empty
+  // whenever another handler owns the booked slot.
+  const handlerScoped = false
 
   const initialRange = resolvePresetRange('upcoming')
   const [fromDate, setFromDate] = useState(initialRange.from)
   const [toDate, setToDate] = useState(initialRange.to)
   const [rangePreset, setRangePreset] = useState('upcoming')
-  const [attendeeFilter, setAttendeeFilter] = useState(handlerScoped ? reference : '')
+  const [attendeeFilter, setAttendeeFilter] = useState('')
   const [candidateSearch, setCandidateSearch] = useState('')
   const [globalStats, setGlobalStats] = useState(null)
   const [loading, setLoading] = useState(true)
