@@ -1843,6 +1843,78 @@ export function CandidatesPanel() {
     toolbar.insertBefore(filter, stage || toolbar.firstChild);
   }, [service]);
   w.useEffect(() => {
+    if (!c) return;
+    const statsRoot = document.querySelector('.cand-page .cand-stats');
+    if (!statsRoot) return;
+    const money = value => `₹${(Number(value) || 0).toLocaleString('en-IN')}`;
+    const makeLine = (parent, left, right = '') => {
+      const line = document.createElement('div');
+      line.className = 'cand-breakdown-line';
+      const name = document.createElement('span'); name.textContent = left;
+      const value = document.createElement('strong'); value.textContent = right;
+      line.append(name, value); parent.append(line);
+    };
+    const openBreakdown = async label => {
+      const backdrop = document.createElement('div');
+      backdrop.className = 'cand-modal-backdrop cand-breakdown-modal';
+      const panel = document.createElement('div');
+      panel.className = 'cand-modal cand-modal--wide';
+      const close = () => backdrop.remove();
+      backdrop.onclick = event => { if (event.target === backdrop) close(); };
+      backdrop.append(panel); document.body.append(backdrop);
+      panel.innerHTML = `<header class="cand-modal-header"><div><h3 class="cand-modal-title">${label} breakdown</h3><p class="cand-modal-sub">${$e || 'All time'}${T !== 'all' ? ` · ${T}` : ''}</p></div><button type="button" class="cand-modal-close" aria-label="Close">×</button></header><div class="cand-modal-body cand-modal-body--stack"><p class="cand-exp-empty">Loading calculation…</p></div>`;
+      panel.querySelector('.cand-modal-close').onclick = close;
+      const body = panel.querySelector('.cand-modal-body');
+      let rows = [];
+      try {
+        const params = new URLSearchParams();
+        if (m !== 'all') params.set('month', m);
+        if (T !== 'all') params.set('reference', T);
+        const result = await (await fetch(`${ve}/candidates?${params.toString()}`, { credentials: 'include' })).json();
+        rows = result.status === 'ok' ? result.candidates || [] : [];
+      } catch (_) {}
+      body.innerHTML = '';
+      const total = document.createElement('div'); total.className = 'cand-breakdown-total';
+      const lines = document.createElement('div'); lines.className = 'cand-breakdown-lines';
+      if (label === 'Company revenue') {
+        const received = rows.reduce((sum, row) => sum + (Number(row.payment) || 0), 0);
+        const referral = rows.reduce((sum, row) => sum + (Number(row.handler_commission) || 0), 0);
+        const company = Math.max(0, received - referral);
+        total.textContent = `${money(received)} client collections − ${money(referral)} referral share = ${money(company)} company revenue`;
+        rows.filter(row => Number(row.payment) > 0).forEach(row => makeLine(lines, `${row.name} · ${money(row.payment)} received − ${money(row.handler_commission)} referral`, money(Math.max(0, (Number(row.payment) || 0) - (Number(row.handler_commission) || 0)))));
+      } else if (label === 'Total revenue') {
+        const received = rows.reduce((sum, row) => sum + (Number(row.payment) || 0), 0);
+        total.textContent = `${money(received)} received from ${rows.filter(row => Number(row.payment) > 0).length} candidate${rows.filter(row => Number(row.payment) > 0).length === 1 ? '' : 's'}`;
+        rows.filter(row => Number(row.payment) > 0).forEach(row => makeLine(lines, row.name, money(row.payment)));
+      } else if (label === 'Pending collections') {
+        const pending = rows.filter(row => Number(row.balance_due) > 0);
+        total.textContent = `${money(pending.reduce((sum, row) => sum + (Number(row.balance_due) || 0), 0))} still pending from ${pending.length} candidate${pending.length === 1 ? '' : 's'}`;
+        pending.forEach(row => makeLine(lines, `${row.name} · expected ${money(row.expected_payment)} · received ${money(row.payment)}`, money(row.balance_due)));
+      } else if (label === 'Conversion') {
+        const stages = ['completed', 'in_progress', 'fail', 'dropped'];
+        total.textContent = `${c.by_stage?.completed || 0} completed of ${c.total || 0} candidates`;
+        stages.forEach(stage => makeLine(lines, stage.replace('_', ' '), String(c.by_stage?.[stage] || 0)));
+      } else if (label === 'Total candidates') {
+        total.textContent = `${c.total || 0} candidate${(c.total || 0) === 1 ? '' : 's'} in this view`;
+        ['completed', 'in_progress', 'fail', 'dropped'].forEach(stage => makeLine(lines, stage.replace('_', ' '), String(c.by_stage?.[stage] || 0)));
+      } else if (label.startsWith('Top technologies')) {
+        total.textContent = 'Company share by technology';
+        (c.top_technologies || []).forEach(item => makeLine(lines, item.name, money(item.revenue)));
+      }
+      body.append(total, lines);
+      if (!lines.children.length) { const empty = document.createElement('p'); empty.className = 'cand-exp-empty'; empty.textContent = 'No matching records for this view.'; body.append(empty); }
+    };
+    const cards = Array.from(statsRoot.querySelectorAll('.cand-stat-card:not(.cand-stat-card--payouts)'));
+    cards.forEach(card => {
+      const label = card.querySelector('.cand-stat-label')?.childNodes[0]?.textContent?.trim();
+      if (!label) return;
+      card.classList.add('cand-stat-card--clickable');
+      card.title = `View ${label.toLowerCase()} calculation`;
+      card.onclick = () => openBreakdown(label);
+    });
+    return () => cards.forEach(card => { card.onclick = null; });
+  }, [c, m, T, $e]);
+  w.useEffect(() => {
     if (f || !i.length) return;
     const intent = consumePendingWorkOpenIntent();
     if (!intent) return;
