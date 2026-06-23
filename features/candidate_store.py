@@ -281,13 +281,22 @@ def effective_expected_payment(row: dict) -> int:
 
 
 def referrer_commission_basis(row: dict) -> int:
-    """Rupee basis for handler commission before the 50% split."""
+    """Rupee basis for handler commission before the 50% split.
+
+    BGV certificates are billed by a third-party company and are only
+    mediated here, so their ₹30k pass-through amount is never commissionable.
+    """
     received = int(row.get("payment") or 0)
     if received <= 0:
         return 0
-    agreed = effective_expected_payment(row)
-    charged = min(received, agreed) if agreed > 0 else received
-    prescribed = prescribed_baseline(row)
+    bgv_charge = BGV_CERTIFICATES_PAYMENT if _coerce_bool(row.get("bgv_certificates")) else 0
+    agreed = max(0, effective_expected_payment(row) - bgv_charge)
+    charged = min(received, agreed) if agreed > 0 else 0
+    prescribed = baseline_for_service(
+        _normalise_service_type(row.get("service_type"), row),
+        consultancy=bool(row.get("consultancy", False)),
+        interview_scope=_normalise_interview_scope(row.get("interview_scope"), row),
+    )
     # Installments toward the agreed deal — commission accrues on cash received.
     if agreed > 0 and received < agreed:
         return charged
@@ -982,7 +991,8 @@ def _with_computed(row: dict) -> dict:
     enriched["payment_status"] = status
     enriched["needs_followup"] = balance > 0
     enriched["handler_commission"] = referrer_commission_amount(row)
-    enriched["handler_commission_max"] = (expected * HANDLER_COMMISSION_PCT) // 100
+    commissionable_expected = max(0, expected - (BGV_CERTIFICATES_PAYMENT if enriched["bgv_certificates"] else 0))
+    enriched["handler_commission_max"] = (commissionable_expected * HANDLER_COMMISSION_PCT) // 100
     enriched["company_revenue"] = max(0, received - enriched["handler_commission"])
     proofs = enriched.get("proofs") or []
     enriched["proofs"] = proofs
