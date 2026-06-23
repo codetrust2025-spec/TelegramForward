@@ -392,14 +392,14 @@ function $n(e) {
     return "₹0";
   }
 }
-function wl(e, t, r) {
+function wl(e, t, r, bgv = false) {
   const n = Number(e) || 0;
   const a = Number(t) || 0;
   const i = Number(r) || 0;
-  if (n <= 0) {
+  const l = n ? Math.min(n, Math.max(0, a - (bgv || a - i === 30000 ? 30000 : 0))) : 0;
+  if (l <= 0) {
     return 0;
   }
-  const l = a > 0 ? Math.min(n, a) : n;
   let c;
   if (i > 0 && l < i) {
     c = Math.max(0, 2 * l - i);
@@ -408,14 +408,14 @@ function wl(e, t, r) {
   }
   return Math.floor(c * 0.5);
 }
-function Y8(e, t, r) {
+function Y8(e, t, r, bgv = false) {
   const n = Number(e) || 0;
   const a = Number(t) || 0;
   const i = Number(r) || 0;
-  if (n <= 0) {
+  const l = n ? Math.min(n, Math.max(0, a - (bgv ? 30000 : 0))) : 0;
+  if (l <= 0) {
     return 0;
   }
-  const l = a > 0 ? Math.min(n, a) : n;
   if (i > 0 && l < i) {
     return Math.max(0, 2 * l - i);
   } else {
@@ -669,7 +669,7 @@ function X8({
   const k = Number(l.payment) || 0;
   const T = Number(l.expected_payment) || os(l.service_type, l.consultancy, l.interview_scope);
   const P = os(l.service_type, l.consultancy, l.interview_scope);
-  const F = Y8(k, T, P);
+  const F = Y8(k, T, P, !!l.bgv_certificates);
   const S = Math.max(0, T - k);
   const E = w.useMemo(() => k <= 0 ? "unpaid" : k >= T ? "paid" : "partial", [k, T]);
   const b = S > 0;
