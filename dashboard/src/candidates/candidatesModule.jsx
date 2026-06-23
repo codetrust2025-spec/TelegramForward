@@ -666,6 +666,31 @@ function X8({
     input.onchange = () => B(input.checked);
     body.insertBefore(field, expected);
   }, [l.bgv_certificates]);
+  // Safari on iPhone does not reliably expose an input's datalist. Keep the
+  // desktop text field, but add a native select that CSS shows only on mobile.
+  w.useEffect(() => {
+    const input = document.querySelector('.cand-modal-body input[list="cand-tech-list"]');
+    const field = input == null ? undefined : input.closest('.cand-field');
+    if (!input || !field || field.querySelector('.cand-tech-mobile-select')) return;
+    field.classList.add('cand-tech-field');
+
+    const select = document.createElement('select');
+    select.className = 'cand-input cand-tech-mobile-select';
+    select.setAttribute('aria-label', 'Technology');
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Select technology';
+    select.appendChild(placeholder);
+    Array.from(new Set([l.technology, ...H8].filter(Boolean))).forEach(value => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value;
+      select.appendChild(option);
+    });
+    select.value = l.technology || '';
+    select.addEventListener('change', () => g('technology', select.value));
+    input.insertAdjacentElement('afterend', select);
+  }, [l.technology]);
   const k = Number(l.payment) || 0;
   const T = Number(l.expected_payment) || os(l.service_type, l.consultancy, l.interview_scope);
   const P = os(l.service_type, l.consultancy, l.interview_scope);
