@@ -1014,6 +1014,9 @@ def _with_computed(row: dict) -> dict:
         "phone": _clean_str(enriched.get("phone")),
         "reference": _clean_str(enriched.get("reference")),
         "resume": bool(resumes),
+        # Once money is recorded, at least one payment proof is required
+        # before the row can be considered fully complete.
+        "payment_proof": bool(proofs) if received > 0 else True,
     }
     enriched["completion_missing"] = [
         field for field, value in required_details.items() if not value
