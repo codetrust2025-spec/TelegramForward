@@ -1862,7 +1862,7 @@ export function CandidatesPanel() {
       const close = () => backdrop.remove();
       backdrop.onclick = event => { if (event.target === backdrop) close(); };
       backdrop.append(panel); document.body.append(backdrop);
-      panel.innerHTML = `<header class="cand-modal-header"><div><h3 class="cand-modal-title">${label} breakdown</h3><p class="cand-modal-sub">${$e || 'All time'}${T !== 'all' ? ` · ${T}` : ''}</p></div><button type="button" class="cand-modal-close" aria-label="Close">×</button></header><div class="cand-modal-body cand-modal-body--stack"><p class="cand-exp-empty">Loading calculation…</p></div>`;
+      panel.innerHTML = `<header class="cand-modal-header"><div><h3 class="cand-modal-title">${label} breakdown</h3><p class="cand-modal-sub">${m === 'all' ? 'All time' : m}${T !== 'all' ? ` · ${T}` : ''}</p></div><button type="button" class="cand-modal-close" aria-label="Close">×</button></header><div class="cand-modal-body cand-modal-body--stack"><p class="cand-exp-empty">Loading calculation…</p></div>`;
       panel.querySelector('.cand-modal-close').onclick = close;
       const body = panel.querySelector('.cand-modal-body');
       let rows = [];
@@ -1913,7 +1913,7 @@ export function CandidatesPanel() {
       card.onclick = () => openBreakdown(label);
     });
     return () => cards.forEach(card => { card.onclick = null; });
-  }, [c, m, T, $e]);
+  }, [c, m, T]);
   w.useEffect(() => {
     if (f || !i.length) return;
     const intent = consumePendingWorkOpenIntent();
