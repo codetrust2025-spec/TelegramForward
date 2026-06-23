@@ -1936,6 +1936,15 @@ export function CandidatesPanel() {
         row.querySelector(".cand-cell-resume")?.remove();
         const candidate = i[index];
         if (!candidate || !candidate.id) return;
+        const nameCell = row.querySelector(".cand-cell-name");
+        nameCell?.querySelector(".cand-row-complete")?.remove();
+        if (candidate.details_complete && nameCell) {
+          const complete = document.createElement("span");
+          complete.className = "cand-row-complete";
+          complete.title = "All required candidate details are entered";
+          complete.textContent = "✓ Details complete";
+          nameCell.append(complete);
+        }
         const serviceCell = row.children[6];
         if (serviceCell) {
           const isRoundWise = candidate.service_type === "round_wise";

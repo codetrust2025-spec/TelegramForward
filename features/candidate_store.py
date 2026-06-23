@@ -986,6 +986,20 @@ def _with_computed(row: dict) -> dict:
         )
     else:
         enriched["latest_resume"] = None
+    required_details = {
+        "name": _clean_str(enriched.get("name")),
+        "technology": _clean_str(enriched.get("technology")),
+        "date": _clean_str(enriched.get("date")),
+        "phone": _clean_str(enriched.get("phone")),
+        "reference": _clean_str(enriched.get("reference")),
+        "resume": bool(resumes),
+    }
+    enriched["completion_missing"] = [
+        field for field, value in required_details.items() if not value
+    ]
+    # This is a data-entry completion signal only. An unpaid balance or a
+    # future interview slot must not hide it, because those are workflow state.
+    enriched["details_complete"] = not enriched["completion_missing"]
     slot_ok = can_confirm_slot(enriched)
     enriched["can_confirm_slot"] = slot_ok
     enriched["slot_confirm_block_reason"] = slot_confirm_block_reason(enriched)
