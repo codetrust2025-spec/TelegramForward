@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "description": "Pinned production assets \u2014 live site must match these hashes.",
+  "git_commit": "960ca376d25a58e7f95094525ea6dcd8f666a95f",
+  "git_commit_short": "960ca37",
+  "deployed_at": "2026-06-23T07:24:22Z",
+  "js": "assets/app-_C-7ULi-.js",
+  "css": "assets/index-Dgqo-RUc.css",
+  "js_sha256": "613e0904bf32ec6a5dcb16b8d7d791ed7e535c909b235b2c9574e3bc3cbe7229",
+  "css_sha256": "8424a4e645c2b8676a3e3bb113520071f6a400cbc9389305187e6d09f8c77289",
+  "js_bytes": 1120402,
+  "css_bytes": 477665,
+  "server_py_sha256": "752c0844dfa23b72d6a7537c503aa194d52cbdab9f81715b93b6d1396b44272a"
+}
