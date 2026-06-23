@@ -1701,6 +1701,11 @@ def _interview_rows_for_range(
             continue
         if not include_unconfirmed and not _coerce_bool(raw.get("slot_confirmed")):
             continue
+        # A historic quick-slot shortcut could create a confirmed interview
+        # from a name alone.  Those records have no candidate technology and
+        # are not valid interviews; never show them in Daily ops.
+        if not include_unconfirmed and row_candidate_technology(raw) in {"", "Unspecified"}:
+            continue
         rows.append(_with_computed(raw))
     return rows
 

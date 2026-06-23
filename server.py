@@ -3216,40 +3216,31 @@ async def candidates_interviews_filter_options(
 
 @app.post("/candidates/interviews/slots")
 async def candidates_interviews_slots_create(request: Request, body: dict):
+    from core.dashboard_access import assert_candidate_row_access
     from features import candidate_store
 
     b = body or {}
-    name = (b.get("name") or "").strip()
     candidate_id = (b.get("candidate_id") or "").strip()
     date = (b.get("date") or "").strip()
     time = (b.get("time") or "").strip()
     time_end = (b.get("time_end") or "").strip()
     notes = (b.get("notes") or "").strip()
     interview_round = (b.get("interview_round") or "").strip()
-    technology = (b.get("technology") or "").strip()
-    service_type = (b.get("service_type") or "").strip().lower()
     try:
-        if name:
-            row = candidate_store.create_interview_slot(
-                name=name,
-                date=date,
-                time=time,
-                time_end=time_end,
-                technology=technology,
-                notes=notes,
-                interview_round=interview_round,
-            )
-        elif candidate_id:
-            row = candidate_store.assign_interview_slot(
-                candidate_id=candidate_id,
-                date=date,
-                time=time,
-                time_end=time_end,
-                notes=notes,
-                interview_round=interview_round,
-            )
-        else:
-            raise ValueError("Candidate name or id is required")
+        if not candidate_id:
+            raise ValueError("Select an existing candidate before booking an interview slot")
+        existing = candidate_store.get_candidate(candidate_id)
+        if not existing:
+            raise ValueError("Candidate not found")
+        assert_candidate_row_access(request, existing)
+        row = candidate_store.assign_interview_slot(
+            candidate_id=candidate_id,
+            date=date,
+            time=time,
+            time_end=time_end,
+            notes=notes,
+            interview_round=interview_round,
+        )
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
     return {"status": "ok", "candidate": row}
