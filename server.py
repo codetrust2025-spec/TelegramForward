@@ -3351,8 +3351,13 @@ async def candidates_interview_attendance(cid: str, request: Request, body: dict
 @app.patch("/candidates/{cid}/interview-attendee")
 async def candidates_interview_attendee(cid: str, request: Request, body: dict):
     """Change the assigned interview attendee without changing attendance."""
+    from fastapi import HTTPException
     from core.dashboard_access import assert_candidate_row_access
+    from core.dashboard_access import operator_profile
     from features import candidate_store
+
+    if (operator_profile(request).get("role") or "").strip().lower() != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can reassign an interview attendee")
 
     existing = candidate_store.get_candidate(cid)
     if not existing:

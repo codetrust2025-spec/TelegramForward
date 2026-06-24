@@ -534,17 +534,43 @@ def _interview_attendance_counts(rows: list[dict]) -> dict[str, int]:
 def row_interview_attendee(row: dict) -> str:
     explicit = (row.get("interview_attendee") or "").strip()
     if candidate_defaults_to_tool_attendee(row.get("name") or ""):
-        if not explicit:
-            return "Tool"
-        # Respect explicit attendee value even if it's Bhavana/Nikhila
-        return explicit
+        return "Tool"
     if explicit:
-        return explicit
-    # Do not assume Bhavana/Nikhila for pending future slots — only after attendance is logged.
-    status = row_interview_attendance_status(row)
-    if status in {"attended", "not_attended"}:
-        return infer_interview_attendee(row.get("technology") or "", row.get("name") or "")
-    return ""
+        try:
+            return normalise_interview_attendee_name(explicit)
+        except ValueError:
+            # Older imports accidentally copied the referrer into this field.
+            # A referrer is never an interview attendee.
+            pass
+    # Bhavana is the default support attendee for every non-Tool interview.
+    return infer_interview_attendee(row.get("technology") or "", row.get("name") or "")
+
+
+def repair_invalid_interview_attendees() -> int:
+    """Replace legacy referrer values in the attendee field with the default."""
+    data = _load()
+    rows = data.get("candidates") or []
+    changed = 0
+    for index, raw in enumerate(rows):
+        if not _coerce_bool(raw.get("slot_confirmed")):
+            continue
+        expected = infer_interview_attendee(raw.get("technology") or "", raw.get("name") or "")
+        current = _clean_str(raw.get("interview_attendee"))
+        try:
+            valid = normalise_interview_attendee_name(current) if current else ""
+        except ValueError:
+            valid = ""
+        if valid == expected:
+            continue
+        row = dict(raw)
+        row["interview_attendee"] = expected
+        row["updated_at"] = _now_iso()
+        rows[index] = row
+        changed += 1
+    if changed:
+        data["candidates"] = rows
+        _save(data)
+    return changed
 
 
 def _is_interview_attender_reference(reference: str | None) -> bool:
@@ -2658,9 +2684,7 @@ def create_interview_slot(
         raise ValueError("Interview date is required (YYYY-MM-DD)")
     slot_time = _clean_str(time)
     _validate_interview_slot_times(slot_time, time_end)
-    attendee = normalise_interview_attendee_name(interview_attendee) if interview_attendee else ""
-    if not attendee and candidate_defaults_to_tool_attendee(name):
-        attendee = "Tool"
+    attendee = normalise_interview_attendee_name(interview_attendee) if interview_attendee else infer_interview_attendee(technology, name)
     tech = canonical_technology(_clean_str(technology))
     if tech in {"", "Unspecified"} and candidate_defaults_to_tool_attendee(name):
         tech = TOOL_PROFILE_CANDIDATE_TECHNOLOGY
@@ -2707,10 +2731,8 @@ def _duplicate_candidate_slot(
     attendee = ""
     if interview_attendee is not None:
         attendee = normalise_interview_attendee_name(interview_attendee)
-    elif candidate_defaults_to_tool_attendee(source.get("name") or ""):
-        attendee = "Tool"
     else:
-        attendee = normalise_interview_attendee_name(source.get("interview_attendee"))
+        attendee = row_interview_attendee(source)
 
     record = {
         "name": source.get("name"),
@@ -2802,8 +2824,8 @@ def assign_interview_slot(
         patch["notes"] = f"{prev}\n{extra}".strip() if prev else extra
     if interview_attendee is not None:
         patch["interview_attendee"] = normalise_interview_attendee_name(interview_attendee)
-    elif candidate_defaults_to_tool_attendee(existing.get("name") or ""):
-        patch["interview_attendee"] = "Tool"
+    else:
+        patch["interview_attendee"] = row_interview_attendee(existing)
     rnd = normalise_interview_round(interview_round)
     if rnd:
         patch["interview_round"] = rnd

@@ -67,7 +67,7 @@ function AttendanceSelect({ value, disabled, onChange, ariaLabel }) {
   )
 }
 
-function RowActions({ row, busy, onEditAttendee, onEditSlot, onRemove }) {
+function RowActions({ row, busy, canEditAttendee, onEditAttendee, onEditSlot, onRemove }) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState(null)
   const triggerRef = useRef(null)
@@ -90,7 +90,7 @@ function RowActions({ row, busy, onEditAttendee, onEditSlot, onRemove }) {
   }
   const menu = open && position && createPortal(
     <ul ref={menuRef} className="ops-row-menu__list ops-row-menu__list--portal" style={{ top: position.top, left: position.left }} role="menu">
-      <li role="none"><button type="button" role="menuitem" className="ops-row-menu__item" onClick={() => { setOpen(false); onEditAttendee(row) }}>Edit attendee</button></li>
+      {canEditAttendee && <li role="none"><button type="button" role="menuitem" className="ops-row-menu__item" onClick={() => { setOpen(false); onEditAttendee(row) }}>Edit attendee</button></li>}
       <li role="none"><button type="button" role="menuitem" className="ops-row-menu__item" onClick={() => { setOpen(false); onEditSlot(row) }}>Edit slot</button></li>
       <li role="none"><button type="button" role="menuitem" className="ops-row-menu__item ops-row-menu__item--danger" onClick={() => { setOpen(false); onRemove(row) }}>Remove slot</button></li>
     </ul>, document.body)
@@ -103,7 +103,7 @@ function RowActions({ row, busy, onEditAttendee, onEditSlot, onRemove }) {
 }
 
 function SlotEditModal({ row, mode, busy, onClose, onSave }) {
-  const [attendee, setAttendee] = useState(row.interview_attendee || row.interview_attended_by || row.reference || '')
+  const [attendee, setAttendee] = useState(row.interview_attendee_resolved || row.interview_attendee || 'Bhavana')
   const [date, setDate] = useState(row.date || '')
   const [time, setTime] = useState(row.time || '')
   const [timeEnd, setTimeEnd] = useState(row.time_end || '')
@@ -150,6 +150,7 @@ export function InterviewRoster({
 }) {
   const { role, reference, enabled } = useAuth()
   const canManage = !enabled || role === 'admin' || role === 'handler'
+  const canEditAttendee = !enabled || role === 'admin'
   const handlerView = role === 'handler' && !!reference?.trim()
   const isDashboard = variant === 'dashboard'
   const hasRange = isDashboard && dashboardFromDate && dashboardToDate
@@ -461,7 +462,7 @@ export function InterviewRoster({
                           </span>
                         </div>
                       </td>
-                      {canManage && <td data-label="Actions" className="ops-dash-attend-cell"><RowActions row={row} busy={busyId === row.id} onEditAttendee={() => setEditing({ row, mode: 'attendee' })} onEditSlot={() => setEditing({ row, mode: 'slot' })} onRemove={removeSlot} /></td>}
+                      {canManage && <td data-label="Actions" className="ops-dash-attend-cell"><RowActions row={row} busy={busyId === row.id} canEditAttendee={canEditAttendee} onEditAttendee={() => setEditing({ row, mode: 'attendee' })} onEditSlot={() => setEditing({ row, mode: 'slot' })} onRemove={removeSlot} /></td>}
                     </tr>
                   )
                 })}
