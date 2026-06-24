@@ -83,6 +83,7 @@
 .ops-interview-attendance-status{min-width:130px;flex:0 0 auto}
 .ops-interview-attendance-remark{flex:1 1 160px;min-width:140px}
 .ops-interview-time{font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:600;color:#fbbf24}
+.ops-interview-date{font-variant-numeric:tabular-nums;white-space:nowrap;color:#cbd5e1;font-weight:600}
 .ops-interview-phone{display:block;font-size:12px;color:#94a3b8;margin-top:2px}
 .ops-interview-attended-check{display:inline-flex;align-items:center;gap:6px;cursor:pointer;-webkit-user-select:none;user-select:none}
 .ops-interview-attended-check input{width:16px;height:16px;accent-color:#6366f1}
