@@ -98,68 +98,72 @@ export function DailyOpsPanel({
       <PendingWorksStrip onOpenCandidates={onNavCandidates} />
 
       <div className="ops-dashboard ops-dashboard--v3">
-        <header className="ops-dash-toolbar ops-dash-toolbar--v3 ops-dash-toolbar--legacy">
+
+        {/* ── Row 1: title + KPI stats ────────────────────────────────── */}
+        <div className="ops-dash-top-row">
           <div className="ops-dash-toolbar__intro">
             <h1 className="ops-dash-title">Daily ops</h1>
             <p className="ops-dash-sub">Interview roster, attendance, and pending work</p>
           </div>
-          <div className="ops-dash-toolbar__main ops-dash-toolbar__main--legacy">
-            <div className="ops-date-range">
-              <div className="ops-date-range__presets" role="tablist" aria-label="Date range">
-                {PRESETS.map(preset => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={rangePreset === preset.id}
-                    className={`ops-date-range__preset${rangePreset === preset.id ? ' ops-date-range__preset--active' : ''}`}
-                    onClick={() => applyPreset(preset.id)}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-              <div className="ops-date-range__inputs">
-                <span className="ops-date-range__label">Range</span>
-                <input className="cand-input" type="date" value={fromDate} onChange={e => applyManualFrom(e.target.value)} aria-label="From date" />
-                <span className="ops-date-range__sep">—</span>
-                <input className="cand-input" type="date" value={toDate} onChange={e => applyManualTo(e.target.value)} aria-label="To date" />
-              </div>
-            </div>
-            {!handlerScoped && (
-              <select
-                className="cand-input"
-                value={attendeeFilter}
-                onChange={e => setAttendeeFilter(e.target.value)}
-                aria-label="Attendee filter"
-              >
-                <option value="">All attendees</option>
-                {ATTENDEES.map(name => (
-                  <option key={name} value={name}>{name}</option>
-                ))}
-              </select>
-            )}
-            <input
-              className="cand-input"
-              placeholder="Search candidate"
-              value={candidateSearch}
-              onChange={e => setCandidateSearch(e.target.value)}
-              aria-label="Candidate search"
-            />
-            <div className="ops-dash-toolbar__actions">
-              <button type="button" className="btn btn--ghost btn--sm" onClick={loadGlobal}>Refresh</button>
-            </div>
+          <div className="ops-dash-kpi-row ops-dash-kpi-row--v3" aria-label="Summary metrics">
+            <KpiCard label="Scheduled"    value={interviews.count          ?? 0} tone="blue"  loading={loading} />
+            <KpiCard label="Attended"     value={interviews.attended_count  ?? 0} tone="green" loading={loading} />
+            <KpiCard label="Pending"      value={interviews.pending_count   ?? 0} tone="amber" loading={loading} />
+            <KpiCard label="Not attended" value={interviews.not_attended_count ?? 0} tone="red" loading={loading} />
           </div>
-        </header>
+        </div>
+
+        {/* ── Row 2: filter controls ──────────────────────────────────── */}
+        <div className="ops-dash-controls-row">
+          {/* Date presets */}
+          <div className="ops-date-range__presets" role="tablist" aria-label="Date range">
+            {PRESETS.map(preset => (
+              <button
+                key={preset.id}
+                type="button"
+                role="tab"
+                aria-selected={rangePreset === preset.id}
+                className={`ops-date-range__preset${rangePreset === preset.id ? ' ops-date-range__preset--active' : ''}`}
+                onClick={() => applyPreset(preset.id)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Date range inputs */}
+          <div className="ops-date-range__inputs">
+            <span className="ops-date-range__label">Range</span>
+            <input className="cand-input ops-ctrl-date" type="date" value={fromDate} onChange={e => applyManualFrom(e.target.value)} aria-label="From date" />
+            <span className="ops-date-range__sep">—</span>
+            <input className="cand-input ops-ctrl-date" type="date" value={toDate}   onChange={e => applyManualTo(e.target.value)}   aria-label="To date" />
+          </div>
+
+          {/* Attendee + search */}
+          {!handlerScoped && (
+            <select
+              className="cand-input ops-ctrl-select"
+              value={attendeeFilter}
+              onChange={e => setAttendeeFilter(e.target.value)}
+              aria-label="Attendee filter"
+            >
+              <option value="">All attendees</option>
+              {ATTENDEES.map(name => <option key={name} value={name}>{name}</option>)}
+            </select>
+          )}
+          <input
+            className="cand-input ops-ctrl-search"
+            placeholder="Search candidate"
+            value={candidateSearch}
+            onChange={e => setCandidateSearch(e.target.value)}
+            aria-label="Candidate search"
+          />
+          <button type="button" className="btn btn--ghost btn--sm ops-ctrl-refresh" onClick={loadGlobal}>
+            Refresh
+          </button>
+        </div>
 
         {error && <p className="admin-error ops-dash-error" role="alert">{error}</p>}
-
-        <div className="ops-dash-kpi-row ops-dash-kpi-row--v3" aria-label="Summary metrics">
-          <KpiCard label="Scheduled" value={interviews.count ?? 0} tone="blue" loading={loading} />
-          <KpiCard label="Attended" value={interviews.attended_count ?? 0} tone="green" loading={loading} />
-          <KpiCard label="Pending" value={interviews.pending_count ?? 0} tone="amber" loading={loading} />
-          <KpiCard label="Not attended" value={interviews.not_attended_count ?? 0} tone="red" loading={loading} />
-        </div>
 
         <InterviewRoster
           key={`${fromDate}|${toDate}|${upcomingOnly}`}
