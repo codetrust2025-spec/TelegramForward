@@ -425,6 +425,7 @@ export function InterviewRoster({
             <table className={`ops-interview-table${isDashboard ? ' ops-dash-table ops-dash-table--v3' : ''}`}>
               <thead>
                 <tr>
+                  <th>Date</th>
                   <th>Time</th>
                   <th>Candidate</th>
                   <th>Technology</th>
@@ -438,6 +439,9 @@ export function InterviewRoster({
                   const status = resolvedStatus(row)
                   return (
                     <tr key={row.id} className={`ops-interview-row ops-interview-row--${statusTone(status)}`}>
+                      <td data-label="Date" className="ops-interview-date">
+                        {formatDayLabel(row.date)}
+                      </td>
                       <td data-label="Time" className="ops-interview-time">
                         {[row.time, row.time_end].filter(Boolean).join(' – ') || '—'}
                       </td>
