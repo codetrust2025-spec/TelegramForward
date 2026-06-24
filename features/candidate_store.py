@@ -350,6 +350,7 @@ _CANDIDATE_NAME_ALIASES: dict[str, str] = {
     "abhilash perla": "Abilash Perla",
     "abilash perla": "Abilash Perla",
     "ram charan m s": "Ram Charan M S",
+    "ram charan ms": "Ram Charan M S",
     "reddy charan m s": "Ram Charan M S",
     "ganguli1433": "Gangadhar",
     "ganguli": "Gangadhar",
@@ -366,7 +367,7 @@ def canonical_candidate_name(name: str) -> str:
         return _CANDIDATE_NAME_ALIASES[key]
     if "perla" in key and ("abhilash" in key or "abilash" in key):
         return "Abilash Perla"
-    if ("ram charan" in key or "reddy charan" in key) and "m s" in key:
+    if ("ram charan" in key or "reddy charan" in key) and ("m s" in key or key.endswith(" ms")):
         return "Ram Charan M S"
     return raw
 
