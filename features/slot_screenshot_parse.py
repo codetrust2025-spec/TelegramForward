@@ -116,6 +116,25 @@ def _parse_gmail_calendar_line(blob: str) -> tuple[str, str, str]:
     return date, start, end
 
 
+def _parse_relative_calendar_line(blob: str, ref: datetime | None = None) -> tuple[str, str, str]:
+    """Gmail cards commonly say: ``Tomorrow · 12:00 PM – 12:30 PM``."""
+    text = (blob or "").replace("\n", " ")
+    match = re.search(
+        r"\b(today|tomorrow)\b[^\d]{0,32}"
+        r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(?:-|to|–|—)\s*"
+        r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return "", "", ""
+    now = ref or datetime.now()
+    day = now.date() + timedelta(days=1 if match.group(1).lower() == "tomorrow" else 0)
+    sh, sm = _to_24h(int(match.group(2)), int(match.group(3) or 0), match.group(4))
+    eh, em = _to_24h(int(match.group(5)), int(match.group(6) or 0), match.group(7))
+    return day.isoformat(), _fmt_hhmm(sh, sm), _fmt_hhmm(eh, em)
+
+
 def _parse_longform_invite_line(blob: str) -> tuple[str, str, str]:
     """Email body: Monday, 22 June, 2026, 3:30 PM to 4:00 PM (IST)"""
     text = (blob or "").replace("\n", " ")
@@ -365,11 +384,14 @@ def _parse_platform_from_blob(blob: str) -> str:
 def parse_invite_text(blob: str) -> dict[str, Any]:
     """Regex extraction from OCR or vision text."""
     labeled_date, labeled_start, labeled_end = _parse_labeled_interview_block(blob)
+    relative_date, relative_start, relative_end = _parse_relative_calendar_line(blob)
     g_date, g_start, g_end = _parse_gmail_calendar_line(blob)
     lf_date, lf_start, lf_end = _parse_longform_invite_line(blob)
-    date = labeled_date or g_date or lf_date or _parse_date_token(blob)
+    date = labeled_date or relative_date or g_date or lf_date or _parse_date_token(blob)
     if labeled_start:
         start, end = labeled_start, labeled_end
+    elif relative_start:
+        start, end = relative_start, relative_end
     elif g_start:
         start, end = g_start, g_end
     elif lf_start:
