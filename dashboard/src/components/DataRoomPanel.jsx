@@ -143,7 +143,7 @@ function CopyChip({ label, text, copyKey, activeKey, onCopy }) {
   )
 }
 
-function CredentialRow({ rowKey, site, row, isAdmin, activeKey, onCopy }) {
+function CredentialRow({ rowKey, site, row, isAdmin, activeKey, onCopy, onEdit, onDelete }) {
   const block = formatCredentialBlock(site, row, { isAdmin })
   return (
     <tr>
@@ -160,12 +160,96 @@ function CredentialRow({ rowKey, site, row, isAdmin, activeKey, onCopy }) {
       <td className="dr-creds-copy-all">
         <CopyChip label="Copy all" text={block} copyKey={`${rowKey}-all`} activeKey={activeKey} onCopy={onCopy} />
       </td>
+      <td className="dr-actions">
+        <button type="button" className="cand-btn cand-btn--sm" onClick={onEdit}>Edit</button>
+        {!isAdmin && (
+          <button type="button" className="cand-btn cand-btn--sm cand-btn--danger" onClick={onDelete}>Delete</button>
+        )}
+      </td>
     </tr>
   )
 }
 
-function CredentialsSection({ creds, loading, active }) {
+const EMPTY_HANDLER_FORM = { username: '', password: '', reference: '', notes: '' }
+const EMPTY_ADMIN_FORM = { username: '', password: '', reference: '' }
+
+function HandlerModal({ mode, form, onChange, onSave, onClose, error }) {
+  return (
+    <div className="dr-modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="dr-modal cand-card" role="dialog" aria-labelledby="dr-handler-modal-title" onClick={(e) => e.stopPropagation()}>
+        <h2 id="dr-handler-modal-title" className="cand-title">
+          {mode === 'create' ? 'Add handler login' : 'Edit handler login'}
+        </h2>
+        {error && <p className="dr-error">{error}</p>}
+        <div className="dr-form-grid">
+          <label>
+            Username
+            <input className="cand-input" value={form.username} readOnly={mode === 'edit'}
+              onChange={(e) => onChange({ ...form, username: e.target.value })} />
+          </label>
+          <label>
+            Reference (display name)
+            <input className="cand-input" value={form.reference}
+              onChange={(e) => onChange({ ...form, reference: e.target.value })} />
+          </label>
+          <label>
+            Password{mode === 'edit' ? ' (leave blank to keep)' : ''}
+            <input className="cand-input" type="password" autoComplete="new-password" value={form.password}
+              onChange={(e) => onChange({ ...form, password: e.target.value })} />
+          </label>
+          <label className="dr-form-full">
+            Notes (optional)
+            <input className="cand-input" value={form.notes}
+              onChange={(e) => onChange({ ...form, notes: e.target.value })} />
+          </label>
+        </div>
+        <div className="dr-modal-actions">
+          <button type="button" className="cand-btn" onClick={onClose}>Cancel</button>
+          <button type="button" className="cand-btn cand-btn--primary" onClick={onSave}>Save</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AdminModal({ form, onChange, onSave, onClose, error }) {
+  return (
+    <div className="dr-modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="dr-modal cand-card" role="dialog" aria-labelledby="dr-admin-modal-title" onClick={(e) => e.stopPropagation()}>
+        <h2 id="dr-admin-modal-title" className="cand-title">Edit admin login</h2>
+        {error && <p className="dr-error">{error}</p>}
+        <div className="dr-form-grid">
+          <label>
+            Username
+            <input className="cand-input" value={form.username}
+              onChange={(e) => onChange({ ...form, username: e.target.value })} />
+          </label>
+          <label>
+            Reference
+            <input className="cand-input" value={form.reference}
+              onChange={(e) => onChange({ ...form, reference: e.target.value })} />
+          </label>
+          <label className="dr-form-full">
+            New password (leave blank to keep)
+            <input className="cand-input" type="password" autoComplete="new-password" value={form.password}
+              onChange={(e) => onChange({ ...form, password: e.target.value })} />
+          </label>
+        </div>
+        <div className="dr-modal-actions">
+          <button type="button" className="cand-btn" onClick={onClose}>Cancel</button>
+          <button type="button" className="cand-btn cand-btn--primary" onClick={onSave}>Save</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CredentialsSection({ creds, loading, active, onReload }) {
+  const { confirm } = useConfirm()
   const [activeKey, setActiveKey] = useState(null)
+  const [handlerModal, setHandlerModal] = useState(null) // { mode:'create'|'edit', form, username? }
+  const [adminModal, setAdminModal] = useState(null)
+  const [modalError, setModalError] = useState('')
 
   const onCopy = useCallback(async (key, text) => {
     const ok = await copyToClipboard(text)
@@ -174,6 +258,54 @@ function CredentialsSection({ creds, loading, active }) {
       window.setTimeout(() => setActiveKey((k) => (k === key ? null : k)), 1600)
     }
   }, [])
+
+  const openAddHandler = () => {
+    setModalError('')
+    setHandlerModal({ mode: 'create', form: { ...EMPTY_HANDLER_FORM } })
+  }
+
+  const openEditHandler = (h) => {
+    setModalError('')
+    setHandlerModal({ mode: 'edit', username: h.username, form: { username: h.username, password: '', reference: h.reference || '', notes: h.notes || '' } })
+  }
+
+  const openEditAdmin = () => {
+    const admin = creds?.admin || {}
+    setModalError('')
+    setAdminModal({ form: { username: admin.username || 'admin', password: '', reference: admin.reference || 'Full dashboard' } })
+  }
+
+  const saveHandler = async () => {
+    const { mode, form, username } = handlerModal
+    const url = mode === 'create'
+      ? `${API_BASE}/data-room/credentials/handlers`
+      : `${API_BASE}/data-room/credentials/handlers/${username}`
+    const method = mode === 'create' ? 'POST' : 'PATCH'
+    const body = { ...form }
+    if (mode === 'edit' && !body.password) delete body.password
+    const res = await fetch(url, { method, credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const data = await res.json()
+    if (data.status !== 'ok') { setModalError(data.message || 'Save failed'); return }
+    setHandlerModal(null)
+    onReload()
+  }
+
+  const deleteHandler = async (h) => {
+    const ok = await confirm({ title: 'Remove handler?', message: `Delete handler "${h.reference || h.username}"?`, confirmLabel: 'Delete', variant: 'danger' })
+    if (!ok) return
+    await fetch(`${API_BASE}/data-room/credentials/handlers/${h.username}`, { method: 'DELETE', credentials: 'include' })
+    onReload()
+  }
+
+  const saveAdmin = async () => {
+    const body = { ...adminModal.form }
+    if (!body.password) delete body.password
+    const res = await fetch(`${API_BASE}/data-room/credentials/admin`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const data = await res.json()
+    if (data.status !== 'ok') { setModalError(data.message || 'Save failed'); return }
+    setAdminModal(null)
+    onReload()
+  }
 
   if (loading) return <p className="dr-muted">Loading credentials…</p>
   if (!creds) return null
@@ -185,11 +317,16 @@ function CredentialsSection({ creds, loading, active }) {
       className={`dr-section dr-credentials-section${active ? ' dr-section--active' : ''}`}
       aria-labelledby="dr-creds-title"
     >
-      <div className="dr-section-head">
-        <h2 id="dr-creds-title" className="dr-section-title">Dashboard logins</h2>
-        <p className="dr-section-desc">
-          Admin and handler credentials for teleautomation.online. Use Copy on each row.
-        </p>
+      <div className="dr-section-head dr-section-head--row">
+        <div>
+          <h2 id="dr-creds-title" className="dr-section-title">Dashboard logins</h2>
+          <p className="dr-section-desc">
+            Admin and handler credentials for teleautomation.online. Use Copy on each row.
+          </p>
+        </div>
+        <button type="button" className="cand-btn cand-btn--primary" onClick={openAddHandler}>
+          + Add handler
+        </button>
       </div>
       <p className="dr-muted dr-creds-site">
         Site: <a href={site} target="_blank" rel="noopener noreferrer">{site}</a>
@@ -203,6 +340,7 @@ function CredentialsSection({ creds, loading, active }) {
               <th>Username</th>
               <th>Password</th>
               <th>Copy</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -214,6 +352,8 @@ function CredentialsSection({ creds, loading, active }) {
                 isAdmin
                 activeKey={activeKey}
                 onCopy={onCopy}
+                onEdit={openEditAdmin}
+                onDelete={() => {}}
               />
             )}
             {handlers.map((h) => (
@@ -224,6 +364,8 @@ function CredentialsSection({ creds, loading, active }) {
                 row={h}
                 activeKey={activeKey}
                 onCopy={onCopy}
+                onEdit={() => openEditHandler(h)}
+                onDelete={() => deleteHandler(h)}
               />
             ))}
           </tbody>
@@ -240,6 +382,26 @@ function CredentialsSection({ creds, loading, active }) {
             onCopy={onCopy}
           />
         </p>
+      )}
+
+      {handlerModal && (
+        <HandlerModal
+          mode={handlerModal.mode}
+          form={handlerModal.form}
+          onChange={(f) => setHandlerModal((s) => ({ ...s, form: f }))}
+          onSave={saveHandler}
+          onClose={() => setHandlerModal(null)}
+          error={modalError}
+        />
+      )}
+      {adminModal && (
+        <AdminModal
+          form={adminModal.form}
+          onChange={(f) => setAdminModal((s) => ({ ...s, form: f }))}
+          onSave={saveAdmin}
+          onClose={() => setAdminModal(null)}
+          error={modalError}
+        />
       )}
     </section>
   )
@@ -461,11 +623,11 @@ export function DataRoomPanel() {
       {error && <p className="dr-error dr-page-error" role="alert">{error}</p>}
 
       {isAdmin && activeTab === 'logins' && (
-        <CredentialsSection creds={credentials} loading={credsLoading} active />
+        <CredentialsSection creds={credentials} loading={credsLoading} active onReload={loadCredentials} />
       )}
 
       {isAdmin && activeTab === 'vault' && credentials && (
-        <DataRoomVaultSection creds={credentials} active />
+        <DataRoomVaultSection creds={credentials} active onReload={loadCredentials} />
       )}
 
       {activeTab === 'partners' && (

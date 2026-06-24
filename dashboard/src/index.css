@@ -14671,6 +14671,34 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   white-space: normal;
 }
 
+/* Data room — CRUD additions */
+.dr-section-head--row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.dr-vault-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.dr-vault-item-actions--right {
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+.dr-vault-summary-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.dr-prompt-card > summary {
+  gap: 0.5rem;
+}
+
 /* Public submit-slot page */
 .submit-slot-screen {
   position: relative;
