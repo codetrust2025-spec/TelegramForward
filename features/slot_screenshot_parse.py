@@ -136,12 +136,14 @@ def _parse_relative_calendar_line(blob: str, ref: datetime | None = None) -> tup
 
 
 def _parse_longform_invite_line(blob: str) -> tuple[str, str, str]:
-    """Email body: Monday, 22 June, 2026, 3:30 PM to 4:00 PM (IST)"""
+    """Email body: Monday, 22 June, 2026, 3:30 PM to 4:00 PM (IST)
+    Also handles Teams-style multiline: '25 June 2026  10:30 - 11:10 (IST)'
+    """
     text = (blob or "").replace("\n", " ")
     range_pat = re.compile(
         rf"(?:{_WEEKDAY_PATTERN},?\s+)?(\d{{1,2}})\s+({_MONTH_PATTERN})\s*,?\s*"
         rf"(20\d{{2}}),?\s+"
-        rf"(\d{{1,2}})(?::(\d{{2}}))?\s*(am|pm)\s*(?:-|to|–|—)\s*"
+        rf"(\d{{1,2}})(?::(\d{{2}}))?\s*(am|pm)\s*(?:-|to|\u2013|\u2014)\s*"
         rf"(\d{{1,2}})(?::(\d{{2}}))?\s*(am|pm)\b",
         re.IGNORECASE,
     )
@@ -163,19 +165,36 @@ def _parse_longform_invite_line(blob: str) -> tuple[str, str, str]:
         re.IGNORECASE,
     )
     m = single_pat.search(text)
-    if not m:
-        return "", "", ""
-    mon = _month_num(m.group(2))
-    day = int(m.group(1))
-    y = int(m.group(3))
-    if not mon:
-        return "", "", ""
-    date = f"{y:04d}-{_pad2(mon)}-{_pad2(day)}"
-    sh, sm = _to_24h(int(m.group(4)), int(m.group(5) or 0), m.group(6))
-    start = _fmt_hhmm(sh, sm)
-    end_total = sh * 60 + sm + 30
-    end = _fmt_hhmm(end_total // 60, end_total % 60)
-    return date, start, end
+    if m:
+        mon = _month_num(m.group(2))
+        day = int(m.group(1))
+        y = int(m.group(3))
+        if mon:
+            date = f"{y:04d}-{_pad2(mon)}-{_pad2(day)}"
+            sh, sm = _to_24h(int(m.group(4)), int(m.group(5) or 0), m.group(6))
+            start = _fmt_hhmm(sh, sm)
+            end_total = sh * 60 + sm + 30
+            end = _fmt_hhmm(end_total // 60, end_total % 60)
+            return date, start, end
+
+    # Teams-style: "25 June 2026" then "10:30 - 11:10 (IST)" — date-only line, time on next.
+    date_only = re.compile(
+        rf"(?:{_WEEKDAY_PATTERN},?\s+)?(\d{{1,2}})\s+({_MONTH_PATTERN})\s*,?\s*(20\d{{2}})\b",
+        re.IGNORECASE,
+    )
+    dm = date_only.search(text)
+    if dm:
+        mon = _month_num(dm.group(2))
+        day = int(dm.group(1))
+        y = int(dm.group(3))
+        if mon:
+            date = f"{y:04d}-{_pad2(mon)}-{_pad2(day)}"
+            after = text[dm.end():]
+            ts, te = _parse_times_from_blob(after)
+            if ts:
+                return date, ts, te
+
+    return "", "", ""
 
 
 def _env_api_key() -> str:
@@ -330,6 +349,8 @@ def _parse_time_token(match: re.Match) -> tuple[int, int]:
 
 def _parse_times_from_blob(blob: str) -> tuple[str, str]:
     text = (blob or "").lower().replace("–", "-").replace("—", "-")
+
+    # Full range with AM/PM on the end: 10:30 - 11:10 (IST), 2:00 PM - 3:00 PM, etc.
     range_pat = re.compile(
         r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*"
         r"(?:-|to|–|—)\s*"
@@ -343,11 +364,32 @@ def _parse_times_from_blob(blob: str) -> tuple[str, str]:
         if (eh, em) <= (sh, sm) and (m.group(3) or "").lower() == "pm" and not (m.group(6) or "").lower():
             eh += 12 if eh < 12 else 0
         return _fmt_hhmm(sh, sm), _fmt_hhmm(eh, em)
+
+    # 24h bare range without AM/PM: "10:30 - 11:10" or "10:30 - 11:10 (IST)"
+    range_24h = re.compile(
+        r"\b(\d{1,2}):(\d{2})\s*(?:-|to|–|—)\s*(\d{1,2}):(\d{2})\b"
+    )
+    m24 = range_24h.search(text)
+    if m24:
+        sh, sm = int(m24.group(1)), int(m24.group(2))
+        eh, em = int(m24.group(3)), int(m24.group(4))
+        if 0 <= sh <= 23 and 0 <= sm <= 59 and 0 <= eh <= 23 and 0 <= em <= 59:
+            return _fmt_hhmm(sh, sm), _fmt_hhmm(eh, em)
+
     colon = re.search(r"\b(\d{1,2}):(\d{2})\s*(am|pm)\b", text, re.IGNORECASE)
     if colon:
         sh, sm = _to_24h(int(colon.group(1)), int(colon.group(2)), colon.group(3))
         end_total = sh * 60 + sm + 30
         return _fmt_hhmm(sh, sm), _fmt_hhmm(end_total // 60, end_total % 60)
+
+    # Single 24h colon time with no AM/PM: "10:30 (IST)"
+    colon_24h = re.search(r"\b(\d{1,2}):(\d{2})\b", text)
+    if colon_24h:
+        sh, sm = int(colon_24h.group(1)), int(colon_24h.group(2))
+        if 0 <= sh <= 23 and 0 <= sm <= 59:
+            end_total = sh * 60 + sm + 30
+            return _fmt_hhmm(sh, sm), _fmt_hhmm(end_total // 60, end_total % 60)
+
     plain = re.search(r"(?<![:\d])\b(\d{1,2})\s*(am|pm)\b", text, re.IGNORECASE)
     if plain:
         sh, sm = _to_24h(int(plain.group(1)), 0, plain.group(2))
