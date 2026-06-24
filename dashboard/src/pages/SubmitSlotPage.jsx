@@ -168,8 +168,8 @@ export function SubmitSlotPage() {
     setError('')
     try {
       const [cRes, bRes] = await Promise.all([
-        fetch(`${API_BASE}/public/slots/candidates`),
-        fetch(`${API_BASE}/public/slots/booked`),
+        fetch(`${API_BASE}/public/slots/candidates`, { cache: 'no-store' }),
+        fetch(`${API_BASE}/public/slots/booked`, { cache: 'no-store' }),
       ])
       const cData = await cRes.json()
       const bData = await bRes.json()

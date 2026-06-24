@@ -24,12 +24,18 @@ def install_public_slot_routes(app) -> None:
     @app.get("/public/slots/candidates")
     async def public_slot_candidates(channel: str | None = None):
         rows = cs.interview_slot_picker_rows(channel=channel or "profile")
-        return {"status": "ok", "candidates": rows, "count": len(rows)}
+        return JSONResponse(
+            {"status": "ok", "candidates": rows, "count": len(rows)},
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
 
     @app.get("/public/slots/booked")
     async def public_slot_booked(days: int = 60):
         snap = cs.public_booked_interview_slots(days=days)
-        return {"status": "ok", **snap}
+        return JSONResponse(
+            {"status": "ok", **snap},
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
 
     @app.post("/public/slots/payment-proof")
     async def public_slot_payment_proof(
