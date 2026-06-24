@@ -572,97 +572,134 @@
 
 /* ─────────────────────────────────────────────────────────────────────────
    Daily Ops — responsive layout for small laptops, tablets, and phones
-   Breakpoints:
-     Laptop S   1024 – 1279px
-     Tablet     768  – 1023px
-     Mobile     ≤ 767px
+   The sidebar is ~200px wide so effective content width ≈ viewport − 200px.
+   At 1280px viewport the content area is ~1080px — still tight for all
+   toolbar items in one row. Stack controls from 1380px down.
    ───────────────────────────────────────────────────────────────────────── */
 
-/* ── Small laptops (1024–1279px): toolbar wraps to two rows ────────────── */
-@media (min-width: 1024px) and (max-width: 1279px) {
-  /* Shrink the intro column so controls have more room */
+/* ── Small laptops (901–1380px): toolbar wraps to two rows ─────────────── */
+@media (min-width: 901px) and (max-width: 1380px) {
+  /* Stack title above controls */
   .ops-dash-toolbar--v3 {
-    grid-template-columns: minmax(0, 9rem) minmax(0, 1fr);
-    gap: 6px 10px;
-    padding: 7px 10px;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 8px 10px;
   }
 
-  /* Let date presets + inputs wrap to a second line inside the main area */
-  .ops-dash-toolbar__main--legacy .ops-date-range {
+  /* Intro row: title + subtitle inline */
+  .ops-dash-toolbar__intro {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .ops-dash-toolbar__intro .ops-dash-title {
+    white-space: nowrap;
+    font-size: 1rem;
+  }
+
+  .ops-dash-toolbar__intro .ops-dash-sub {
+    white-space: nowrap;
+    font-size: 11px;
+    color: #64748b;
+  }
+
+  /* Controls row: horizontal flex, wraps if needed */
+  .ops-dash-toolbar__main,
+  .ops-dash-toolbar__main--legacy {
+    display: flex;
+    flex-direction: row;
     flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
     width: 100%;
+    min-width: 0;
+  }
+
+  /* Date presets + range in a sub-row that can wrap */
+  .ops-dash-toolbar__main--legacy .ops-date-range {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .ops-dash-toolbar__main--legacy .ops-date-range__presets {
-    flex-wrap: wrap;
+    display: flex;
+    flex-wrap: nowrap;
     gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .ops-dash-toolbar__main--legacy .ops-date-range__presets::-webkit-scrollbar {
+    display: none;
   }
 
   .ops-dash-toolbar__main--legacy .ops-date-range__preset {
+    flex-shrink: 0;
     padding: 3px 8px;
     font-size: 10px;
   }
 
-  /* Compact date inputs */
   .ops-dash-toolbar__main--legacy .ops-date-range__inputs {
-    flex-wrap: nowrap;
+    display: flex;
+    align-items: center;
     gap: 4px;
+    flex-shrink: 0;
   }
 
+  /* Compact date inputs */
   .ops-dash-toolbar__main--legacy .ops-date-range__inputs .cand-input {
-    width: 118px;
-    min-width: 100px;
+    width: 112px !important;
+    min-width: 96px !important;
     font-size: 11px;
+    padding: 4px 6px;
   }
 
-  /* Attendee + search shrink */
+  /* Attendee + search inputs: smaller */
   .ops-dash-toolbar__main--legacy > .cand-input {
-    min-width: 100px;
-    max-width: 140px;
+    min-width: 90px;
+    max-width: 130px;
     font-size: 11px;
+    padding: 4px 8px;
   }
 
-  /* Refresh button tighter */
+  /* Refresh: no left border separation needed */
   .ops-dash-toolbar__actions {
-    padding-left: 8px;
+    border-left: none;
+    padding-left: 0;
   }
 
-  /* KPI row: keep 4 cards but tighter */
+  /* KPI row: keep 4-col but tighter text */
   .ops-dash-kpi-row--v3 .ops-dash-kpi__label {
-    font-size: 7px;
+    font-size: 8px;
     letter-spacing: .04em;
+    white-space: normal;
+    line-height: 1.2;
   }
 
   .ops-dash-kpi-row--v3 .ops-dash-kpi__value {
     font-size: .95rem;
   }
 
-  /* Table: allow slight horizontal scroll on smallest laptops */
+  /* Table: allow horizontal scroll */
+  .ops-dash-roster .ops-dash-table-wrap {
+    overflow-x: auto;
+  }
+
   .ops-dash-table--v3 {
-    min-width: 780px;
+    min-width: 700px;
   }
 
   .ops-dash-table--v3 th,
   .ops-dash-table--v3 td {
     padding: 4px 6px;
     font-size: 10px;
-  }
-
-  .ops-dash-table--v3 .ops-dash-col-date  { width: 8%; }
-  .ops-dash-table--v3 .ops-dash-col-time  { width: 12%; }
-  .ops-dash-table--v3 .ops-dash-col-candidate { width: 18%; }
-  .ops-dash-table--v3 .ops-dash-col-tech  { width: 11%; }
-  .ops-dash-table--v3 .ops-dash-col-attendee { width: 8%; }
-  .ops-dash-table--v3 .ops-dash-col-status { width: 25%; }
-
-  /* Pending strip: allow wrapping */
-  .pending-works-strip__row {
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .pending-works-strip__text {
-    flex: 1 1 200px;
   }
 }
 
