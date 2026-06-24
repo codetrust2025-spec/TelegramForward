@@ -569,3 +569,517 @@
 .ops-row-menu__item:hover:not(:disabled){background:#ffffff10}
 .ops-row-menu__item--danger{color:#f87171}
 .ops-row-menu__item--disabled,.ops-row-menu__item:disabled{opacity:.45;cursor:not-allowed}.ops-row-menu__list.ops-row-menu__list--portal,.ops-dash-attend-cell .ops-row-menu__list.ops-row-menu__list--portal{position:fixed;z-index:12000;bottom:auto}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Daily Ops — responsive layout for small laptops, tablets, and phones
+   Breakpoints:
+     Laptop S   1024 – 1279px
+     Tablet     768  – 1023px
+     Mobile     ≤ 767px
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Small laptops (1024–1279px): toolbar wraps to two rows ────────────── */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  /* Shrink the intro column so controls have more room */
+  .ops-dash-toolbar--v3 {
+    grid-template-columns: minmax(0, 9rem) minmax(0, 1fr);
+    gap: 6px 10px;
+    padding: 7px 10px;
+  }
+
+  /* Let date presets + inputs wrap to a second line inside the main area */
+  .ops-dash-toolbar__main--legacy .ops-date-range {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .ops-dash-toolbar__main--legacy .ops-date-range__presets {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .ops-dash-toolbar__main--legacy .ops-date-range__preset {
+    padding: 3px 8px;
+    font-size: 10px;
+  }
+
+  /* Compact date inputs */
+  .ops-dash-toolbar__main--legacy .ops-date-range__inputs {
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  .ops-dash-toolbar__main--legacy .ops-date-range__inputs .cand-input {
+    width: 118px;
+    min-width: 100px;
+    font-size: 11px;
+  }
+
+  /* Attendee + search shrink */
+  .ops-dash-toolbar__main--legacy > .cand-input {
+    min-width: 100px;
+    max-width: 140px;
+    font-size: 11px;
+  }
+
+  /* Refresh button tighter */
+  .ops-dash-toolbar__actions {
+    padding-left: 8px;
+  }
+
+  /* KPI row: keep 4 cards but tighter */
+  .ops-dash-kpi-row--v3 .ops-dash-kpi__label {
+    font-size: 7px;
+    letter-spacing: .04em;
+  }
+
+  .ops-dash-kpi-row--v3 .ops-dash-kpi__value {
+    font-size: .95rem;
+  }
+
+  /* Table: allow slight horizontal scroll on smallest laptops */
+  .ops-dash-table--v3 {
+    min-width: 780px;
+  }
+
+  .ops-dash-table--v3 th,
+  .ops-dash-table--v3 td {
+    padding: 4px 6px;
+    font-size: 10px;
+  }
+
+  .ops-dash-table--v3 .ops-dash-col-date  { width: 8%; }
+  .ops-dash-table--v3 .ops-dash-col-time  { width: 12%; }
+  .ops-dash-table--v3 .ops-dash-col-candidate { width: 18%; }
+  .ops-dash-table--v3 .ops-dash-col-tech  { width: 11%; }
+  .ops-dash-table--v3 .ops-dash-col-attendee { width: 8%; }
+  .ops-dash-table--v3 .ops-dash-col-status { width: 25%; }
+
+  /* Pending strip: allow wrapping */
+  .pending-works-strip__row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .pending-works-strip__text {
+    flex: 1 1 200px;
+  }
+}
+
+/* ── Tablets (768–1023px): stacked toolbar, card-mode table ────────────── */
+@media (min-width: 768px) and (max-width: 1023px) {
+  /* Toolbar: single column */
+  .ops-dash-toolbar--v3 {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .ops-dash-toolbar__intro .ops-dash-title,
+  .ops-dash-toolbar__intro .ops-dash-sub {
+    white-space: normal;
+  }
+
+  .ops-dash-toolbar__main,
+  .ops-dash-toolbar__main--legacy {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .ops-dash-toolbar__main--legacy .ops-date-range {
+    flex-direction: column;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    width: 100%;
+    gap: 6px;
+  }
+
+  .ops-dash-toolbar__main--legacy .ops-date-range__presets {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .ops-dash-toolbar__main--legacy .ops-date-range__inputs {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .ops-dash-toolbar__main--legacy .ops-date-range__inputs .cand-input,
+  .ops-dash-toolbar__main--legacy .cand-input {
+    flex: 1 1 140px;
+    max-width: none;
+    min-height: 34px;
+  }
+
+  .ops-dash-toolbar__actions {
+    border-left: none;
+    padding-left: 0;
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  /* KPI row: 2×2 grid */
+  .ops-dash-kpi-row--v3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ops-dash-kpi-row--v3 .ops-dash-kpi__label {
+    font-size: 9px;
+    white-space: normal;
+    line-height: 1.3;
+  }
+
+  .ops-dash-kpi-row--v3 .ops-dash-kpi__value {
+    font-size: 1rem;
+  }
+
+  /* Table: use card-mode (already enabled by ta-table-responsive--cards) */
+  .ops-dash-roster .ops-dash-table-wrap {
+    overflow-x: auto;
+    max-height: none;
+  }
+
+  .ops-dash-table--v3 {
+    min-width: 0;
+    width: 100%;
+    table-layout: auto;
+  }
+
+  /* Card-mode overrides for roster table */
+  .ops-dash-table-wrap.ta-table-responsive--cards .ops-interview-table {
+    display: block !important;
+    width: 100%;
+  }
+
+  .ops-dash-table-wrap.ta-table-responsive--cards thead {
+    display: none;
+  }
+
+  .ops-dash-table-wrap.ta-table-responsive--cards tbody,
+  .ops-dash-table-wrap.ta-table-responsive--cards tr {
+    display: block;
+    width: 100%;
+  }
+
+  .ops-dash-table-wrap.ta-table-responsive--cards td {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 5px 10px;
+    font-size: 12px;
+    border-bottom: none;
+    min-width: 0;
+  }
+
+  .ops-dash-table-wrap.ta-table-responsive--cards td::before {
+    content: attr(data-label);
+    min-width: 80px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: #64748b;
+    flex-shrink: 0;
+  }
+
+  .ops-dash-table-wrap.ta-table-responsive--cards tr {
+    margin-bottom: 8px;
+    padding: 8px 0;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 8px;
+    background: rgba(255,255,255,.02);
+  }
+
+  .ops-dash-table-wrap.ta-table-responsive--cards td:last-child {
+    border-bottom: none;
+  }
+
+  /* Attendance cell in card mode */
+  .ops-dash-table-wrap.ta-table-responsive--cards .ops-interview-attendance-cell {
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  /* Pending strip */
+  .pending-works-strip__row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .pending-works-strip__chips {
+    flex-wrap: wrap;
+  }
+}
+
+/* ── Mobile phones (≤ 767px): fully stacked ────────────────────────────── */
+@media (max-width: 767px) {
+  /* Page padding */
+  .daily-ops-page--dashboard {
+    padding: 4px 4px 8px;
+  }
+
+  /* Pending strip */
+  .pending-works-strip {
+    padding: 8px;
+  }
+
+  .pending-works-strip__row {
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: auto;
+  }
+
+  .pending-works-strip__chips {
+    flex-wrap: wrap;
+  }
+
+  .pending-works-strip__chip {
+    font-size: 11px;
+    max-width: calc(50% - 4px);
+  }
+
+  /* Toolbar: fully stacked */
+  .ops-dash-toolbar--v3 {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .ops-dash-toolbar__intro {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .ops-dash-toolbar__intro .ops-dash-title {
+    font-size: 1rem;
+    white-space: normal;
+  }
+
+  .ops-dash-toolbar__intro .ops-dash-sub {
+    font-size: 11px;
+    white-space: normal;
+  }
+
+  .ops-dash-toolbar__main,
+  .ops-dash-toolbar__main--legacy {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+  }
+
+  /* Date presets: scrollable row */
+  .ops-dash-toolbar__main--legacy .ops-date-range {
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .ops-dash-toolbar__main--legacy .ops-date-range__presets {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 6px;
+    padding-bottom: 2px;
+  }
+
+  .ops-dash-toolbar__main--legacy .ops-date-range__presets::-webkit-scrollbar {
+    display: none;
+  }
+
+  .ops-dash-toolbar__main--legacy .ops-date-range__preset {
+    flex: 0 0 auto;
+    min-height: 36px;
+    min-width: 64px;
+    font-size: 11px;
+    text-align: center;
+  }
+
+  /* Date range inputs: full width */
+  .ops-dash-toolbar__main--legacy .ops-date-range__inputs {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+  }
+
+  .ops-dash-toolbar__main--legacy .ops-date-range__inputs .cand-input {
+    flex: 1 1 0;
+    min-width: 0;
+    width: 100%;
+    min-height: 38px;
+    font-size: 12px;
+  }
+
+  .ops-dash-toolbar__main--legacy .ops-date-range__sep {
+    flex-shrink: 0;
+  }
+
+  /* Attendee select + search: full width */
+  .ops-dash-toolbar__main--legacy > .cand-input {
+    width: 100%;
+    max-width: none;
+    min-height: 38px;
+    font-size: 12px;
+  }
+
+  .ops-dash-toolbar__actions {
+    border-left: none;
+    padding-left: 0;
+    justify-content: flex-start;
+  }
+
+  .ops-dash-toolbar__actions .btn {
+    min-height: 38px;
+    font-size: 12px;
+  }
+
+  /* KPI row: 2×2 grid */
+  .ops-dash-kpi-row--v3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .ops-dash-kpi-row--v3 .ops-dash-kpi {
+    min-height: 48px;
+    padding: 8px 10px;
+  }
+
+  .ops-dash-kpi-row--v3 .ops-dash-kpi__value {
+    font-size: 1.15rem;
+  }
+
+  .ops-dash-kpi-row--v3 .ops-dash-kpi__label {
+    font-size: 9px;
+    white-space: normal;
+    line-height: 1.3;
+  }
+
+  /* Roster header */
+  .ops-dash-roster__head {
+    flex-direction: column;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  /* Table: full card mode */
+  .ops-dash-roster .ops-dash-table-wrap {
+    overflow-x: visible;
+    max-height: none;
+    border: none;
+  }
+
+  .ops-dash-table--v3 {
+    min-width: 0;
+    width: 100%;
+    table-layout: auto;
+  }
+
+  /* Force card layout */
+  .ops-dash-table-wrap.ta-table-responsive--cards .ops-interview-table,
+  .ops-interview-table-wrap .ops-interview-table {
+    display: block !important;
+    width: 100%;
+    min-width: 0 !important;
+  }
+
+  .ops-dash-table-wrap.ta-table-responsive--cards thead,
+  .ops-interview-table-wrap .ops-interview-table thead {
+    display: none;
+  }
+
+  .ops-dash-table-wrap.ta-table-responsive--cards tbody,
+  .ops-dash-table-wrap.ta-table-responsive--cards tr,
+  .ops-interview-table-wrap .ops-interview-table tbody,
+  .ops-interview-table-wrap .ops-interview-table tr {
+    display: block;
+    width: 100%;
+  }
+
+  .ops-dash-table-wrap.ta-table-responsive--cards td,
+  .ops-interview-table-wrap .ops-interview-table td {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 6px 12px;
+    font-size: 13px;
+    border-bottom: 1px solid rgba(255,255,255,.04);
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .ops-dash-table-wrap.ta-table-responsive--cards td::before,
+  .ops-interview-table-wrap .ops-interview-table td::before {
+    content: attr(data-label);
+    min-width: 82px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: #64748b;
+    flex-shrink: 0;
+    padding-top: 2px;
+  }
+
+  .ops-dash-table-wrap.ta-table-responsive--cards tr,
+  .ops-interview-table-wrap .ops-interview-table tbody tr {
+    margin-bottom: 10px;
+    border: 1px solid rgba(255,255,255,.09);
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgba(15,23,42,.55);
+  }
+
+  /* Time cell: keep it highlighted */
+  .ops-interview-time,
+  .ops-dash-table-wrap.ta-table-responsive--cards td[data-label=Time] {
+    font-weight: 700;
+    color: #fbbf24;
+  }
+
+  /* Attendance cell in card mode */
+  .ops-interview-attendance-cell,
+  .ops-dash-attend-cell {
+    min-width: 0 !important;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .ops-interview-attendance-form {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    width: 100%;
+  }
+
+  .ops-interview-attendance-status,
+  .ops-dash-status-select,
+  .ops-attendance-select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  /* Status watermarks: hide on small screens (too large) */
+  .ops-interview-row--done:after,
+  .ops-interview-row--missed:after,
+  .ops-interview-row--cancelled:after,
+  .ops-interview-row--rescheduled:after,
+  .ops-interview-row--awaiting-update:after,
+  .ops-dash-table--v3 tbody tr:after {
+    display: none;
+  }
+
+  /* Actions menu: full width in card */
+  .ops-dash-attend-cell .ops-row-menu {
+    justify-content: flex-start;
+  }
+}
