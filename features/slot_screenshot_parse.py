@@ -423,6 +423,47 @@ def _parse_platform_from_blob(blob: str) -> str:
     return ""
 
 
+def _parse_technology_from_blob(blob: str) -> str:
+    """Extract technology from invite titles like 'Technical Screening_Frontend Angular Developer_...'"""
+    low = (blob or "").lower()
+    # Order matters — check more specific phrases first
+    checks = [
+        ("angular", "Angular"),
+        ("react js", "React JS"),
+        ("react", "React JS"),
+        ("java ", "Java"),
+        ("java_", "Java"),
+        (".net", ".NET"),
+        ("dotnet", ".NET"),
+        ("python", "Python"),
+        ("node", "Node"),
+        ("power bi", "Power BI"),
+        ("powerbi", "Power BI"),
+        ("sql", "SQL"),
+        ("etl", "ETL"),
+        ("microservice", "Microservices"),
+        ("devops", "DevOps"),
+        ("aws", "AWS"),
+        ("azure", "Azure"),
+        ("flutter", "Flutter"),
+        ("android", "Android"),
+        ("ios", "iOS"),
+        ("data engineer", "Data Engineering"),
+        ("data science", "Data Science"),
+        ("machine learning", "Machine Learning"),
+        ("frontend", "Frontend"),
+        ("front end", "Frontend"),
+        ("backend", "Backend"),
+        ("back end", "Backend"),
+        ("full stack", "Full Stack"),
+        ("fullstack", "Full Stack"),
+    ]
+    for needle, label in checks:
+        if needle in low:
+            return label
+    return ""
+
+
 def parse_invite_text(blob: str) -> dict[str, Any]:
     """Regex extraction from OCR or vision text."""
     labeled_date, labeled_start, labeled_end = _parse_labeled_interview_block(blob)
@@ -445,7 +486,7 @@ def parse_invite_text(blob: str) -> dict[str, Any]:
         "time": start,
         "time_end": end,
         "interview_round": _parse_round_from_blob(blob),
-        "technology": "",
+        "technology": _parse_technology_from_blob(blob),
         "platform": _parse_platform_from_blob(blob),
         "raw_text": (blob or "")[:2000],
     }
