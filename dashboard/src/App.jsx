@@ -208,7 +208,9 @@ export default function App() {
   const [mainView, setMainView] = useState('dashboard') // dashboard | inbox | candidates | handler-kit | ...
 
   useEffect(() => {
-    if (authRole === 'handler' && (mainView === 'dashboard' || mainView === 'inbox' || mainView === 'data-room' || mainView === 'admin' || mainView === 'logs')) {
+    // Handlers have a restricted Data Room (Opportunities only), so do not
+    // redirect them away after they deliberately select it from navigation.
+    if (authRole === 'handler' && (mainView === 'dashboard' || mainView === 'inbox' || mainView === 'admin' || mainView === 'logs')) {
       setMainView('handler-kit')
     }
   }, [authRole, mainView])
