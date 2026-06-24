@@ -313,7 +313,9 @@ export function SubmitSlotPage() {
       setParsedSlot(null)
       setManualDate('')
       setManualTime('')
+      setInterviewRound('')
       setPaymentProofId('')
+      setSuccess(`Slot confirmed for ${data.candidate?.name || effectiveName}.`)
       await refresh()
     } catch {
       setError('Network error — try again')
@@ -352,7 +354,15 @@ export function SubmitSlotPage() {
     }
   }
 
-  const upcoming = useMemo(() => booked.slice(0, 8), [booked])
+  // The selected candidate's just-confirmed slot should not look like it is
+  // still waiting in the booking queue.  Keep the list as awareness of other
+  // confirmed appointments only.
+  const upcoming = useMemo(
+    () => booked
+      .filter(slot => candidateNameKey(slot.name) !== candidateNameKey(effectiveName))
+      .slice(0, 8),
+    [booked, effectiveName],
+  )
 
   return (
     <div className="auth-screen submit-slot-screen">
@@ -560,7 +570,7 @@ export function SubmitSlotPage() {
 
             {upcoming.length > 0 ? (
               <section className="submit-slot-upcoming">
-                <h2>Upcoming slots</h2>
+                <h2>Other confirmed upcoming slots</h2>
                 <ul className="submit-slot-upcoming-list">
                   {upcoming.map((s, i) => (
                     <li key={`${s.name}-${s.date}-${s.time}-${i}`} className="submit-slot-upcoming-item">
