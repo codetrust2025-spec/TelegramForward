@@ -3168,9 +3168,6 @@ def _find_assignable_profile_row(rows: list[dict], name: str) -> dict | None:
             continue
         if _candidate_has_confirmed_slot(row):
             continue
-        # Only assign slots to candidates who have a scheduled interview date
-        if not (row.get("date") or "").strip():
-            continue
         matches.append(row)
     if not matches:
         return None
