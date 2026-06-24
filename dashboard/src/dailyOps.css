@@ -1356,3 +1356,210 @@
     justify-content: center;
   }
 }
+
+/* ── Compact top bar: title + KPI chips + pending pill ────────────────────
+   Everything in ONE row so the table gets maximum vertical space.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.ops-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 2px 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.ops-topbar__left {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.ops-topbar__left .ops-dash-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.ops-topbar__sub {
+  font-size: 11px;
+  color: #64748b;
+  white-space: nowrap;
+  display: none; /* hidden on small screens, shown on wide */
+}
+
+@media (min-width: 1100px) {
+  .ops-topbar__sub { display: inline; }
+}
+
+/* KPI chips in topbar — compact horizontal strip */
+.ops-topbar__kpis {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.ops-topbar__kpis .ops-dash-kpi {
+  flex: 1 1 70px;
+  min-width: 64px;
+  max-width: 130px;
+  min-height: 32px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ops-topbar__kpis .ops-dash-kpi__label {
+  font-size: 9px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  order: 1;
+}
+
+.ops-topbar__kpis .ops-dash-kpi__value {
+  font-size: .95rem;
+  font-weight: 700;
+  order: 0;
+  min-width: 1.2ch;
+}
+
+/* Pending pill */
+.ops-topbar__right {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.pending-works-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(251,191,36,.4);
+  background: rgba(251,191,36,.1);
+  color: #fde68a;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s;
+}
+
+.pending-works-pill:hover {
+  background: rgba(251,191,36,.2);
+}
+
+.pending-works-pill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fbbf24;
+  flex-shrink: 0;
+  animation: pending-works-pulse 1.8s ease-out infinite;
+}
+
+.pending-works-pill__label {
+  font-weight: 600;
+}
+
+.pending-works-pill__count {
+  background: rgba(251,191,36,.25);
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* ── Table area: fill remaining space ─────────────────────────────────── */
+.ops-table-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ops-table-area .ops-dash-roster {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ops-table-area .ops-dash-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none !important; /* override the 56vh cap — let it fill the view */
+  overflow: auto;
+}
+
+/* Remove the old top-row/controls from the ops-dashboard wrapper */
+.ops-dashboard.ops-table-area {
+  gap: 0;
+  padding: 0;
+}
+
+/* ── Responsive: topbar ───────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .ops-topbar {
+    gap: 8px;
+    padding: 4px 0 6px;
+  }
+
+  .ops-topbar__kpis {
+    gap: 4px;
+  }
+
+  .ops-topbar__kpis .ops-dash-kpi {
+    min-width: 56px;
+    max-width: none;
+    flex: 1 1 56px;
+    min-height: 28px;
+    padding: 2px 6px;
+  }
+
+  .ops-topbar__kpis .ops-dash-kpi__value {
+    font-size: .85rem;
+  }
+
+  .ops-topbar__kpis .ops-dash-kpi__label {
+    font-size: 8px;
+  }
+}
+
+@media (max-width: 600px) {
+  .ops-topbar {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .ops-topbar__left .ops-dash-title {
+    font-size: 1rem;
+  }
+
+  .ops-topbar__kpis {
+    order: 3;
+    width: 100%;
+    flex-wrap: nowrap;
+  }
+
+  .ops-topbar__right {
+    order: 2;
+    margin-left: 0;
+  }
+
+  .pending-works-pill {
+    font-size: 10px;
+    padding: 3px 8px;
+  }
+}
