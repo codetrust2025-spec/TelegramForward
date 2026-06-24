@@ -149,7 +149,7 @@ export function InterviewRoster({
   onRosterMutate,
   onRosterCountsChange,
 }) {
-  const { role, reference, enabled } = useAuth()
+  const { role, enabled } = useAuth()
   const canManage = !enabled || role === 'admin' || role === 'handler'
   const canEditAttendee = !enabled || role === 'admin'
   const handlerView = role === 'handler' && !!reference?.trim()
@@ -277,7 +277,9 @@ export function InterviewRoster({
     try {
       const body = { status: status || '', remark: row.interview_attendance_remark || '' }
       if (status && (status === 'attended' || status === 'not_attended')) {
-        body.attendee = attendee || row.interview_attended_by || reference || ATTENDEES[0]
+        // Attendee is the support person, never the referrer or the operator
+        // recording attendance. Bhavana is the safe default for all slots.
+        body.attendee = attendee || row.interview_attendee_resolved || row.interview_attendee || 'Bhavana'
       }
       const res = await fetch(`${API}/candidates/${row.id}/interview-attendance`, {
         method: 'POST',
@@ -452,7 +454,7 @@ export function InterviewRoster({
                       </td>
                       <td data-label="Technology">{row.technology || '—'}</td>
                       {!handlerView && !effectiveAttendee && (
-                        <td data-label="Attendee">{row.interview_attended_by || row.reference || '—'}</td>
+                        <td data-label="Attendee">{row.interview_attendee_resolved || row.interview_attendee || 'Bhavana'}</td>
                       )}
                       <td data-label="Attendance" className="ops-interview-attendance-cell">
                         <div className="ops-interview-attendance-form">
@@ -460,7 +462,7 @@ export function InterviewRoster({
                             value={status === 'pending' ? '' : status}
                             disabled={busyId === row.id}
                             ariaLabel={`Attendance for ${row.name}`}
-                            onChange={val => saveAttendance(row, val, row.interview_attended_by)}
+                            onChange={val => saveAttendance(row, val, row.interview_attendee_resolved || row.interview_attendee || 'Bhavana')}
                           />
                           <span className={`ops-status-pill ops-status-pill--${statusTone(status)}`}>
                             {statusLabel(status)}
