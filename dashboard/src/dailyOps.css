@@ -1168,13 +1168,14 @@
 /* Row 2 — controls */
 .ops-dash-controls-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px 8px;
   padding: 7px 10px;
   border-radius: 10px;
   background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
   border: 1px solid rgba(255,255,255,.09);
+  overflow: hidden;
 }
 
 .ops-dash-controls-row .ops-date-range__presets {
@@ -1192,17 +1193,17 @@
 }
 
 .ops-ctrl-date {
-  width: 128px !important;
-  min-width: 110px !important;
-  max-width: 140px !important;
+  width: 118px !important;
+  min-width: 100px !important;
+  max-width: 130px !important;
   min-height: 28px !important;
   padding: 3px 6px !important;
   font-size: 11px !important;
 }
 
 .ops-ctrl-select {
-  min-width: 110px;
-  max-width: 148px;
+  min-width: 100px;
+  max-width: 130px;
   min-height: 28px;
   padding: 3px 24px 3px 8px;
   font-size: 11px;
@@ -1210,9 +1211,9 @@
 }
 
 .ops-ctrl-search {
-  flex: 1 1 140px;
-  min-width: 120px;
-  max-width: 220px;
+  flex: 1 1 80px;
+  min-width: 80px;
+  max-width: 180px;
   min-height: 28px;
   padding: 3px 8px;
   font-size: 11px;
@@ -1220,7 +1221,7 @@
 
 .ops-ctrl-refresh {
   flex-shrink: 0;
-  margin-left: auto;
+  margin-left: 0;
   min-height: 28px;
   padding: 3px 10px;
   font-size: 11px;
@@ -1245,6 +1246,8 @@
   .ops-dash-controls-row {
     gap: 8px 10px;
     padding: 8px 10px;
+    overflow-x: auto;
+    flex-wrap: nowrap;
   }
 
   .ops-dash-controls-row .ops-date-range__presets {
@@ -1259,12 +1262,12 @@
   }
 
   .ops-ctrl-date {
-    width: 118px !important;
+    width: 110px !important;
   }
 
   .ops-ctrl-select,
   .ops-ctrl-search {
-    flex: 1 1 120px;
+    min-width: 90px;
     max-width: none;
   }
 
