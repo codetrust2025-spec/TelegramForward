@@ -15221,13 +15221,17 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 .submit-slot-upcoming-round {
   grid-column: 2;
   grid-row: 1 / span 2;
-  align-self: center;
-  padding: 0.2rem 0.45rem;
+  align-self: start;
+  padding: 0.22rem 0.55rem;
   border-radius: 999px;
-  font-size: 0.625rem;
-  font-weight: 600;
-  color: #a5b4fc;
-  background: rgba(99, 102, 241, 0.14);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #c7d2fe;
+  background: rgba(99, 102, 241, 0.28);
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  box-shadow: 0 0 6px rgba(99, 102, 241, 0.25);
+  white-space: nowrap;
 }
 .submit-slot-foot {
   position: relative;
