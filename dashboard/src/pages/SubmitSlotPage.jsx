@@ -579,6 +579,7 @@ export function SubmitSlotPage() {
                         {formatFriendlyDate(s.date?.slice(0, 10))}
                         <span>·</span>
                         {formatFriendlyTime(s.time)}
+                        {s.time_end ? ` – ${formatFriendlyTime(s.time_end)}` : ''}
                       </div>
                       {s.interview_round ? (
                         <span className="submit-slot-upcoming-round">{s.interview_round}</span>
