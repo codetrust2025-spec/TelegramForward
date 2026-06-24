@@ -1,14 +1,14 @@
 {
   "version": 2,
   "description": "Pinned production assets \u2014 live site must match these hashes.",
-  "git_commit": "445af41e5bda76b0c0be1dbdf55eb9c7744ccc2d",
-  "git_commit_short": "445af41",
-  "deployed_at": "2026-06-24T07:47:08Z",
-  "js": "assets/app-CxHUFVkQ.js",
+  "git_commit": "25d1043b7d7e13464d91c84e1430c6084781865b",
+  "git_commit_short": "25d1043",
+  "deployed_at": "2026-06-24T11:10:31Z",
+  "js": "assets/app-DZp34aoj.js",
   "css": "assets/index-DrFKwB7O.css",
-  "js_sha256": "ea08811e6182cad17e7dbdfd267a5b092780dd510d596af373254f18d09979c3",
+  "js_sha256": "948b6edc4c702bcbf768a4c080aabe7ffbbc71e7b2aefe68c01c83b83292a8c1",
   "css_sha256": "7b05b02917c701cff5d2c0a59b11d7e247a3dda74a39c0db65df70895d1afea3",
-  "js_bytes": 1130469,
+  "js_bytes": 1130604,
   "css_bytes": 488846,
   "server_py_sha256": "d14f564bcde8fd16666341fb8402118c875f765531dd95b53a90f7f3bcc046f8"
 }
