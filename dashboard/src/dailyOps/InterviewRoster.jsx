@@ -353,21 +353,9 @@ export function InterviewRoster({
 
   return (
     <section className={isDashboard ? 'ops-dash-roster' : 'admin-card admin-card--full ops-interview-roster'}>
-      <header className={isDashboard ? 'ops-dash-roster__head' : 'ops-checklist-header'}>
-        {isDashboard ? (
-          <>
-            <div className="ops-dash-roster__title">
-              <h2>{title}</h2>
-              <p className="ops-dash-roster__meta">
-                <strong>{counts.count}</strong> scheduled
-                {counts.pending_count > 0 && (
-                  <> · <strong>{counts.pending_count}</strong> pending</>
-                )}
-              </p>
-            </div>
-          </>
-        ) : (
-          <>
+      {!isDashboard && (
+      <header className="ops-checklist-header">
+        <>
             <div>
               <h2>{title}</h2>
               <p className="admin-hint">
@@ -413,8 +401,8 @@ export function InterviewRoster({
               <button type="button" className="btn btn--ghost btn--sm" onClick={() => load()}>Refresh</button>
             </div>
           </>
-        )}
       </header>
+      )}
 
       {error && <p className="admin-error" role="alert">{error}</p>}
 
