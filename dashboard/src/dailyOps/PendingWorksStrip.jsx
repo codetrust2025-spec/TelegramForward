@@ -4,7 +4,7 @@ import {
   usePendingWorksContext,
 } from './PendingWorksProvider.jsx'
 
-export function PendingWorksStrip({ onOpenCandidates, maxPreview = 4 }) {
+export function PendingWorksStrip({ onOpenCandidates, maxPreview = 4, compact = false }) {
   const { works, count, candidateCount, loading, error } = usePendingWorksContext()
   const { preview, uniqueTotal } = useMemo(() => {
     const groups = new Map()
@@ -21,6 +21,26 @@ export function PendingWorksStrip({ onOpenCandidates, maxPreview = 4 }) {
   }, [works, maxPreview])
 
   if (!loading && count === 0) return null
+
+  // Compact mode: single pill in the top bar
+  if (compact) {
+    return (
+      <button
+        type="button"
+        className="pending-works-pill"
+        onClick={() => navigatePendingWorkToCandidates(null, { onNavCandidates: onOpenCandidates })}
+        aria-label={`Pending works: ${count} tasks`}
+      >
+        <span className="pending-works-pill__dot" aria-hidden />
+        <span className="pending-works-pill__label">
+          {loading ? 'Checking…' : `${count} pending`}
+        </span>
+        {!loading && candidateCount > 0 && (
+          <span className="pending-works-pill__count">{candidateCount}</span>
+        )}
+      </button>
+    )
+  }
 
   return (
     <section className="pending-works-strip" aria-label="Pending works">
