@@ -1120,3 +1120,239 @@
     justify-content: flex-start;
   }
 }
+
+/* ── New two-row Daily Ops layout ─────────────────────────────────────────
+   Row 1: title (left) + KPI cards (right)
+   Row 2: date presets + range + attendee + search + refresh (all in one
+           wrappable flex row, no overflow)
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Row 1 */
+.ops-dash-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 6px 0 4px;
+}
+
+.ops-dash-top-row .ops-dash-toolbar__intro {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.ops-dash-top-row .ops-dash-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  white-space: nowrap;
+}
+
+.ops-dash-top-row .ops-dash-sub {
+  margin: 0;
+  font-size: 11px;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+/* KPI cards live in top-row on desktop, fill remaining width */
+.ops-dash-top-row .ops-dash-kpi-row--v3 {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: flex-end;
+  margin: 0;
+}
+
+/* Row 2 — controls */
+.ops-dash-controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+  border: 1px solid rgba(255,255,255,.09);
+}
+
+.ops-dash-controls-row .ops-date-range__presets {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.ops-dash-controls-row .ops-date-range__inputs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.ops-ctrl-date {
+  width: 128px !important;
+  min-width: 110px !important;
+  max-width: 140px !important;
+  min-height: 28px !important;
+  padding: 3px 6px !important;
+  font-size: 11px !important;
+}
+
+.ops-ctrl-select {
+  min-width: 110px;
+  max-width: 148px;
+  min-height: 28px;
+  padding: 3px 24px 3px 8px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.ops-ctrl-search {
+  flex: 1 1 140px;
+  min-width: 120px;
+  max-width: 220px;
+  min-height: 28px;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.ops-ctrl-refresh {
+  flex-shrink: 0;
+  margin-left: auto;
+  min-height: 28px;
+  padding: 3px 10px;
+  font-size: 11px;
+}
+
+/* ── Responsive overrides for the new layout ───────────────────────────── */
+
+/* Tablets (768–1023px) */
+@media (max-width: 1023px) {
+  .ops-dash-top-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .ops-dash-top-row .ops-dash-kpi-row--v3 {
+    width: 100%;
+    justify-content: flex-start;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .ops-dash-controls-row {
+    gap: 8px 10px;
+    padding: 8px 10px;
+  }
+
+  .ops-dash-controls-row .ops-date-range__presets {
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
+  }
+
+  .ops-dash-controls-row .ops-date-range__presets::-webkit-scrollbar {
+    display: none;
+  }
+
+  .ops-ctrl-date {
+    width: 118px !important;
+  }
+
+  .ops-ctrl-select,
+  .ops-ctrl-search {
+    flex: 1 1 120px;
+    max-width: none;
+  }
+
+  .ops-ctrl-refresh {
+    margin-left: 0;
+  }
+}
+
+/* Mobile (≤ 767px) */
+@media (max-width: 767px) {
+  .ops-dash-top-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 4px 0 2px;
+  }
+
+  .ops-dash-top-row .ops-dash-title {
+    font-size: 1.05rem;
+    white-space: normal;
+  }
+
+  .ops-dash-top-row .ops-dash-sub {
+    display: none;
+  }
+
+  .ops-dash-top-row .ops-dash-kpi-row--v3 {
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+
+  .ops-dash-controls-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .ops-dash-controls-row .ops-date-range__presets {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    gap: 6px;
+    padding-bottom: 2px;
+  }
+
+  .ops-dash-controls-row .ops-date-range__presets::-webkit-scrollbar {
+    display: none;
+  }
+
+  .ops-dash-controls-row .ops-date-range__preset {
+    flex: 0 0 auto;
+    min-height: 36px;
+    min-width: 60px;
+    text-align: center;
+  }
+
+  .ops-dash-controls-row .ops-date-range__inputs {
+    width: 100%;
+    gap: 6px;
+  }
+
+  .ops-ctrl-date {
+    flex: 1 1 0;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    min-height: 36px !important;
+    font-size: 13px !important;
+  }
+
+  .ops-ctrl-select,
+  .ops-ctrl-search {
+    width: 100%;
+    max-width: none;
+    min-height: 36px;
+    font-size: 13px;
+  }
+
+  .ops-ctrl-refresh {
+    width: 100%;
+    min-height: 36px;
+    font-size: 13px;
+    margin-left: 0;
+    text-align: center;
+    justify-content: center;
+  }
+}
