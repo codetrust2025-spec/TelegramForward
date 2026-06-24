@@ -15414,3 +15414,264 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   }
   .cand-page .cand-stats .cand-stat-card:nth-child(n + 5) { display: none !important; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Candidates page — compact layout overrides
+   Goal: stat cards + top performers take as little vertical space as
+   possible so the table is visible without scrolling.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Compact stat cards: single horizontal pill row ─────────────────── */
+.cand-page {
+  gap: 8px;
+  padding: 10px clamp(8px, 1.5vw, 20px) 12px;
+}
+
+.cand-page .cand-header {
+  margin-bottom: 2px;
+}
+
+.cand-page .cand-title {
+  font-size: clamp(16px, 1.8vw, 20px);
+}
+
+.cand-page .cand-subtitle {
+  display: none; /* reclaim vertical space */
+}
+
+.cand-page .cand-header-actions {
+  gap: 6px;
+}
+
+.cand-page .cand-header-actions .cand-btn {
+  padding: 5px 10px;
+  font-size: 11px;
+  min-height: 28px;
+}
+
+/* Stat cards: compact single-row strip */
+.cand-page .cand-stats {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.cand-page .cand-stats .cand-stat-card {
+  padding: 7px 8px;
+  gap: 2px;
+  border-radius: 8px;
+}
+
+.cand-page .cand-stats .cand-stat-label {
+  font-size: 9px;
+  letter-spacing: 0.3px;
+  line-height: 1.2;
+}
+
+.cand-page .cand-stats .cand-stat-value {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.cand-page .cand-stats .cand-stat-sub {
+  font-size: 9px;
+  line-height: 1.25;
+  color: #64748b;
+}
+
+/* Payout card: collapse the handler list by default */
+.cand-page .cand-stats .cand-stat-card--payouts .cand-payto-list {
+  max-height: 0;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+}
+
+.cand-page .cand-stats .cand-stat-card--payouts:hover .cand-payto-list,
+.cand-page .cand-stats .cand-stat-card--payouts:focus-within .cand-payto-list {
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* Tech list card: compact */
+.cand-page .cand-stats .cand-stat-card--list .cand-stat-list {
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.cand-page .cand-stats .cand-stat-card--list .cand-stat-list li {
+  font-size: 10px;
+}
+
+/* Channel pills */
+.cand-page .cand-stat-channel {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.cand-page .cand-channel-pill {
+  font-size: 9px;
+  padding: 1px 5px;
+}
+
+/* ── Top performers: collapsed to a 1-line summary, expandable ──────── */
+.cand-top-perf {
+  padding: 8px 10px;
+  gap: 0;
+  border-radius: 8px;
+  background: rgba(255,255,255,.025);
+  border: 1px solid rgba(255,255,255,.07);
+}
+
+.cand-top-perf-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
+.cand-top-perf-title {
+  font-size: 11px;
+  font-weight: 700;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.cand-top-perf-sub {
+  font-size: 10px;
+  margin: 0;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 400px;
+  flex: 1;
+}
+
+.cand-top-perf-controls {
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.cand-top-perf .cand-perf-list {
+  display: none; /* hidden by default — show on hover/focus */
+  max-height: 0;
+  overflow: hidden;
+}
+
+.cand-top-perf:hover .cand-perf-list,
+.cand-top-perf:focus-within .cand-perf-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255,255,255,.06);
+}
+
+.cand-top-perf .cand-perf-row {
+  gap: 8px;
+}
+
+.cand-top-perf .cand-perf-bar-wrap {
+  display: none; /* skip bars in compact mode */
+}
+
+.cand-top-perf .cand-perf-name {
+  font-size: 11px;
+}
+
+.cand-top-perf .cand-perf-headline {
+  gap: 4px;
+}
+
+.cand-top-perf .cand-perf-revenue {
+  font-size: 11px;
+}
+
+.cand-top-perf .cand-perf-line2 {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cand-top-perf .cand-perf-stat {
+  font-size: 9px;
+}
+
+/* ── Toolbar: tighter ───────────────────────────────────────────────── */
+.cand-toolbar {
+  top: 52px; /* header is shorter now */
+  padding: 6px 10px;
+  gap: 6px;
+}
+
+.cand-toolbar .cand-input,
+.cand-toolbar .cand-input--search {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.cand-toolbar .cand-toggle {
+  padding: 4px 10px;
+  font-size: 11px;
+  min-height: 28px;
+}
+
+/* ── Table: fill remaining space ────────────────────────────────────── */
+.cand-table-wrap {
+  flex: 1 1 auto;
+}
+
+.cand-table th,
+.cand-table td {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+/* ── Stat scope tags: hide to save space ────────────────────────────── */
+.cand-stat-scope {
+  display: none;
+}
+
+/* ── Responsive: tablet (768–1199px) ────────────────────────────────── */
+@media (max-width: 1199px) {
+  .cand-page .cand-stats {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    padding-bottom: 4px;
+    gap: 6px;
+  }
+
+  .cand-page .cand-stats .cand-stat-card {
+    flex: 0 0 140px;
+    min-width: 0;
+  }
+
+  .cand-top-perf-sub {
+    max-width: 200px;
+  }
+}
+
+/* ── Responsive: mobile ─────────────────────────────────────────────── */
+@media (max-width: 767px) {
+  .cand-page .cand-subtitle {
+    display: block;
+    font-size: 11px;
+  }
+
+  .cand-top-perf-sub {
+    display: none;
+  }
+
+  .cand-top-perf:hover .cand-perf-list,
+  .cand-top-perf:focus-within .cand-perf-list {
+    max-height: 280px;
+  }
+}
