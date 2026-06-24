@@ -55,13 +55,26 @@ export function formatIstTime(value, options = {}) {
   const d = parseInstant(value)
   if (!d) return '—'
   return d.toLocaleTimeString(IST_LOCALE, {
-    hour: '2-digit',
+    hour: 'numeric',
     minute: '2-digit',
     second: '2-digit',
-    hour12: false,
+    hour12: true,
     timeZone: IST_TIMEZONE,
     ...options,
   })
+}
+
+/** Format a stored time-of-day value (HH:MM or HH:MM:SS) for display only. */
+export function formatClockTime(value) {
+  const raw = String(value || '').trim()
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/)
+  if (!match) return raw || '—'
+  const hour = Number(match[1])
+  const minute = Number(match[2])
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return raw
+  const period = hour >= 12 ? 'PM' : 'AM'
+  const hour12 = hour % 12 || 12
+  return `${hour12}:${String(minute).padStart(2, '0')} ${period}`
 }
 
 export function formatIstDate(value, options = {}) {
@@ -93,7 +106,7 @@ export function formatIstShort(value) {
 /** Logs / timeline — 24h clock in IST */
 export function formatIstLogTime(time) {
   if (!time) return '--:--:--'
-  if (typeof time === 'string' && /^\d{2}:\d{2}:\d{2}$/.test(time)) return `${time} IST`
+  if (typeof time === 'string' && /^\d{1,2}:\d{2}(?::\d{2})?$/.test(time)) return `${formatClockTime(time)} IST`
   const d = parseInstant(time)
   if (!d) return String(time)
   return formatIstTime(d)
