@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { API } from '../config.js'
 import { useAuth } from '../context/AuthContext.jsx'
+import { formatClockTime } from '../utils/istTime.js'
 
 const ATTENDEES = ['Nikhila', 'Bhavana', 'Tool']
 
@@ -443,7 +444,7 @@ export function InterviewRoster({
                         {formatDayLabel(row.date)}
                       </td>
                       <td data-label="Time" className="ops-interview-time">
-                        {[row.time, row.time_end].filter(Boolean).join(' – ') || '—'}
+                        {[row.time, row.time_end].filter(Boolean).map(formatClockTime).join(' – ') || '—'}
                       </td>
                       <td data-label="Candidate">
                         <strong>{row.name}</strong>
