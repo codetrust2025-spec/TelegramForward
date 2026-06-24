@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Spinner } from '../Loader.jsx'
 import { SubmitSlotFileDrop } from './SubmitSlotFileDrop.jsx'
 
@@ -36,6 +36,85 @@ function platformLabel(platform) {
   return map[platform] || platform || ''
 }
 
+const ROUND_OPTIONS = ['L1', 'L2', 'L3', 'HR', 'Final round']
+
+function candidateNameKey(value) {
+  return String(value || '').trim().toLocaleLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function dedupeCandidates(rows) {
+  const byName = new Map()
+  for (const row of rows || []) {
+    const name = String(row?.name || '').trim()
+    const key = candidateNameKey(name)
+    if (!name || !key) continue
+    const current = byName.get(key)
+    // Prefer a normally-cased name over an all-uppercase duplicate.
+    if (!current || (current.name === current.name.toUpperCase() && name !== name.toUpperCase())) {
+      byName.set(key, { ...row, name })
+    }
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }))
+}
+
+function SlotCandidatePicker({ candidates, value, onChange, disabled }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef(null)
+  const options = useMemo(() => dedupeCandidates(candidates), [candidates])
+  const query = value.trim().toLocaleLowerCase()
+  const matches = useMemo(
+    () => options.filter(candidate => candidate.name.toLocaleLowerCase().includes(query)),
+    [options, query],
+  )
+
+  useEffect(() => {
+    function close(event) {
+      if (!rootRef.current?.contains(event.target)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', close)
+    return () => document.removeEventListener('pointerdown', close)
+  }, [])
+
+  return (
+    <div ref={rootRef} className="submit-slot-picker">
+      <input
+        className="submit-slot-select submit-slot-name-input"
+        value={value}
+        onChange={event => { onChange(event.target.value); setOpen(true) }}
+        onFocus={() => setOpen(true)}
+        placeholder="Choose or type your name"
+        disabled={disabled}
+        autoComplete="name"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls="slot-candidate-options"
+      />
+      <button
+        type="button"
+        className="submit-slot-picker__toggle"
+        onClick={() => setOpen(current => !current)}
+        disabled={disabled}
+        aria-label="Show candidate names"
+        aria-expanded={open}
+      >⌄</button>
+      {open && (
+        <div id="slot-candidate-options" className="submit-slot-picker__menu" role="listbox">
+          {matches.length ? matches.map(candidate => (
+            <button
+              key={candidateNameKey(candidate.name)}
+              type="button"
+              role="option"
+              aria-selected={candidate.name.toLocaleLowerCase() === query}
+              className="submit-slot-picker__option"
+              onClick={() => { onChange(candidate.name); setOpen(false) }}
+            >{candidate.name}</button>
+          )) : <p className="submit-slot-picker__empty">Type a new candidate name to continue.</p>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function SubmitSlotPage() {
   const [tab, setTab] = useState('book')
   const [candidates, setCandidates] = useState([])
@@ -56,12 +135,13 @@ export function SubmitSlotPage() {
   const [sessionPreview, setSessionPreview] = useState('')
   const [manualDate, setManualDate] = useState('')
   const [manualTime, setManualTime] = useState('')
+  const [interviewRound, setInterviewRound] = useState('')
 
   const effectiveName = name.trim()
   const selected = useMemo(() => {
     if (!effectiveName) return null
     const key = effectiveName.toLowerCase()
-    return candidates.find(c => c.name.toLowerCase() === key) || null
+    return dedupeCandidates(candidates).find(c => c.name.toLowerCase() === key) || null
   }, [effectiveName, candidates])
   const bookingSlot = useMemo(() => {
     if (parsedSlot?.date && parsedSlot?.time) return parsedSlot
@@ -71,12 +151,13 @@ export function SubmitSlotPage() {
         date: manualDate,
         time: manualTime,
         time_end: parsedSlot?.time_end || '',
+        interview_round: interviewRound || parsedSlot?.interview_round || '',
       }
     }
-    return null
-  }, [parsedSlot, manualDate, manualTime])
+    return parsedSlot ? { ...parsedSlot, interview_round: interviewRound || parsedSlot.interview_round || '' } : null
+  }, [parsedSlot, manualDate, manualTime, interviewRound])
   const canConfirm = Boolean(
-    effectiveName && slotFile && !busy && !parsing,
+    effectiveName && slotFile && interviewRound && !busy && !parsing,
   )
   const showManualSlotFields = Boolean(
     slotFile && !parsing && (!parsedSlot?.date || !parsedSlot?.time),
@@ -92,7 +173,7 @@ export function SubmitSlotPage() {
       ])
       const cData = await cRes.json()
       const bData = await bRes.json()
-      if (cData.status === 'ok') setCandidates(cData.candidates || [])
+      if (cData.status === 'ok') setCandidates(dedupeCandidates(cData.candidates || []))
       if (bData.status === 'ok') setBooked(bData.slots || [])
     } catch {
       setError('Could not load — check your connection and try again.')
@@ -127,6 +208,7 @@ export function SubmitSlotPage() {
         return
       }
       setParsedSlot(data.slot || null)
+      setInterviewRound(data.slot?.interview_round || '')
       setManualDate('')
       setManualTime('')
       setSuccess('Date & time detected — tap Confirm slot below to save.')
@@ -144,6 +226,7 @@ export function SubmitSlotPage() {
     setParsedSlot(null)
     setManualDate('')
     setManualTime('')
+    setInterviewRound('')
     setSuccess('')
     if (file) {
       setSlotPreview(URL.createObjectURL(file))
@@ -315,20 +398,12 @@ export function SubmitSlotPage() {
           <div className="submit-slot-body">
             <label className="submit-slot-field">
               <span className="submit-slot-field-label">Your name</span>
-              <input
-                className="submit-slot-select submit-slot-name-input"
-                list="slot-candidate-names"
+              <SlotCandidatePicker
+                candidates={candidates}
                 value={name}
-                onChange={ev => { setName(ev.target.value); setPaymentProofId('') }}
-                placeholder="Choose or type your name"
+                onChange={value => { setName(value); setPaymentProofId('') }}
                 disabled={busy || parsing}
-                autoComplete="name"
               />
-              <datalist id="slot-candidate-names">
-                {candidates.map(c => (
-                  <option key={c.name} value={c.name} />
-                ))}
-              </datalist>
               <span className="submit-slot-field-hint">
                 Pick from the list or type a new client name.
               </span>
@@ -376,6 +451,22 @@ export function SubmitSlotPage() {
                   busy={parsing}
                   onFile={onSlotFileChange}
                 />
+
+                <label className="submit-slot-field">
+                  <span className="submit-slot-field-label">Interview round</span>
+                  <div className="submit-slot-select-wrap">
+                    <select
+                      className="submit-slot-select"
+                      value={interviewRound}
+                      onChange={event => setInterviewRound(event.target.value)}
+                      disabled={busy || parsing}
+                      required
+                    >
+                      <option value="">Select round (L1, L2…)</option>
+                      {ROUND_OPTIONS.map(round => <option key={round} value={round}>{round}</option>)}
+                    </select>
+                  </div>
+                </label>
 
                 {parsing ? (
                   <div className="submit-slot-status submit-slot-status--loading">
