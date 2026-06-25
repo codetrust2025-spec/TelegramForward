@@ -216,6 +216,7 @@ HANDLER_PAYOUT_EXCLUDED_REF_KEYS = frozenset({"ravinder"})
 # Always offered in the Reference dropdown (even before their first lead).
 HANDLER_REFERENCE_PRESETS: tuple[str, ...] = (
     "Charan",
+    "Ravinder",
 )
 
 # WhatsApp interview-slots group — always offer in public submit-slot dropdown.
