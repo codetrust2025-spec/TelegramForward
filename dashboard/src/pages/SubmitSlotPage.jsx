@@ -75,10 +75,7 @@ function SlotCandidatePicker({ candidates, value, onChange, disabled }) {
   const rootRef = useRef(null)
   const options = useMemo(() => dedupeCandidates(candidates), [candidates])
   const query = value.trim().toLocaleLowerCase()
-  const matches = useMemo(
-    () => options.filter(c => c.name.toLocaleLowerCase().includes(query)),
-    [options, query],
-  )
+  const matches = useMemo(() => options.filter(c => c.name.toLocaleLowerCase().includes(query)), [options, query])
   useEffect(() => {
     function close(e) { if (!rootRef.current?.contains(e.target)) setOpen(false) }
     document.addEventListener('pointerdown', close)
@@ -90,18 +87,11 @@ function SlotCandidatePicker({ candidates, value, onChange, disabled }) {
         <svg className="sbs-picker__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
         </svg>
-        <input
-          className="sbs-input sbs-name-input"
-          value={value}
+        <input className="sbs-input sbs-name-input" value={value}
           onChange={e => { onChange(e.target.value); setOpen(true) }}
           onFocus={() => setOpen(true)}
-          placeholder="Choose or type your name"
-          disabled={disabled}
-          autoComplete="name"
-          aria-autocomplete="list"
-          aria-expanded={open}
-          aria-controls="sbs-candidate-options"
-        />
+          placeholder="Choose or type your name" disabled={disabled}
+          autoComplete="name" aria-autocomplete="list" aria-expanded={open} aria-controls="sbs-candidate-options" />
         <button type="button" className="sbs-picker__toggle" onClick={() => setOpen(v => !v)} disabled={disabled} aria-label="Show names" aria-expanded={open}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M6 9l6 6 6-6"/></svg>
         </button>
@@ -112,52 +102,11 @@ function SlotCandidatePicker({ candidates, value, onChange, disabled }) {
             <button key={candidateNameKey(c.name)} type="button" role="option"
               aria-selected={c.name.toLocaleLowerCase() === query}
               className="sbs-picker__option"
-              onClick={() => { onChange(c.name); setOpen(false) }}
-            >{c.name}</button>
+              onClick={() => { onChange(c.name); setOpen(false) }}>{c.name}</button>
           )) : <p className="sbs-picker__empty">Type a new name to continue.</p>}
         </div>
       )}
     </div>
-  )
-}
-
-// Calendar icon for slot cards
-function CalIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-      <rect x="3" y="4" width="18" height="18" rx="3"/>
-      <path d="M16 2v4M8 2v4M3 10h18" strokeLinecap="round"/>
-    </svg>
-  )
-}
-
-function SlotCard({ slot, index, selected, onClick }) {
-  const isFirst = index === 0
-  return (
-    <button
-      type="button"
-      className={`sbs-slot-card${selected ? ' sbs-slot-card--selected' : ''}`}
-      onClick={onClick}
-    >
-      <div className={`sbs-slot-card__icon${selected ? ' sbs-slot-card__icon--active' : ''}`}>
-        <CalIcon />
-      </div>
-      <div className="sbs-slot-card__body">
-        <div className="sbs-slot-card__name-row">
-          <span className="sbs-slot-card__name">{slot.name}</span>
-          {isFirst && <span className="sbs-slot-card__recommended"><span className="sbs-slot-card__star">★</span> Recommended</span>}
-        </div>
-        <div className="sbs-slot-card__date">{formatFriendlyDate(slot.date?.slice(0, 10))}</div>
-        <div className="sbs-slot-card__time">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" strokeLinecap="round"/></svg>
-          <span>{formatFriendlyTime(slot.time)}{slot.time_end ? ` – ${formatFriendlyTime(slot.time_end)}` : ''}</span>
-        </div>
-      </div>
-      {slot.interview_round && (
-        <span className="sbs-slot-card__round">{slot.interview_round}</span>
-      )}
-      <svg className="sbs-slot-card__arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
-    </button>
   )
 }
 
@@ -181,7 +130,6 @@ export function SubmitSlotPage() {
   const [manualDate, setManualDate] = useState('')
   const [manualTime, setManualTime] = useState('')
   const [interviewRound, setInterviewRound] = useState('')
-  const [showUploadMode, setShowUploadMode] = useState(false)
 
   const effectiveName = name.trim()
   const selected = useMemo(() => {
@@ -285,40 +233,32 @@ export function SubmitSlotPage() {
       if (slotPreview) URL.revokeObjectURL(slotPreview)
       setSlotFile(null); setSlotPreview(''); setParsedSlot(null); setManualDate(''); setManualTime(''); setInterviewRound(''); setPaymentProofId('')
       setSuccess(`Slot confirmed for ${data.candidate?.name || effectiveName}.`)
-      setShowUploadMode(false)
       await refresh()
     } catch { setError('Network error — try again') }
     finally { setBusy(false) }
   }
 
-  async function submitSessionComplete(ev) {
-    ev.preventDefault()
-    if (!effectiveName || !sessionFile) { setError('Enter your name and upload the session complete screenshot.'); return }
-    setBusy(true); setError(''); setSuccess('')
-    try {
-      const fd = new FormData(); fd.append('name', effectiveName); fd.append('file', sessionFile)
-      const res = await fetch(`${API_BASE}/public/slots/session-complete`, { method: 'POST', body: fd })
-      const data = await res.json()
-      if (!res.ok) { setError(data.message || 'Upload failed'); return }
-      setSuccess('Session marked complete — thank you.')
-      if (sessionPreview) URL.revokeObjectURL(sessionPreview)
-      setSessionFile(null); setSessionPreview('')
-    } catch { setError('Network error — try again') }
-    finally { setBusy(false) }
-  }
-
-  // Upcoming slots (exclude current user)
-  const upcoming = useMemo(
-    () => booked.filter(s => candidateNameKey(s.name) !== candidateNameKey(effectiveName)).slice(0, 8),
-    [booked, effectiveName],
+  const TrustBadges = () => (
+    <div className="sbs-trust">
+      <div className="sbs-trust__item">
+        <span className="sbs-trust__icon sbs-trust__icon--green"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+        <div><div className="sbs-trust__title">Secure &amp; Private</div><div className="sbs-trust__sub">Your data is safe with us</div></div>
+      </div>
+      <div className="sbs-trust__item">
+        <span className="sbs-trust__icon sbs-trust__icon--purple"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" strokeLinecap="round"/></svg></span>
+        <div><div className="sbs-trust__title">Smart Detection</div><div className="sbs-trust__sub">We read date &amp; time automatically</div></div>
+      </div>
+      <div className="sbs-trust__item">
+        <span className="sbs-trust__icon sbs-trust__icon--blue"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg></span>
+        <div><div className="sbs-trust__title">Instant Confirmation</div><div className="sbs-trust__sub">Get confirmation as soon as you book</div></div>
+      </div>
+    </div>
   )
 
   return (
     <div className="sbs-screen">
       <div className="sbs-glow" aria-hidden="true" />
       <div className="sbs-card">
-
-        {/* Header */}
         <header className="sbs-header">
           <div className="sbs-header__text">
             <h1 className="sbs-header__title">Book Interview Slot</h1>
@@ -332,11 +272,10 @@ export function SubmitSlotPage() {
           </div>
         </header>
 
-        {/* Tabs */}
         <div className="sbs-tabs" role="tablist">
           <button type="button" role="tab" aria-selected={tab === 'book'}
             className={`sbs-tab${tab === 'book' ? ' sbs-tab--active' : ''}`}
-            onClick={() => { setTab('book'); setError(''); setSuccess(''); setShowUploadMode(false) }}>
+            onClick={() => { setTab('book'); setError(''); setSuccess('') }}>
             Book slot
           </button>
           <button type="button" role="tab" aria-selected={tab === 'confirmed'}
@@ -349,6 +288,7 @@ export function SubmitSlotPage() {
         {loading ? (
           <div className="sbs-loading"><Spinner size={28} /></div>
         ) : tab === 'confirmed' ? (
+          /* ── Confirmed slots tab ─────────────────────────── */
           <div className="sbs-body">
             <section className="sbs-section">
               <div className="sbs-step-head">
@@ -357,7 +297,6 @@ export function SubmitSlotPage() {
                   <p className="sbs-step-sub">{booked.length > 0 ? `${booked.length} interview${booked.length !== 1 ? 's' : ''} scheduled` : 'No confirmed slots yet.'}</p>
                 </div>
               </div>
-
               {booked.length === 0 ? (
                 <div className="sbs-confirmed-empty">
                   <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.25" opacity="0.3">
@@ -380,7 +319,7 @@ export function SubmitSlotPage() {
                       <div className="sbs-date-group__cards">
                         {items.map((slot, i) => (
                           <div key={i} className="sbs-confirmed-card">
-                            <div className={`sbs-slot-card__icon sbs-slot-card__icon--active`}>
+                            <div className="sbs-slot-card__icon sbs-slot-card__icon--active">
                               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
                                 <rect x="3" y="4" width="18" height="18" rx="3"/>
                                 <path d="M16 2v4M8 2v4M3 10h18" strokeLinecap="round"/>
@@ -409,188 +348,81 @@ export function SubmitSlotPage() {
                 </div>
               )}
             </section>
-
-            {/* Trust badges */}
-            <div className="sbs-trust">
-              <div className="sbs-trust__item">
-                <span className="sbs-trust__icon sbs-trust__icon--green"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
-                <div><div className="sbs-trust__title">Secure &amp; Private</div><div className="sbs-trust__sub">Your data is safe with us</div></div>
-              </div>
-              <div className="sbs-trust__item">
-                <span className="sbs-trust__icon sbs-trust__icon--purple"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" strokeLinecap="round"/></svg></span>
-                <div><div className="sbs-trust__title">Smart Detection</div><div className="sbs-trust__sub">We read date &amp; time automatically</div></div>
-              </div>
-              <div className="sbs-trust__item">
-                <span className="sbs-trust__icon sbs-trust__icon--blue"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg></span>
-                <div><div className="sbs-trust__title">Instant Confirmation</div><div className="sbs-trust__sub">Get confirmation as soon as you book</div></div>
-              </div>
-            </div>
+            <TrustBadges />
           </div>
         ) : (
+          /* ── Book slot tab — direct booking form only ─────── */
           <div className="sbs-body">
+            <form className="sbs-form" onSubmit={submitBook}>
+              <label className="sbs-field">
+                <span className="sbs-label">Your name</span>
+                <SlotCandidatePicker candidates={candidates} value={name} onChange={v => { setName(v); setPaymentProofId('') }} disabled={busy || parsing} />
+                <span className="sbs-hint">Pick from the list or type a new client name.</span>
+              </label>
 
-            {/* STEP 1: Choose slot */}
-            {!showUploadMode && (
-              <section className="sbs-section">
-                <div className="sbs-step-head">
-                  <span className="sbs-step-num">1</span>
-                  <div>
-                    <h2 className="sbs-step-title">Choose your preferred slot</h2>
-                    <p className="sbs-step-sub">Select from your confirmed upcoming interview slots.</p>
+              {selected?.needs_payment_proof && (
+                <div className="sbs-pay-card">
+                  <div className="sbs-pay-head"><span>Payment due</span><strong>₹{(selected.balance_due || 0).toLocaleString('en-IN')}</strong></div>
+                  {paymentProofId ? <p className="sbs-pay-ok">Payment proof on file ✓</p> : (
+                    <>
+                      <SubmitSlotFileDrop compact label="Payment screenshot" file={paymentFile} disabled={busy || parsing} busy={busy} onFile={setPaymentFile} />
+                      <button type="button" className="sbs-secondary-btn" disabled={busy || parsing || !paymentFile} onClick={uploadPaymentProof}>Save payment proof</button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <label className="sbs-field">
+                <span className="sbs-label">Interview invite screenshot</span>
+                <SubmitSlotFileDrop hint="Teams, Gmail, Calendar, or Zoom — date and time must be visible." file={slotFile} previewUrl={slotPreview} disabled={busy} busy={parsing} onFile={onSlotFileChange} />
+              </label>
+
+              <label className="sbs-field">
+                <span className="sbs-label">Interview round <span className="sbs-required" aria-hidden="true">*</span></span>
+                <div className={`sbs-select-wrap${!interviewRound && slotFile ? ' sbs-select-wrap--required' : ''}`}>
+                  <select className="sbs-select" value={interviewRound} onChange={e => setInterviewRound(e.target.value)} disabled={busy || parsing} required>
+                    <option value="">Select round (L1, L2…)</option>
+                    {ROUND_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </div>
+                {!interviewRound && slotFile && <span className="sbs-hint sbs-hint--warn">Required — select a round to confirm.</span>}
+              </label>
+
+              {parsing && <div className="sbs-status sbs-status--loading"><Spinner size={18} /><span>Reading your invite…</span></div>}
+
+              {parsedSlot?.date && parsedSlot?.time && (
+                <div className="sbs-detected">
+                  <span className="sbs-detected__badge">Detected</span>
+                  <div className="sbs-detected__main">
+                    <span className="sbs-detected__date">{formatFriendlyDate(parsedSlot.date)}</span>
+                    <span className="sbs-detected__time">{formatFriendlyTime(parsedSlot.time)}{parsedSlot.time_end ? ` – ${formatFriendlyTime(parsedSlot.time_end)}` : ''}</span>
+                  </div>
+                  <div className="sbs-detected__chips">
+                    {parsedSlot.interview_round && <span className="sbs-chip">{parsedSlot.interview_round}</span>}
+                    {parsedSlot.technology && <span className="sbs-chip sbs-chip--muted">{parsedSlot.technology}</span>}
+                    {parsedSlot.platform && <span className="sbs-chip sbs-chip--muted">{platformLabel(parsedSlot.platform)}</span>}
                   </div>
                 </div>
-                <div className="sbs-slot-list">
-                  {upcoming.length === 0 && !loading && (
-                    <p className="sbs-empty">No upcoming slots yet.</p>
-                  )}
-                  {/* Grouped by date */}
-                  {groupSlotsByDate(upcoming).map(({ date, items }) => (
-                    <div key={date} className="sbs-date-group">
-                      <div className="sbs-date-group__header">
-                        <span className="sbs-date-group__label">{formatDayHeader(date)}</span>
-                        <span className="sbs-date-group__count">{items.length} slot{items.length !== 1 ? 's' : ''}</span>
-                      </div>
-                      <div className="sbs-date-group__cards">
-                        {items.map((slot, i) => (
-                          <SlotCard
-                            key={`${slot.name}-${slot.date}-${slot.time}-${i}`}
-                            slot={slot}
-                            index={upcoming.indexOf(slot)}
-                            selected={candidateNameKey(slot.name) === candidateNameKey(name) && candidateNameKey(slot.name) !== ''}
-                            onClick={() => { setName(slot.name); setShowUploadMode(true); setError(''); setSuccess('') }}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                  {/* Can't find slot */}
-                  <button type="button" className="sbs-slot-card sbs-slot-card--ghost" onClick={() => { setShowUploadMode(true); setError(''); setSuccess('') }}>
-                    <div className="sbs-slot-card__icon sbs-slot-card__icon--ghost">
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </div>
-                    <div className="sbs-slot-card__body">
-                      <div className="sbs-slot-card__name">Can&apos;t find your slot?</div>
-                      <div className="sbs-slot-card__date">
-                        Upload <span className="sbs-slot-card__link">invite</span> and we&apos;ll help you find it.
-                      </div>
-                    </div>
-                    <svg className="sbs-slot-card__arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
-                  </button>
-                </div>
-              </section>
-            )}
+              )}
 
-            {/* STEP 2: Confirm booking */}
-            {showUploadMode && (
-              <section className="sbs-section">
-                <div className="sbs-step-head">
-                  <button type="button" className="sbs-back-btn" onClick={() => { setShowUploadMode(false); setError(''); setSuccess('') }} aria-label="Back">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M15 18l-6-6 6-6"/></svg>
-                  </button>
-                  <span className="sbs-step-num">2</span>
-                  <div>
-                    <h2 className="sbs-step-title">Confirm your booking</h2>
+              {showManualSlotFields && (
+                <div className="sbs-manual">
+                  <p className="sbs-manual__hint">Include the date line in your screenshot or enter manually.</p>
+                  <div className="sbs-manual__grid">
+                    <label className="sbs-field"><span className="sbs-label">Interview date</span><input className="sbs-input" type="date" value={manualDate} onChange={e => setManualDate(e.target.value)} disabled={busy || parsing} /></label>
+                    <label className="sbs-field"><span className="sbs-label">Start time</span><input className="sbs-input" type="time" value={manualTime} onChange={e => setManualTime(e.target.value)} disabled={busy || parsing} /></label>
                   </div>
                 </div>
+              )}
 
-                <form className="sbs-form" onSubmit={submitBook}>
-                  <label className="sbs-field">
-                    <span className="sbs-label">Your name</span>
-                    <SlotCandidatePicker candidates={candidates} value={name} onChange={v => { setName(v); setPaymentProofId('') }} disabled={busy || parsing} />
-                    <span className="sbs-hint">Pick from the list or type a new client name.</span>
-                  </label>
+              {error && <p className="sbs-alert sbs-alert--error" role="alert">{error}</p>}
+              {success && <p className="sbs-alert sbs-alert--success">{success}</p>}
 
-                  {selected?.needs_payment_proof && (
-                    <div className="sbs-pay-card">
-                      <div className="sbs-pay-head"><span>Payment due</span><strong>₹{(selected.balance_due || 0).toLocaleString('en-IN')}</strong></div>
-                      {paymentProofId ? <p className="sbs-pay-ok">Payment proof on file ✓</p> : (
-                        <>
-                          <SubmitSlotFileDrop compact label="Payment screenshot" file={paymentFile} disabled={busy || parsing} busy={busy} onFile={setPaymentFile} />
-                          <button type="button" className="sbs-secondary-btn" disabled={busy || parsing || !paymentFile} onClick={uploadPaymentProof}>Save payment proof</button>
-                        </>
-                      )}
-                    </div>
-                  )}
-
-                  <label className="sbs-field">
-                    <span className="sbs-label">Interview invite screenshot</span>
-                    <SubmitSlotFileDrop hint="Teams, Gmail, Calendar, or Zoom — date and time must be visible." file={slotFile} previewUrl={slotPreview} disabled={busy} busy={parsing} onFile={onSlotFileChange} />
-                  </label>
-
-                  <label className="sbs-field">
-                    <span className="sbs-label">Interview round <span className="sbs-required" aria-hidden="true">*</span></span>
-                    <div className={`sbs-select-wrap${!interviewRound && slotFile ? ' sbs-select-wrap--required' : ''}`}>
-                      <select className="sbs-select" value={interviewRound} onChange={e => setInterviewRound(e.target.value)} disabled={busy || parsing} required>
-                        <option value="">Select round (L1, L2…)</option>
-                        {ROUND_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
-                      </select>
-                    </div>
-                    {!interviewRound && slotFile && <span className="sbs-hint sbs-hint--warn">Required — select a round to confirm.</span>}
-                  </label>
-
-                  {parsing && (
-                    <div className="sbs-status sbs-status--loading"><Spinner size={18} /><span>Reading your invite…</span></div>
-                  )}
-
-                  {parsedSlot?.date && parsedSlot?.time && (
-                    <div className="sbs-detected">
-                      <span className="sbs-detected__badge">Detected</span>
-                      <div className="sbs-detected__main">
-                        <span className="sbs-detected__date">{formatFriendlyDate(parsedSlot.date)}</span>
-                        <span className="sbs-detected__time">{formatFriendlyTime(parsedSlot.time)}{parsedSlot.time_end ? ` – ${formatFriendlyTime(parsedSlot.time_end)}` : ''}</span>
-                      </div>
-                      <div className="sbs-detected__chips">
-                        {parsedSlot.interview_round && <span className="sbs-chip">{parsedSlot.interview_round}</span>}
-                        {parsedSlot.technology && <span className="sbs-chip sbs-chip--muted">{parsedSlot.technology}</span>}
-                        {parsedSlot.platform && <span className="sbs-chip sbs-chip--muted">{platformLabel(parsedSlot.platform)}</span>}
-                      </div>
-                    </div>
-                  )}
-
-                  {showManualSlotFields && (
-                    <div className="sbs-manual">
-                      <p className="sbs-manual__hint">Include the date line in your screenshot or enter manually.</p>
-                      <div className="sbs-manual__grid">
-                        <label className="sbs-field"><span className="sbs-label">Interview date</span><input className="sbs-input" type="date" value={manualDate} onChange={e => setManualDate(e.target.value)} disabled={busy || parsing} /></label>
-                        <label className="sbs-field"><span className="sbs-label">Start time</span><input className="sbs-input" type="time" value={manualTime} onChange={e => setManualTime(e.target.value)} disabled={busy || parsing} /></label>
-                      </div>
-                    </div>
-                  )}
-
-                  {error && <p className="sbs-alert sbs-alert--error" role="alert">{error}</p>}
-                  {success && <p className="sbs-alert sbs-alert--success">{success}</p>}
-
-                  <button type="submit" className={`sbs-cta${canConfirm ? ' sbs-cta--ready' : ''}`} disabled={!canConfirm}>
-                    {busy ? <Spinner size={18} /> : 'Confirm booking'}
-                  </button>
-                </form>
-              </section>
-            )}
-
-            {/* Trust footer badges */}
-            <div className="sbs-trust">
-              <div className="sbs-trust__item">
-                <span className="sbs-trust__icon sbs-trust__icon--green">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                </span>
-                <div><div className="sbs-trust__title">Secure &amp; Private</div><div className="sbs-trust__sub">Your data is safe with us</div></div>
-              </div>
-              <div className="sbs-trust__item">
-                <span className="sbs-trust__icon sbs-trust__icon--purple">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" strokeLinecap="round"/></svg>
-                </span>
-                <div><div className="sbs-trust__title">Smart Detection</div><div className="sbs-trust__sub">We read date &amp; time automatically</div></div>
-              </div>
-              <div className="sbs-trust__item">
-                <span className="sbs-trust__icon sbs-trust__icon--blue">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg>
-                </span>
-                <div><div className="sbs-trust__title">Instant Confirmation</div><div className="sbs-trust__sub">Get confirmation as soon as you book</div></div>
-              </div>
-            </div>
-
+              <button type="submit" className={`sbs-cta${canConfirm ? ' sbs-cta--ready' : ''}`} disabled={!canConfirm}>
+                {busy ? <Spinner size={18} /> : 'Confirm booking'}
+              </button>
+            </form>
+            <TrustBadges />
           </div>
         )}
       </div>
