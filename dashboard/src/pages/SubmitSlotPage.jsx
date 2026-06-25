@@ -343,7 +343,6 @@ export function SubmitSlotPage() {
             className={`sbs-tab${tab === 'confirmed' ? ' sbs-tab--active' : ''}`}
             onClick={() => { setTab('confirmed'); setError(''); setSuccess('') }}>
             Confirmed slots
-            {booked.length > 0 && <span className="sbs-tab__badge">{booked.length}</span>}
           </button>
         </div>
 
