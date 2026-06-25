@@ -327,7 +327,6 @@ export function SubmitSlotPage() {
                             </div>
                             <div className="sbs-slot-card__body">
                               <div className="sbs-slot-card__name">{slot.name}</div>
-                              <div className="sbs-slot-card__date">{formatFriendlyDate(slot.date?.slice(0,10))}</div>
                               <div className="sbs-slot-card__time">
                                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" strokeLinecap="round"/></svg>
                                 <span>{formatFriendlyTime(slot.time)}{slot.time_end ? ` – ${formatFriendlyTime(slot.time_end)}` : ''}</span>
