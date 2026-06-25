@@ -1996,11 +1996,6 @@ export function CandidatesPanel() {
       if (serviceHeader) {
         serviceHeader.textContent = "Service type";
         serviceHeader.title = "Profile-wise or round-wise support";
-        // Move service type column to be 2nd (after Name)
-        const nameHeader = header?.querySelector("th");
-        if (nameHeader && serviceHeader !== nameHeader.nextElementSibling) {
-          nameHeader.after(serviceHeader);
-        }
       }
       const openResumeManager = async candidate => {
         const backdrop = document.createElement("div");
@@ -2077,15 +2072,10 @@ export function CandidatesPanel() {
           const isRoundWise = candidate.service_type === "round_wise";
           serviceCell.innerHTML = `<span class="cand-channel-tag ${isRoundWise ? "cand-channel-tag--roundwise" : "cand-channel-tag--profile"}">${isRoundWise ? "Round-wise" : "Profile-wise"}</span>`;
           serviceCell.title = isRoundWise ? "Round-wise interview support" : "Profile service";
-          // Move to 2nd column (after name)
-          const nameCell2 = row.querySelector(".cand-cell-name") || row.children[0];
-          if (nameCell2 && serviceCell !== nameCell2.nextElementSibling) {
-            nameCell2.after(serviceCell);
-          }
         }
-        // Hide service badge from name cell
-        const nameBadge = row.querySelector(".cand-cell-name .cand-channel-tag");
-        if (nameBadge) nameBadge.style.display = "none";
+        // Hide service badge from name cell (the PROFILE/ROUND-WISE next to name)
+        const allBadges = row.querySelectorAll(".cand-cell-name .cand-channel-tag, .cand-cell-name .cand-service-badge");
+        allBadges.forEach(b => b.style.display = "none");
         const cell = document.createElement("td");
         cell.className = "cand-cell-resume";
         cell.onclick = event => event.stopPropagation();
