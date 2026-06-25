@@ -332,15 +332,16 @@ export function SubmitSlotPage() {
           </div>
         </header>
 
-        {/* Tabs - Book slot only, no session complete tab */}
+        {/* Tabs */}
         <div className="sbs-tabs" role="tablist">
-          <button type="button" role="tab" aria-selected={true}
-            className="sbs-tab sbs-tab--active">
+          <button type="button" role="tab" aria-selected={tab === 'book'}
+            className={`sbs-tab${tab === 'book' ? ' sbs-tab--active' : ''}`}
+            onClick={() => { setTab('book'); setError(''); setSuccess(''); setShowUploadMode(false) }}>
             Book slot
           </button>
           <button type="button" role="tab" aria-selected={tab === 'session'}
             className={`sbs-tab${tab === 'session' ? ' sbs-tab--active' : ''}`}
-            onClick={() => { setTab(tab === 'session' ? 'book' : 'session'); setError(''); setSuccess('') }}>
+            onClick={() => { setTab('session'); setError(''); setSuccess('') }}>
             Session complete
           </button>
         </div>
