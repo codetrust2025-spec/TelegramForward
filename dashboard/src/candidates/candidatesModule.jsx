@@ -710,6 +710,18 @@ function X8({
       x("Name is required");
       return;
     }
+    if (!l.technology || !l.technology.trim()) {
+      x("Technology is required — select or type a tech stack.");
+      return;
+    }
+    if (!l.phone || !l.phone.trim() || l.phone.trim().length < 8) {
+      x("Phone number is required — enter a valid 10-digit number.");
+      return;
+    }
+    if (!l.reference || !l.reference.trim()) {
+      x("Reference is required — who referred this lead?");
+      return;
+    }
     if (b && !l.follow_up.trim()) {
       x(`₹${S.toLocaleString("en-IN")} balance pending — add a short follow-up / remark before saving.`);
       return;
