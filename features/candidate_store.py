@@ -324,6 +324,8 @@ def canonical_technology(tech: str) -> str:
     aliases = {
         "react js": "React JS",
         "reactjs": "React JS",
+        "angular": "Angular",
+        "angularjs": "Angular",
         "mern stack": "MERN stack",
         "aws devops": "AWS DevOps",
         "automation testing": "Automation Testing",
