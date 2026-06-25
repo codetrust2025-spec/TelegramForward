@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { API } from '../config.js'
 import { useAuth } from '../context/AuthContext.jsx'
+import { useConfirm } from '../context/ConfirmContext.jsx'
 import { formatClockTime } from '../utils/istTime.js'
 
 const ATTENDEES = ['Nikhila', 'Bhavana', 'Tool']
@@ -151,6 +152,7 @@ export function InterviewRoster({
   onRosterCountsChange,
 }) {
   const { role, enabled, reference } = useAuth()
+  const { confirm } = useConfirm()
   const canManage = !enabled || role === 'admin' || role === 'handler'
   const canEditAttendee = !enabled || role === 'admin'
   const handlerView = role === 'handler' && !!reference?.trim()
@@ -328,7 +330,13 @@ export function InterviewRoster({
   }
 
   async function removeSlot(row) {
-    if (!window.confirm(`Remove interview slot for ${row.name}? The candidate record stays in Candidates.`)) return
+    const ok = await confirm({
+      title: 'Remove interview slot?',
+      message: `Remove slot for ${row.name}? The candidate record stays in Candidates.`,
+      confirmLabel: 'Remove',
+      variant: 'danger',
+    })
+    if (!ok) return
     setBusyId(row.id)
     setError('')
     try {
@@ -458,10 +466,16 @@ export function InterviewRoster({
                             value={status === 'pending' ? '' : status}
                             disabled={busyId === row.id}
                             ariaLabel={`Attendance for ${row.name}`}
-                            onChange={val => {
+                            onChange={async (val) => {
                               if (!val) { saveAttendance(row, val, row.interview_attendee_resolved || row.interview_attendee || 'Bhavana'); return }
                               const label = STATUS_OPTIONS.find(o => o.value === val)?.label || val
-                              if (window.confirm(`Mark ${row.name} as "${label}"?`)) {
+                              const ok = await confirm({
+                                title: `Mark as "${label}"?`,
+                                message: `Update attendance for ${row.name} to "${label}".`,
+                                confirmLabel: label,
+                                variant: val === 'not_attended' || val === 'cancelled' ? 'danger' : 'default',
+                              })
+                              if (ok) {
                                 saveAttendance(row, val, row.interview_attendee_resolved || row.interview_attendee || 'Bhavana')
                               }
                             }}
