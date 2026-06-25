@@ -280,7 +280,8 @@ def _local_ocr_text(data: bytes) -> str:
     try:
         from PIL import Image, ImageEnhance, ImageOps
         import pytesseract
-    except ImportError:
+    except ImportError as e:
+        logger.warning("slot screenshot OCR import failed: %s", e)
         return ""
     try:
         # Configure Tesseract path for Windows and Linux
@@ -293,6 +294,10 @@ def _local_ocr_text(data: bytes) -> str:
             tesseract_path = "/usr/bin/tesseract"
             if os.path.exists(tesseract_path):
                 pytesseract.pytesseract.tesseract_cmd = tesseract_path
+            else:
+                logger.warning("Tesseract not found at %s", tesseract_path)
+                return ""
+        logger.info("slot screenshot OCR using tesseract at: %s", tesseract_path)
         img = Image.open(io.BytesIO(data))
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
