@@ -271,9 +271,9 @@ def _env_api_base() -> str:
 
 
 def _local_ocr_text(data: bytes) -> str:
-    """Tesseract OCR fallback when vision API is unavailable or rate-limited."""
+    """Tesseract OCR with image preprocessing for better accuracy."""
     try:
-        from PIL import Image
+        from PIL import Image, ImageEnhance, ImageFilter
         import pytesseract
     except ImportError:
         return ""
@@ -281,7 +281,17 @@ def _local_ocr_text(data: bytes) -> str:
         img = Image.open(io.BytesIO(data))
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
-        text = pytesseract.image_to_string(img) or ""
+        # Upscale small images for better OCR
+        w, h = img.size
+        if w < 1200:
+            scale = 1200 / w
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        # Enhance contrast and sharpness
+        img = ImageEnhance.Contrast(img).enhance(1.5)
+        img = ImageEnhance.Sharpness(img).enhance(2.0)
+        # Convert to grayscale for better OCR
+        img = img.convert("L")
+        text = pytesseract.image_to_string(img, config='--psm 6') or ""
         return str(text).strip()
     except Exception as exc:
         logger.warning("slot screenshot local OCR failed: %s", exc)
