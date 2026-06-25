@@ -116,6 +116,47 @@ def _parse_gmail_calendar_line(blob: str) -> tuple[str, str, str]:
     return date, start, end
 
 
+def _parse_month_day_24h_line(blob: str) -> tuple[str, str, str]:
+    """Gmail AI Overview / bullet format: 'June 25, 10:30–11:10 IST' (no year, no am/pm)."""
+    text = (blob or "").replace("\n", " ").replace("–", "-").replace("—", "-")
+    pat = re.compile(
+        rf"\b({_MONTH_PATTERN})\s+(\d{{1,2}}),?\s+"
+        rf"(\d{{1,2}}):(\d{{2}})\s*(?:IST|UTC|GMT)?\s*"
+        r"(?:-|to)\s*"
+        rf"(\d{{1,2}}):(\d{{2}})\b",
+        re.IGNORECASE,
+    )
+    m = pat.search(text)
+    if m:
+        mon = _month_num(m.group(1))
+        day = int(m.group(2))
+        if not mon:
+            return "", "", ""
+        y = _infer_year(mon, day)
+        date = f"{y:04d}-{_pad2(mon)}-{_pad2(day)}"
+        sh, sm = int(m.group(3)), int(m.group(4))
+        eh, em = int(m.group(5)), int(m.group(6))
+        return date, _fmt_hhmm(sh, sm), _fmt_hhmm(eh, em)
+    # Single time variant: June 25, 10:30 IST
+    pat2 = re.compile(
+        rf"\b({_MONTH_PATTERN})\s+(\d{{1,2}}),?\s+"
+        rf"(\d{{1,2}}):(\d{{2}})\s*(?:IST|UTC|GMT)?\b",
+        re.IGNORECASE,
+    )
+    m2 = pat2.search(text)
+    if m2:
+        mon = _month_num(m2.group(1))
+        day = int(m2.group(2))
+        if not mon:
+            return "", "", ""
+        y = _infer_year(mon, day)
+        date = f"{y:04d}-{_pad2(mon)}-{_pad2(day)}"
+        sh, sm = int(m2.group(3)), int(m2.group(4))
+        end_total = sh * 60 + sm + 30
+        return date, _fmt_hhmm(sh, sm), _fmt_hhmm(end_total // 60, end_total % 60)
+    return "", "", ""
+
+
 def _parse_relative_calendar_line(blob: str, ref: datetime | None = None) -> tuple[str, str, str]:
     """Gmail cards commonly say: ``Tomorrow · 12:00 PM – 12:30 PM``."""
     text = (blob or "").replace("\n", " ")
@@ -410,7 +451,7 @@ def _parse_round_from_blob(blob: str) -> str:
 
 def _parse_platform_from_blob(blob: str) -> str:
     low = (blob or "").lower()
-    if "microsoft teams" in low or "teams meeting" in low:
+    if "microsoft teams" in low or "teams meeting" in low or "ms teams" in low or " teams" in low:
         return "teams"
     if "zoom" in low:
         return "zoom"
@@ -470,7 +511,8 @@ def parse_invite_text(blob: str) -> dict[str, Any]:
     relative_date, relative_start, relative_end = _parse_relative_calendar_line(blob)
     g_date, g_start, g_end = _parse_gmail_calendar_line(blob)
     lf_date, lf_start, lf_end = _parse_longform_invite_line(blob)
-    date = labeled_date or relative_date or g_date or lf_date or _parse_date_token(blob)
+    md24_date, md24_start, md24_end = _parse_month_day_24h_line(blob)
+    date = labeled_date or relative_date or g_date or lf_date or md24_date or _parse_date_token(blob)
     if labeled_start:
         start, end = labeled_start, labeled_end
     elif relative_start:
@@ -479,6 +521,8 @@ def parse_invite_text(blob: str) -> dict[str, Any]:
         start, end = g_start, g_end
     elif lf_start:
         start, end = lf_start, lf_end
+    elif md24_start:
+        start, end = md24_start, md24_end
     else:
         start, end = _parse_times_from_blob(blob)
     out = {
@@ -504,6 +548,7 @@ def _vision_extract_json(data: bytes, mime: str) -> dict[str, Any]:
     prompt = (
         "Read this interview invite / calendar / Teams / Zoom / Gmail screenshot. "
         "Gmail often shows 'Sat, Jun 20, 2:00 PM' without a year — infer the correct year. "
+        "Gmail AI Overview bullets may show 'June 25, 10:30–11:10 IST' — these are 24-hour IST times with no am/pm. "
         "For bullet lists like 'Date: 20-06-2026' and 'Time: 5:00 pm IST', use those lines — "
         "ignore the email received time in the Gmail header (e.g. '3:09 pm' next to the sender). "
         "Return JSON only with keys: date (YYYY-MM-DD), time (HH:MM 24h), "
