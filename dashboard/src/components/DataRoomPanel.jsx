@@ -408,8 +408,8 @@ function CredentialsSection({ creds, loading, active, onReload }) {
 }
 
 const DATA_ROOM_TABS = [
-  { id: 'logins', label: 'Logins', adminOnly: true },
-  { id: 'vault', label: 'Vault', adminOnly: true },
+  { id: 'logins', label: 'Logins', adminOnly: false },
+  { id: 'vault', label: 'Vault', adminOnly: false },
   { id: 'partners', label: 'Opportunities', adminOnly: false },
 ]
 
@@ -622,11 +622,11 @@ export function DataRoomPanel() {
 
       {error && <p className="dr-error dr-page-error" role="alert">{error}</p>}
 
-      {isAdmin && activeTab === 'logins' && (
+      {activeTab === 'logins' && (
         <CredentialsSection creds={credentials} loading={credsLoading} active onReload={loadCredentials} />
       )}
 
-      {isAdmin && activeTab === 'vault' && credentials && (
+      {activeTab === 'vault' && credentials && (
         <DataRoomVaultSection creds={credentials} active onReload={loadCredentials} />
       )}
 
