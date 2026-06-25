@@ -10098,7 +10098,7 @@ body {
 .cand-toolbar {
   position: sticky;
   top: 0;
-  z-index: 50;
+  z-index: 100;
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -10107,22 +10107,28 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 10px;
   padding: 10px 12px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.8);
   margin-bottom: 8px;
+  isolation: isolate;
 }
 .cand-table-wrap {
+  position: relative;
+  z-index: 1;
   overflow-x: auto;
   overflow-y: visible;
 }
 .cand-table thead {
   position: sticky;
-  top: 52px;
-  z-index: 40;
-  background: #0f1117;
+  top: 0;
+  z-index: 10;
 }
 .cand-table thead th {
   background: #0f1117;
   border-bottom: 2px solid rgba(148,163,184,0.15);
+}
+.cand-table tbody tr {
+  position: relative;
+  z-index: 0;
 }
 .cand-toolbar-spacer { flex: 1; }
 .cand-toolbar-count {
