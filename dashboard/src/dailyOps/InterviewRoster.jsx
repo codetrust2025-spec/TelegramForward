@@ -458,7 +458,13 @@ export function InterviewRoster({
                             value={status === 'pending' ? '' : status}
                             disabled={busyId === row.id}
                             ariaLabel={`Attendance for ${row.name}`}
-                            onChange={val => saveAttendance(row, val, row.interview_attendee_resolved || row.interview_attendee || 'Bhavana')}
+                            onChange={val => {
+                              if (!val) { saveAttendance(row, val, row.interview_attendee_resolved || row.interview_attendee || 'Bhavana'); return }
+                              const label = STATUS_OPTIONS.find(o => o.value === val)?.label || val
+                              if (window.confirm(`Mark ${row.name} as "${label}"?`)) {
+                                saveAttendance(row, val, row.interview_attendee_resolved || row.interview_attendee || 'Bhavana')
+                              }
+                            }}
                           />
                           <span className={`ops-status-pill ops-status-pill--${statusTone(status)}`}>
                             {statusLabel(status)}
