@@ -145,6 +145,7 @@ export function InterviewRoster({
   dashboardAttendeeFilter = '',
   dashboardCandidateSearch = '',
   dashboardCandidateTypeFilter = '',
+  dashboardStatusFilter = '',
   upcomingOnly = false,
   onRosterMutate,
   onRosterCountsChange,
@@ -427,7 +428,12 @@ export function InterviewRoster({
                 </tr>
               </thead>
               <tbody>
-                {rows.map(row => {
+                {rows.filter(row => {
+                  if (!dashboardStatusFilter) return true
+                  const s = resolvedStatus(row)
+                  if (dashboardStatusFilter === 'pending') return !s || s === 'pending'
+                  return s === dashboardStatusFilter
+                }).map(row => {
                   const status = resolvedStatus(row)
                   return (
                     <tr key={row.id} className={`ops-interview-row ops-interview-row--${statusTone(status)}`}>

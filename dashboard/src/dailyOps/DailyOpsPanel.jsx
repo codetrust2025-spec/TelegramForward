@@ -7,12 +7,17 @@ import { PRESETS, detectPresetFromRange, resolvePresetRange } from './dateRangeP
 
 const ATTENDEES = ['Nikhila', 'Bhavana', 'Tool']
 
-function KpiCard({ label, value, tone = 'default', loading = false }) {
+function KpiCard({ label, value, tone = 'default', loading = false, active = false, onClick }) {
   return (
-    <div className={`ops-dash-kpi ops-dash-kpi--${tone}${loading ? ' ops-dash-kpi--loading' : ''}`}>
+    <button
+      type="button"
+      className={`ops-dash-kpi ops-dash-kpi--${tone}${loading ? ' ops-dash-kpi--loading' : ''}${active ? ' ops-dash-kpi--active' : ''}`}
+      onClick={onClick}
+      aria-pressed={active}
+    >
       <span className="ops-dash-kpi__label">{label}</span>
       <strong className="ops-dash-kpi__value">{loading ? '…' : value}</strong>
-    </div>
+    </button>
   )
 }
 
@@ -38,6 +43,7 @@ export function DailyOpsPanel({
   const [rangePreset, setRangePreset] = useState('upcoming')
   const [attendeeFilter, setAttendeeFilter] = useState('')
   const [candidateSearch, setCandidateSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
   const [globalStats, setGlobalStats] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -104,10 +110,10 @@ export function DailyOpsPanel({
         </div>
 
         <div className="ops-topbar__kpis">
-          <KpiCard label="Scheduled"    value={interviews.count             ?? 0} tone="blue"  loading={loading} />
-          <KpiCard label="Attended"     value={interviews.attended_count    ?? 0} tone="green" loading={loading} />
-          <KpiCard label="Pending"      value={interviews.pending_count     ?? 0} tone="amber" loading={loading} />
-          <KpiCard label="Not attended" value={interviews.not_attended_count ?? 0} tone="red"   loading={loading} />
+          <KpiCard label="Scheduled"    value={interviews.count             ?? 0} tone="blue"  loading={loading} active={statusFilter === ''} onClick={() => setStatusFilter('')} />
+          <KpiCard label="Attended"     value={interviews.attended_count    ?? 0} tone="green" loading={loading} active={statusFilter === 'attended'} onClick={() => setStatusFilter(statusFilter === 'attended' ? '' : 'attended')} />
+          <KpiCard label="Pending"      value={interviews.pending_count     ?? 0} tone="amber" loading={loading} active={statusFilter === 'pending'} onClick={() => setStatusFilter(statusFilter === 'pending' ? '' : 'pending')} />
+          <KpiCard label="Not attended" value={interviews.not_attended_count ?? 0} tone="red"   loading={loading} active={statusFilter === 'not_attended'} onClick={() => setStatusFilter(statusFilter === 'not_attended' ? '' : 'not_attended')} />
         </div>
 
         <div className="ops-topbar__right">
@@ -173,6 +179,7 @@ export function DailyOpsPanel({
           dashboardToDate={toDate}
           dashboardAttendeeFilter={attendeeFilter}
           dashboardCandidateSearch={candidateSearch}
+          dashboardStatusFilter={statusFilter}
           upcomingOnly={upcomingOnly}
           onRosterCountsChange={setRosterCounts}
           onRosterMutate={loadGlobal}
