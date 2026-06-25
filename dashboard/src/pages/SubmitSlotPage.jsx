@@ -339,30 +339,94 @@ export function SubmitSlotPage() {
             onClick={() => { setTab('book'); setError(''); setSuccess(''); setShowUploadMode(false) }}>
             Book slot
           </button>
-          <button type="button" role="tab" aria-selected={tab === 'session'}
-            className={`sbs-tab${tab === 'session' ? ' sbs-tab--active' : ''}`}
-            onClick={() => { setTab('session'); setError(''); setSuccess('') }}>
-            Session complete
+          <button type="button" role="tab" aria-selected={tab === 'confirmed'}
+            className={`sbs-tab${tab === 'confirmed' ? ' sbs-tab--active' : ''}`}
+            onClick={() => { setTab('confirmed'); setError(''); setSuccess('') }}>
+            Confirmed slots
+            {booked.length > 0 && <span className="sbs-tab__badge">{booked.length}</span>}
           </button>
         </div>
 
         {loading ? (
           <div className="sbs-loading"><Spinner size={28} /></div>
-        ) : tab === 'session' ? (
-          <form className="sbs-form" onSubmit={submitSessionComplete}>
-            <label className="sbs-field">
-              <span className="sbs-label">Your name</span>
-              <SlotCandidatePicker candidates={candidates} value={name} onChange={v => setName(v)} disabled={busy || parsing} />
-              <span className="sbs-hint">Pick from the list or type a new client name.</span>
-            </label>
-            <p className="sbs-lead">Upload the &quot;Session complete&quot; screen after your interview ends.</p>
-            <SubmitSlotFileDrop label="Session complete screenshot" file={sessionFile} previewUrl={sessionPreview} disabled={busy} onFile={onSessionFileChange} />
-            {error ? <p className="sbs-alert sbs-alert--error" role="alert">{error}</p> : null}
-            {success ? <p className="sbs-alert sbs-alert--success">{success}</p> : null}
-            <button type="submit" className={`sbs-cta${name.trim() && sessionFile ? ' sbs-cta--ready' : ''}`} disabled={busy || !name.trim() || !sessionFile}>
-              {busy ? <Spinner size={18} /> : 'Submit session proof'}
-            </button>
-          </form>
+        ) : tab === 'confirmed' ? (
+          <div className="sbs-body">
+            <section className="sbs-section">
+              <div className="sbs-step-head">
+                <div>
+                  <h2 className="sbs-step-title">Confirmed upcoming slots</h2>
+                  <p className="sbs-step-sub">{booked.length > 0 ? `${booked.length} interview${booked.length !== 1 ? 's' : ''} scheduled` : 'No confirmed slots yet.'}</p>
+                </div>
+              </div>
+
+              {booked.length === 0 ? (
+                <div className="sbs-confirmed-empty">
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.25" opacity="0.3">
+                    <rect x="3" y="4" width="18" height="18" rx="3"/><path d="M16 2v4M8 2v4M3 10h18" strokeLinecap="round"/>
+                  </svg>
+                  <p>No confirmed slots yet. Book your first slot.</p>
+                  <button type="button" className="sbs-cta sbs-cta--ready" style={{maxWidth:'200px'}}
+                    onClick={() => { setTab('book'); setError(''); setSuccess('') }}>
+                    Book a slot
+                  </button>
+                </div>
+              ) : (
+                <div className="sbs-slot-list">
+                  {groupSlotsByDate(booked).map(({ date, items }) => (
+                    <div key={date} className="sbs-date-group">
+                      <div className="sbs-date-group__header">
+                        <span className="sbs-date-group__label">{formatDayHeader(date)}</span>
+                        <span className="sbs-date-group__count">{items.length} slot{items.length !== 1 ? 's' : ''}</span>
+                      </div>
+                      <div className="sbs-date-group__cards">
+                        {items.map((slot, i) => (
+                          <div key={i} className="sbs-confirmed-card">
+                            <div className={`sbs-slot-card__icon sbs-slot-card__icon--active`}>
+                              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+                                <rect x="3" y="4" width="18" height="18" rx="3"/>
+                                <path d="M16 2v4M8 2v4M3 10h18" strokeLinecap="round"/>
+                              </svg>
+                            </div>
+                            <div className="sbs-slot-card__body">
+                              <div className="sbs-slot-card__name">{slot.name}</div>
+                              <div className="sbs-slot-card__date">{formatFriendlyDate(slot.date?.slice(0,10))}</div>
+                              <div className="sbs-slot-card__time">
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" strokeLinecap="round"/></svg>
+                                <span>{formatFriendlyTime(slot.time)}{slot.time_end ? ` – ${formatFriendlyTime(slot.time_end)}` : ''}</span>
+                              </div>
+                            </div>
+                            <div className="sbs-confirmed-card__right">
+                              {slot.interview_round && <span className="sbs-slot-card__round">{slot.interview_round}</span>}
+                              <span className="sbs-confirmed-card__status">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                                Booked
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {/* Trust badges */}
+            <div className="sbs-trust">
+              <div className="sbs-trust__item">
+                <span className="sbs-trust__icon sbs-trust__icon--green"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+                <div><div className="sbs-trust__title">Secure &amp; Private</div><div className="sbs-trust__sub">Your data is safe with us</div></div>
+              </div>
+              <div className="sbs-trust__item">
+                <span className="sbs-trust__icon sbs-trust__icon--purple"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" strokeLinecap="round"/></svg></span>
+                <div><div className="sbs-trust__title">Smart Detection</div><div className="sbs-trust__sub">We read date &amp; time automatically</div></div>
+              </div>
+              <div className="sbs-trust__item">
+                <span className="sbs-trust__icon sbs-trust__icon--blue"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg></span>
+                <div><div className="sbs-trust__title">Instant Confirmation</div><div className="sbs-trust__sub">Get confirmation as soon as you book</div></div>
+              </div>
+            </div>
+          </div>
         ) : (
           <div className="sbs-body">
 
