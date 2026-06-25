@@ -36,7 +36,7 @@ function platformLabel(platform) {
   return map[platform] || platform || ''
 }
 
-const ROUND_OPTIONS = ['L1', 'L2', 'L3', 'HR', 'Final round']
+const ROUND_OPTIONS = ['L1', 'L2', 'L3', 'HR', 'Final round', 'Screening']
 
 function candidateNameKey(value) {
   return String(value || '').trim().toLocaleLowerCase().replace(/[^a-z0-9]/g, '')
@@ -281,6 +281,10 @@ export function SubmitSlotPage() {
       setError('Upload your interview invite screenshot.')
       return
     }
+    if (!interviewRound) {
+      setError('Select an interview round (L1, L2, HR, etc.) before confirming.')
+      return
+    }
     if (!bookingSlot?.date || !bookingSlot?.time) {
       // Server re-parses screenshot on book when date/time omitted
     }
@@ -463,8 +467,11 @@ export function SubmitSlotPage() {
                 />
 
                 <label className="submit-slot-field">
-                  <span className="submit-slot-field-label">Interview round</span>
-                  <div className="submit-slot-select-wrap">
+                  <span className="submit-slot-field-label">
+                    Interview round
+                    <span className="submit-slot-required" aria-hidden="true"> *</span>
+                  </span>
+                  <div className={`submit-slot-select-wrap${!interviewRound && slotFile ? ' submit-slot-select-wrap--required' : ''}`}>
                     <select
                       className="submit-slot-select"
                       value={interviewRound}
@@ -476,6 +483,9 @@ export function SubmitSlotPage() {
                       {ROUND_OPTIONS.map(round => <option key={round} value={round}>{round}</option>)}
                     </select>
                   </div>
+                  {!interviewRound && slotFile && (
+                    <span className="submit-slot-field-hint submit-slot-field-hint--warn">Required — select a round to confirm the slot.</span>
+                  )}
                 </label>
 
                 {parsing ? (

@@ -14916,6 +14916,18 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   color: var(--text-muted, #a8b4c4);
   line-height: 1.35;
 }
+.submit-slot-field-hint--warn {
+  color: #f87171;
+  font-weight: 500;
+}
+.submit-slot-required {
+  color: #f87171;
+  margin-left: 0.1rem;
+}
+.submit-slot-select-wrap--required .submit-slot-select {
+  border-color: rgba(248, 113, 113, 0.5);
+  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.25);
+}
 .submit-slot-manual {
   display: flex;
   flex-direction: column;
