@@ -36583,7 +36583,7 @@ const V8 = [{
   value: "dropped",
   label: "Dropped"
 }];
-const H8 = ["SAP BASIS", "SAP Sales", "SAP MM", "SAP HANA", "Salesforce", "ServiceNow", "React JS", "Java Backend", "Node JS", "Python", "AWS Admin", "AWS Cloud", "AWS DevOps", "Azure DevOps", "Azure Admin", "Cloud", "Cloud DevOps", "DevOps", "Testing", "ETL", "Oracle Fusion (Tech Con)", "Oracle Fusion (Func)", "Data Engineer", "Data Analyst", "ML Engineer"];
+const H8 = ["SAP BASIS", "SAP Sales", "SAP MM", "SAP HANA", "Salesforce", "ServiceNow", "React JS", "Angular", "Java Backend", "Node JS", "Python", "AWS Admin", "AWS Cloud", "AWS DevOps", "Azure DevOps", "Azure Admin", "Cloud", "Cloud DevOps", "DevOps", "Testing", "ETL", "Oracle Fusion (Tech Con)", "Oracle Fusion (Func)", "Data Engineer", "Data Analyst", "ML Engineer"];
 function G8() {
   return {
     name: "",
