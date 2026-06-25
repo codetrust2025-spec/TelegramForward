@@ -15807,6 +15807,14 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 .ops-dash-kpi--active.ops-dash-kpi--green { border-color: #22c55e; }
 .ops-dash-kpi--active.ops-dash-kpi--amber { border-color: #f59e0b; }
 .ops-dash-kpi--active.ops-dash-kpi--red { border-color: #ef4444; }
+
+/* Candidates page — collapse stats and top performers to reduce scrolling */
+.cand-page .cand-stats {
+  display: none;
+}
+.cand-page .cand-top-perf {
+  display: none;
+}
 .auth-forgot-link {
   margin-top: 0.5rem;
   width: 100%;
