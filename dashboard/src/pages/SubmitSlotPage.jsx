@@ -34,6 +34,28 @@ function candidateNameKey(value) {
   return String(value || '').trim().toLocaleLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
+function formatDayHeader(iso) {
+  if (!iso) return ''
+  try {
+    const d = new Date(`${iso}T12:00:00`)
+    const today = new Date()
+    const tomorrow = new Date(); tomorrow.setDate(today.getDate() + 1)
+    if (d.toDateString() === today.toDateString()) return 'Today'
+    if (d.toDateString() === tomorrow.toDateString()) return 'Tomorrow'
+    return d.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })
+  } catch { return iso }
+}
+
+function groupSlotsByDate(slots) {
+  const groups = new Map()
+  for (const slot of slots) {
+    const key = (slot.date || '').slice(0, 10)
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(slot)
+  }
+  return [...groups.entries()].map(([date, items]) => ({ date, items }))
+}
+
 function dedupeCandidates(rows) {
   const byName = new Map()
   for (const row of rows || []) {
@@ -310,16 +332,15 @@ export function SubmitSlotPage() {
           </div>
         </header>
 
-        {/* Tabs */}
+        {/* Tabs - Book slot only, no session complete tab */}
         <div className="sbs-tabs" role="tablist">
-          <button type="button" role="tab" aria-selected={tab === 'book'}
-            className={`sbs-tab${tab === 'book' ? ' sbs-tab--active' : ''}`}
-            onClick={() => { setTab('book'); setError(''); setSuccess(''); setShowUploadMode(false) }}>
+          <button type="button" role="tab" aria-selected={true}
+            className="sbs-tab sbs-tab--active">
             Book slot
           </button>
           <button type="button" role="tab" aria-selected={tab === 'session'}
             className={`sbs-tab${tab === 'session' ? ' sbs-tab--active' : ''}`}
-            onClick={() => { setTab('session'); setError(''); setSuccess('') }}>
+            onClick={() => { setTab(tab === 'session' ? 'book' : 'session'); setError(''); setSuccess('') }}>
             Session complete
           </button>
         </div>
@@ -358,18 +379,25 @@ export function SubmitSlotPage() {
                   {upcoming.length === 0 && !loading && (
                     <p className="sbs-empty">No upcoming slots yet.</p>
                   )}
-                  {upcoming.map((slot, i) => (
-                    <SlotCard
-                      key={`${slot.name}-${slot.date}-${slot.time}-${i}`}
-                      slot={slot}
-                      index={i}
-                      selected={candidateNameKey(slot.name) === candidateNameKey(name) && candidateNameKey(slot.name) !== ''}
-                      onClick={() => {
-                        setName(slot.name)
-                        setShowUploadMode(true)
-                        setError(''); setSuccess('')
-                      }}
-                    />
+                  {/* Grouped by date */}
+                  {groupSlotsByDate(upcoming).map(({ date, items }) => (
+                    <div key={date} className="sbs-date-group">
+                      <div className="sbs-date-group__header">
+                        <span className="sbs-date-group__label">{formatDayHeader(date)}</span>
+                        <span className="sbs-date-group__count">{items.length} slot{items.length !== 1 ? 's' : ''}</span>
+                      </div>
+                      <div className="sbs-date-group__cards">
+                        {items.map((slot, i) => (
+                          <SlotCard
+                            key={`${slot.name}-${slot.date}-${slot.time}-${i}`}
+                            slot={slot}
+                            index={upcoming.indexOf(slot)}
+                            selected={candidateNameKey(slot.name) === candidateNameKey(name) && candidateNameKey(slot.name) !== ''}
+                            onClick={() => { setName(slot.name); setShowUploadMode(true); setError(''); setSuccess('') }}
+                          />
+                        ))}
+                      </div>
+                    </div>
                   ))}
                   {/* Can't find slot */}
                   <button type="button" className="sbs-slot-card sbs-slot-card--ghost" onClick={() => { setShowUploadMode(true); setError(''); setSuccess('') }}>
@@ -387,6 +415,25 @@ export function SubmitSlotPage() {
                     <svg className="sbs-slot-card__arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
                   </button>
                 </div>
+
+                {/* Booked slots status */}
+                {booked.length > 0 && (
+                  <div className="sbs-booked-status">
+                    <div className="sbs-booked-status__head">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg>
+                      <span>{booked.length} booking{booked.length !== 1 ? 's' : ''} confirmed</span>
+                    </div>
+                    <div className="sbs-booked-status__list">
+                      {booked.slice(0, 5).map((s, i) => (
+                        <div key={i} className="sbs-booked-status__item">
+                          <span className="sbs-booked-status__name">{s.name}</span>
+                          <span className="sbs-booked-status__time">{formatFriendlyDate(s.date?.slice(0,10))} · {formatFriendlyTime(s.time)}</span>
+                          {s.interview_round && <span className="sbs-booked-status__round">{s.interview_round}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </section>
             )}
 
