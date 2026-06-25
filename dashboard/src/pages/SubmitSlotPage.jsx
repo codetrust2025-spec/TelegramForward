@@ -480,35 +480,6 @@ export function SubmitSlotPage() {
                     <svg className="sbs-slot-card__arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
                   </button>
                 </div>
-
-                {/* Booked slots status */}
-                {booked.length > 0 && (
-                  <div className="sbs-booked-status">
-                    <div className="sbs-booked-status__head">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg>
-                      <span>{booked.length} booking{booked.length !== 1 ? 's' : ''} confirmed</span>
-                    </div>
-                    <div className="sbs-booked-status__list">
-                      {booked.slice(0, 5).map((s, i) => (
-                        <button
-                          key={i}
-                          type="button"
-                          className="sbs-booked-status__item sbs-booked-status__item--btn"
-                          onClick={() => { setName(s.name); setShowUploadMode(true); setError(''); setSuccess('') }}
-                        >
-                          <div className="sbs-booked-status__item-left">
-                            <span className="sbs-booked-status__name">{s.name}</span>
-                            <span className="sbs-booked-status__time">{formatFriendlyDate(s.date?.slice(0,10))} · {formatFriendlyTime(s.time)}</span>
-                          </div>
-                          <div className="sbs-booked-status__item-right">
-                            {s.interview_round && <span className="sbs-booked-status__round">{s.interview_round}</span>}
-                            <span className="sbs-booked-status__book-btn">Book</span>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </section>
             )}
 
