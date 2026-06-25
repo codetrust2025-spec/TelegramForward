@@ -117,8 +117,28 @@ def _parse_gmail_calendar_line(blob: str) -> tuple[str, str, str]:
 
 
 def _parse_month_day_24h_line(blob: str) -> tuple[str, str, str]:
-    """Gmail AI Overview / bullet format: 'June 25, 10:30–11:10 IST' (no year, no am/pm)."""
+    """Gmail AI Overview / bullet format: 'June 25, 10:30–11:10 IST' (no year, no am/pm).
+    Also handles: '10:00AM Friday, 26 June 2026' (time before date)."""
     text = (blob or "").replace("\n", " ").replace("–", "-").replace("—", "-")
+
+    # Format: "10:00AM Friday, 26 June 2026" or "10:00 AM Friday, 26 June 2026"
+    time_before_date = re.compile(
+        rf"(\d{{1,2}}):(\d{{2}})\s*(am|pm)\s*"
+        rf"{_WEEKDAY_PATTERN}?,?\s*"
+        rf"(\d{{1,2}})\s+({_MONTH_PATTERN})\s+(20\d{{2}})\b",
+        re.IGNORECASE,
+    )
+    m_tbd = time_before_date.search(text)
+    if m_tbd:
+        sh, sm = _to_24h(int(m_tbd.group(1)), int(m_tbd.group(2)), m_tbd.group(3))
+        day = int(m_tbd.group(4))
+        mon = _month_num(m_tbd.group(5))
+        y = int(m_tbd.group(6))
+        if mon:
+            date = f"{y:04d}-{_pad2(mon)}-{_pad2(day)}"
+            end_total = sh * 60 + sm + 30
+            return date, _fmt_hhmm(sh, sm), _fmt_hhmm(end_total // 60, end_total % 60)
+
     pat = re.compile(
         rf"\b({_MONTH_PATTERN})\s+(\d{{1,2}}),?\s+"
         rf"(\d{{1,2}}):(\d{{2}})\s*(?:IST|UTC|GMT)?\s*"
