@@ -273,7 +273,7 @@ def _env_api_base() -> str:
 def _local_ocr_text(data: bytes) -> str:
     """Tesseract OCR with image preprocessing for better accuracy."""
     try:
-        from PIL import Image, ImageEnhance, ImageFilter
+        from PIL import Image, ImageEnhance, ImageFilter, ImageOps
         import pytesseract
     except ImportError:
         return ""
@@ -281,18 +281,43 @@ def _local_ocr_text(data: bytes) -> str:
         img = Image.open(io.BytesIO(data))
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
-        # Upscale small images for better OCR
-        w, h = img.size
-        if w < 1200:
-            scale = 1200 / w
-            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+        # Auto-crop: trim borders and focus on content area
+        # Convert to grayscale and find content bounds
+        gray = img.convert("L")
+        # Invert if dark background (common in dark mode screenshots)
+        pixels = list(gray.getdata())
+        avg = sum(pixels) / len(pixels) if pixels else 128
+        if avg < 100:  # dark background — invert for better OCR
+            gray = ImageOps.invert(gray)
+            img_for_ocr = ImageOps.invert(img.convert("RGB")).convert("L")
+        else:
+            img_for_ocr = gray
+
+        # Upscale for better OCR
+        w, h = img_for_ocr.size
+        if w < 1500:
+            scale = 1500 / w
+            img_for_ocr = img_for_ocr.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
         # Enhance contrast and sharpness
-        img = ImageEnhance.Contrast(img).enhance(1.5)
-        img = ImageEnhance.Sharpness(img).enhance(2.0)
-        # Convert to grayscale for better OCR
-        img = img.convert("L")
-        text = pytesseract.image_to_string(img, config='--psm 6') or ""
-        return str(text).strip()
+        img_for_ocr = Image.merge("RGB", (img_for_ocr, img_for_ocr, img_for_ocr))
+        img_for_ocr = ImageEnhance.Contrast(img_for_ocr).enhance(1.8)
+        img_for_ocr = ImageEnhance.Sharpness(img_for_ocr).enhance(2.0)
+        img_for_ocr = img_for_ocr.convert("L")
+
+        # Try multiple PSM modes for best result
+        best_text = ""
+        for psm in (6, 3, 4):
+            text = pytesseract.image_to_string(img_for_ocr, config=f'--psm {psm}') or ""
+            text = str(text).strip()
+            if len(text) > len(best_text):
+                best_text = text
+            # If we found a date pattern, stop trying
+            if re.search(r'\d{1,2}:\d{2}\s*(am|pm|AM|PM)', text) or re.search(r'\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)', text, re.IGNORECASE):
+                break
+
+        return best_text
     except Exception as exc:
         logger.warning("slot screenshot local OCR failed: %s", exc)
         return ""
