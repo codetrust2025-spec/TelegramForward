@@ -118,8 +118,13 @@ def _parse_gmail_calendar_line(blob: str) -> tuple[str, str, str]:
 
 def _parse_month_day_24h_line(blob: str) -> tuple[str, str, str]:
     """Gmail AI Overview / bullet format: 'June 25, 10:30–11:10 IST' (no year, no am/pm).
-    Also handles: '10:00AM Friday, 26 June 2026' (time before date)."""
+    Also handles: '10:00AM Friday, 26 June 2026' (time before date).
+    Handles OCR errors: '10.00AM' or '10.008M' etc."""
     text = (blob or "").replace("\n", " ").replace("–", "-").replace("—", "-")
+    # Fix common OCR errors: dots instead of colons, 8M→AM, 0M→OM→AM
+    text = re.sub(r'(\d{1,2})\.(\d{2})\s*(AM|PM|am|pm|8M|8m|0M)', lambda m: f"{m.group(1)}:{m.group(2)} {'AM' if '8' in m.group(3) or 'A' in m.group(3).upper() or '0' in m.group(3) else 'PM'}", text)
+    # Fix dot-comma: "Friday. 26" → "Friday, 26"
+    text = re.sub(r'(\w)\.\s+(\d)', r'\1, \2', text)
 
     # Format: "10:00AM Friday, 26 June 2026" or "10:00 AM Friday, 26 June 2026"
     time_before_date = re.compile(
@@ -439,6 +444,10 @@ def _parse_time_token(match: re.Match) -> tuple[int, int]:
 
 def _parse_times_from_blob(blob: str) -> tuple[str, str]:
     text = (blob or "").lower().replace("–", "-").replace("—", "-")
+    # Fix common OCR errors: 10.00am → 10:00am, 8m→am
+    text = re.sub(r'(\d{1,2})\.(\d{2})\s*(am|pm|8m|0m)', lambda m: f"{m.group(1)}:{m.group(2)}{'am' if '8' in m.group(3) or 'a' in m.group(3) or '0' in m.group(3) else 'pm'}", text)
+    text = re.sub(r'8m\b', 'am', text)
+    text = re.sub(r'0m\b', 'am', text)
 
     # Full range with AM/PM on the end: 10:30 - 11:10 (IST), 2:00 PM - 3:00 PM, etc.
     range_pat = re.compile(
