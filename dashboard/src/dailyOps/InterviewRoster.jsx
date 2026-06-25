@@ -420,6 +420,7 @@ export function InterviewRoster({
                   <th>Time</th>
                   <th>Candidate</th>
                   <th>Technology</th>
+                  <th>Round</th>
                   {!handlerView && !effectiveAttendee && <th>Attendee</th>}
                   <th>Attendance</th>
                   {canManage && <th aria-label="Actions" />}
@@ -441,6 +442,7 @@ export function InterviewRoster({
                         {row.phone && <span className="ops-interview-phone">{row.phone}</span>}
                       </td>
                       <td data-label="Technology">{row.technology || '—'}</td>
+                      <td data-label="Round">{row.interview_round || '—'}</td>
                       {!handlerView && !effectiveAttendee && (
                         <td data-label="Attendee">{row.interview_attendee_resolved || row.interview_attendee || 'Bhavana'}</td>
                       )}
