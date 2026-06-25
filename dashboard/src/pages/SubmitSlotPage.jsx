@@ -40,8 +40,9 @@ function formatDayHeader(iso) {
     const d = new Date(`${iso}T12:00:00`)
     const today = new Date()
     const tomorrow = new Date(); tomorrow.setDate(today.getDate() + 1)
-    if (d.toDateString() === today.toDateString()) return 'Today'
-    if (d.toDateString() === tomorrow.toDateString()) return 'Tomorrow'
+    const dateStr = d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })
+    if (d.toDateString() === today.toDateString()) return `Today · ${dateStr}`
+    if (d.toDateString() === tomorrow.toDateString()) return `Tomorrow · ${dateStr}`
     return d.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })
   } catch { return iso }
 }
