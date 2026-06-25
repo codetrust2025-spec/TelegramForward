@@ -693,31 +693,38 @@ def parse_invite_screenshot(data: bytes, mime: str = "image/jpeg") -> dict[str, 
     """
     Parse invite screenshot → slot fields.
     Raises ValueError when date/time cannot be determined.
+    Uses Tesseract OCR only (no external AI API).
     """
     if not data:
         raise ValueError("Screenshot file is empty")
     if len(data) > 8 * 1024 * 1024:
         raise ValueError("Screenshot must be under 8 MB")
 
-    vision = _vision_extract_json(data, mime)
-    regex_blob = " ".join(
-        str(v) for v in vision.values() if isinstance(v, str) and v.strip()
-    )
-    regex = parse_invite_text(regex_blob)
-    merged = _merge_parsed(vision, regex)
-    method = "vision" if vision else ""
+    # Primary: Tesseract OCR
+    ocr_text = _local_ocr_text(data)
+    merged: dict[str, Any] = {}
+    method = ""
 
+    if ocr_text:
+        merged = parse_invite_text(ocr_text)
+        method = "ocr"
+
+    # Fallback: Vision API only if OCR failed AND API key is available
     if not merged.get("date") or not merged.get("time"):
-        ocr_text = _local_ocr_text(data)
-        if ocr_text:
-            merged = _apply_text_to_merged(merged, ocr_text, method="ocr")
-            method = "ocr"
+        vision = _vision_extract_json(data, mime)
+        if vision:
+            regex_blob = " ".join(
+                str(v) for v in vision.values() if isinstance(v, str) and v.strip()
+            )
+            regex = parse_invite_text(regex_blob)
+            merged = _merge_parsed(vision, regex if not merged.get("date") else merged)
+            method = method or "vision"
 
     if not merged.get("date") or not merged.get("time"):
         raw_text = _vision_extract_raw_text(data, mime)
         if raw_text:
             merged = _apply_text_to_merged(merged, raw_text, method="vision-ocr")
-            method = "vision-ocr" if not method else method
+            method = method or "vision-ocr"
 
     from features.candidate_store import canonical_technology, normalise_interview_round
 
@@ -734,5 +741,5 @@ def parse_invite_screenshot(data: bytes, mime: str = "image/jpeg") -> dict[str, 
             "enter date & time manually, or upload a clearer invite image."
         )
     merged["parsed"] = True
-    merged["method"] = method or ("vision" if vision else "regex")
+    merged["method"] = method or "ocr"
     return merged
