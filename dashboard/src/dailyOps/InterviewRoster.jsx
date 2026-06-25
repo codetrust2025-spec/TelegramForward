@@ -149,7 +149,7 @@ export function InterviewRoster({
   onRosterMutate,
   onRosterCountsChange,
 }) {
-  const { role, enabled } = useAuth()
+  const { role, enabled, reference } = useAuth()
   const canManage = !enabled || role === 'admin' || role === 'handler'
   const canEditAttendee = !enabled || role === 'admin'
   const handlerView = role === 'handler' && !!reference?.trim()
