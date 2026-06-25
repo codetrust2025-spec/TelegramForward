@@ -283,6 +283,16 @@ def _local_ocr_text(data: bytes) -> str:
     except ImportError:
         return ""
     try:
+        # Configure Tesseract path for Windows and Linux
+        if os.name == 'nt':
+            tesseract_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+            if os.path.exists(tesseract_path):
+                pytesseract.pytesseract.tesseract_cmd = tesseract_path
+        else:
+            # Linux/Unix (production VPS) - usually in /usr/bin/tesseract
+            tesseract_path = "/usr/bin/tesseract"
+            if os.path.exists(tesseract_path):
+                pytesseract.pytesseract.tesseract_cmd = tesseract_path
         img = Image.open(io.BytesIO(data))
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
