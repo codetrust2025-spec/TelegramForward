@@ -425,11 +425,21 @@ export function SubmitSlotPage() {
                     </div>
                     <div className="sbs-booked-status__list">
                       {booked.slice(0, 5).map((s, i) => (
-                        <div key={i} className="sbs-booked-status__item">
-                          <span className="sbs-booked-status__name">{s.name}</span>
-                          <span className="sbs-booked-status__time">{formatFriendlyDate(s.date?.slice(0,10))} · {formatFriendlyTime(s.time)}</span>
-                          {s.interview_round && <span className="sbs-booked-status__round">{s.interview_round}</span>}
-                        </div>
+                        <button
+                          key={i}
+                          type="button"
+                          className="sbs-booked-status__item sbs-booked-status__item--btn"
+                          onClick={() => { setName(s.name); setShowUploadMode(true); setError(''); setSuccess('') }}
+                        >
+                          <div className="sbs-booked-status__item-left">
+                            <span className="sbs-booked-status__name">{s.name}</span>
+                            <span className="sbs-booked-status__time">{formatFriendlyDate(s.date?.slice(0,10))} · {formatFriendlyTime(s.time)}</span>
+                          </div>
+                          <div className="sbs-booked-status__item-right">
+                            {s.interview_round && <span className="sbs-booked-status__round">{s.interview_round}</span>}
+                            <span className="sbs-booked-status__book-btn">Book</span>
+                          </div>
+                        </button>
                       ))}
                     </div>
                   </div>

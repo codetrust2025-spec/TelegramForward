@@ -15522,23 +15522,36 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   color: #6ee7b7;
   margin-bottom: 0.65rem;
 }
-.sbs-booked-status__list { display: flex; flex-direction: column; gap: 0.5rem; }
+.sbs-booked-status__list { display: flex; flex-direction: column; gap: 0.4rem; }
 .sbs-booked-status__item {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
-  flex-wrap: wrap;
+  width: 100%;
+  text-align: left;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(16,185,129,0.1);
+  border-radius: 0.55rem;
+  padding: 0.55rem 0.65rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
 }
+.sbs-booked-status__item:hover { background: rgba(99,102,241,0.1); border-color: rgba(99,102,241,0.25); }
+.sbs-booked-status__item-left { display: flex; flex-direction: column; gap: 0.1rem; flex: 1; min-width: 0; }
+.sbs-booked-status__item-right { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
 .sbs-booked-status__name { font-size: 0.8rem; font-weight: 600; color: var(--text,#eef2f7); }
-.sbs-booked-status__time { font-size: 0.72rem; color: var(--text-muted,#a8b4c4); flex: 1; }
+.sbs-booked-status__time { font-size: 0.7rem; color: var(--text-muted,#a8b4c4); }
 .sbs-booked-status__round {
-  font-size: 0.6rem;
-  font-weight: 700;
-  color: #c7d2fe;
-  background: rgba(99,102,241,0.18);
-  border: 1px solid rgba(129,140,248,0.25);
-  padding: 0.1rem 0.4rem;
-  border-radius: 999px;
+  font-size: 0.6rem; font-weight: 700; color: #c7d2fe;
+  background: rgba(99,102,241,0.18); border: 1px solid rgba(129,140,248,0.25);
+  padding: 0.1rem 0.4rem; border-radius: 999px;
+}
+.sbs-booked-status__book-btn {
+  font-size: 0.65rem; font-weight: 600; color: #a5b4fc;
+  background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.25);
+  padding: 0.15rem 0.5rem; border-radius: 999px;
+  white-space: nowrap;
 }
 /* Fields */
 .sbs-field { display: flex; flex-direction: column; gap: 0.35rem; }
