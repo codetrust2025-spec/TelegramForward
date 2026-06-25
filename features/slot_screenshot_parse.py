@@ -296,22 +296,15 @@ def _local_ocr_text(data: bytes) -> str:
             scale = max(2, 1500 // w)
             gray = gray.resize((w * scale, h * scale), Image.LANCZOS)
 
-        # Binarize: threshold to pure black/white for clean OCR
-        threshold = 128
-        gray = gray.point(lambda p: 255 if p > threshold else 0)
-
-        # Try OCR
-        text = pytesseract.image_to_string(gray, config='--psm 6 --oem 3') or ""
+        # Try OCR without binarization first (preserves more detail)
+        text = pytesseract.image_to_string(gray, config='--psm 3 --oem 3') or ""
         text = str(text).strip()
 
-        # If PSM 6 didn't get much, try PSM 3 (auto)
+        # If too short, try with binarization
         if len(text) < 20:
-            gray2 = img.convert("L")
-            w2, h2 = gray2.size
-            if w2 < 1500:
-                scale2 = max(2, 1500 // w2)
-                gray2 = gray2.resize((w2 * scale2, h2 * scale2), Image.LANCZOS)
-            text2 = pytesseract.image_to_string(gray2, config='--psm 3 --oem 3') or ""
+            threshold = 140
+            binary = gray.point(lambda p: 255 if p > threshold else 0)
+            text2 = pytesseract.image_to_string(binary, config='--psm 6 --oem 3') or ""
             text2 = str(text2).strip()
             if len(text2) > len(text):
                 text = text2
@@ -742,6 +735,8 @@ def parse_invite_screenshot(data: bytes, mime: str = "image/jpeg") -> dict[str, 
     ocr_text = _local_ocr_text(data)
     merged: dict[str, Any] = {}
     method = ""
+
+    logger.info("slot screenshot OCR output (%d chars): %s", len(ocr_text), ocr_text[:300].replace("\n", " | "))
 
     if ocr_text:
         merged = parse_invite_text(ocr_text)
