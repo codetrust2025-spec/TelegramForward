@@ -15809,6 +15809,34 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 .ops-dash-kpi--active.ops-dash-kpi--red { border-color: #ef4444; }
 
 /* Candidates page — stats and top performers visible */
+/* Candidates page tabs */
+.cand-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0 0 0.75rem;
+  border-bottom: 1px solid rgba(148,163,184,0.1);
+  margin-bottom: 0.75rem;
+}
+.cand-tabs__btn {
+  flex: 1;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.6rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid rgba(148,163,184,0.1);
+  color: var(--text-muted, #a8b4c4);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+.cand-tabs__btn:hover { background: rgba(99,102,241,0.08); }
+.cand-tabs__btn--active {
+  background: rgba(99,102,241,0.18);
+  border-color: rgba(99,102,241,0.35);
+  color: #c7d2fe;
+  font-weight: 600;
+}
 .auth-forgot-link {
   margin-top: 0.5rem;
   width: 100%;
