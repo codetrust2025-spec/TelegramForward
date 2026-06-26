@@ -3814,11 +3814,14 @@ def stats(
                 if _reference_key(r.get("reference") or "") == scope_key
             ]
     if month and month != "all":
-        rows = [r for r in all_rows if _row_in_month(r, month)]
+        # Collapse profile duplicates FIRST, then filter by month.
+        # This matches how list_candidates works: collapse → filter.
+        # Without this, individual slot clones with different dates could
+        # cause a candidate to be counted in a month they don't belong to.
+        rows = _stats_rows_deduped(all_rows)
+        rows = [r for r in rows if _row_in_month(r, month)]
     else:
-        rows = all_rows
-
-    rows = _stats_rows_deduped(rows)
+        rows = _stats_rows_deduped(all_rows)
 
     total = len(rows)
     by_stage = {s: 0 for s in VALID_STAGES}
