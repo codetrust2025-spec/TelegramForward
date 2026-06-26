@@ -1101,7 +1101,7 @@ def backfill_tool_default_interview_attendees() -> int:
 
 
 def backfill_logged_dates() -> int:
-    """Set logged_date from earliest slot/lead date per profile client name."""
+    """Set logged_date from earliest slot/lead date (or created_at) per profile client name."""
     data = _load(force=True)
     rows = data.get("candidates") or []
     earliest_by_name: dict[str, str] = {}
@@ -1111,7 +1111,12 @@ def backfill_logged_dates() -> int:
         key = _normalise_candidate_name_key(r.get("name") or "")
         if not key:
             continue
-        day = _clean_str(r.get("date"))[:10]
+        # Use logged_date if available, then date, then created_at
+        day = _clean_str(r.get("logged_date"))[:10]
+        if len(day) != 10:
+            day = _clean_str(r.get("date"))[:10]
+        if len(day) != 10:
+            day = _clean_str(r.get("created_at"))[:10]
         if len(day) != 10:
             continue
         prev = earliest_by_name.get(key)
@@ -1268,16 +1273,25 @@ def _collapse_profile_candidates(rows: list[dict]) -> list[dict]:
         # NOT the interview slot date.  Use logged_date (the original date when
         # the candidate was first added) so slot bookings don't shift the row
         # into the current month.
-        lead_date = _row_lead_date(merged)
-        if not lead_date:
-            # Fallback: use the earliest date across all rows in the group
-            earliest = min(
-                (_clean_str(r.get("logged_date") or r.get("date"))[:10] for r in group),
-                default="",
-            )
-            if len(earliest) == 10:
-                lead_date = earliest
-        if lead_date:
+        lead_date = _clean_str(merged.get("logged_date"))[:10]
+        if len(lead_date) != 10:
+            # Fallback: earliest date across all rows in the group
+            all_dates = [
+                d for r in group
+                for d in [_clean_str(r.get("logged_date"))[:10]]
+                if len(d) == 10
+            ]
+            if not all_dates:
+                # Use created_at (ISO timestamp) as last resort — this is
+                # when the candidate record was first inserted.
+                all_dates = [
+                    d for r in group
+                    for d in [_clean_str(r.get("created_at"))[:10]]
+                    if len(d) == 10
+                ]
+            if all_dates:
+                lead_date = min(all_dates)
+        if len(lead_date) == 10:
             merged["date"] = lead_date
         # Use the max payment across all slot clones for this profile.
         # Payment is recorded on one slot but the collapsed row should reflect it.
@@ -1440,15 +1454,22 @@ def _merge_profile_rows_for_pending(rows: list[dict]) -> dict:
         "follow_up": follow_up or rep.get("follow_up"),
     }
     # Use the original lead date, not the interview slot date
-    lead_date = _row_lead_date(merged)
-    if not lead_date:
-        earliest = min(
-            (_clean_str(r.get("logged_date") or r.get("date"))[:10] for r in rows),
-            default="",
-        )
-        if len(earliest) == 10:
-            lead_date = earliest
-    if lead_date:
+    lead_date = _clean_str(merged.get("logged_date"))[:10]
+    if len(lead_date) != 10:
+        all_dates = [
+            d for r in rows
+            for d in [_clean_str(r.get("logged_date"))[:10]]
+            if len(d) == 10
+        ]
+        if not all_dates:
+            all_dates = [
+                d for r in rows
+                for d in [_clean_str(r.get("created_at"))[:10]]
+                if len(d) == 10
+            ]
+        if all_dates:
+            lead_date = min(all_dates)
+    if len(lead_date) == 10:
         merged["date"] = lead_date
     return merged
 
@@ -2884,8 +2905,15 @@ def assign_interview_slot(
     }
     logged = _clean_str(existing.get("logged_date"))[:10]
     existing_day = _clean_str(existing.get("date"))[:10]
-    if len(logged) != 10 and len(existing_day) == 10:
-        patch["logged_date"] = existing_day
+    if len(logged) != 10:
+        # Preserve the original date before overwriting with slot day.
+        # Use existing date if available, otherwise fall back to created_at.
+        if len(existing_day) == 10:
+            patch["logged_date"] = existing_day
+        else:
+            created = _clean_str(existing.get("created_at"))[:10]
+            if len(created) == 10:
+                patch["logged_date"] = created
     patch["date"] = day
     extra = sanitize_candidate_notes(_clean_str(notes))
     if extra:
