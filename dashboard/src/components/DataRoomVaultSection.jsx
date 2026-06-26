@@ -119,7 +119,7 @@ async function vaultDelete(section, id) {
   return res.json()
 }
 
-// ── Service Accounts block ────────────────────────────────────────────────────
+// ── Service Accounts block (horizontal scroll row) ────────────────────────────
 
 const SVC_FIELDS = [
   { key: 'id', label: 'ID (stable slug)', placeholder: 'e.g. gmail_karthik_2026' },
@@ -172,7 +172,7 @@ function ServiceAccountsBlock({ accounts, onReload }) {
   }
 
   return (
-    <div className="dr-vault-block">
+    <div className="dr-vault-svc-row">
       <div className="dr-vault-block-head">
         <h3 className="dr-vault-subtitle">Service accounts</h3>
         <button type="button" className="cand-btn cand-btn--sm cand-btn--primary" onClick={openAdd}>+ Add</button>
@@ -180,7 +180,7 @@ function ServiceAccountsBlock({ accounts, onReload }) {
       {accounts.length === 0 ? (
         <p className="dr-muted">No service accounts yet.</p>
       ) : (
-        <div className="dr-svc-grid">
+        <div className="dr-svc-scroll-row">
           {accounts.map(row => {
             const tone = serviceCardTone(row)
             const copyAll = [row.label || row.id, row.service ? `Service: ${row.service}` : '', row.username ? `Username: ${row.username}` : '', row.password ? `Password: ${row.password}` : '', row.notes || ''].filter(Boolean).join('\n')
@@ -194,30 +194,32 @@ function ServiceAccountsBlock({ accounts, onReload }) {
                   <div className="dr-vault-item-actions">
                     {tone === 'current' && <span className="dr-svc-badge dr-svc-badge--current">Current</span>}
                     {tone === 'deprecated' && <span className="dr-svc-badge dr-svc-badge--deprecated">Old</span>}
-                    <button type="button" className="cand-btn cand-btn--sm" onClick={() => openEdit(row)}>Edit</button>
-                    <button type="button" className="cand-btn cand-btn--sm cand-btn--danger" onClick={() => handleDelete(row)}>Delete</button>
                   </div>
                 </div>
-                {row.username && (
-                  <div className="dr-svc-field">
-                    <span className="dr-svc-field-label">Username</span>
-                    <div className="dr-svc-field-value">
-                      <code>{row.username}</code>
-                      <CopyChip label="Copy" text={row.username} copyKey={`${row.id}-user`} activeKey={activeKey} onCopy={onCopy} />
+                <div className="dr-svc-card-body">
+                  {row.username && (
+                    <div className="dr-svc-field">
+                      <span className="dr-svc-field-label">Username</span>
+                      <div className="dr-svc-field-value">
+                        <code>{row.username}</code>
+                        <CopyChip label="Copy" text={row.username} copyKey={`${row.id}-user`} activeKey={activeKey} onCopy={onCopy} />
+                      </div>
                     </div>
-                  </div>
-                )}
-                {row.password && (
-                  <div className="dr-svc-field">
-                    <span className="dr-svc-field-label">Password</span>
-                    <div className="dr-svc-field-value">
-                      <code className="dr-creds-pass">{row.password}</code>
-                      <CopyChip label="Copy" text={row.password} copyKey={`${row.id}-pass`} activeKey={activeKey} onCopy={onCopy} />
+                  )}
+                  {row.password && (
+                    <div className="dr-svc-field">
+                      <span className="dr-svc-field-label">Password</span>
+                      <div className="dr-svc-field-value">
+                        <code className="dr-creds-pass">{row.password}</code>
+                        <CopyChip label="Copy" text={row.password} copyKey={`${row.id}-pass`} activeKey={activeKey} onCopy={onCopy} />
+                      </div>
                     </div>
-                  </div>
-                )}
-                {row.notes && <p className="dr-svc-notes">{row.notes}</p>}
-                <div className="dr-svc-card-actions">
+                  )}
+                  {row.notes && <p className="dr-svc-notes">{row.notes}</p>}
+                </div>
+                <div className="dr-svc-card-footer">
+                  <button type="button" className="cand-btn cand-btn--sm" onClick={() => openEdit(row)}>Edit</button>
+                  <button type="button" className="cand-btn cand-btn--sm cand-btn--danger" onClick={() => handleDelete(row)}>Delete</button>
                   <CopyChip label="Copy all" text={copyAll} copyKey={`${row.id}-all`} activeKey={activeKey} onCopy={onCopy} />
                 </div>
               </article>
@@ -240,7 +242,7 @@ function ServiceAccountsBlock({ accounts, onReload }) {
   )
 }
 
-// ── Prompts block ─────────────────────────────────────────────────────────────
+// ── Prompts block (compact list) ──────────────────────────────────────────────
 
 const PROMPT_FIELDS = [
   { key: 'id', label: 'ID (stable slug)', placeholder: 'e.g. intro_message' },
@@ -290,34 +292,34 @@ function PromptsBlock({ prompts, onReload }) {
     onReload()
   }
 
+  const visiblePrompts = prompts.slice(0, 4)
+
   return (
-    <div className="dr-vault-block">
+    <div className="dr-vault-block dr-vault-col">
       <div className="dr-vault-block-head">
-        <h3 className="dr-vault-subtitle">Prompts</h3>
+        <h3 className="dr-vault-subtitle">Prompts <span className="dr-vault-count">({prompts.length})</span></h3>
         <button type="button" className="cand-btn cand-btn--sm cand-btn--primary" onClick={openAdd}>+ Add</button>
       </div>
       {prompts.length === 0 ? (
         <p className="dr-muted">No prompts yet.</p>
       ) : (
-        <div className="dr-prompt-list">
-          {prompts.map(row => (
-            <details className="dr-prompt-card" key={row.id}>
-              <summary>
-                <span className="dr-prompt-card-title">{row.title || row.id}</span>
-                <span className="dr-prompt-card-meta">{(row.body || '').length} chars</span>
-                <span className="dr-vault-summary-actions" onClick={(e) => e.stopPropagation()}>
-                  <button type="button" className="cand-btn cand-btn--sm" onClick={() => openEdit(row)}>Edit</button>
-                  <button type="button" className="cand-btn cand-btn--sm cand-btn--danger" onClick={() => handleDelete(row)}>Delete</button>
-                </span>
-              </summary>
-              <div className="dr-prompt-body-wrap">
-                {row.source && <p className="dr-muted">{row.source}</p>}
-                <pre className="dr-prompt-body">{row.body}</pre>
-                <CopyChip label="Copy prompt" text={row.body || ''} copyKey={`prompt-${row.id}`} activeKey={activeKey} onCopy={onCopy} />
+        <div className="dr-prompt-compact-list">
+          {visiblePrompts.map(row => (
+            <div className="dr-prompt-compact-row" key={row.id}>
+              <div className="dr-prompt-compact-info">
+                <span className="dr-prompt-compact-title">{row.title || row.id}</span>
+                <span className="dr-prompt-compact-meta">{(row.body || '').length} chars</span>
               </div>
-            </details>
+              <div className="dr-prompt-compact-actions">
+                <button type="button" className="cand-btn cand-btn--sm" onClick={() => openEdit(row)}>Edit</button>
+                <button type="button" className="cand-btn cand-btn--sm cand-btn--danger" onClick={() => handleDelete(row)}>Delete</button>
+              </div>
+            </div>
           ))}
         </div>
+      )}
+      {prompts.length > 4 && (
+        <a className="dr-vault-view-all" href="#prompts-all">View all prompts →</a>
       )}
       {modal && (
         <VaultModal
@@ -334,7 +336,7 @@ function PromptsBlock({ prompts, onReload }) {
   )
 }
 
-// ── Key Links (resources) block ───────────────────────────────────────────────
+// ── Key Links (resources) block — 2-col mini cards ────────────────────────────
 
 const LINK_FIELDS = [
   { key: 'id', label: 'ID (stable slug)', placeholder: 'e.g. drive_folder' },
@@ -378,28 +380,27 @@ function ResourcesBlock({ resources, onReload }) {
   }
 
   return (
-    <div className="dr-vault-block">
+    <div className="dr-vault-block dr-vault-col">
       <div className="dr-vault-block-head">
-        <h3 className="dr-vault-subtitle">Key links</h3>
+        <h3 className="dr-vault-subtitle">Key links <span className="dr-vault-count">({resources.length})</span></h3>
         <button type="button" className="cand-btn cand-btn--sm cand-btn--primary" onClick={openAdd}>+ Add</button>
       </div>
       {resources.length === 0 ? (
         <p className="dr-muted">No links yet.</p>
       ) : (
-        <ul className="dr-resource-grid">
+        <ul className="dr-resource-mini-grid">
           {resources.map(row => (
-            <li className="dr-resource-card" key={row.id}>
-              <div className="dr-vault-item-actions dr-vault-item-actions--right">
-                <button type="button" className="cand-btn cand-btn--sm" onClick={() => openEdit(row)}>Edit</button>
-                <button type="button" className="cand-btn cand-btn--sm cand-btn--danger" onClick={() => handleDelete(row)}>Delete</button>
-              </div>
-              <a className="dr-resource-card-title" href={row.url} target="_blank" rel="noopener noreferrer" title={row.title || row.url}>
+            <li className="dr-resource-mini-card" key={row.id}>
+              <a className="dr-resource-mini-title" href={row.url} target="_blank" rel="noopener noreferrer" title={row.title || row.url}>
                 {row.title || row.url}
               </a>
-              {row.notes && <p className="dr-resource-notes">{row.notes}</p>}
+              {row.notes && <p className="dr-resource-mini-desc">{row.notes}</p>}
             </li>
           ))}
         </ul>
+      )}
+      {resources.length > 0 && (
+        <a className="dr-vault-view-all" href="#links-all">View all key links →</a>
       )}
       {modal && (
         <VaultModal
@@ -416,7 +417,7 @@ function ResourcesBlock({ resources, onReload }) {
   )
 }
 
-// ── Offer Letters block ───────────────────────────────────────────────────────
+// ── Offer Letters block (table, center column) ────────────────────────────────
 
 const OFFER_FIELDS = [
   { key: 'id', label: 'ID (stable slug)', placeholder: 'e.g. luxoft_2024_01' },
@@ -436,8 +437,6 @@ function OfferLettersBlock({ offers, onReload }) {
   const [uploadId, setUploadId] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
-
-  const offerFolder = offers.find(row => row.folder_url)?.folder_url || DEFAULT_OFFER_FOLDER
 
   const openAdd = () => {
     setModalError('')
@@ -489,57 +488,47 @@ function OfferLettersBlock({ offers, onReload }) {
     }
   }
 
+  const visibleOffers = offers.slice(0, 5)
+
   return (
-    <div className="dr-vault-block">
+    <div className="dr-vault-block dr-vault-col dr-vault-col--wide">
       <div className="dr-vault-block-head">
-        <h3 className="dr-vault-subtitle">Offer letters</h3>
+        <h3 className="dr-vault-subtitle">Offer letters <span className="dr-vault-count">({offers.length})</span></h3>
         <button type="button" className="cand-btn cand-btn--sm cand-btn--primary" onClick={openAdd}>+ Add</button>
       </div>
-      <p className="dr-muted dr-offer-folder">
-        Drive folder:{' '}
-        <a href={offerFolder} target="_blank" rel="noopener noreferrer">Offer letters for proof</a>
-      </p>
       {uploadError && <p className="dr-error">{uploadError}</p>}
       {offers.length === 0 ? (
         <p className="dr-muted">No offer letters catalogued yet.</p>
       ) : (
-        <div className="cand-table-wrap">
-          <table className="cand-table dr-table dr-offer-table">
+        <div className="dr-offer-compact-table-wrap">
+          <table className="dr-offer-compact-table">
             <thead>
               <tr>
                 <th>File</th>
                 <th>Candidate</th>
                 <th>Modified</th>
-                <th>Size</th>
-                <th>Notes</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {offers.map(row => (
+              {visibleOffers.map(row => (
                 <tr key={row.id}>
-                  <td data-label="File">
-                    <strong className="dr-offer-filename">{row.filename || row.id}</strong>
-                  </td>
-                  <td data-label="Candidate">{row.candidate || '—'}</td>
-                  <td data-label="Modified">{row.date_modified || '—'}</td>
-                  <td data-label="Size">{row.size_kb ? `${row.size_kb} KB` : '—'}</td>
-                  <td data-label="Notes" className="dr-summary" title={row.notes}>{row.notes || '—'}</td>
-                  <td data-label="Actions" className="dr-actions">
-                    <a href={`${API_BASE}/data-room/offer-letters/${row.id}/preview`} target="_blank" rel="noopener noreferrer" className="cand-btn cand-btn--sm">View</a>
-                    <a href={`${API_BASE}/data-room/offer-letters/${row.id}/download`} download className="cand-btn cand-btn--sm">Download</a>
-                    <label className={`cand-btn cand-btn--sm${uploading && uploadId === row.id ? ' cand-btn--disabled' : ''}`} title="Upload PDF">
-                      {uploading && uploadId === row.id ? 'Uploading…' : 'Upload'}
-                      <input type="file" accept="application/pdf" style={{ display: 'none' }} onChange={(e) => handleUpload(row.id, e.target.files[0])} />
-                    </label>
-                    <button type="button" className="cand-btn cand-btn--sm" onClick={() => openEdit(row)}>Edit</button>
-                    <button type="button" className="cand-btn cand-btn--sm cand-btn--danger" onClick={() => handleDelete(row)}>Delete</button>
+                  <td><span className="dr-offer-filename">{row.filename || row.id}</span></td>
+                  <td>{row.candidate || '—'}</td>
+                  <td>{row.date_modified || '—'}</td>
+                  <td className="dr-offer-actions-cell">
+                    <a href={`${API_BASE}/data-room/offer-letters/${row.id}/preview`} target="_blank" rel="noopener noreferrer" className="dr-offer-icon-btn" title="View">👁</a>
+                    <a href={`${API_BASE}/data-room/offer-letters/${row.id}/download`} download className="dr-offer-icon-btn" title="Download">⬇</a>
+                    <button type="button" className="dr-offer-icon-btn" title="More" onClick={() => openEdit(row)}>⋯</button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+      {offers.length > 5 && (
+        <a className="dr-vault-view-all" href="#offers-all">View all offer letters →</a>
       )}
       {modal && (
         <VaultModal
@@ -571,33 +560,26 @@ export function DataRoomVaultSection({ creds, active = true, onReload }) {
       className={`dr-section dr-vault-section${active ? ' dr-section--active' : ''}`}
       aria-labelledby="dr-vault-title"
     >
-      <div className="dr-section-head">
-        <h2 id="dr-vault-title" className="dr-section-title">Operations vault</h2>
-        <p className="dr-section-desc">
-          Gmail accounts, AI prompts, offer-letter catalog, and key links.
-        </p>
-      </div>
-
-      <div className="dr-vault-stats">
-        <div className="dr-vault-stat">
-          <div className="dr-vault-stat-label">Accounts</div>
-          <div className="dr-vault-stat-value">{accounts.length}</div>
+      {/* Header row: title + stats chips */}
+      <div className="dr-vault-header-row">
+        <div className="dr-section-head">
+          <h2 id="dr-vault-title" className="dr-section-title">Operations vault</h2>
+          <p className="dr-section-desc">
+            Gmail accounts, AI prompts, offer-letter catalog, and key links.
+          </p>
         </div>
-        <div className="dr-vault-stat">
-          <div className="dr-vault-stat-label">Prompts</div>
-          <div className="dr-vault-stat-value">{prompts.length}</div>
-        </div>
-        <div className="dr-vault-stat">
-          <div className="dr-vault-stat-label">Links</div>
-          <div className="dr-vault-stat-value">{resources.length}</div>
-        </div>
-        <div className="dr-vault-stat">
-          <div className="dr-vault-stat-label">Offers</div>
-          <div className="dr-vault-stat-value">{offers.length}</div>
+        <div className="dr-vault-stats">
+          <div className="dr-vault-stat"><span className="dr-vault-stat-icon">👤</span><div><div className="dr-vault-stat-label">Accounts</div><div className="dr-vault-stat-value">{accounts.length}</div></div></div>
+          <div className="dr-vault-stat"><span className="dr-vault-stat-icon">📝</span><div><div className="dr-vault-stat-label">Prompts</div><div className="dr-vault-stat-value">{prompts.length}</div></div></div>
+          <div className="dr-vault-stat"><span className="dr-vault-stat-icon">🔗</span><div><div className="dr-vault-stat-label">Key Links</div><div className="dr-vault-stat-value">{resources.length}</div></div></div>
+          <div className="dr-vault-stat"><span className="dr-vault-stat-icon">📄</span><div><div className="dr-vault-stat-label">Offers</div><div className="dr-vault-stat-value">{offers.length}</div></div></div>
         </div>
       </div>
 
+      {/* Service Accounts — horizontal scroll row */}
       <ServiceAccountsBlock accounts={accounts} onReload={onReload} />
+
+      {/* 3-column grid: Prompts | Offer Letters | Key Links */}
       <div className="dr-vault-grid">
         <PromptsBlock prompts={prompts} onReload={onReload} />
         <OfferLettersBlock offers={offers} onReload={onReload} />
