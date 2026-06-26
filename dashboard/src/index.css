@@ -16220,8 +16220,8 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   color: #c7d2fe;
   font-weight: 600;
 }
-/* Overview quick actions */
-.cand-overview-actions { margin-top: 1.25rem; }
+/* Overview quick actions — HIDDEN */
+.cand-overview-actions { display: none; }
 .cand-overview-actions__title { font-size: 0.8rem; font-weight: 600; color: var(--text-muted, #a8b4c4); margin: 0 0 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .cand-overview-actions__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.65rem; }
 .cand-overview-action {
