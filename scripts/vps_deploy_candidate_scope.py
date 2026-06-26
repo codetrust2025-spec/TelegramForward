@@ -33,6 +33,8 @@ def main() -> None:
 
     sftp.put(str(ROOT / "server.py"), f"{REMOTE}/server.py")
     print("Uploaded server.py")
+    sftp.put(str(ROOT / "features" / "candidate_store.py"), f"{REMOTE}/features/candidate_store.py")
+    print("Uploaded features/candidate_store.py")
     for rel in (
         "core/dashboard_auth_vps.py",
         "core/dashboard_auth_api.py",
