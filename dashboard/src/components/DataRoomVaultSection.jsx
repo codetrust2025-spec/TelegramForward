@@ -598,9 +598,11 @@ export function DataRoomVaultSection({ creds, active = true, onReload }) {
       </div>
 
       <ServiceAccountsBlock accounts={accounts} onReload={onReload} />
-      <PromptsBlock prompts={prompts} onReload={onReload} />
-      <OfferLettersBlock offers={offers} onReload={onReload} />
-      <ResourcesBlock resources={resources} onReload={onReload} />
+      <div className="dr-vault-grid">
+        <PromptsBlock prompts={prompts} onReload={onReload} />
+        <OfferLettersBlock offers={offers} onReload={onReload} />
+        <ResourcesBlock resources={resources} onReload={onReload} />
+      </div>
     </section>
   )
 }
