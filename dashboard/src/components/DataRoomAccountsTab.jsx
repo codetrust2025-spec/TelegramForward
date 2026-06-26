@@ -264,8 +264,14 @@ export function DataRoomAccountsTab({ accounts = [], onReload }) {
                   <td>
                     <div className="dr-acct-actions">
                       <button type="button" className="cand-btn cand-btn--sm" onClick={() => openEdit(row)}>Edit</button>
-                      <button type="button" className="cand-btn cand-btn--sm" onClick={() => {/* view */ }}>View</button>
-                      <button type="button" className="dr-offer-icon-btn" title="More" onClick={() => openEdit(row)}>⋯</button>
+                      <button type="button" className="cand-btn cand-btn--sm cand-btn--danger" onClick={() => handleDelete(row)}>Delete</button>
+                      <button
+                        type="button"
+                        className={`dr-copy-btn${activeKey === `${row.id}-all` ? ' dr-copy-btn--copied' : ''}`}
+                        onClick={() => onCopy(`${row.id}-all`, [row.label || row.id, row.service ? `Service: ${row.service}` : '', row.username ? `Username: ${row.username}` : '', row.password ? `Password: ${row.password}` : '', row.notes || ''].filter(Boolean).join('\n'))}
+                      >
+                        {activeKey === `${row.id}-all` ? '✓' : 'Copy all'}
+                      </button>
                     </div>
                   </td>
                 </tr>
