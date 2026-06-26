@@ -1026,8 +1026,13 @@ def _with_computed(row: dict) -> dict:
     enriched["handler_commission_max"] = (commissionable_expected * HANDLER_COMMISSION_PCT) // 100
     enriched["company_revenue"] = max(0, received - enriched["handler_commission"])
     proofs = enriched.get("proofs") or []
-    enriched["proofs"] = proofs
-    enriched["proof_count"] = len(proofs)
+    # Separate payment proofs from slot screenshots for the Candidates table.
+    # Payment VIEW should only show payment screenshots, not interview slot images.
+    payment_proofs = [p for p in proofs if not _is_slot_screenshot_proof(p)]
+    enriched["proofs"] = payment_proofs
+    enriched["proof_count"] = len(payment_proofs)
+    # Keep slot screenshots accessible separately (for Daily Ops / interview views)
+    enriched["slot_screenshot_proofs"] = [p for p in proofs if _is_slot_screenshot_proof(p)]
     resumes = enriched.get("resumes") or []
     enriched["resumes"] = resumes
     enriched["resume_count"] = len(resumes)
@@ -1047,7 +1052,7 @@ def _with_computed(row: dict) -> dict:
         "resume": bool(resumes),
         # Once money is recorded, at least one payment proof is required
         # before the row can be considered fully complete.
-        "payment_proof": bool(proofs) if received > 0 else True,
+        "payment_proof": bool(payment_proofs) if received > 0 else True,
     }
     enriched["completion_missing"] = [
         field for field, value in required_details.items() if not value
