@@ -3,6 +3,10 @@ import { useConfirm } from '../context/ConfirmContext.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
 import { formatIstDateTime } from '../utils/istTime.js'
 import { DataRoomVaultSection } from './DataRoomVaultSection.jsx'
+import { DataRoomAccountsTab } from './DataRoomAccountsTab.jsx'
+import { DataRoomPromptsTab } from './DataRoomPromptsTab.jsx'
+import { DataRoomLinksTab } from './DataRoomLinksTab.jsx'
+import { DataRoomOffersTab } from './DataRoomOffersTab.jsx'
 
 const API_BASE =
   typeof window !== 'undefined' && window.location.port === '3000'
@@ -408,9 +412,13 @@ function CredentialsSection({ creds, loading, active, onReload }) {
 }
 
 const DATA_ROOM_TABS = [
-  { id: 'logins', label: 'Logins', adminOnly: false },
   { id: 'vault', label: 'Vault', adminOnly: false },
+  { id: 'logins', label: 'Logins', adminOnly: false },
   { id: 'partners', label: 'Opportunities', adminOnly: false },
+  { id: 'accounts', label: 'Accounts', adminOnly: false },
+  { id: 'prompts', label: 'Prompts', adminOnly: false },
+  { id: 'links', label: 'Key Links', adminOnly: false },
+  { id: 'offers', label: 'Offers', adminOnly: false },
 ]
 
 export function DataRoomPanel() {
@@ -427,7 +435,7 @@ export function DataRoomPanel() {
   const [typeFilter, setTypeFilter] = useState('')
   const [search, setSearch] = useState('')
   const [editor, setEditor] = useState(null)
-  const [activeTab, setActiveTab] = useState('logins')
+  const [activeTab, setActiveTab] = useState('vault')
 
   const visibleTabs = useMemo(
     () => DATA_ROOM_TABS.filter(tab => isAdmin || !tab.adminOnly),
@@ -443,6 +451,10 @@ export function DataRoomPanel() {
       logins: (credentials?.handlers?.length || 0) + (credentials?.admin ? 1 : 0),
       vault: accounts.length + prompts.length + resources.length + offers.length,
       partners: stats?.total ?? rows.length,
+      accounts: accounts.length,
+      prompts: prompts.length,
+      links: resources.length,
+      offers: offers.length,
     }
   }, [credentials, stats, rows.length])
 
@@ -628,6 +640,22 @@ export function DataRoomPanel() {
 
       {activeTab === 'vault' && credentials && (
         <DataRoomVaultSection creds={credentials} active onReload={loadCredentials} />
+      )}
+
+      {activeTab === 'accounts' && credentials && (
+        <DataRoomAccountsTab accounts={credentials.service_accounts || []} onReload={loadCredentials} />
+      )}
+
+      {activeTab === 'prompts' && credentials && (
+        <DataRoomPromptsTab prompts={credentials.prompts || []} onReload={loadCredentials} />
+      )}
+
+      {activeTab === 'links' && credentials && (
+        <DataRoomLinksTab resources={credentials.resources || []} onReload={loadCredentials} />
+      )}
+
+      {activeTab === 'offers' && credentials && (
+        <DataRoomOffersTab offers={credentials.offer_letters || []} onReload={loadCredentials} />
       )}
 
       {activeTab === 'partners' && (
