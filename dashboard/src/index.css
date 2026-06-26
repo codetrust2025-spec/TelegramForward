@@ -9949,22 +9949,22 @@ body {
   background: var(--bg, #0b1020);
   width: 100%;
 }
-/* Merge header + toolbar into single visual block */
+/* Layout: "Candidates" title alone on top, then ONE toolbar row with 
+   search + filters + action buttons all together */
 .cand-page > .cand-header {
   order: -3;
-  margin-bottom: 0;
-  padding-bottom: 8px;
+  margin-bottom: 10px;
 }
+/* Hide the header actions from their original position */
+.cand-page > .cand-header .cand-header-actions {
+  display: none;
+}
+/* The toolbar becomes the single unified bar */
 .cand-page > .cand-toolbar {
   order: -2;
-  margin-top: 0;
-  border-top: none;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
   margin-bottom: 12px;
 }
-.cand-page > .cand-tabs { order: -1; margin-top: 8px; }
-/* Everything else gets normal spacing */
+.cand-page > .cand-tabs { order: -1; margin-top: 4px; }
 .cand-page > *:not(.cand-header):not(.cand-toolbar):not(.cand-tabs) {
   margin-top: 12px;
 }
