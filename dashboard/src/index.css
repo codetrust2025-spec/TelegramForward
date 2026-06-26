@@ -14461,58 +14461,51 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   margin-top: 0;
 }
 
-/* Data room — vault (service accounts, prompts, offers, links) */
+/* Data room — vault (single-screen layout, no page scrolling) */
 .dr-vault-section {
-  padding: 16px;
+  padding: 12px 16px;
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 10px;
   background: rgba(15, 23, 42, 0.35);
   display: flex;
   flex-direction: column;
+  gap: 10px;
+  height: calc(100vh - 160px);
+  min-height: 600px;
+  overflow: hidden;
+}
+
+/* Header row: title left, stats right */
+.dr-vault-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 16px;
+  flex-shrink: 0;
 }
-/* Service accounts block — limit height so grid below is visible */
-.dr-vault-section > .dr-vault-block {
-  max-height: 250px;
-  overflow-y: auto;
-}
-/* 3-column grid: Prompts | Offer Letters | Key Links */
-.dr-vault-grid {
-  display: grid;
-  grid-template-columns: 1fr 1.5fr 1fr;
-  gap: 16px;
-}
-.dr-vault-grid > .dr-vault-block {
-  max-height: 380px;
-  overflow-y: auto;
-  border: 1px solid rgba(148,163,184,0.1);
-  border-radius: 10px;
-  padding: 12px;
-  background: rgba(15,17,23,0.5);
-}
-@media (max-width: 1024px) {
-  .dr-vault-grid {
-    grid-template-columns: 1fr;
-  }
-  .dr-vault-grid > .dr-vault-block {
-    max-height: 300px;
-  }
+.dr-vault-header-row .dr-section-head {
+  margin-bottom: 0;
 }
 .dr-vault-stats {
   display: flex;
-  flex-wrap: wrap;
   gap: 10px;
-  margin-bottom: 14px;
+  flex-shrink: 0;
 }
 .dr-vault-stat {
-  min-width: 88px;
-  padding: 8px 12px;
-  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 100px;
+  padding: 8px 14px;
+  border-radius: 10px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(148, 163, 184, 0.12);
 }
+.dr-vault-stat-icon {
+  font-size: 1.2rem;
+}
 .dr-vault-stat-label {
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -14523,39 +14516,48 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   font-weight: 700;
   color: #e2e8f0;
 }
-.dr-vault-block {
+
+/* Service accounts — horizontal scroll row */
+.dr-vault-svc-row {
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  margin-top: 16px;
+  gap: 8px;
+  max-height: 240px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(15, 17, 23, 0.4);
 }
-.dr-vault-block-head {
+.dr-svc-scroll-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 12px;
+  padding-bottom: 6px;
 }
-.dr-vault-subtitle {
-  margin: 0;
-  font-size: 0.8rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #64748b;
+.dr-svc-scroll-row::-webkit-scrollbar {
+  height: 6px;
 }
-.dr-svc-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 0.75rem;
+.dr-svc-scroll-row::-webkit-scrollbar-track {
+  background: rgba(148, 163, 184, 0.06);
+  border-radius: 3px;
+}
+.dr-svc-scroll-row::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 3px;
 }
 .dr-svc-card {
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
-  padding: 0.9rem 1rem;
+  gap: 0.5rem;
+  min-width: 240px;
+  max-width: 260px;
+  padding: 0.75rem 0.85rem;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(148, 163, 184, 0.12);
+  flex-shrink: 0;
 }
 .dr-svc-card--current {
   border-color: rgba(74, 222, 128, 0.28);
@@ -14569,20 +14571,22 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.4rem;
 }
 .dr-svc-card-title {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: 0.82rem;
   font-weight: 600;
   color: #f1f5f9;
+  line-height: 1.2;
 }
 .dr-svc-badge {
-  padding: 0.12rem 0.45rem;
+  padding: 0.1rem 0.4rem;
   border-radius: 999px;
-  font-size: 0.62rem;
+  font-size: 0.58rem;
   font-weight: 700;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 .dr-svc-badge--current {
   background: rgba(34, 197, 94, 0.2);
@@ -14593,143 +14597,283 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   color: #94a3b8;
 }
 .dr-svc-service {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   color: #64748b;
+}
+.dr-svc-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  flex: 1;
 }
 .dr-svc-field {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: 0.15rem;
 }
 .dr-svc-field-label {
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   color: #64748b;
 }
 .dr-svc-field-value {
   display: flex;
   align-items: center;
+  gap: 0.3rem;
   flex-wrap: wrap;
-  gap: 0.35rem;
+}
+.dr-svc-field-value code {
+  font-size: 0.72rem;
+  word-break: break-all;
 }
 .dr-svc-notes {
   margin: 0;
-  font-size: 0.78rem;
+  font-size: 0.7rem;
   color: #94a3b8;
+  line-height: 1.3;
 }
-.dr-svc-card-actions {
+.dr-svc-card-footer {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.08);
 }
-.dr-prompt-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-.dr-prompt-card {
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(148, 163, 184, 0.1);
+
+/* 3-column grid: fills remaining viewport */
+.dr-vault-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.6fr 1fr;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
-.dr-prompt-card > summary {
+.dr-vault-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(15, 17, 23, 0.5);
+  overflow-y: auto;
+  min-height: 0;
+}
+.dr-vault-col--wide {
+  /* center column gets more space via grid */
+}
+@media (max-width: 1024px) {
+  .dr-vault-grid {
+    grid-template-columns: 1fr;
+  }
+  .dr-vault-section {
+    height: auto;
+    overflow: visible;
+  }
+  .dr-vault-col {
+    max-height: 320px;
+  }
+}
+
+/* Shared block head */
+.dr-vault-block-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
-  cursor: pointer;
-  list-style: none;
+  gap: 0.6rem;
+  flex-shrink: 0;
 }
-.dr-prompt-card > summary::-webkit-details-marker {
-  display: none;
-}
-.dr-prompt-card-title {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: #f1f5f9;
-}
-.dr-prompt-card-meta {
-  font-size: 0.72rem;
-  color: #64748b;
-}
-.dr-prompt-body-wrap {
-  padding: 0 1rem 0.85rem;
-  border-top: 1px solid rgba(148, 163, 184, 0.08);
-}
-.dr-prompt-body {
-  margin: 0.75rem 0;
-  padding: 0.75rem;
-  border-radius: 8px;
-  background: rgba(15, 23, 42, 0.6);
-  border: 1px solid rgba(148, 163, 184, 0.08);
-  font-size: 0.78rem;
-  line-height: 1.5;
-  color: #cbd5e1;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 16rem;
-  overflow: auto;
-}
-.dr-resource-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 0.75rem;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.dr-resource-card {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  padding: 0.75rem 0.85rem;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(148, 163, 184, 0.1);
-}
-.dr-resource-card-title {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: #a5b4fc;
-  text-decoration: none;
-}
-.dr-resource-card-title:hover {
-  text-decoration: underline;
-}
-.dr-resource-notes {
+.dr-vault-subtitle {
   margin: 0;
   font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: #64748b;
 }
-.dr-offer-folder a {
+.dr-vault-count {
+  font-weight: 400;
+  color: #94a3b8;
+}
+.dr-vault-view-all {
+  display: block;
+  text-align: center;
+  font-size: 0.75rem;
   color: #a5b4fc;
   text-decoration: none;
+  padding: 6px 0;
+  margin-top: auto;
+  flex-shrink: 0;
 }
-.dr-offer-folder a:hover {
+.dr-vault-view-all:hover {
   text-decoration: underline;
 }
+
+/* Prompts — compact row list */
+.dr-prompt-compact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.dr-prompt-compact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(148, 163, 184, 0.08);
+}
+.dr-prompt-compact-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.dr-prompt-compact-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #f1f5f9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dr-prompt-compact-meta {
+  font-size: 0.65rem;
+  color: #64748b;
+}
+.dr-prompt-compact-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Offer letters — compact table */
+.dr-offer-compact-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.dr-offer-compact-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+.dr-offer-compact-table thead th {
+  text-align: left;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  position: sticky;
+  top: 0;
+  background: rgba(15, 17, 23, 0.95);
+}
+.dr-offer-compact-table tbody td {
+  padding: 7px 8px;
+  color: #cbd5e1;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+.dr-offer-compact-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
 .dr-offer-filename {
-  font-size: 0.8125rem;
+  font-size: 0.78rem;
   font-weight: 600;
   color: #e2e8f0;
   word-break: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  max-width: 180px;
 }
-.dr-offer-table .dr-summary {
-  max-width: 12rem;
-  white-space: normal;
+.dr-offer-actions-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dr-offer-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  color: #94a3b8;
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.dr-offer-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+}
+
+/* Key links — 2-column mini card grid */
+.dr-resource-mini-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.dr-resource-mini-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(148, 163, 184, 0.08);
+}
+.dr-resource-mini-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #a5b4fc;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dr-resource-mini-title:hover {
+  text-decoration: underline;
+}
+.dr-resource-mini-desc {
+  margin: 0;
+  font-size: 0.68rem;
+  color: #64748b;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 /* Data room — CRUD additions */
-.dr-section-head--row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
 .dr-vault-item-actions {
   display: flex;
   align-items: center;
@@ -14739,15 +14883,6 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 .dr-vault-item-actions--right {
   justify-content: flex-end;
   margin-bottom: 6px;
-}
-.dr-vault-summary-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-}
-.dr-prompt-card > summary {
-  gap: 0.5rem;
 }
 
 /* Public submit-slot page */
