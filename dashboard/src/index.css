@@ -14467,6 +14467,8 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 10px;
   background: rgba(15, 23, 42, 0.35);
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
 }
 .dr-vault-stats {
   display: flex;
