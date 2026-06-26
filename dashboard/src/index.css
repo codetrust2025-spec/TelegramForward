@@ -14470,36 +14470,29 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  height: calc(100vh - 200px);
-  overflow: hidden;
 }
-/* Service accounts — horizontal scroll, limited height */
-.dr-vault-section > .dr-vault-block:first-of-type {
-  max-height: 280px;
+/* Service accounts block — limit height so grid below is visible */
+.dr-vault-section > .dr-vault-block {
+  max-height: 250px;
   overflow-y: auto;
-  flex-shrink: 0;
 }
 /* 3-column grid: Prompts | Offer Letters | Key Links */
 .dr-vault-grid {
   display: grid;
   grid-template-columns: 1fr 1.5fr 1fr;
   gap: 16px;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
 }
 .dr-vault-grid > .dr-vault-block {
+  max-height: 380px;
   overflow-y: auto;
   border: 1px solid rgba(148,163,184,0.1);
   border-radius: 10px;
   padding: 12px;
   background: rgba(15,17,23,0.5);
-  min-height: 0;
 }
 @media (max-width: 1024px) {
   .dr-vault-grid {
     grid-template-columns: 1fr;
-    overflow-y: auto;
   }
   .dr-vault-grid > .dr-vault-block {
     max-height: 300px;
