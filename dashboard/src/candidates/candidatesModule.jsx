@@ -1940,6 +1940,7 @@ export function CandidatesPanel() {
         const params = new URLSearchParams();
         if (m !== 'all') params.set('month', m);
         if (T !== 'all') params.set('reference', T);
+        if (service !== 'all') params.set('service_type', service);
         const result = await (await fetch(`${ve}/candidates?${params.toString()}`, { credentials: 'include' })).json();
         rows = result.status === 'ok' ? result.candidates || [] : [];
       } catch (_) {}
