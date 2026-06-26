@@ -1264,6 +1264,11 @@ def _collapse_profile_candidates(rows: list[dict]) -> list[dict]:
         newest = max(group, key=lambda r: (r.get("updated_at") or "", r.get("date") or ""))
         merged = dict(newest)
         merged["slot_count"] = len(group)
+        # Use the max payment across all slot clones for this profile.
+        # Payment is recorded on one slot but the collapsed row should reflect it.
+        max_payment = max(int(r.get("payment") or 0) for r in group)
+        if max_payment > merged.get("payment", 0):
+            merged["payment"] = max_payment
         # A profile may have old interview-slot duplicates.  Keep its explicit
         # Ravinder referral instead of letting a newer duplicate (for example
         # one imported with Thrilok) replace it in the consolidated row.
