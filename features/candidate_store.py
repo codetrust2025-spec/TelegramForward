@@ -3814,14 +3814,9 @@ def stats(
                 if _reference_key(r.get("reference") or "") == scope_key
             ]
     if month and month != "all":
-        # Use the same filter pipeline as list_candidates to ensure stats
-        # match the breakdown modal exactly.  Collapse profiles first (taking
-        # max payment across slot clones), then filter by the display date.
-        # Also exclude hidden/placeholder rows that _stats_rows_deduped filters.
-        all_rows = [r for r in all_rows if not _hidden_from_candidates_page(r.get("name") or "")]
-        all_rows = [r for r in all_rows if not _is_roster_placeholder(r)]
-        all_rows = _collapse_profile_candidates(all_rows)
-        rows = [r for r in all_rows if _row_in_month(r, month)]
+        # Use list_candidates (the exact same function the breakdown modal calls)
+        # to ensure the stat card revenue matches the breakdown total exactly.
+        rows = list_candidates(month=month, reference=reference)
     else:
         rows = _stats_rows_deduped(all_rows)
 
