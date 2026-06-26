@@ -758,10 +758,8 @@ function cr(e) {
   const t = Number(e) || 0;
   if (t === 0) {
     return "₹0";
-  } else if (t < 100000) {
-    return `₹${t.toLocaleString("en-IN")}`;
   } else {
-    return `₹${(t / 100000).toFixed(t % 100000 === 0 ? 0 : 1)}L`;
+    return `₹${t.toLocaleString("en-IN")}`;
   }
 }
 function J8({
