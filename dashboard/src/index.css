@@ -9949,6 +9949,10 @@ body {
   background: var(--bg, #0b1020);
   width: 100%;
 }
+/* Reorder: Header → Toolbar → Tabs → Content */
+.cand-page > .cand-header { order: -3; }
+.cand-page > .cand-toolbar { order: -2; }
+.cand-page > .cand-tabs { order: -1; }
 
 /* When the Candidates view is mounted, let the document scroll naturally.
    The flex column still works because the header is the first child and
@@ -10121,6 +10125,7 @@ body {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.8);
   margin-bottom: 8px;
   isolation: isolate;
+  order: -1;
 }
 .cand-table-wrap {
   position: relative;
