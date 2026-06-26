@@ -110,13 +110,14 @@ function SlotEditModal({ row, mode, busy, onClose, onSave }) {
   const [time, setTime] = useState(row.time || '')
   const [timeEnd, setTimeEnd] = useState(row.time_end || '')
   const [notes, setNotes] = useState(row.notes || '')
+  const [round, setRound] = useState(row.interview_round || '')
   const [error, setError] = useState('')
   const attendeeOnly = mode === 'attendee'
   async function submit(event) {
     event.preventDefault()
     setError('')
     try {
-      await onSave(attendeeOnly ? { attendee } : { date, time, time_end: timeEnd, notes, interview_round: row.interview_round || '' })
+      await onSave(attendeeOnly ? { attendee } : { date, time, time_end: timeEnd, notes, interview_round: round })
     } catch (err) {
       setError(err.message || 'Save failed')
     }
@@ -126,7 +127,7 @@ function SlotEditModal({ row, mode, busy, onClose, onSave }) {
       <form className="cand-modal ops-slot-modal" onSubmit={submit}>
         <header className="cand-modal-header"><div><h3 className="cand-modal-title">{attendeeOnly ? 'Edit attendee' : 'Edit interview slot'}</h3><p className="cand-modal-sub">{row.name}</p></div><button type="button" className="cand-modal-close" onClick={onClose} aria-label="Close">×</button></header>
         <div className="cand-modal-body">
-          {attendeeOnly ? <label className="cand-field cand-field--span2"><span className="cand-field-label">Attendee</span><input className="cand-input" list="ops-attendee-options" value={attendee} onChange={event => setAttendee(event.target.value)} required autoFocus /><datalist id="ops-attendee-options">{ATTENDEES.map(name => <option key={name} value={name} />)}</datalist></label> : <><label className="cand-field"><span className="cand-field-label">Date</span><input className="cand-input" type="date" value={date} onChange={event => setDate(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Start time</span><input className="cand-input" type="time" value={time} onChange={event => setTime(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">End time</span><input className="cand-input" type="time" value={timeEnd} onChange={event => setTimeEnd(event.target.value)} required /></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Notes</span><input className="cand-input" value={notes} onChange={event => setNotes(event.target.value)} /></label></>}
+          {attendeeOnly ? <label className="cand-field cand-field--span2"><span className="cand-field-label">Attendee</span><input className="cand-input" list="ops-attendee-options" value={attendee} onChange={event => setAttendee(event.target.value)} required autoFocus /><datalist id="ops-attendee-options">{ATTENDEES.map(name => <option key={name} value={name} />)}</datalist></label> : <><label className="cand-field"><span className="cand-field-label">Date</span><input className="cand-input" type="date" value={date} onChange={event => setDate(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Start time</span><input className="cand-input" type="time" value={time} onChange={event => setTime(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">End time</span><input className="cand-input" type="time" value={timeEnd} onChange={event => setTimeEnd(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Interview round</span><select className="cand-input" value={round} onChange={event => setRound(event.target.value)}><option value="">Select round</option><option value="L1">L1</option><option value="L2">L2</option><option value="L3">L3</option><option value="HR">HR</option><option value="Final">Final round</option><option value="Screening">Screening</option></select></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Notes</span><input className="cand-input" value={notes} onChange={event => setNotes(event.target.value)} /></label></>}
           {error && <p className="admin-error cand-field--span2">{error}</p>}
         </div>
         <footer className="cand-modal-footer"><button type="button" className="cand-btn cand-btn--ghost" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="cand-btn cand-btn--primary" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button></footer>
