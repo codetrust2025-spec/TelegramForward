@@ -14885,6 +14885,203 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   margin-bottom: 6px;
 }
 
+/* ── Data Room sub-tab pages (Accounts, Prompts, Links, Offers) ─────────── */
+.dr-tab-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.dr-tab-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.dr-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.dr-search-icon {
+  position: absolute;
+  left: 10px;
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+.dr-search-input {
+  padding-left: 32px !important;
+  min-width: 200px;
+}
+.dr-tab-stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.dr-tab-stat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  min-width: 180px;
+  flex: 1;
+}
+.dr-tab-stat-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+.dr-tab-stat-icon--blue { background: rgba(59, 130, 246, 0.15); }
+.dr-tab-stat-icon--green { background: rgba(34, 197, 94, 0.15); }
+.dr-tab-stat-icon--yellow { background: rgba(234, 179, 8, 0.15); }
+.dr-tab-stat-icon--purple { background: rgba(168, 85, 247, 0.15); }
+.dr-tab-stat-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  line-height: 1;
+}
+.dr-tab-stat-label {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+/* Tab table */
+.dr-tab-table-wrap {
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(15, 17, 23, 0.4);
+}
+.dr-tab-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.dr-tab-table thead th {
+  text-align: left;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(15, 17, 23, 0.6);
+}
+.dr-tab-table tbody td {
+  padding: 12px 16px;
+  color: #cbd5e1;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+  vertical-align: middle;
+}
+.dr-tab-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+.dr-tab-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Account cell */
+.dr-acct-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dr-acct-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dr-acct-dot--active { background: #22c55e; }
+.dr-acct-dot--old { background: #eab308; }
+.dr-acct-name {
+  font-weight: 600;
+  color: #f1f5f9;
+}
+.dr-acct-primary-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  background: rgba(34, 197, 94, 0.15);
+  color: #86efac;
+  text-transform: uppercase;
+}
+.dr-acct-cred-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dr-acct-cred-cell code {
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+.dr-acct-status {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.dr-acct-status--active { color: #22c55e; }
+.dr-acct-status--old { color: #eab308; }
+.dr-acct-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Tip bar */
+.dr-tip-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid rgba(59, 130, 246, 0.15);
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+.dr-tip-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+/* Links tab */
+.dr-link-url {
+  color: #a5b4fc;
+  text-decoration: none;
+  font-size: 0.78rem;
+}
+.dr-link-url:hover {
+  text-decoration: underline;
+}
+
+/* Prompt preview */
+.dr-prompt-preview {
+  font-size: 0.75rem;
+  color: #64748b;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Public submit-slot page */
 .submit-slot-screen {
   position: relative;
