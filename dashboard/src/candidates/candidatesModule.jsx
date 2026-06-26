@@ -1788,7 +1788,7 @@ export function CandidatesPanel() {
   const [J, G] = w.useState(false);
   const [ce, ee] = w.useState(false);
   const [B, Z] = w.useState(null);
-  const [candTab, setCandTab] = w.useState("candidates");
+  const [candTab, setCandTab] = w.useState("overview");
   const [P, j] = w.useState(null);
   const [ro, setRo] = w.useState(false);
   const {
@@ -1975,7 +1975,7 @@ export function CandidatesPanel() {
       card.onclick = () => openBreakdown(label);
     });
     return () => cards.forEach(card => { card.onclick = null; });
-  }, [c, m, T]);
+  }, [c, m, T, candTab]);
   w.useEffect(() => {
     if (f || !i.length) return;
     const intent = consumePendingWorkOpenIntent();
