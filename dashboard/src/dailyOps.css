@@ -117,7 +117,16 @@
 .ops-checklist-foot{margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06)}
 .daily-ops-page--dashboard{padding:6px 10px 8px;max-width:100%;width:100%;gap:0;display:flex;flex-direction:column;min-height:0}
 /* Remove gap between top sections */
-.ops-dashboard{display:flex;flex-direction:column;gap:2px;min-height:0;width:100%}
+.ops-dashboard{display:flex;flex-direction:column;gap:0;min-height:0;width:100%}
+/* Make the top area a single non-wrapping row */
+.ops-dashboard > .ops-topbar,
+.ops-dashboard > .ops-dash-top-row {
+  flex-wrap: nowrap;
+}
+.ops-dashboard > .ops-dash-controls-row {
+  display: inline-flex;
+  flex-wrap: nowrap;
+}
 .ops-dashboard--v2.ops-dashboard--enterprise .ops-dash-board{gap:6px}
 .ops-dashboard--v2 .ops-dash-row{grid-template-columns:minmax(0,13fr) minmax(0,7fr);gap:6px}
 .ops-dashboard--enterprise .ops-dash-board{display:flex;flex-direction:column;gap:8px;width:100%}
@@ -1367,20 +1376,37 @@
    ───────────────────────────────────────────────────────────────────────── */
 
 .ops-topbar {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 4px 2px 0;
+  gap: 8px;
+  padding: 0;
   flex-wrap: nowrap;
   min-width: 0;
   margin-bottom: 0;
 }
-/* Merge topbar and toolbar into visually one row */
+/* Merge topbar and controls into single line */
+.ops-topbar + .ops-dash-controls-row {
+  display: inline-flex;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
 .ops-topbar + .ops-dash-toolbar--v3,
 .ops-topbar + .ops-monitor-toolbar {
   margin-top: 0;
-  padding-top: 4px;
+  padding-top: 0;
   border-top: none;
+}
+/* Parent container: single row wrap */
+.ops-dash-top-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  padding: 4px 0;
+}
+.ops-dash-top-row + .ops-dash-controls-row {
+  display: inline;
 }
 
 .ops-topbar__left {
