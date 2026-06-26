@@ -1264,6 +1264,21 @@ def _collapse_profile_candidates(rows: list[dict]) -> list[dict]:
         newest = max(group, key=lambda r: (r.get("updated_at") or "", r.get("date") or ""))
         merged = dict(newest)
         merged["slot_count"] = len(group)
+        # The Candidates table should show the original lead/registration date,
+        # NOT the interview slot date.  Use logged_date (the original date when
+        # the candidate was first added) so slot bookings don't shift the row
+        # into the current month.
+        lead_date = _row_lead_date(merged)
+        if not lead_date:
+            # Fallback: use the earliest date across all rows in the group
+            earliest = min(
+                (_clean_str(r.get("logged_date") or r.get("date"))[:10] for r in group),
+                default="",
+            )
+            if len(earliest) == 10:
+                lead_date = earliest
+        if lead_date:
+            merged["date"] = lead_date
         # Use the max payment across all slot clones for this profile.
         # Payment is recorded on one slot but the collapsed row should reflect it.
         max_payment = max(int(r.get("payment") or 0) for r in group)
@@ -1414,7 +1429,7 @@ def _merge_profile_rows_for_pending(rows: list[dict]) -> dict:
         rep.get("reference"),
     )
     follow_up = next((r.get("follow_up") for r in rows if _clean_str(r.get("follow_up"))), "")
-    return {
+    merged = {
         **rep,
         "payment": payment,
         "expected_payment": expected,
@@ -1424,6 +1439,18 @@ def _merge_profile_rows_for_pending(rows: list[dict]) -> dict:
         "reference": reference or rep.get("reference"),
         "follow_up": follow_up or rep.get("follow_up"),
     }
+    # Use the original lead date, not the interview slot date
+    lead_date = _row_lead_date(merged)
+    if not lead_date:
+        earliest = min(
+            (_clean_str(r.get("logged_date") or r.get("date"))[:10] for r in rows),
+            default="",
+        )
+        if len(earliest) == 10:
+            lead_date = earliest
+    if lead_date:
+        merged["date"] = lead_date
+    return merged
 
 
 _STAGE_RANK = {"completed": 4, "in_progress": 3, "fail": 2, "dropped": 1}
