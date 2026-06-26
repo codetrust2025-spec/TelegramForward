@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useConfirm } from '../context/ConfirmContext.jsx'
 import { useAuth } from '../context/AuthContext.jsx'
 import { formatIstDateTime } from '../utils/istTime.js'
-import { DataRoomVaultSection } from './DataRoomVaultSection.jsx'
 import { DataRoomAccountsTab } from './DataRoomAccountsTab.jsx'
 import { DataRoomPromptsTab } from './DataRoomPromptsTab.jsx'
 import { DataRoomLinksTab } from './DataRoomLinksTab.jsx'
@@ -412,7 +411,6 @@ function CredentialsSection({ creds, loading, active, onReload }) {
 }
 
 const DATA_ROOM_TABS = [
-  { id: 'vault', label: 'Vault', adminOnly: false },
   { id: 'logins', label: 'Logins', adminOnly: false },
   { id: 'partners', label: 'Opportunities', adminOnly: false },
   { id: 'accounts', label: 'Accounts', adminOnly: false },
@@ -435,7 +433,7 @@ export function DataRoomPanel() {
   const [typeFilter, setTypeFilter] = useState('')
   const [search, setSearch] = useState('')
   const [editor, setEditor] = useState(null)
-  const [activeTab, setActiveTab] = useState('vault')
+  const [activeTab, setActiveTab] = useState('accounts')
 
   const visibleTabs = useMemo(
     () => DATA_ROOM_TABS.filter(tab => isAdmin || !tab.adminOnly),
@@ -449,7 +447,6 @@ export function DataRoomPanel() {
     const offers = credentials?.offer_letters || []
     return {
       logins: (credentials?.handlers?.length || 0) + (credentials?.admin ? 1 : 0),
-      vault: accounts.length + prompts.length + resources.length + offers.length,
       partners: stats?.total ?? rows.length,
       accounts: accounts.length,
       prompts: prompts.length,
@@ -636,10 +633,6 @@ export function DataRoomPanel() {
 
       {activeTab === 'logins' && (
         <CredentialsSection creds={credentials} loading={credsLoading} active onReload={loadCredentials} />
-      )}
-
-      {activeTab === 'vault' && credentials && (
-        <DataRoomVaultSection creds={credentials} active onReload={loadCredentials} />
       )}
 
       {activeTab === 'accounts' && credentials && (
