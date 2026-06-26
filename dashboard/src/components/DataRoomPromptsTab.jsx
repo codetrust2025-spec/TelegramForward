@@ -104,18 +104,25 @@ export function DataRoomPromptsTab({ prompts = [], onReload }) {
 
       <div className="dr-tab-stats">
         <div className="dr-tab-stat">
-          <span className="dr-tab-stat-icon dr-tab-stat-icon--blue">📝</span>
-          <div>
-            <div className="dr-tab-stat-value">{prompts.length}</div>
-            <div className="dr-tab-stat-label">Total prompts</div>
+          <div className="dr-tab-stat-header">
+            <span className="dr-tab-stat-title">Total prompts</span>
           </div>
+          <div className="dr-tab-stat-value">{prompts.length}</div>
+          <div className="dr-tab-stat-sub">AI prompts, scripts, and templates</div>
         </div>
         <div className="dr-tab-stat">
-          <span className="dr-tab-stat-icon dr-tab-stat-icon--green">📊</span>
-          <div>
-            <div className="dr-tab-stat-value">{prompts.reduce((s, p) => s + (p.body || '').length, 0).toLocaleString()}</div>
-            <div className="dr-tab-stat-label">Total characters</div>
+          <div className="dr-tab-stat-header">
+            <span className="dr-tab-stat-title">Total characters</span>
           </div>
+          <div className="dr-tab-stat-value dr-tab-stat-value--green">{prompts.reduce((s, p) => s + (p.body || '').length, 0).toLocaleString()}</div>
+          <div className="dr-tab-stat-sub">Combined prompt body length</div>
+        </div>
+        <div className="dr-tab-stat">
+          <div className="dr-tab-stat-header">
+            <span className="dr-tab-stat-title">Avg length</span>
+          </div>
+          <div className="dr-tab-stat-value">{prompts.length ? Math.round(prompts.reduce((s, p) => s + (p.body || '').length, 0) / prompts.length).toLocaleString() : 0}</div>
+          <div className="dr-tab-stat-sub">Average chars per prompt</div>
         </div>
       </div>
 

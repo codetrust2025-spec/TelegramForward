@@ -181,32 +181,32 @@ export function DataRoomAccountsTab({ accounts = [], onReload }) {
       {/* Stats row */}
       <div className="dr-tab-stats">
         <div className="dr-tab-stat">
-          <span className="dr-tab-stat-icon dr-tab-stat-icon--blue">👤</span>
-          <div>
-            <div className="dr-tab-stat-value">{totalAccounts}</div>
-            <div className="dr-tab-stat-label">Total accounts</div>
+          <div className="dr-tab-stat-header">
+            <span className="dr-tab-stat-title">Total accounts</span>
           </div>
+          <div className="dr-tab-stat-value">{totalAccounts}</div>
+          <div className="dr-tab-stat-sub">{activeAccounts} active · {oldAccounts} deprecated</div>
         </div>
         <div className="dr-tab-stat">
-          <span className="dr-tab-stat-icon dr-tab-stat-icon--green">✓</span>
-          <div>
-            <div className="dr-tab-stat-value">{activeAccounts}</div>
-            <div className="dr-tab-stat-label">Currently active</div>
+          <div className="dr-tab-stat-header">
+            <span className="dr-tab-stat-title">Active</span>
           </div>
+          <div className="dr-tab-stat-value dr-tab-stat-value--green">{activeAccounts}</div>
+          <div className="dr-tab-stat-sub">Currently in use</div>
         </div>
         <div className="dr-tab-stat">
-          <span className="dr-tab-stat-icon dr-tab-stat-icon--yellow">⏸</span>
-          <div>
-            <div className="dr-tab-stat-value">{oldAccounts}</div>
-            <div className="dr-tab-stat-label">Locked or deprecated</div>
+          <div className="dr-tab-stat-header">
+            <span className="dr-tab-stat-title">Locked / Old</span>
           </div>
+          <div className="dr-tab-stat-value dr-tab-stat-value--yellow">{oldAccounts}</div>
+          <div className="dr-tab-stat-sub">Deprecated or locked accounts</div>
         </div>
         <div className="dr-tab-stat">
-          <span className="dr-tab-stat-icon dr-tab-stat-icon--purple">⭐</span>
-          <div>
-            <div className="dr-tab-stat-value">{primaryAccounts}</div>
-            <div className="dr-tab-stat-label">Marked as primary</div>
+          <div className="dr-tab-stat-header">
+            <span className="dr-tab-stat-title">Primary accounts</span>
           </div>
+          <div className="dr-tab-stat-value dr-tab-stat-value--purple">{primaryAccounts}</div>
+          <div className="dr-tab-stat-sub">Marked as current primary</div>
         </div>
       </div>
 
