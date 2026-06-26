@@ -13,7 +13,7 @@ from _deploy_common import enforce_git_first, repo_root
 
 HOST, USER = "187.127.169.159", "root"
 PWD = os.environ.get("VPS_PASSWORD", "")
-REMOTE = "/opt/telegramforward.old"
+REMOTE = "/opt/telegramforward"
 ROOT = repo_root()
 STATIC = ROOT / "static"
 
