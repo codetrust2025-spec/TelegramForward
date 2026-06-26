@@ -9943,16 +9943,35 @@ body {
    itself is then just a normal flow block. */
 .cand-page {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 10px 16px;
   padding: 18px clamp(12px, 2vw, 24px) 24px;
   background: var(--bg, #0b1020);
   width: 100%;
+  align-items: center;
 }
-/* Reorder: Header → Toolbar → Tabs → Content */
-.cand-page > .cand-header { order: -3; }
-.cand-page > .cand-toolbar { order: -2; }
-.cand-page > .cand-tabs { order: -1; }
+/* Merge header + toolbar into one row; tabs and content go full-width below */
+.cand-page > .cand-header {
+  order: -3;
+  flex: 0 0 auto;
+}
+.cand-page > .cand-toolbar {
+  order: -3;
+  flex: 1 1 0;
+  margin: 0;
+}
+.cand-page > .cand-tabs {
+  order: -1;
+  flex: 0 0 100%;
+}
+.cand-page > .cand-stats,
+.cand-page > .cand-table-wrap,
+.cand-page > .cand-error,
+.cand-page > section,
+.cand-page > div:not(.cand-toolbar) {
+  flex: 0 0 100%;
+}
 
 /* When the Candidates view is mounted, let the document scroll naturally.
    The flex column still works because the header is the first child and
@@ -10125,7 +10144,6 @@ body {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.8);
   margin-bottom: 8px;
   isolation: isolate;
-  order: -1;
 }
 .cand-table-wrap {
   position: relative;
