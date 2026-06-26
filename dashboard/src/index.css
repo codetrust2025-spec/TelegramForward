@@ -9944,15 +9944,30 @@ body {
 .cand-page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
   padding: 18px clamp(12px, 2vw, 24px) 24px;
   background: var(--bg, #0b1020);
   width: 100%;
 }
-/* Reorder: Header → Toolbar → Tabs → Content */
-.cand-page > .cand-header { order: -3; }
-.cand-page > .cand-toolbar { order: -2; }
-.cand-page > .cand-tabs { order: -1; }
+/* Merge header + toolbar into single visual block */
+.cand-page > .cand-header {
+  order: -3;
+  margin-bottom: 0;
+  padding-bottom: 8px;
+}
+.cand-page > .cand-toolbar {
+  order: -2;
+  margin-top: 0;
+  border-top: none;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  margin-bottom: 12px;
+}
+.cand-page > .cand-tabs { order: -1; margin-top: 8px; }
+/* Everything else gets normal spacing */
+.cand-page > *:not(.cand-header):not(.cand-toolbar):not(.cand-tabs) {
+  margin-top: 12px;
+}
 
 /* When the Candidates view is mounted, let the document scroll naturally.
    The flex column still works because the header is the first child and
