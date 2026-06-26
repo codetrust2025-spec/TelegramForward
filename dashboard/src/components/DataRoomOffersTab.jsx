@@ -123,11 +123,25 @@ export function DataRoomOffersTab({ offers = [], onReload }) {
 
       <div className="dr-tab-stats">
         <div className="dr-tab-stat">
-          <span className="dr-tab-stat-icon dr-tab-stat-icon--blue">📄</span>
-          <div>
-            <div className="dr-tab-stat-value">{offers.length}</div>
-            <div className="dr-tab-stat-label">Total offers</div>
+          <div className="dr-tab-stat-header">
+            <span className="dr-tab-stat-title">Total offers</span>
           </div>
+          <div className="dr-tab-stat-value">{offers.length}</div>
+          <div className="dr-tab-stat-sub">Catalogued offer letters for proof</div>
+        </div>
+        <div className="dr-tab-stat">
+          <div className="dr-tab-stat-header">
+            <span className="dr-tab-stat-title">Unique candidates</span>
+          </div>
+          <div className="dr-tab-stat-value dr-tab-stat-value--green">{new Set(offers.map(o => o.candidate).filter(Boolean)).size}</div>
+          <div className="dr-tab-stat-sub">Distinct candidate names</div>
+        </div>
+        <div className="dr-tab-stat">
+          <div className="dr-tab-stat-header">
+            <span className="dr-tab-stat-title">Companies</span>
+          </div>
+          <div className="dr-tab-stat-value dr-tab-stat-value--purple">{new Set(offers.map(o => o.company_name).filter(Boolean)).size}</div>
+          <div className="dr-tab-stat-sub">Unique company names</div>
         </div>
       </div>
 

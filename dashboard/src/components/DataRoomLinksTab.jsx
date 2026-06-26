@@ -95,11 +95,25 @@ export function DataRoomLinksTab({ resources = [], onReload }) {
 
       <div className="dr-tab-stats">
         <div className="dr-tab-stat">
-          <span className="dr-tab-stat-icon dr-tab-stat-icon--blue">🔗</span>
-          <div>
-            <div className="dr-tab-stat-value">{resources.length}</div>
-            <div className="dr-tab-stat-label">Total links</div>
+          <div className="dr-tab-stat-header">
+            <span className="dr-tab-stat-title">Total links</span>
           </div>
+          <div className="dr-tab-stat-value">{resources.length}</div>
+          <div className="dr-tab-stat-sub">Important URLs, Drive folders, and tools</div>
+        </div>
+        <div className="dr-tab-stat">
+          <div className="dr-tab-stat-header">
+            <span className="dr-tab-stat-title">Drive links</span>
+          </div>
+          <div className="dr-tab-stat-value dr-tab-stat-value--green">{resources.filter(r => (r.url || '').includes('drive.google')).length}</div>
+          <div className="dr-tab-stat-sub">Google Drive resources</div>
+        </div>
+        <div className="dr-tab-stat">
+          <div className="dr-tab-stat-header">
+            <span className="dr-tab-stat-title">GitHub links</span>
+          </div>
+          <div className="dr-tab-stat-value dr-tab-stat-value--purple">{resources.filter(r => (r.url || '').includes('github')).length}</div>
+          <div className="dr-tab-stat-sub">Repositories and code links</div>
         </div>
       </div>
 
