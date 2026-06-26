@@ -3814,12 +3814,11 @@ def stats(
                 if _reference_key(r.get("reference") or "") == scope_key
             ]
     if month and month != "all":
-        # Collapse profile duplicates FIRST, then filter by month.
-        # This matches how list_candidates works: collapse → filter.
-        # Without this, individual slot clones with different dates could
-        # cause a candidate to be counted in a month they don't belong to.
-        rows = _stats_rows_deduped(all_rows)
-        rows = [r for r in rows if _row_in_month(r, month)]
+        # Use the same filter pipeline as list_candidates to ensure stats
+        # match the breakdown modal exactly.  Collapse profiles first (taking
+        # max payment across slot clones), then filter by the display date.
+        all_rows = _collapse_profile_candidates(all_rows)
+        rows = [r for r in all_rows if _row_in_month(r, month)]
     else:
         rows = _stats_rows_deduped(all_rows)
 
