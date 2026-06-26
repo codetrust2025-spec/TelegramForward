@@ -3649,15 +3649,15 @@ def _row_display_month(row: dict) -> str:
 
 
 def _row_in_month(row: dict, month: str) -> bool:
-    """Match either the original lead date or the visible profile date.
+    """Match only the visible display date (the 'date' column in the table).
 
-    Imports and profile merges can preserve an older ``logged_date`` while the
-    candidate row correctly displays the current profile/interview date.  Both
-    dates must make the profile discoverable in the corresponding month.
+    Previously this matched either the internal logged_date OR the display date,
+    causing candidates imported in a later month to appear in that month even
+    though their profile date was older. Now we only use the displayed date.
     """
     if not month or month == "all":
         return True
-    return _row_month(row) == month or _row_display_month(row) == month
+    return _row_display_month(row) == month
 
 
 def _handler_reference_options(
