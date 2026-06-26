@@ -145,6 +145,8 @@ export function InterviewRoster({
   dashboardFromDate,
   dashboardToDate,
   dashboardAttendeeFilter = '',
+  dashboardRoundFilter = '',
+  dashboardTechnologyFilter = '',
   dashboardCandidateSearch = '',
   dashboardCandidateTypeFilter = '',
   dashboardStatusFilter = '',
@@ -188,6 +190,8 @@ export function InterviewRoster({
   const effectiveAttendee = isDashboard ? dashboardAttendeeFilter : attendeeFilter
   const effectiveSearch = isDashboard ? dashboardCandidateSearch : candidateFilter
   const effectiveChannel = isDashboard ? dashboardCandidateTypeFilter : channelFilter
+  const effectiveRound = isDashboard ? dashboardRoundFilter : ''
+  const effectiveTechnology = isDashboard ? dashboardTechnologyFilter : ''
 
   const load = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true)
@@ -205,6 +209,8 @@ export function InterviewRoster({
       const search = effectiveSearch.trim()
       if (search) params.set('search', search)
       if (effectiveChannel) params.set('channel', effectiveChannel)
+      if (effectiveRound) params.set('round', effectiveRound)
+      if (effectiveTechnology) params.set('technology', effectiveTechnology)
       if (upcomingOnly) params.set('upcoming_only', 'true')
 
       const res = await fetch(`${url}?${params}`, { credentials: 'include', cache: 'no-store' })
@@ -241,6 +247,8 @@ export function InterviewRoster({
     effectiveAttendee,
     effectiveSearch,
     effectiveChannel,
+    effectiveRound,
+    effectiveTechnology,
     hasRange,
     isSingleDayRange,
     upcomingOnly,

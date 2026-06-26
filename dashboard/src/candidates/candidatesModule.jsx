@@ -1854,9 +1854,19 @@ export function CandidatesPanel() {
       if (T !== "all") {
         Ge.set("reference", T);
       }
+      if (service !== "all") {
+        Ge.set("service_type", service);
+      }
       const Ze = [fetch(`${ve}/candidates?${ge.toString()}`), fetch(`${ve}/candidates/stats?${Ge.toString()}`)];
       if (m !== "all" && a) {
-        Ze.push(fetch(`${ve}/candidates/stats`));
+        const allMonthParams = new URLSearchParams();
+        if (T !== "all") {
+          allMonthParams.set("reference", T);
+        }
+        if (service !== "all") {
+          allMonthParams.set("service_type", service);
+        }
+        Ze.push(fetch(`${ve}/candidates/stats?${allMonthParams.toString()}`));
       }
       const [Be, Xe, je] = await Promise.all(Ze);
       const Tt = await Be.json();

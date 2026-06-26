@@ -6,6 +6,7 @@ import { PendingWorksStrip } from './PendingWorksStrip.jsx'
 import { PRESETS, detectPresetFromRange, resolvePresetRange } from './dateRangePresets.js'
 
 const ATTENDEES = ['Nikhila', 'Bhavana', 'Tool']
+const ROUNDS = ['L1', 'L2', 'HR', 'Final', 'Screening']
 
 function KpiCard({ label, value, tone = 'default', loading = false, active = false, onClick }) {
   return (
@@ -42,6 +43,8 @@ export function DailyOpsPanel({
   const [toDate, setToDate] = useState(initialRange.to)
   const [rangePreset, setRangePreset] = useState('upcoming')
   const [attendeeFilter, setAttendeeFilter] = useState('')
+  const [roundFilter, setRoundFilter] = useState('')
+  const [technologyFilter, setTechnologyFilter] = useState('')
   const [candidateSearch, setCandidateSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [globalStats, setGlobalStats] = useState(null)
@@ -77,6 +80,8 @@ export function DailyOpsPanel({
     try {
       const params = new URLSearchParams({ from: fromDate, to: toDate })
       if (attendeeFilter) params.set('attendee', attendeeFilter)
+      if (roundFilter) params.set('round', roundFilter)
+      if (technologyFilter) params.set('technology', technologyFilter)
       const search = candidateSearch.trim()
       if (search) params.set('search', search)
       if (effectiveUpcomingOnly) params.set('upcoming_only', 'true')
@@ -93,11 +98,12 @@ export function DailyOpsPanel({
     } finally {
       setLoading(false)
     }
-  }, [fromDate, toDate, attendeeFilter, candidateSearch, effectiveUpcomingOnly])
+  }, [fromDate, toDate, attendeeFilter, roundFilter, technologyFilter, candidateSearch, effectiveUpcomingOnly])
 
   useEffect(() => { loadGlobal() }, [loadGlobal])
 
   const interviews = globalStats?.interviews || rosterCounts || {}
+  const technologyOptions = Object.keys(globalStats?.by_technology || {}).sort()
 
   return (
     <div className="daily-ops-page daily-ops-page--dashboard">
@@ -156,6 +162,24 @@ export function DailyOpsPanel({
             {ATTENDEES.map(name => <option key={name} value={name}>{name}</option>)}
           </select>
         )}
+        <select
+          className="cand-input ops-ctrl-select"
+          value={roundFilter}
+          onChange={e => setRoundFilter(e.target.value)}
+          aria-label="Round filter"
+        >
+          <option value="">All rounds</option>
+          {ROUNDS.map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
+        <select
+          className="cand-input ops-ctrl-select"
+          value={technologyFilter}
+          onChange={e => setTechnologyFilter(e.target.value)}
+          aria-label="Technology filter"
+        >
+          <option value="">All profiles</option>
+          {technologyOptions.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
         <input
           className="cand-input ops-ctrl-search"
           placeholder="Search candidate"
@@ -178,6 +202,8 @@ export function DailyOpsPanel({
           dashboardFromDate={fromDate}
           dashboardToDate={toDate}
           dashboardAttendeeFilter={attendeeFilter}
+          dashboardRoundFilter={roundFilter}
+          dashboardTechnologyFilter={technologyFilter}
           dashboardCandidateSearch={candidateSearch}
           dashboardStatusFilter={statusFilter}
           upcomingOnly={upcomingOnly}
