@@ -3649,6 +3649,7 @@ def stats(
     month: str | None = None,
     reference: str | None = None,
     *,
+    service_type: str | None = None,
     _all_rows: list[dict] | None = None,
     _skip_pending_works: bool = False,
 ) -> dict:
@@ -3661,6 +3662,8 @@ def stats(
 
     `reference` when set limits every aggregate to one handler/referrer —
     used so referrers never see other people's revenue.
+
+    `service_type` filters by service channel: 'profile_service' or 'round_wise'.
     """
     scope_key: str | None = None
     if reference and str(reference).strip().lower() not in ("", "all"):
@@ -3676,6 +3679,10 @@ def stats(
                 r for r in all_rows
                 if _reference_key(r.get("reference") or "") == scope_key
             ]
+    # Apply service_type filter before computing stats
+    if service_type and service_type != "all":
+        all_rows = [r for r in all_rows if _normalise_service_type(r.get("service_type"), r) == service_type]
+
     if month and month != "all":
         rows = [r for r in all_rows if _row_in_month(r, month)]
     else:

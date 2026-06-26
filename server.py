@@ -2965,13 +2965,14 @@ async def candidates_stats(
     request: Request,
     month: str | None = Query(default=None),
     reference: str | None = Query(default=None),
+    service_type: str | None = Query(default=None),
 ):
     from core.dashboard_access import handler_payout_reference_scope
     from features import candidate_store
 
     # Earnings and payout totals must never expose another handler's figures.
     reference = handler_payout_reference_scope(request, reference)
-    return {"status": "ok", "stats": candidate_store.stats(month=month, reference=reference)}
+    return {"status": "ok", "stats": candidate_store.stats(month=month, reference=reference, service_type=service_type)}
 
 
 @app.get("/candidates/roster")
@@ -3076,6 +3077,8 @@ async def candidates_interviews_daily(
     attendee: str | None = Query(default=None),
     search: str | None = Query(default=None),
     channel: str | None = Query(default=None),
+    round: str | None = Query(default=None),
+    technology: str | None = Query(default=None),
 ):
     from fastapi import HTTPException
 
@@ -3092,6 +3095,8 @@ async def candidates_interviews_daily(
             filter_attendee=attendee,
             filter_search=search,
             filter_channel=channel,
+            filter_round=round,
+            filter_technology=technology,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3106,6 +3111,8 @@ async def candidates_interviews_monitor(
     attendee: str | None = Query(default=None),
     search: str | None = Query(default=None),
     channel: str | None = Query(default=None),
+    round: str | None = Query(default=None),
+    technology: str | None = Query(default=None),
     upcoming_only: bool = Query(default=False),
 ):
     from fastapi import HTTPException
@@ -3125,6 +3132,8 @@ async def candidates_interviews_monitor(
             filter_attendee=attendee,
             filter_search=search,
             filter_channel=channel,
+            filter_round=round,
+            filter_technology=technology,
             upcoming_only=upcoming_only,
         )
     except ValueError as exc:
@@ -3167,6 +3176,8 @@ async def candidates_interviews_global(
     attendee: str | None = Query(default=None),
     search: str | None = Query(default=None),
     channel: str | None = Query(default=None),
+    round: str | None = Query(default=None),
+    technology: str | None = Query(default=None),
     upcoming_only: bool = Query(default=False),
 ):
     from fastapi import HTTPException
@@ -3186,6 +3197,8 @@ async def candidates_interviews_global(
             filter_attendee=attendee,
             filter_search=search,
             filter_channel=channel,
+            filter_round=round,
+            filter_technology=technology,
             upcoming_only=upcoming_only,
         )
     except ValueError as exc:

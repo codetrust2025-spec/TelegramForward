@@ -1691,6 +1691,8 @@ def daily_interview_roster(
     filter_attendee: str | None = None,
     filter_search: str | None = None,
     filter_channel: str | None = None,
+    filter_round: str | None = None,
+    filter_technology: str | None = None,
     include_unconfirmed: bool = False,
 ) -> dict:
     """Confirmed interview slots for one calendar day (YYYY-MM-DD).
@@ -1709,6 +1711,8 @@ def daily_interview_roster(
         filter_attendee=filter_attendee,
         filter_search=filter_search,
         filter_channel=filter_channel,
+        filter_round=filter_round,
+        filter_technology=filter_technology,
     )
     counts = _interview_attendance_counts(rows)
     rows = _enrich_interview_rows_with_slot_screenshots(rows)
@@ -2173,6 +2177,8 @@ def _filter_interview_rows(
     filter_attendee: str | None = None,
     filter_search: str | None = None,
     filter_channel: str | None = None,
+    filter_round: str | None = None,
+    filter_technology: str | None = None,
 ) -> list[dict]:
     attendee_filter = (filter_attendee or "").strip()
     search_filter = (filter_search or "").strip()
@@ -2203,6 +2209,25 @@ def _filter_interview_rows(
                 r for r in rows
                 if _normalise_service_type(r.get("service_type"), r) != "round_wise"
             ]
+
+    # Round filter — normalize both the filter value and each row's round
+    round_val = (filter_round or "").strip()
+    if round_val:
+        round_key = normalise_interview_round(round_val)
+        rows = [
+            r for r in rows
+            if normalise_interview_round(r.get("interview_round")) == round_key
+        ]
+
+    # Technology filter — normalize and compare case-insensitively
+    tech_val = (filter_technology or "").strip()
+    if tech_val:
+        tech_key = canonical_technology(tech_val).lower()
+        rows = [
+            r for r in rows
+            if canonical_technology(r.get("technology") or "").lower() == tech_key
+        ]
+
     rows.sort(key=_slot_chronological_sort_key)
     return rows
 
@@ -2224,6 +2249,8 @@ def interview_monitor(
     filter_attendee: str | None = None,
     filter_search: str | None = None,
     filter_channel: str | None = None,
+    filter_round: str | None = None,
+    filter_technology: str | None = None,
     include_unconfirmed: bool = False,
     upcoming_only: bool = False,
 ) -> dict:
@@ -2239,6 +2266,8 @@ def interview_monitor(
         filter_attendee=filter_attendee,
         filter_search=filter_search,
         filter_channel=filter_channel,
+        filter_round=filter_round,
+        filter_technology=filter_technology,
     )
     counts = _interview_attendance_counts(rows)
     if upcoming_only:
@@ -2394,6 +2423,8 @@ def interview_global_summary(
     filter_attendee: str | None = None,
     filter_search: str | None = None,
     filter_channel: str | None = None,
+    filter_round: str | None = None,
+    filter_technology: str | None = None,
     include_unconfirmed: bool = False,
     upcoming_only: bool = False,
 ) -> dict:
@@ -2416,6 +2447,8 @@ def interview_global_summary(
         filter_attendee=filter_attendee,
         filter_search=filter_search,
         filter_channel=filter_channel,
+        filter_round=filter_round,
+        filter_technology=filter_technology,
     )
     if upcoming_only:
         rows = _filter_upcoming_only_rows(rows)
@@ -3786,6 +3819,7 @@ def stats(
     month: str | None = None,
     reference: str | None = None,
     *,
+    service_type: str | None = None,
     _all_rows: list[dict] | None = None,
     _skip_pending_works: bool = False,
 ) -> dict:
@@ -3798,6 +3832,8 @@ def stats(
 
     `reference` when set limits every aggregate to one handler/referrer —
     used so referrers never see other people's revenue.
+
+    `service_type` filters by service channel: 'profile_service' or 'round_wise'.
     """
     scope_key: str | None = None
     if reference and str(reference).strip().lower() not in ("", "all"):
@@ -3813,10 +3849,14 @@ def stats(
                 r for r in all_rows
                 if _reference_key(r.get("reference") or "") == scope_key
             ]
+    # Apply service_type filter before computing stats
+    if service_type and service_type != "all":
+        all_rows = [r for r in all_rows if _normalise_service_type(r.get("service_type"), r) == service_type]
+
     if month and month != "all":
         # Use list_candidates (the exact same function the breakdown modal calls)
         # to ensure the stat card revenue matches the breakdown total exactly.
-        rows = list_candidates(month=month, reference=reference)
+        rows = list_candidates(month=month, reference=reference, service_type=service_type)
     else:
         rows = _stats_rows_deduped(all_rows)
 
