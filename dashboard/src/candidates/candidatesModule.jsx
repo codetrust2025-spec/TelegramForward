@@ -1786,7 +1786,7 @@ export function CandidatesPanel() {
   const [J, G] = w.useState(false);
   const [ce, ee] = w.useState(false);
   const [B, Z] = w.useState(null);
-  const [candTab, setCandTab] = w.useState("performers");
+  const [candTab, setCandTab] = w.useState("candidates");
   const [P, j] = w.useState(null);
   const [ro, setRo] = w.useState(false);
   const {
