@@ -1269,30 +1269,6 @@ def _collapse_profile_candidates(rows: list[dict]) -> list[dict]:
         newest = max(group, key=lambda r: (r.get("updated_at") or "", r.get("date") or ""))
         merged = dict(newest)
         merged["slot_count"] = len(group)
-        # The Candidates table should show the original lead/registration date,
-        # NOT the interview slot date.  Use logged_date (the original date when
-        # the candidate was first added) so slot bookings don't shift the row
-        # into the current month.
-        lead_date = _clean_str(merged.get("logged_date"))[:10]
-        if len(lead_date) != 10:
-            # Fallback: earliest date across all rows in the group
-            all_dates = [
-                d for r in group
-                for d in [_clean_str(r.get("logged_date"))[:10]]
-                if len(d) == 10
-            ]
-            if not all_dates:
-                # Use created_at (ISO timestamp) as last resort — this is
-                # when the candidate record was first inserted.
-                all_dates = [
-                    d for r in group
-                    for d in [_clean_str(r.get("created_at"))[:10]]
-                    if len(d) == 10
-                ]
-            if all_dates:
-                lead_date = min(all_dates)
-        if len(lead_date) == 10:
-            merged["date"] = lead_date
         # Use the max payment across all slot clones for this profile.
         # Payment is recorded on one slot but the collapsed row should reflect it.
         max_payment = max(int(r.get("payment") or 0) for r in group)
@@ -1453,24 +1429,6 @@ def _merge_profile_rows_for_pending(rows: list[dict]) -> dict:
         "reference": reference or rep.get("reference"),
         "follow_up": follow_up or rep.get("follow_up"),
     }
-    # Use the original lead date, not the interview slot date
-    lead_date = _clean_str(merged.get("logged_date"))[:10]
-    if len(lead_date) != 10:
-        all_dates = [
-            d for r in rows
-            for d in [_clean_str(r.get("logged_date"))[:10]]
-            if len(d) == 10
-        ]
-        if not all_dates:
-            all_dates = [
-                d for r in rows
-                for d in [_clean_str(r.get("created_at"))[:10]]
-                if len(d) == 10
-            ]
-        if all_dates:
-            lead_date = min(all_dates)
-    if len(lead_date) == 10:
-        merged["date"] = lead_date
     return merged
 
 
