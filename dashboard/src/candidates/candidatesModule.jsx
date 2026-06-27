@@ -1979,13 +1979,25 @@ export function CandidatesPanel() {
     cards.forEach(card => {
       const label = card.querySelector('.cand-stat-label')?.childNodes[0]?.textContent?.trim();
       if (!label) return;
-      card.classList.add('cand-stat-card--clickable');
-      card.title = `View ${label.toLowerCase()} calculation`;
-      card.onclick = () => openBreakdown(label);
+      if (candTab === 'overview') {
+        card.classList.add('cand-stat-card--clickable');
+        card.title = `View ${label.toLowerCase()} calculation`;
+        card.onclick = () => openBreakdown(label);
+      } else {
+        card.classList.remove('cand-stat-card--clickable');
+        card.title = '';
+        card.onclick = null;
+      }
     });
     // Auto-show "Total candidates" breakdown inline on load
     if (candTab === 'overview') {
       openBreakdown('Total candidates');
+    } else {
+      // Remove inline breakdown when not on overview tab
+      if (statsRoot && statsRoot.parentElement) {
+        const ic = statsRoot.parentElement.querySelector('.cand-breakdown-inline');
+        if (ic) ic.remove();
+      }
     }
     return () => { cards.forEach(card => { card.onclick = null; }); if (statsRoot && statsRoot.parentElement) { const ic = statsRoot.parentElement.querySelector('.cand-breakdown-inline'); if (ic) ic.remove(); } };
   }, [c, m, T, candTab]);
