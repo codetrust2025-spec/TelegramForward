@@ -10585,46 +10585,68 @@ select.cand-input {
 /* Inline breakdown below overview stats */
 .cand-breakdown-inline {
   margin-top: 20px;
-  background: linear-gradient(160deg, rgba(30, 41, 59, 0.85), rgba(15, 23, 42, 0.9));
-  border: 1px solid rgba(99, 102, 241, 0.2);
-  border-radius: 14px;
-  padding: 24px 28px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+  background: linear-gradient(145deg, #1e293b, #0f172a);
+  border: 1px solid rgba(99, 102, 241, 0.18);
+  border-radius: 16px;
+  padding: 28px 32px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
 .cand-breakdown-inline__title {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
   color: #f1f5f9;
-  margin: 0 0 16px;
+  margin: 0 0 20px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 .cand-breakdown-inline__sub {
   font-size: 11px;
-  font-weight: 400;
-  color: #64748b;
-  background: rgba(99, 102, 241, 0.12);
-  padding: 2px 8px;
-  border-radius: 4px;
+  font-weight: 500;
+  color: #a5b4fc;
+  background: rgba(99, 102, 241, 0.15);
+  padding: 3px 10px;
+  border-radius: 6px;
 }
 .cand-breakdown-inline__content {
-  display: flex;
-  gap: 28px;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-items: start;
 }
-.cand-breakdown-inline__summary {
-  font-size: 18px;
-  color: #c4b5fd;
-  font-weight: 600;
-  min-width: 200px;
+.cand-breakdown-inline .cand-breakdown-total {
+  padding: 20px 24px;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(139, 92, 246, 0.06));
+  font-size: 16px;
+  color: #e0e7ff;
+  font-weight: 700;
+  line-height: 1.5;
 }
-.cand-breakdown-inline__lines {
-  flex: 1;
-  border-radius: 10px;
-  overflow: hidden;
-  border: 1px solid rgba(148, 163, 184, 0.1);
-  background: rgba(15, 23, 42, 0.4);
+.cand-breakdown-inline .cand-breakdown-lines {
+  border: 1px solid rgba(99, 102, 241, 0.12);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.5);
+  max-height: none;
+  overflow: visible;
+}
+.cand-breakdown-inline .cand-breakdown-line {
+  padding: 14px 20px;
+  font-size: 14px;
+  color: #cbd5e1;
+  border-bottom: 1px solid rgba(99, 102, 241, 0.08);
+}
+.cand-breakdown-inline .cand-breakdown-line:last-child {
+  border-bottom: 0;
+}
+.cand-breakdown-inline .cand-breakdown-line:hover {
+  background: rgba(99, 102, 241, 0.08);
+}
+.cand-breakdown-inline .cand-breakdown-line strong {
+  font-size: 15px;
+  color: #6ee7b7;
+  font-weight: 800;
 }
 
 .cand-cell-money {
