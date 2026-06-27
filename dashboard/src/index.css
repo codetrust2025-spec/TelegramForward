@@ -10535,6 +10535,45 @@ select.cand-input {
 }
 .cand-breakdown-line:last-child { border-bottom: 0; }
 .cand-breakdown-line strong { color: #6ee7b7; white-space: nowrap; }
+
+/* Inline breakdown below overview stats */
+.cand-breakdown-inline {
+  margin-top: 24px;
+  background: rgba(30, 41, 59, .55);
+  border: 1px solid rgba(148, 163, 184, .13);
+  border-radius: 12px;
+  padding: 20px 24px;
+}
+.cand-breakdown-inline__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin: 0 0 12px;
+}
+.cand-breakdown-inline__sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: #94a3b8;
+  margin-left: 10px;
+}
+.cand-breakdown-inline__content {
+  display: flex;
+  gap: 32px;
+  align-items: flex-start;
+}
+.cand-breakdown-inline__summary {
+  font-size: 18px;
+  color: #c4b5fd;
+  font-weight: 600;
+  min-width: 200px;
+}
+.cand-breakdown-inline__lines {
+  flex: 1;
+  border-radius: 9px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, .1);
+}
+
 .cand-cell-money {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
