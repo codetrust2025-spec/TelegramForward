@@ -1926,6 +1926,7 @@ export function CandidatesPanel() {
     };
     const openBreakdown = async label => {
       // Render breakdown inline below the stats cards instead of a popup
+      if (!statsRoot || !statsRoot.parentElement) return;
       let inlineContainer = statsRoot.parentElement.querySelector('.cand-breakdown-inline');
       if (!inlineContainer) {
         inlineContainer = document.createElement('div');
@@ -1986,7 +1987,7 @@ export function CandidatesPanel() {
     if (candTab === 'overview') {
       openBreakdown('Total candidates');
     }
-    return () => { cards.forEach(card => { card.onclick = null; }); const ic = statsRoot.parentElement.querySelector('.cand-breakdown-inline'); if (ic) ic.remove(); };
+    return () => { cards.forEach(card => { card.onclick = null; }); if (statsRoot && statsRoot.parentElement) { const ic = statsRoot.parentElement.querySelector('.cand-breakdown-inline'); if (ic) ic.remove(); } };
   }, [c, m, T, candTab]);
   w.useEffect(() => {
     if (f || !i.length) return;
