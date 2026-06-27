@@ -1994,12 +1994,9 @@ export function CandidatesPanel() {
       openBreakdown('Total candidates');
     } else {
       // Remove inline breakdown when not on overview tab
-      if (statsRoot && statsRoot.parentElement) {
-        const ic = statsRoot.parentElement.querySelector('.cand-breakdown-inline');
-        if (ic) ic.remove();
-      }
+      document.querySelectorAll('.cand-page .cand-breakdown-inline').forEach(el => el.remove());
     }
-    return () => { cards.forEach(card => { card.onclick = null; }); if (statsRoot && statsRoot.parentElement) { const ic = statsRoot.parentElement.querySelector('.cand-breakdown-inline'); if (ic) ic.remove(); } };
+    return () => { cards.forEach(card => { card.onclick = null; }); document.querySelectorAll('.cand-page .cand-breakdown-inline').forEach(el => el.remove()); };
   }, [c, m, T, candTab]);
   w.useEffect(() => {
     if (f || !i.length) return;
