@@ -1933,17 +1933,24 @@ export function CandidatesPanel() {
         inlineContainer.className = 'cand-breakdown-inline';
         statsRoot.after(inlineContainer);
       }
-      inlineContainer.innerHTML = `<h3 class="cand-breakdown-inline__title">${label} breakdown<span class="cand-breakdown-inline__sub">${m === 'all' ? 'All time' : m}${T !== 'all' ? ' · ' + T : ''}</span></h3><div class="cand-breakdown-inline__content"><p class="cand-exp-empty">Loading…</p></div>`;
+      inlineContainer.dataset.label = label;
+      inlineContainer.innerHTML = `<h3 class="cand-breakdown-inline__title">${label} breakdown<span class="cand-breakdown-inline__sub">${m === 'all' ? 'All time' : m}${T !== 'all' ? ' · ' + T : ''}</span></h3><div class="cand-breakdown-inline__content"></div>`;
       const body = inlineContainer.querySelector('.cand-breakdown-inline__content');
+      // Stage-based breakdowns (Total candidates, Conversion) use already-loaded
+      // stats — no fetch needed, so they render instantly without a loading flash.
+      const needsFetch = ['Company revenue', 'Total revenue', 'Pending collections'].includes(label);
       let rows = [];
-      try {
-        const params = new URLSearchParams();
-        if (m !== 'all') params.set('month', m);
-        if (T !== 'all') params.set('reference', T);
-        if (service !== 'all') params.set('service_type', service);
-        const result = await (await fetch(`${ve}/candidates?${params.toString()}`, { credentials: 'include' })).json();
-        rows = result.status === 'ok' ? result.candidates || [] : [];
-      } catch (_) {}
+      if (needsFetch) {
+        body.innerHTML = '<p class="cand-exp-empty">Loading…</p>';
+        try {
+          const params = new URLSearchParams();
+          if (m !== 'all') params.set('month', m);
+          if (T !== 'all') params.set('reference', T);
+          if (service !== 'all') params.set('service_type', service);
+          const result = await (await fetch(`${ve}/candidates?${params.toString()}`, { credentials: 'include' })).json();
+          rows = result.status === 'ok' ? result.candidates || [] : [];
+        } catch (_) {}
+      }
       body.innerHTML = '';
       const total = document.createElement('div'); total.className = 'cand-breakdown-total';
       const lines = document.createElement('div'); lines.className = 'cand-breakdown-lines';
@@ -1989,9 +1996,12 @@ export function CandidatesPanel() {
         card.onclick = null;
       }
     });
-    // Auto-show "Total candidates" breakdown inline on load
+    // Auto-show breakdown inline on overview — preserve the user's selected
+    // card across stats refreshes instead of snapping back to the default.
     if (candTab === 'overview') {
-      openBreakdown('Total candidates');
+      const existing = statsRoot.parentElement && statsRoot.parentElement.querySelector('.cand-breakdown-inline');
+      const prevLabel = existing && existing.dataset ? existing.dataset.label : '';
+      openBreakdown(prevLabel || 'Total candidates');
     } else {
       // Remove inline breakdown when not on overview tab
       document.querySelectorAll('.cand-page .cand-breakdown-inline').forEach(el => el.remove());
