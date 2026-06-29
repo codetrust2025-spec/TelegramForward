@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
-const STORAGE_KEY = 'telegram-forward-column-sizes-v2'
-const DEFAULT_SIZES = { left: 36, center: 29, right: 35 }
+const STORAGE_KEY = 'telegram-forward-column-sizes-v3'
+const DEFAULT_SIZES = { left: 42, center: 23, right: 35 }
 const MIN_PCT = 14
 const RESIZE_MIN_WIDTH = 900
 
