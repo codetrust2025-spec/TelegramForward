@@ -39,6 +39,7 @@ import {
 import {
   accountLabel,
   telegramDisplayName,
+  formatPhoneDisplay,
   formatJoinedStats,
   formatLogTime,
   getAccountSlots,
@@ -2101,6 +2102,9 @@ export default function App() {
               {state.active_account && state.account_info?.[state.active_account] && (
                 <span className="app-header-active-user">
                   · Viewing {telegramDisplayName(state.account_info[state.active_account])}
+                  {formatPhoneDisplay(state.account_info[state.active_account]?.phone)
+                    ? ` (${formatPhoneDisplay(state.account_info[state.active_account]?.phone)})`
+                    : ''}
                 </span>
               )}
             </p>

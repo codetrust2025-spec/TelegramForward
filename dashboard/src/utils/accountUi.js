@@ -91,11 +91,13 @@ export function accountCardTitle(slot, info) {
   const label = accountLabel(slot)
   const tg = telegramDisplayName(info)
   const user = telegramUsername(info)
-  if (!tg) return label
+  const phone = formatPhoneDisplay(info?.phone)
+  const phoneBit = phone ? ` · ${phone}` : ''
+  if (!tg) return `${label}${phoneBit}`
   if (user && tg !== user && !tg.includes(user)) {
-    return `${label} — ${tg} (${user})`
+    return `${label} — ${tg} (${user})${phoneBit}`
   }
-  return `${label} — ${tg}`
+  return `${label} — ${tg}${phoneBit}`
 }
 
 export function formatJoinedStats(info) {
