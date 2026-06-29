@@ -614,6 +614,28 @@ async def start_account(
     return {"status": "started", "slot": slot, "feature": feat or "all"}
 
 
+@app.post("/account/{slot}/shutdown", dependencies=[Depends(_require_fleet_admin)])
+async def put_account_shutdown(slot: str):
+    """Manually move an account to the shutdown (rest) list and stop it."""
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    from core.account_shutdown import put_on_shutdown_list
+    from core.worker_persistence import mark_stopped
+
+    w = registry.get_worker(slot)
+    if not w.state.account_info:
+        return {"status": "error", "message": f"{slot} not logged in"}
+    was_running = bool(w.state.running)
+    put_on_shutdown_list(slot, reason="manual", was_running=was_running)
+    try:
+        await registry.stop_account(slot)
+    except Exception:
+        pass
+    mark_stopped(slot)
+    await _push_state()
+    return {"status": "ok", "slot": slot, **registry.build_ui_state()}
+
+
 @app.post("/account/{slot}/shutdown/clear", dependencies=[Depends(_require_fleet_admin)])
 async def clear_account_shutdown(slot: str):
     if slot not in ACCOUNTS:
