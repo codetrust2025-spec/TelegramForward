@@ -311,7 +311,9 @@ export function MobileDashboardHome({
             className="mob-quick-tile mob-quick-tile--dark"
             onClick={() => window.open('/submit-slot', '_blank', 'noopener,noreferrer')}
           >
-            <span className="mob-quick-tile__icon mob-quick-tile__icon--green" aria-hidden>📅</span>
+            <span className="mob-quick-tile__icon mob-quick-tile__icon--green" aria-hidden>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+            </span>
             <span className="mob-quick-tile__label">Book slot</span>
           </button>
         </div>

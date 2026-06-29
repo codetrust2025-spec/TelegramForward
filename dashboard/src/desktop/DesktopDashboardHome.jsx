@@ -390,7 +390,9 @@ export function DesktopDashboardHome({
                 className="desk-quick-btn desk-quick-btn--util"
                 onClick={() => window.open('/submit-slot', '_blank', 'noopener,noreferrer')}
               >
-                <span className="desk-quick-btn__ico desk-quick-btn__ico--green" aria-hidden>📅</span>
+                <span className="desk-quick-btn__ico desk-quick-btn__ico--green" aria-hidden>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+                </span>
                 Book slot
               </button>
             </div>
