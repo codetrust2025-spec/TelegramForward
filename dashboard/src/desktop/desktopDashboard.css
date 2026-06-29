@@ -651,10 +651,10 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
-  align-items: stretch;
+  align-items: start;
 }
 
-.fwd-row > .fwd-card { height: 100%; }
+.fwd-row > .fwd-card { height: auto; min-height: 0; }
 
 @media (max-width: 900px) {
   .fwd-row { grid-template-columns: 1fr; }
@@ -717,7 +717,6 @@
 }
 
 .fwd-card__body {
-  flex: 1;
   min-width: 0;
 }
 
@@ -1573,7 +1572,11 @@
 }
 .fwd-stat4__item b { font-size: 18px; font-weight: 800; color: #e2e8f0; }
 
-.fwd-login-row { display: flex; gap: 12px; align-items: stretch; }
+.fwd-login-row {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 12px;
+}
 .fwd-add-tile {
   flex: 0 0 130px;
   border: 1px dashed rgba(96, 165, 250, 0.4);
@@ -1707,7 +1710,7 @@
 
 @media (max-width: 640px) {
   .fwd-drawer { width: 100vw; border-left: none; }
-  .fwd-login-row { flex-direction: column; }
+  .fwd-login-row { grid-template-columns: 1fr; }
   .fwd-add-tile { flex: 0 0 auto; flex-direction: row; }
 }
 
@@ -1719,19 +1722,19 @@
 .fwd-card--bulk,
 .fwd-card--shutdown { min-height: 290px; }
 
-/* Bulk panel: pin its action row toward the bottom, no oversized block */
-.fwd-card--bulk .fleet-defaults-panel { display: flex; flex-direction: column; height: 100%; }
-.fwd-card--bulk .fleet-defaults-panel__block { display: flex; flex-direction: column; gap: 10px; }
-.fwd-card--bulk .fleet-defaults-panel__actions { margin-top: auto; }
+/* Bulk panel: fixed height textarea, no full-height stretching of panel container */
+.fwd-card--bulk .fleet-defaults-panel { display: block; height: auto; }
+.fwd-card--bulk .fleet-defaults-panel__block { display: block; }
+.fwd-card--bulk .fleet-defaults-panel__actions { margin-top: 8px; }
 
 /* Shutdown card: hide the panel's own header (the card already has one),
    push Return-all / Reset to the bottom, and keep the preview compact. */
-.fwd-card__body--shutdown { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.fwd-card__body--shutdown { display: block; }
 .fwd-card__body--shutdown .shutdown-list-panel--tab,
-.fwd-card__body--shutdown .shutdown-list-body { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.fwd-card__body--shutdown .shutdown-list-body { display: block; }
 .fwd-card__body--shutdown .shutdown-list-tab-head { display: none; }
 .fwd-card__body--shutdown .shutdown-list-help-details { display: none; }
-.fwd-card__body--shutdown .shutdown-list-actions { order: 3; margin-top: auto; padding-top: 12px; }
+.fwd-card__body--shutdown .shutdown-list-actions { order: 3; margin-top: 10px; padding-top: 10px; }
 .fwd-card__body--shutdown .shutdown-list-rows { order: 1; gap: 8px; }
 .fwd-card__body--shutdown .shutdown-list-viewall { order: 2; margin-top: 8px; margin-bottom: 0; }
 
@@ -1771,7 +1774,7 @@
 
 
 /* ── Final compaction: footers, shutdown header + rows ─────────────────── */
-.fwd-card__foot { margin-top: auto; }
+.fwd-card__foot { margin-top: 10px; }
 .fwd-foot-actions { display: flex; align-items: center; gap: 12px; }
 .fwd-shutdown-head-right { display: flex; align-items: center; gap: 10px; }
 
