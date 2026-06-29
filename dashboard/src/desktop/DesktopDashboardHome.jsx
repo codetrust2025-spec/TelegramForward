@@ -385,6 +385,14 @@ export function DesktopDashboardHome({
                 <span className="desk-quick-btn__ico desk-quick-btn__ico--blue" aria-hidden>📊</span>
                 Data
               </button>
+              <button
+                type="button"
+                className="desk-quick-btn desk-quick-btn--util"
+                onClick={() => window.open('/submit-slot', '_blank', 'noopener,noreferrer')}
+              >
+                <span className="desk-quick-btn__ico desk-quick-btn__ico--green" aria-hidden>📅</span>
+                Book slot
+              </button>
             </div>
           </div>
         </div>

@@ -658,6 +658,7 @@
 .mob-quick-tile__icon--blue { color: #60a5fa; }
 .mob-quick-tile__icon--red { color: #f87171; }
 .mob-quick-tile__icon--purple { color: #a78bfa; }
+.mob-quick-tile__icon--green { color: #34d399; }
 
 .mob-quick-tile:disabled {
   opacity: 0.45;

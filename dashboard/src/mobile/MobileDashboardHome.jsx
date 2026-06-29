@@ -306,6 +306,14 @@ export function MobileDashboardHome({
             <span className="mob-quick-tile__icon mob-quick-tile__icon--purple" aria-hidden>📋</span>
             <span className="mob-quick-tile__label">Logs</span>
           </button>
+          <button
+            type="button"
+            className="mob-quick-tile mob-quick-tile--dark"
+            onClick={() => window.open('/submit-slot', '_blank', 'noopener,noreferrer')}
+          >
+            <span className="mob-quick-tile__icon mob-quick-tile__icon--green" aria-hidden>📅</span>
+            <span className="mob-quick-tile__label">Book slot</span>
+          </button>
         </div>
       </div>
 
