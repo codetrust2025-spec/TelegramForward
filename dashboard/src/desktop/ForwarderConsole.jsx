@@ -105,8 +105,16 @@ export function ForwarderConsole({
 
   return (
     <div className="fwd-console">
-      {/* Left column: Setup → Bulk */}
-      <div className="fwd-col">
+      {/*
+        DOM order: right-col first (Login→Shutdown) then left-col (Setup→Bulk).
+        CSS `order` restores desktop layout: left-col shows on left, right-col on right.
+        Mobile collapses to single column, preserving DOM order:
+          Login → Shutdown → Setup → Bulk  (wrong mobile order)
+        To get Setup → Login → Bulk → Shutdown on mobile, we use CSS order values.
+      */}
+
+      {/* Left column (desktop): Setup → Bulk  |  mobile order: 1, 3 */}
+      <div className="fwd-col fwd-col--left">
         <section className="fwd-card fwd-card--setup">
           <CardHead num="1" title="Setup" desc="Configure how forwarding works for your accounts." />
           <div className="fwd-card__body">
@@ -159,8 +167,8 @@ export function ForwarderConsole({
         </section>
       </div>
 
-      {/* Right column: Login → Shutdown */}
-      <div className="fwd-col">
+      {/* Right column (desktop): Login → Shutdown  |  mobile order: 2, 4 */}
+      <div className="fwd-col fwd-col--right">
         <section className="fwd-card fwd-card--login">
           <CardHead
             num="2"
@@ -221,7 +229,7 @@ export function ForwarderConsole({
         </section>
       </div>
 
-      {/* ── Drawers (reuse full panels — all logic preserved) ── */}
+      {/* ── Drawers ── */}
       <Drawer open={drawer === 'setup'} title="Setup configuration" onClose={() => setDrawer(null)}>
         <SetupMainPanel
           slots={setupLoggedInSlots}
