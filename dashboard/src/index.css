@@ -16687,17 +16687,12 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 .cand-top-perf-controls { gap: 5px; flex-shrink: 0; }
 .cand-top-perf-earn-btn { padding: 3px 8px; font-size: 11px; min-height: 24px; }
 
-/* Hide performer list by default — expand on hover */
+/* Performer list is always visible (no hover required) */
 .cand-top-perf .cand-perf-list {
-  display: none;
-  max-height: 0;
-}
-.cand-top-perf:hover .cand-perf-list,
-.cand-top-perf:focus-within .cand-perf-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 180px;
+  max-height: 360px;
   overflow-y: auto;
   margin-top: 6px;
   padding-top: 6px;
