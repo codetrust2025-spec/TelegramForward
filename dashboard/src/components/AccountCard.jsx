@@ -416,6 +416,34 @@ export function AccountCard({
     if (ok) onStop(slot)
   }
 
+  async function doMoveToShutdown() {
+    const ok = await confirm({
+      title: `Move ${label} to shutdown list?`,
+      message: 'The account stops posting and rests for 7 days before auto-restart. Clear it anytime from the Shutdown tab.',
+      confirmLabel: 'Move to shutdown',
+      variant: 'warn',
+    })
+    if (!ok) return
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch(`${API}/account/${slot}/shutdown`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.status === 'error') {
+        setError(data.message || 'Could not move to shutdown list')
+        return
+      }
+    } catch (e) {
+      setError(e.message || 'Could not move to shutdown list')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const isSubAccount = isSubscription || isSubscriptionAccount(slot, null, info)
 
   async function handleRestart() {
@@ -652,6 +680,12 @@ export function AccountCard({
                     label: refreshingJoined ? 'Scanning…' : 'Rescan membership',
                     onClick: () => { setMenuOpen(false); onRefreshJoined(slot) },
                     disabled: refreshingJoined,
+                  },
+                  {
+                    key: 'shutdown',
+                    label: onShutdown ? 'On shutdown list' : 'Move to shutdown list',
+                    onClick: () => { setMenuOpen(false); doMoveToShutdown() },
+                    disabled: loading || onShutdown,
                   },
                   {
                     key: 'logout',
