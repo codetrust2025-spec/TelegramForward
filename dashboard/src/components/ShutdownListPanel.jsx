@@ -5,6 +5,7 @@ import { ButtonContent, Spinner } from '../Loader.jsx'
 import {
   accountLabel,
   formatDurationShort,
+  formatPhoneDisplay,
   isAccountOnShutdown,
   telegramDisplayName,
 } from '../utils/accountUi.js'
@@ -52,7 +53,8 @@ export function ShutdownListPanel({
       const merged = { slot, ...row, ...(accountShutdown?.[slot] || {}) }
       const name =
         telegramDisplayName(accountInfo?.[slot]) || accountLabel(slot)
-      return { ...merged, name }
+      const phone = accountInfo?.[slot]?.phone || ''
+      return { ...merged, name, phone }
     })
   }, [shutdownList, accountShutdown, accountInfo])
 
@@ -181,6 +183,7 @@ export function ShutdownListPanel({
                       <span className="shutdown-list-row-name">{row.name}</span>
                       <span className="shutdown-list-row-slot">
                         {accountLabel(row.slot)}
+                        {row.phone ? ` · ${formatPhoneDisplay(row.phone)}` : ''}
                       </span>
                     </div>
                     <div className="shutdown-list-row-meta">
