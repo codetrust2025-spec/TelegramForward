@@ -1198,6 +1198,7 @@
 .desk-quick-btn__ico--red { color: #f87171; }
 .desk-quick-btn__ico--purple { color: #a78bfa; }
 .desk-quick-btn__ico--blue { color: #60a5fa; }
+.desk-quick-btn__ico--green { color: #34d399; }
 
 .mob-status-pill--rest {
   background: rgba(59, 130, 246, 0.15);
