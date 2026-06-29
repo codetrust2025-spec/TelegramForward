@@ -2489,6 +2489,16 @@ body {
 .account-mini-user--empty {
   visibility: hidden;
 }
+.account-mini-phone {
+  font-size: 11px;
+  font-weight: 600;
+  color: #cbd5e1;
+  line-height: 1.2;
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .account-mini-groups {
   display: inline-flex;
   align-items: center;
