@@ -1499,7 +1499,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-top: 14px;
+  margin-top: auto;
+  padding-top: 14px;
   flex-wrap: wrap;
 }
 
@@ -1694,4 +1695,62 @@
   .fwd-drawer { width: 100vw; border-left: none; }
   .fwd-login-row { flex-direction: column; }
   .fwd-add-tile { flex: 0 0 auto; flex-direction: row; }
+}
+
+
+/* ── Forwarder console: balanced heights + compact shutdown rows ───────── */
+.fwd-card--setup,
+.fwd-card--login { min-height: 300px; }
+
+.fwd-card--bulk,
+.fwd-card--shutdown { min-height: 290px; }
+
+/* Bulk panel: pin its action row toward the bottom, no oversized block */
+.fwd-card--bulk .fleet-defaults-panel { display: flex; flex-direction: column; height: 100%; }
+.fwd-card--bulk .fleet-defaults-panel__block { display: flex; flex-direction: column; gap: 10px; }
+.fwd-card--bulk .fleet-defaults-panel__actions { margin-top: auto; }
+
+/* Shutdown card: hide the panel's own header (the card already has one),
+   push Return-all / Reset to the bottom, and keep the preview compact. */
+.fwd-card__body--shutdown { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.fwd-card__body--shutdown .shutdown-list-panel--tab,
+.fwd-card__body--shutdown .shutdown-list-body { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.fwd-card__body--shutdown .shutdown-list-tab-head { display: none; }
+.fwd-card__body--shutdown .shutdown-list-help-details { display: none; }
+.fwd-card__body--shutdown .shutdown-list-actions { order: 3; margin-top: auto; padding-top: 12px; }
+.fwd-card__body--shutdown .shutdown-list-rows { order: 1; gap: 8px; }
+.fwd-card__body--shutdown .shutdown-list-viewall { order: 2; margin-top: 8px; margin-bottom: 0; }
+
+/* Compact table-like resting rows (replace the large red cards) */
+.fwd-card__body--shutdown .shutdown-list-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 6px 12px;
+  min-height: 52px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(248, 113, 113, 0.06);
+  border: 1px solid rgba(248, 113, 113, 0.18);
+}
+.fwd-card__body--shutdown .shutdown-list-row-main { grid-column: 1; min-width: 0; }
+.fwd-card__body--shutdown .shutdown-list-row-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fwd-card__body--shutdown .shutdown-list-row-slot { font-size: 11px; }
+.fwd-card__body--shutdown .shutdown-list-row-meta {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+.fwd-card__body--shutdown .shutdown-list-row-reason { display: none; }
+.fwd-card__body--shutdown .shutdown-list-clear-btn {
+  grid-column: 3;
+  padding: 4px 8px;
+  font-size: 11px;
 }
