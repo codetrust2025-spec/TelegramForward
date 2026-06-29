@@ -13,7 +13,20 @@ const NAV = [
   { id: 'logs', label: 'Logs', icon: '📋' },
   { id: 'admin', label: 'Admin', icon: '⚙' },
   { id: 'settings', label: 'Settings', icon: '⚙' },
+  { id: 'slot-booking', label: 'Slot booking', icon: 'calendar', external: '/submit-slot' },
 ]
+
+function NavIcon({ icon }) {
+  if (icon === 'calendar') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="4" width="18" height="18" rx="2" />
+        <path d="M16 2v4M8 2v4M3 10h18" />
+      </svg>
+    )
+  }
+  return icon
+}
 
 export function DesktopSidebar({
   activeId,
@@ -60,9 +73,15 @@ export function DesktopSidebar({
             key={item.id}
             type="button"
             className={`desktop-sidebar__link${activeId === item.id ? ' desktop-sidebar__link--active' : ''}`}
-            onClick={() => onNavigate(item.id)}
+            onClick={() => {
+              if (item.external) {
+                window.open(item.external, '_blank', 'noopener,noreferrer')
+              } else {
+                onNavigate(item.id)
+              }
+            }}
           >
-            <span className="desktop-sidebar__link-icon" aria-hidden>{item.icon}</span>
+            <span className="desktop-sidebar__link-icon" aria-hidden><NavIcon icon={item.icon} /></span>
             {item.label}
             {item.badgeKey === 'inbox' && inboxUnreadTotal > 0 && (
               <span className="desktop-sidebar__badge">
