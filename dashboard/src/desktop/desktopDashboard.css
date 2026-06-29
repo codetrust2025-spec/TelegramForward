@@ -1661,15 +1661,7 @@
 .fwd-pill--rest { background: rgba(248, 113, 113, 0.15); color: #fca5a5; }
 
 /* Bulk textarea cap so the card stays compact */
-.fwd-card--bulk .input--textarea {
-  height: 78px;
-  min-height: 78px;
-  max-height: 78px;
-  resize: none;
-  overflow-y: auto;
-}
-.fwd-card--bulk .fleet-defaults-panel__head { display: none; }
-.fwd-card--bulk .fleet-defaults-panel__label { font-size: 12px; }
+/* NOTE: overridden below in the final-polish block — see ".fwd-card--bulk .input--textarea" */
 
 /* Shutdown preview: hide verbose help, tighten rows */
 .fwd-card__body--shutdown .shutdown-list-help-details { display: none; }
@@ -1862,7 +1854,7 @@
   .fwd-card--shutdown { order: 4; }
   .fwd-login-row { grid-template-columns: 1fr; }
   .fwd-stat4 { flex-wrap: wrap; gap: 8px 14px; }
-  .fwd-card--bulk .input--textarea { height: 86px; min-height: 86px; max-height: 86px; }
+  .fwd-card--bulk .input--textarea { height: 88px; min-height: 88px; max-height: 88px; }
 }
 
 /* ── Standardize dashboard button heights ───────────────────────────────── */
@@ -1878,12 +1870,12 @@
 }
 .fwd-link { min-height: auto; }
 
-/* ── Bulk textarea — slightly taller, no clip ───────────────────────────── */
+/* ── Bulk textarea — 88px, bottom padding to avoid last-line clip ─────── */
 .fwd-card--bulk .input--textarea {
-  height: 86px;
-  min-height: 86px;
-  max-height: 86px;
-  padding: 10px 12px;
+  height: 88px;
+  min-height: 88px;
+  max-height: 88px;
+  padding: 10px 12px 12px;
   line-height: 1.45;
   resize: none;
   overflow-y: auto;
@@ -1921,3 +1913,37 @@
 /* ── Login card gap ─────────────────────────────────────────────────────── */
 .fwd-card--login { gap: 10px; }
 .fwd-card--login .fwd-card__foot { margin-top: 2px; padding-top: 4px; }
+
+
+/* ── Final lock: button interaction states ─────────────────────────────── */
+.fwd-btn:focus-visible {
+  outline: 2px solid #4b91ff;
+  outline-offset: 2px;
+}
+.fwd-btn:active { transform: scale(0.97); }
+.fwd-btn:disabled,
+.fwd-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.fwd-btn--green:hover { background: #16a34a; border-color: #16a34a; }
+.fwd-btn--ghost:hover { background: rgba(96, 165, 250, 0.18); }
+.fwd-link:focus-visible { outline: 2px solid #4b91ff; border-radius: 3px; }
+.fwd-link:disabled, .fwd-link[disabled] { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+
+/* Ensure fleet-defaults buttons inherit consistent height */
+.fwd-card--bulk .fleet-defaults-panel .btn {
+  min-height: 36px;
+  font-size: 13px;
+}
+
+/* Shutdown panel: fleet-defaults-panel__actions are already styled via shutdown-list-actions */
+.fwd-card__body--shutdown .btn {
+  min-height: 36px;
+  font-size: 13px;
+}
+
+/* Remove duplicate Bulk head/label that appears in some modes */
+.fwd-card--bulk .fleet-defaults-panel__head { display: none; }
+.fwd-card--bulk .fleet-defaults-panel__label { font-size: 12px; color: #9fb0c5; }
