@@ -640,18 +640,25 @@
 
 /* ── Forwarder console: 2×2 dashboard grid (Setup / Log in / Bulk / Shutdown) ── */
 .fwd-console {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
   width: 100%;
-  align-items: start;
   box-sizing: border-box;
 }
 
-@media (max-width: 1023px) {
-  .fwd-console {
-    grid-template-columns: 1fr;
-  }
+.fwd-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.fwd-row > .fwd-card { height: 100%; }
+
+@media (max-width: 900px) {
+  .fwd-row { grid-template-columns: 1fr; }
+  .fwd-row > .fwd-card { height: auto; }
 }
 
 .fwd-card {
@@ -673,7 +680,7 @@
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .fwd-card__badge {
@@ -1632,8 +1639,15 @@
 .fwd-pill--rest { background: rgba(248, 113, 113, 0.15); color: #fca5a5; }
 
 /* Bulk textarea cap so the card stays compact */
-.fwd-card--bulk .input--textarea { max-height: 110px; min-height: 80px; resize: vertical; }
+.fwd-card--bulk .input--textarea {
+  height: 78px;
+  min-height: 78px;
+  max-height: 78px;
+  resize: none;
+  overflow-y: auto;
+}
 .fwd-card--bulk .fleet-defaults-panel__head { display: none; }
+.fwd-card--bulk .fleet-defaults-panel__label { font-size: 12px; }
 
 /* Shutdown preview: hide verbose help, tighten rows */
 .fwd-card__body--shutdown .shutdown-list-help-details { display: none; }
@@ -1754,3 +1768,50 @@
   padding: 4px 8px;
   font-size: 11px;
 }
+
+
+/* ── Final compaction: footers, shutdown header + rows ─────────────────── */
+.fwd-card__foot { margin-top: auto; }
+.fwd-foot-actions { display: flex; align-items: center; gap: 12px; }
+.fwd-shutdown-head-right { display: flex; align-items: center; gap: 10px; }
+
+/* Shutdown card: hide the panel's own header/help (card header already labels it) */
+.fwd-card__body--shutdown .shutdown-list-tab-head,
+.fwd-card__body--shutdown .shutdown-list-help-details { display: none; }
+
+/* Compact preview rows: tighter padding, hide verbose reason + per-row Clear */
+.fwd-card__body--shutdown .shutdown-list-rows { gap: 0; }
+.fwd-card__body--shutdown .shutdown-list-row {
+  padding: 8px 10px;
+  gap: 2px 10px;
+  border-radius: 0;
+  border: none;
+  border-top: 1px solid rgba(239, 68, 68, 0.16);
+  background: transparent;
+}
+.fwd-card__body--shutdown .shutdown-list-rows {
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.fwd-card__body--shutdown .shutdown-list-row:first-child { border-top: none; }
+.fwd-card__body--shutdown .shutdown-list-row-reason { display: none; }
+.fwd-card__body--shutdown .shutdown-list-clear-btn { display: none; }
+.fwd-card__body--shutdown .shutdown-list-row-name {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fwd-card__body--shutdown .shutdown-list-row-slot { font-size: 11px; }
+.fwd-card__body--shutdown .shutdown-list-row-badge { font-size: 10px; padding: 1px 8px; }
+.fwd-card__body--shutdown .shutdown-list-row-resume { font-size: 11px; }
+
+/* Return all / Reset in one compact footer row */
+.fwd-card__body--shutdown .shutdown-list-actions {
+  margin-top: 10px;
+  gap: 8px;
+}
+
+/* Reduce overall page padding for the console */
+.desktop-body .fwd-console { padding-top: 2px; }

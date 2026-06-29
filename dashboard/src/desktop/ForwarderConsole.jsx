@@ -105,6 +105,7 @@ export function ForwarderConsole({
 
   return (
     <div className="fwd-console">
+      <div className="fwd-row">
       {/* ── Card 1: Setup ─────────────────────────────── */}
       <section className="fwd-card fwd-card--setup">
         <CardHead num="1" title="Setup" desc="Configure how forwarding works for your accounts." />
@@ -169,16 +170,20 @@ export function ForwarderConsole({
             <div className="fwd-login-summary">
               <div className="fwd-login-summary__label">Logged-in accounts</div>
               <div className="fwd-login-summary__big">{loggedInCount} account{loggedInCount !== 1 ? 's' : ''} ready</div>
-              <button type="button" className="fwd-link" onClick={() => setDrawer('accounts')}>View all →</button>
             </div>
           </div>
         </div>
         <footer className="fwd-card__foot">
-          <span className="fwd-muted">{loggedInCount > 0 ? 'Accounts ready to use' : 'Not logged in'}</span>
-          <button type="button" className="fwd-btn fwd-btn--green" onClick={() => setDrawer('accounts')}>+ Login</button>
+          <span className="fwd-muted">{loggedInCount > 0 ? `${loggedInCount} account${loggedInCount !== 1 ? 's' : ''} ready to use` : 'Not logged in'}</span>
+          <div className="fwd-foot-actions">
+            <button type="button" className="fwd-link" onClick={() => setDrawer('accounts')}>View all →</button>
+            <button type="button" className="fwd-btn fwd-btn--green" onClick={() => setDrawer('accounts')}>+ Login</button>
+          </div>
         </footer>
       </section>
+      </div>
 
+      <div className="fwd-row">
       {/* ── Card 3: Bulk ──────────────────────────────── */}
       <section className="fwd-card fwd-card--bulk">
         <CardHead num="3" title="Bulk" desc="Set default message/link for bulk forwarding." />
@@ -198,7 +203,12 @@ export function ForwarderConsole({
           num="4"
           title="Shutdown"
           desc="Manage accounts resting on shutdown."
-          right={shutdownListCount > 0 ? <span className="fwd-pill fwd-pill--rest">{shutdownListCount} resting</span> : null}
+          right={(
+            <div className="fwd-shutdown-head-right">
+              {shutdownListCount > 0 && <span className="fwd-pill fwd-pill--rest">{shutdownListCount} resting</span>}
+              <button type="button" className="fwd-link" onClick={() => setDrawer('shutdown')}>View all →</button>
+            </div>
+          )}
         />
         <div className="fwd-card__body fwd-card__body--shutdown">
           <ShutdownListPanel
@@ -208,10 +218,10 @@ export function ForwarderConsole({
             onUpdated={refreshAccounts}
             embedInTab
             previewLimit={3}
-            onViewAll={() => setDrawer('shutdown')}
           />
         </div>
       </section>
+      </div>
 
       {/* ── Drawers (reuse full panels — all logic preserved) ── */}
       <Drawer open={drawer === 'setup'} title="Setup configuration" onClose={() => setDrawer(null)}>
