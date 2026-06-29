@@ -106,6 +106,7 @@ export function AccountMiniCard({
   const isSub = isSubscription || isSubscriptionAccount(slot, null, info)
   const membership = formatJoinedStats(info)
   const membershipStale = isMembershipStale(info)
+  const phoneNumber = loggedIn ? formatPhoneDisplay(info?.phone) : ''
 
   const title = isSub
     ? `${accountCardTitle(slot, info)} · Subscription account`
@@ -186,6 +187,12 @@ export function AccountMiniCard({
       >
         {tgUser || '\u00a0'}
       </span>
+
+      {loggedIn && phoneNumber && (
+        <span className="account-mini-phone" title="Account mobile number">
+          {phoneNumber}
+        </span>
+      )}
 
       {loggedIn && membership && (
         <span
