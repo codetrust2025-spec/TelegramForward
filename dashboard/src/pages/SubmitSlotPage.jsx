@@ -131,6 +131,7 @@ export function SubmitSlotPage() {
   const [manualDate, setManualDate] = useState('')
   const [manualTime, setManualTime] = useState('')
   const [interviewRound, setInterviewRound] = useState('')
+  const [triedSubmit, setTriedSubmit] = useState(false)
 
   const effectiveName = name.trim()
   const selected = useMemo(() => {
@@ -145,20 +146,8 @@ export function SubmitSlotPage() {
     return parsedSlot ? { ...parsedSlot, interview_round: interviewRound || parsedSlot.interview_round || '' } : null
   }, [parsedSlot, manualDate, manualTime, interviewRound])
 
-  const canConfirm = Boolean(effectiveName && slotFile && interviewRound && !busy && !parsing)
   const showManualSlotFields = Boolean(slotFile && !parsing && (!parsedSlot?.date || !parsedSlot?.time))
-
-  const missingItems = []
-  if (!effectiveName) missingItems.push('your name')
-  if (!interviewRound) missingItems.push('an interview round')
-  if (!slotFile) missingItems.push('your interview invite screenshot')
-  const validationHint = missingItems.length
-    ? `To confirm, add ${
-        missingItems.length === 1
-          ? missingItems[0]
-          : `${missingItems.slice(0, -1).join(', ')} and ${missingItems[missingItems.length - 1]}`
-      }.`
-    : ''
+  const needsPaymentProof = Boolean(selected?.needs_payment_proof && !paymentProofId)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -225,10 +214,11 @@ export function SubmitSlotPage() {
 
   async function submitBook(ev) {
     ev.preventDefault()
-    if (!effectiveName) { setError('Enter your name.'); return }
-    if (!slotFile) { setError('Upload your interview invite screenshot.'); return }
-    if (!interviewRound) { setError('Select an interview round (L1, L2, HR, etc.) before confirming.'); return }
-    if (selected?.needs_payment_proof && !paymentProofId) { setError(`Upload payment proof first (₹${(selected.balance_due || 0).toLocaleString('en-IN')} due).`); return }
+    if (!effectiveName || !slotFile || !interviewRound || needsPaymentProof) {
+      setTriedSubmit(true)
+      setError('')
+      return
+    }
     setBusy(true); setError(''); setSuccess('')
     try {
       const fd = new FormData()
@@ -245,6 +235,7 @@ export function SubmitSlotPage() {
       if (!res.ok) { setError(data.payment_due ? (data.message || 'Payment required.') : (data.message || 'Could not book slot')); return }
       if (slotPreview) URL.revokeObjectURL(slotPreview)
       setSlotFile(null); setSlotPreview(''); setParsedSlot(null); setManualDate(''); setManualTime(''); setInterviewRound(''); setPaymentProofId('')
+      setTriedSubmit(false)
       setSuccess(`Slot confirmed for ${data.candidate?.name || effectiveName}.`)
       await refresh()
     } catch { setError('Network error — try again') }
@@ -369,7 +360,9 @@ export function SubmitSlotPage() {
               <label className="sbs-field">
                 <span className="sbs-label">Your name</span>
                 <SlotCandidatePicker candidates={candidates} value={name} onChange={v => { setName(v); setPaymentProofId('') }} disabled={busy || parsing} />
-                <span className="sbs-hint">Pick from the list or type a new client name.</span>
+                {triedSubmit && !effectiveName
+                  ? <span className="sbs-hint sbs-hint--warn">Enter or pick your name to confirm.</span>
+                  : <span className="sbs-hint">Pick from the list or type a new client name.</span>}
               </label>
 
               {selected?.needs_payment_proof && (
@@ -379,6 +372,7 @@ export function SubmitSlotPage() {
                     <>
                       <SubmitSlotFileDrop compact label="Payment screenshot" file={paymentFile} disabled={busy || parsing} busy={busy} onFile={setPaymentFile} />
                       <button type="button" className="sbs-secondary-btn" disabled={busy || parsing || !paymentFile} onClick={uploadPaymentProof}>Save payment proof</button>
+                      {triedSubmit && needsPaymentProof && <span className="sbs-hint sbs-hint--warn">Upload and save payment proof to confirm.</span>}
                     </>
                   )}
                 </div>
@@ -386,18 +380,19 @@ export function SubmitSlotPage() {
 
               <label className="sbs-field">
                 <span className="sbs-label">Interview round <span className="sbs-required" aria-hidden="true">*</span></span>
-                <div className={`sbs-select-wrap${!interviewRound ? ' sbs-select-wrap--required' : ''}`}>
+                <div className={`sbs-select-wrap${triedSubmit && !interviewRound ? ' sbs-select-wrap--required' : ''}`}>
                   <select className="sbs-select" value={interviewRound} onChange={e => setInterviewRound(e.target.value)} disabled={busy || parsing} required>
                     <option value="">Select round (L1, L2…)</option>
                     {ROUND_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
                 </div>
-                {!interviewRound && <span className="sbs-hint sbs-hint--warn">Required — select a round to confirm.</span>}
+                {triedSubmit && !interviewRound && <span className="sbs-hint sbs-hint--warn">Required — select a round to confirm.</span>}
               </label>
 
               <label className="sbs-field">
                 <span className="sbs-label">Interview invite screenshot</span>
                 <SubmitSlotFileDrop hint="Teams, Gmail, Calendar, or Zoom — date and time must be visible." file={slotFile} previewUrl={slotPreview} disabled={busy} busy={parsing} onFile={onSlotFileChange} />
+                {triedSubmit && !slotFile && <span className="sbs-hint sbs-hint--warn">Upload your interview invite screenshot to confirm.</span>}
               </label>
 
               {parsing && <div className="sbs-status sbs-status--loading"><Spinner size={18} /><span>Reading your invite…</span></div>}
@@ -430,11 +425,7 @@ export function SubmitSlotPage() {
               {error && <p className="sbs-alert sbs-alert--error" role="alert">{error}</p>}
               {success && <p className="sbs-alert sbs-alert--success">{success}</p>}
 
-              {!canConfirm && !busy && !parsing && validationHint && (
-                <p className="sbs-alert sbs-alert--warn" role="status">{validationHint}</p>
-              )}
-
-              <button type="submit" className={`sbs-cta${canConfirm ? ' sbs-cta--ready' : ''}`} disabled={!canConfirm}>
+              <button type="submit" className="sbs-cta sbs-cta--ready" disabled={busy}>
                 {busy ? <Spinner size={18} /> : 'Confirm booking'}
               </button>
             </form>
