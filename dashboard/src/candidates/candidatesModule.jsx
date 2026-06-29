@@ -1765,7 +1765,7 @@ function mR() {
   const e = new Date();
   return `${e.getUTCFullYear()}-${String(e.getUTCMonth() + 1).padStart(2, "0")}`;
 }
-export function CandidatesPanel() {
+function CandidatesPanelImpl() {
   const {
     role: e,
     reference: t,
@@ -2270,3 +2270,9 @@ export function CandidatesPanel() {
       net: (c == null ? undefined : c.net_handler_payout) ?? 0
     }} onClose={() => G(false)} onChanged={fe} />}{P && a && <_Component30 handler={P} onClose={() => j(null)} onChanged={fe} />}{B && <_Component31 candidate={B} onClose={() => Z(null)} onEdit={ge => I(ge)} />}<CandidatesActiveRoster open={ro} onClose={() => setRo(false)} reference={T} /><_Component32 open={!!W} title={W == null ? undefined : W.title} message={W == null ? undefined : W.message} onVerified={W == null ? undefined : W.onVerified} onCancel={H} /></div>;
 }
+
+// Memoized: this panel takes no props, so memoizing prevents the parent's
+// frequent WebSocket-driven re-renders from reconciling the table and tearing
+// down the imperatively-injected DOM (Resume column, service filter, inline
+// breakdown, complete badges) — which caused the table to flicker / "come and go".
+export const CandidatesPanel = React.memo(CandidatesPanelImpl)
