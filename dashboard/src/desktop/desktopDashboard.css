@@ -634,7 +634,8 @@
 }
 
 .desk-setup-wrap {
-  max-width: 960px;
+  max-width: 100%;
+  width: 100%;
 }
 
 .desk-account-picker {
