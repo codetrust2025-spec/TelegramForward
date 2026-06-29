@@ -268,58 +268,21 @@ export function DesktopApp({
     )
   } else if (desktopPage === 'setup') {
     content = (
-      <div className="desk-setup-wrap">
-        <ResponsiveOptions
-          className="setup-column-nav__tabs-wrap"
-          segmentedClassName="setup-column-nav__tabs setup-column-tabs"
-          label="Setup"
-          options={setupTabOptions}
-          value={setupTab}
-          onChange={setSetupTab}
-          role="tablist"
-          compactColumns={4}
-        />
-        {setupTab === 'setup' && (
-          <SetupMainPanel
-            slots={setupLoggedInSlots}
-            accountFilter={workspaceMode}
-            onAccountFilterChange={handleSetupAccountFilter}
-            onModeApplied={handleAccountModeApplied}
-            activeSlot={state.active_account}
-            accountInfo={state.account_info}
-            accountStates={state.account_states}
-            postingModes={postingModes}
-            accountShutdown={state.account_shutdown}
-            subscriptionSlots={subscriptionSlots}
-            switchingAccount={switchingAccount}
-            onSelectAccount={switchAccount}
-            onOpenLoginTab={() => setSetupTab?.('login')}
-            onPostingModeUpdated={refreshAccounts}
-            modesProps={modesProps}
-          />
-        )}
-        {setupTab === 'login' && <AccountPanel {...setupPanelProps.accountPanel} />}
-        {setupTab === 'fleet' && (
-          <FleetDefaultsPanel
-            embedInTab
-            workspaceMode={workspaceMode}
-            loggedInCount={setupLoggedInSlots.length}
-            onUpdated={refreshAccounts}
-          />
-        )}
-        {setupTab === 'shutdown' && (
-          <ShutdownListPanel
-            shutdownList={state.shutdown_list}
-            accountShutdown={state.account_shutdown}
-            accountInfo={state.account_info}
-            onUpdated={refreshAccounts}
-            embedInTab
-          />
-        )}
-        {setupTab === 'groups' && (
-          <>
-            <SetupAccountPicker
+      <div className="fwd-console">
+        <section className="fwd-card fwd-card--setup">
+          <header className="fwd-card__head">
+            <span className="fwd-card__badge">1</span>
+            <div className="fwd-card__titles">
+              <h2 className="fwd-card__title">Setup</h2>
+              <p className="fwd-card__desc">Configure how forwarding works for your accounts.</p>
+            </div>
+          </header>
+          <div className="fwd-card__body">
+            <SetupMainPanel
               slots={setupLoggedInSlots}
+              accountFilter={workspaceMode}
+              onAccountFilterChange={handleSetupAccountFilter}
+              onModeApplied={handleAccountModeApplied}
               activeSlot={state.active_account}
               accountInfo={state.account_info}
               accountStates={state.account_states}
@@ -327,11 +290,89 @@ export function DesktopApp({
               accountShutdown={state.account_shutdown}
               subscriptionSlots={subscriptionSlots}
               switchingAccount={switchingAccount}
-              onSelect={switchAccount}
-              onOpenAccountsTab={() => setSetupTab?.('login')}
+              onSelectAccount={switchAccount}
+              onOpenLoginTab={() => setSetupTab?.('login')}
+              onPostingModeUpdated={refreshAccounts}
+              modesProps={modesProps}
             />
-            <GroupsUpload {...groupsUploadProps} />
-          </>
+          </div>
+        </section>
+
+        <section className="fwd-card fwd-card--login">
+          <header className="fwd-card__head">
+            <span className="fwd-card__badge">2</span>
+            <div className="fwd-card__titles">
+              <h2 className="fwd-card__title">Log in</h2>
+              <p className="fwd-card__desc">Manage your account logins.</p>
+            </div>
+          </header>
+          <div className="fwd-card__body">
+            <AccountPanel {...setupPanelProps.accountPanel} />
+          </div>
+        </section>
+
+        <section className="fwd-card fwd-card--bulk">
+          <header className="fwd-card__head">
+            <span className="fwd-card__badge">3</span>
+            <div className="fwd-card__titles">
+              <h2 className="fwd-card__title">Bulk</h2>
+              <p className="fwd-card__desc">Set default message/link for bulk forwarding.</p>
+            </div>
+          </header>
+          <div className="fwd-card__body">
+            <FleetDefaultsPanel
+              embedInTab
+              workspaceMode={workspaceMode}
+              loggedInCount={setupLoggedInSlots.length}
+              onUpdated={refreshAccounts}
+            />
+          </div>
+        </section>
+
+        <section className="fwd-card fwd-card--shutdown">
+          <header className="fwd-card__head">
+            <span className="fwd-card__badge">4</span>
+            <div className="fwd-card__titles">
+              <h2 className="fwd-card__title">Shutdown</h2>
+              <p className="fwd-card__desc">Manage accounts resting on shutdown.</p>
+            </div>
+          </header>
+          <div className="fwd-card__body">
+            <ShutdownListPanel
+              shutdownList={state.shutdown_list}
+              accountShutdown={state.account_shutdown}
+              accountInfo={state.account_info}
+              onUpdated={refreshAccounts}
+              embedInTab
+            />
+          </div>
+        </section>
+
+        {workspaceMode === WORKSPACE_CAMPAIGN && (
+          <section className="fwd-card fwd-card--groups">
+            <header className="fwd-card__head">
+              <span className="fwd-card__badge">5</span>
+              <div className="fwd-card__titles">
+                <h2 className="fwd-card__title">Groups</h2>
+                <p className="fwd-card__desc">Upload and manage campaign group lists.</p>
+              </div>
+            </header>
+            <div className="fwd-card__body">
+              <SetupAccountPicker
+                slots={setupLoggedInSlots}
+                activeSlot={state.active_account}
+                accountInfo={state.account_info}
+                accountStates={state.account_states}
+                postingModes={postingModes}
+                accountShutdown={state.account_shutdown}
+                subscriptionSlots={subscriptionSlots}
+                switchingAccount={switchingAccount}
+                onSelect={switchAccount}
+                onOpenAccountsTab={() => setSetupTab?.('login')}
+              />
+              <GroupsUpload {...groupsUploadProps} />
+            </div>
+          </section>
         )}
       </div>
     )
