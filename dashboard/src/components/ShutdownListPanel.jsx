@@ -42,6 +42,9 @@ export function ShutdownListPanel({
   onUpdated,
   /** When true, always expanded (setup column Shutdown tab). */
   embedInTab = false,
+  /** When > 0, show only this many rows + a "View all" button (dashboard preview). */
+  previewLimit = 0,
+  onViewAll = null,
 }) {
   const [open, setOpen] = useState(embedInTab)
   const [clearing, setClearing] = useState(null)
@@ -172,7 +175,7 @@ export function ShutdownListPanel({
             </div>
           ) : (
             <ul className="shutdown-list-rows">
-              {rows.map(row => {
+              {(previewLimit > 0 ? rows.slice(0, previewLimit) : rows).map(row => {
                 const left = Number(row.seconds_until_resume) || 0
                 const badge = isAccountOnShutdown(accountShutdown, row.slot)
                   ? `Resumes in ${formatDurationShort(left)}`
@@ -222,6 +225,15 @@ export function ShutdownListPanel({
                 )
               })}
             </ul>
+          )}
+          {previewLimit > 0 && rows.length > previewLimit && onViewAll && (
+            <button
+              type="button"
+              className="shutdown-list-viewall"
+              onClick={onViewAll}
+            >
+              View all {rows.length} resting →
+            </button>
           )}
         </div>
   )
