@@ -105,122 +105,120 @@ export function ForwarderConsole({
 
   return (
     <div className="fwd-console">
-      <div className="fwd-row">
-      {/* ── Card 1: Setup ─────────────────────────────── */}
-      <section className="fwd-card fwd-card--setup">
-        <CardHead num="1" title="Setup" desc="Configure how forwarding works for your accounts." />
-        <div className="fwd-card__body">
-          <div className="fwd-config">
-            <div className="fwd-config__label">Current configuration</div>
-            <div className="fwd-config__row">
-              <span className="fwd-config__k">Mode</span>
-              <span className="fwd-config__v">{modeLabel}</span>
+      {/* Left column: Setup → Bulk */}
+      <div className="fwd-col">
+        <section className="fwd-card fwd-card--setup">
+          <CardHead num="1" title="Setup" desc="Configure how forwarding works for your accounts." />
+          <div className="fwd-card__body">
+            <div className="fwd-config">
+              <div className="fwd-config__label">Current configuration</div>
+              <div className="fwd-config__row">
+                <span className="fwd-config__k">Mode</span>
+                <span className="fwd-config__v">{modeLabel}</span>
+              </div>
+              <div className="fwd-config__row">
+                <span className="fwd-config__k">{isCampaign ? 'Campaign message' : 'Default post link'}</span>
+                <span className="fwd-config__v fwd-config__v--link" title={defaultSummary}>{defaultSummary}</span>
+              </div>
+              <div className="fwd-config__row">
+                <span className="fwd-config__k">Applied to</span>
+                <span className="fwd-config__v">All logged-in accounts</span>
+              </div>
             </div>
-            <div className="fwd-config__row">
-              <span className="fwd-config__k">{isCampaign ? 'Campaign message' : 'Default post link'}</span>
-              <span className="fwd-config__v fwd-config__v--link" title={defaultSummary}>{defaultSummary}</span>
-            </div>
-            <div className="fwd-config__row">
-              <span className="fwd-config__k">Applied to</span>
-              <span className="fwd-config__v">All logged-in accounts</span>
+            <div className="fwd-statbox-row">
+              <div className="fwd-statbox">
+                <div className="fwd-statbox__n">{forwardingCount}</div>
+                <div className="fwd-statbox__l">Forwarding accounts</div>
+              </div>
+              <div className="fwd-statbox">
+                <div className="fwd-statbox__n">{campaignCount}</div>
+                <div className="fwd-statbox__l">Campaigns</div>
+              </div>
             </div>
           </div>
-          <div className="fwd-statbox-row">
-            <div className="fwd-statbox">
-              <div className="fwd-statbox__n">{forwardingCount}</div>
-              <div className="fwd-statbox__l">Forwarding accounts</div>
-            </div>
-            <div className="fwd-statbox">
-              <div className="fwd-statbox__n">{campaignCount}</div>
-              <div className="fwd-statbox__l">Campaigns</div>
-            </div>
-          </div>
-        </div>
-        <footer className="fwd-card__foot">
-          <button type="button" className="fwd-btn fwd-btn--ghost" onClick={() => setDrawer('setup')}>
-            ⚙ Edit configuration
-          </button>
-          <button type="button" className="fwd-link" disabled={!!totalListLoading} onClick={() => onTotalList?.()}>
-            {totalListLoading ? 'Building…' : 'View forward list →'}
-          </button>
-        </footer>
-      </section>
-
-      {/* ── Card 2: Log in ────────────────────────────── */}
-      <section className="fwd-card fwd-card--login">
-        <CardHead
-          num="2"
-          title="Log in"
-          desc="Manage your account logins."
-          right={(
-            <div className="fwd-stat4">
-              <span className="fwd-stat4__item"><b>{loggedInCount}</b>Logged in</span>
-              <span className="fwd-stat4__item"><b>{shutdownListCount}</b>Shutdown rest</span>
-              <span className="fwd-stat4__item"><b>{forwardingCount}</b>Forwarding</span>
-              <span className="fwd-stat4__item"><b>{campaignCount}</b>Campaign</span>
-            </div>
-          )}
-        />
-        <div className="fwd-card__body">
-          <div className="fwd-login-row">
-            <button type="button" className="fwd-add-tile" onClick={() => setDrawer('accounts')}>
-              <span className="fwd-add-tile__plus">+</span>
-              <span className="fwd-add-tile__label">Add account</span>
+          <footer className="fwd-card__foot">
+            <button type="button" className="fwd-btn fwd-btn--ghost" onClick={() => setDrawer('setup')}>
+              ⚙ Edit configuration
             </button>
-            <div className="fwd-login-summary">
-              <div className="fwd-login-summary__label">Logged-in accounts</div>
-              <div className="fwd-login-summary__big">{loggedInCount} account{loggedInCount !== 1 ? 's' : ''} ready</div>
-            </div>
+            <button type="button" className="fwd-link" disabled={!!totalListLoading} onClick={() => onTotalList?.()}>
+              {totalListLoading ? 'Building…' : 'View forward list →'}
+            </button>
+          </footer>
+        </section>
+
+        <section className="fwd-card fwd-card--bulk">
+          <CardHead num="3" title="Bulk" desc="Set default message/link for bulk forwarding." />
+          <div className="fwd-card__body">
+            <FleetDefaultsPanel
+              embedInTab
+              workspaceMode={workspaceMode}
+              loggedInCount={setupLoggedInSlots.length}
+              onUpdated={refreshAccounts}
+            />
           </div>
-        </div>
-        <footer className="fwd-card__foot">
-          <span className="fwd-muted">{loggedInCount > 0 ? `${loggedInCount} account${loggedInCount !== 1 ? 's' : ''} ready to use` : 'Not logged in'}</span>
-          <div className="fwd-foot-actions">
-            <button type="button" className="fwd-link" onClick={() => setDrawer('accounts')}>View all →</button>
-            <button type="button" className="fwd-btn fwd-btn--green" onClick={() => setDrawer('accounts')}>+ Login</button>
-          </div>
-        </footer>
-      </section>
+        </section>
       </div>
 
-      <div className="fwd-row">
-      {/* ── Card 3: Bulk ──────────────────────────────── */}
-      <section className="fwd-card fwd-card--bulk">
-        <CardHead num="3" title="Bulk" desc="Set default message/link for bulk forwarding." />
-        <div className="fwd-card__body">
-          <FleetDefaultsPanel
-            embedInTab
-            workspaceMode={workspaceMode}
-            loggedInCount={setupLoggedInSlots.length}
-            onUpdated={refreshAccounts}
+      {/* Right column: Login → Shutdown */}
+      <div className="fwd-col">
+        <section className="fwd-card fwd-card--login">
+          <CardHead
+            num="2"
+            title="Log in"
+            desc="Manage your account logins."
+            right={(
+              <div className="fwd-stat4">
+                <span className="fwd-stat4__item"><b>{loggedInCount}</b>Logged in</span>
+                <span className="fwd-stat4__item"><b>{shutdownListCount}</b>Shutdown rest</span>
+                <span className="fwd-stat4__item"><b>{forwardingCount}</b>Forwarding</span>
+                <span className="fwd-stat4__item"><b>{campaignCount}</b>Campaign</span>
+              </div>
+            )}
           />
-        </div>
-      </section>
-
-      {/* ── Card 4: Shutdown ──────────────────────────── */}
-      <section className="fwd-card fwd-card--shutdown">
-        <CardHead
-          num="4"
-          title="Shutdown"
-          desc="Manage accounts resting on shutdown."
-          right={(
-            <div className="fwd-shutdown-head-right">
-              {shutdownListCount > 0 && <span className="fwd-pill fwd-pill--rest">{shutdownListCount} resting</span>}
-              <button type="button" className="fwd-link" onClick={() => setDrawer('shutdown')}>View all →</button>
+          <div className="fwd-card__body">
+            <div className="fwd-login-row">
+              <button type="button" className="fwd-add-tile" onClick={() => setDrawer('accounts')}>
+                <span className="fwd-add-tile__plus">+</span>
+                <span className="fwd-add-tile__label">Add account</span>
+              </button>
+              <div className="fwd-login-summary">
+                <div className="fwd-login-summary__label">Logged-in accounts</div>
+                <div className="fwd-login-summary__big">{loggedInCount} account{loggedInCount !== 1 ? 's' : ''} ready</div>
+              </div>
             </div>
-          )}
-        />
-        <div className="fwd-card__body fwd-card__body--shutdown">
-          <ShutdownListPanel
-            shutdownList={shutdownList}
-            accountShutdown={accountShutdown}
-            accountInfo={state.account_info}
-            onUpdated={refreshAccounts}
-            embedInTab
-            previewLimit={3}
+          </div>
+          <footer className="fwd-card__foot">
+            <span className="fwd-muted">{loggedInCount > 0 ? `${loggedInCount} account${loggedInCount !== 1 ? 's' : ''} ready to use` : 'Not logged in'}</span>
+            <div className="fwd-foot-actions">
+              <button type="button" className="fwd-link" onClick={() => setDrawer('accounts')}>View all →</button>
+              <button type="button" className="fwd-btn fwd-btn--green" onClick={() => setDrawer('accounts')}>+ Login</button>
+            </div>
+          </footer>
+        </section>
+
+        <section className="fwd-card fwd-card--shutdown">
+          <CardHead
+            num="4"
+            title="Shutdown"
+            desc="Manage accounts resting on shutdown."
+            right={(
+              <div className="fwd-shutdown-head-right">
+                {shutdownListCount > 0 && <span className="fwd-pill fwd-pill--rest">{shutdownListCount} resting</span>}
+                <button type="button" className="fwd-link" onClick={() => setDrawer('shutdown')}>View all →</button>
+              </div>
+            )}
           />
-        </div>
-      </section>
+          <div className="fwd-card__body fwd-card__body--shutdown">
+            <ShutdownListPanel
+              shutdownList={shutdownList}
+              accountShutdown={accountShutdown}
+              accountInfo={state.account_info}
+              onUpdated={refreshAccounts}
+              embedInTab
+              previewLimit={3}
+            />
+          </div>
+        </section>
       </div>
 
       {/* ── Drawers (reuse full panels — all logic preserved) ── */}
