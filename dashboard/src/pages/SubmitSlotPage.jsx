@@ -148,6 +148,18 @@ export function SubmitSlotPage() {
   const canConfirm = Boolean(effectiveName && slotFile && interviewRound && !busy && !parsing)
   const showManualSlotFields = Boolean(slotFile && !parsing && (!parsedSlot?.date || !parsedSlot?.time))
 
+  const missingItems = []
+  if (!effectiveName) missingItems.push('your name')
+  if (!interviewRound) missingItems.push('an interview round')
+  if (!slotFile) missingItems.push('your interview invite screenshot')
+  const validationHint = missingItems.length
+    ? `To confirm, add ${
+        missingItems.length === 1
+          ? missingItems[0]
+          : `${missingItems.slice(0, -1).join(', ')} and ${missingItems[missingItems.length - 1]}`
+      }.`
+    : ''
+
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
@@ -373,19 +385,19 @@ export function SubmitSlotPage() {
               )}
 
               <label className="sbs-field">
-                <span className="sbs-label">Interview invite screenshot</span>
-                <SubmitSlotFileDrop hint="Teams, Gmail, Calendar, or Zoom — date and time must be visible." file={slotFile} previewUrl={slotPreview} disabled={busy} busy={parsing} onFile={onSlotFileChange} />
-              </label>
-
-              <label className="sbs-field">
                 <span className="sbs-label">Interview round <span className="sbs-required" aria-hidden="true">*</span></span>
-                <div className={`sbs-select-wrap${!interviewRound && slotFile ? ' sbs-select-wrap--required' : ''}`}>
+                <div className={`sbs-select-wrap${!interviewRound ? ' sbs-select-wrap--required' : ''}`}>
                   <select className="sbs-select" value={interviewRound} onChange={e => setInterviewRound(e.target.value)} disabled={busy || parsing} required>
                     <option value="">Select round (L1, L2…)</option>
                     {ROUND_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
                 </div>
-                {!interviewRound && slotFile && <span className="sbs-hint sbs-hint--warn">Required — select a round to confirm.</span>}
+                {!interviewRound && <span className="sbs-hint sbs-hint--warn">Required — select a round to confirm.</span>}
+              </label>
+
+              <label className="sbs-field">
+                <span className="sbs-label">Interview invite screenshot</span>
+                <SubmitSlotFileDrop hint="Teams, Gmail, Calendar, or Zoom — date and time must be visible." file={slotFile} previewUrl={slotPreview} disabled={busy} busy={parsing} onFile={onSlotFileChange} />
               </label>
 
               {parsing && <div className="sbs-status sbs-status--loading"><Spinner size={18} /><span>Reading your invite…</span></div>}
@@ -417,6 +429,10 @@ export function SubmitSlotPage() {
 
               {error && <p className="sbs-alert sbs-alert--error" role="alert">{error}</p>}
               {success && <p className="sbs-alert sbs-alert--success">{success}</p>}
+
+              {!canConfirm && !busy && !parsing && validationHint && (
+                <p className="sbs-alert sbs-alert--warn" role="status">{validationHint}</p>
+              )}
 
               <button type="submit" className={`sbs-cta${canConfirm ? ' sbs-cta--ready' : ''}`} disabled={!canConfirm}>
                 {busy ? <Spinner size={18} /> : 'Confirm booking'}
