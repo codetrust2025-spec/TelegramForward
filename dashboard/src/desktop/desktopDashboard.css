@@ -653,6 +653,16 @@
   flex-direction: column;
   gap: 14px;
   min-width: 0;
+  align-items: stretch;
+  /* Cards size to their content — no cross-axis stretch */
+}
+
+.fwd-col > .fwd-card {
+  height: auto;
+  min-height: 0;
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 100%;
 }
 
 .fwd-row {
@@ -1724,12 +1734,8 @@
 }
 
 
-/* ── Forwarder console: balanced heights + compact shutdown rows ───────── */
-.fwd-card--setup,
-.fwd-card--login { min-height: 300px; }
-
-.fwd-card--bulk,
-.fwd-card--shutdown { min-height: 290px; }
+/* ── Forwarder console: cards use natural content height ───────────────── */
+/* Removed forced min-heights that created empty space in Login/Bulk cards */
 
 /* Bulk panel: fixed height textarea, no full-height stretching of panel container */
 .fwd-card--bulk .fleet-defaults-panel { display: block; height: auto; }
@@ -1737,10 +1743,10 @@
 .fwd-card--bulk .fleet-defaults-panel__actions { margin-top: 8px; }
 
 /* Shutdown card: hide the panel's own header (the card already has one),
-   push Return-all / Reset to the bottom, and keep the preview compact. */
-.fwd-card__body--shutdown { display: block; }
+   place action buttons BELOW the preview list (order property requires flex). */
+.fwd-card__body--shutdown { display: flex; flex-direction: column; }
 .fwd-card__body--shutdown .shutdown-list-panel--tab,
-.fwd-card__body--shutdown .shutdown-list-body { display: block; }
+.fwd-card__body--shutdown .shutdown-list-body { display: flex; flex-direction: column; flex: 1; }
 .fwd-card__body--shutdown .shutdown-list-tab-head { display: none; }
 .fwd-card__body--shutdown .shutdown-list-help-details { display: none; }
 .fwd-card__body--shutdown .shutdown-list-actions { order: 3; margin-top: 10px; padding-top: 10px; }
@@ -1794,7 +1800,7 @@
 /* Compact preview rows: tighter padding, hide verbose reason + per-row Clear */
 .fwd-card__body--shutdown .shutdown-list-rows { gap: 0; }
 .fwd-card__body--shutdown .shutdown-list-row {
-  padding: 8px 10px;
+  padding: 6px 10px;
   gap: 2px 10px;
   border-radius: 0;
   border: none;
@@ -1805,6 +1811,7 @@
   border: 1px solid rgba(239, 68, 68, 0.22);
   border-radius: 10px;
   overflow: hidden;
+  order: 1;
 }
 .fwd-card__body--shutdown .shutdown-list-row:first-child { border-top: none; }
 .fwd-card__body--shutdown .shutdown-list-row-reason { display: none; }
