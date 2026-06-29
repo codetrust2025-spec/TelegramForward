@@ -1834,3 +1834,90 @@
 
 /* Reduce overall page padding for the console */
 .desktop-body .fwd-console { padding-top: 2px; }
+
+
+/* ── Final polish: desktop column order + mobile ordering ───────────────── */
+/* Left col (Setup+Bulk) appears first visually on desktop */
+.fwd-col--left  { order: 1; }
+.fwd-col--right { order: 2; }
+
+/* Mobile: collapse to single column, restore logical reading order */
+@media (max-width: 900px) {
+  .fwd-console {
+    display: flex;
+    flex-direction: column;
+  }
+  .fwd-col { width: 100%; }
+  /* Setup=1, Login=2, Bulk=3, Shutdown=4 */
+  .fwd-col--left  { order: 1; }   /* renders Setup then Bulk as items 1,3 */
+  .fwd-col--right { order: 2; }   /* renders Login then Shutdown as items 2,4 */
+  /* With flex-direction: column and two cols, left items appear before right —
+     so the natural order is Setup→Bulk→Login→Shutdown.
+     To get Setup→Login→Bulk→Shutdown on mobile we need individual card ordering. */
+  .fwd-col--left  { display: contents; }
+  .fwd-col--right { display: contents; }
+  .fwd-card--setup    { order: 1; }
+  .fwd-card--login    { order: 2; }
+  .fwd-card--bulk     { order: 3; }
+  .fwd-card--shutdown { order: 4; }
+  .fwd-login-row { grid-template-columns: 1fr; }
+  .fwd-stat4 { flex-wrap: wrap; gap: 8px 14px; }
+  .fwd-card--bulk .input--textarea { height: 86px; min-height: 86px; max-height: 86px; }
+}
+
+/* ── Standardize dashboard button heights ───────────────────────────────── */
+.fwd-btn {
+  min-height: 36px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.fwd-link { min-height: auto; }
+
+/* ── Bulk textarea — slightly taller, no clip ───────────────────────────── */
+.fwd-card--bulk .input--textarea {
+  height: 86px;
+  min-height: 86px;
+  max-height: 86px;
+  padding: 10px 12px;
+  line-height: 1.45;
+  resize: none;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+.fwd-card--bulk .fleet-defaults-panel__block { gap: 0; }
+.fwd-card--bulk .fleet-defaults-panel__actions {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.85fr) minmax(200px, 1.15fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+@media (max-width: 600px) {
+  .fwd-card--bulk .fleet-defaults-panel__actions { grid-template-columns: 1fr; }
+}
+
+/* ── Text colour variables ───────────────────────────────────────────────── */
+.fwd-card__title { color: #f3f6fb; }
+.fwd-card__desc  { color: #9fb0c5; }
+.fwd-config__k   { color: #9fb0c5; }
+.fwd-config__v   { color: #f3f6fb; }
+.fwd-config__v--link { color: #4b91ff; }
+.fwd-login-summary__label { color: #71839b; }
+.fwd-login-summary__big   { color: #f3f6fb; }
+.fwd-statbox__l { color: #9fb0c5; }
+.fwd-statbox__n { color: #f3f6fb; }
+.fwd-muted { color: #9fb0c5; }
+
+/* ── Compact config rows ────────────────────────────────────────────────── */
+.fwd-config { padding: 10px 12px; }
+.fwd-config__row { min-height: 28px; padding: 4px 0; }
+.fwd-statbox-row { margin-top: 10px; }
+.fwd-statbox { padding: 8px 12px; }
+
+/* ── Login card gap ─────────────────────────────────────────────────────── */
+.fwd-card--login { gap: 10px; }
+.fwd-card--login .fwd-card__foot { margin-top: 2px; padding-top: 4px; }
