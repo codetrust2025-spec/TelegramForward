@@ -61,6 +61,7 @@ function ColumnResizeHandle({ onPointerDown, label }) {
  * Below 900px width uses CSS stack layout — no drag handles.
  */
 export function ResizableDashboardLayout({ left, center, right }) {
+  const onlyLeft = !center && !right
   const twoCol = !right
   const [sizes, setSizes] = useState(loadSizes)
   const [canResize, setCanResize] = useState(
@@ -145,6 +146,18 @@ export function ResizableDashboardLayout({ left, center, right }) {
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     setIsDragging(true)
+  }
+
+  if (onlyLeft) {
+    return (
+      <div className="dashboard-resize-wrap dashboard-resize-wrap--single">
+        <div className="dashboard-resize-row">
+          <div className="dashboard-resize-pane" style={{ width: '100%' }}>
+            {left}
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (!canResize) {
