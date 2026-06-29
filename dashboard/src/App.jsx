@@ -2011,7 +2011,8 @@ export default function App() {
               state,
               configuredSlots,
               subscriptionSlots: subscriptionSlots.length ? subscriptionSlots : (state.subscription_slots || []),
-              accountsModeFilter: workspaceMode,
+              // Log in tab lists every working account (campaign + forwarding), not just the active workspace mode.
+              accountsModeFilter: 'all',
               onAccountsModeFilterChange: setWorkspaceMode,
               hideAccountsModeFilter: true,
               workspaceMode,
@@ -2323,7 +2324,7 @@ export default function App() {
                     state={state}
                     configuredSlots={configuredSlots}
                     subscriptionSlots={subscriptionSlots.length ? subscriptionSlots : (state.subscription_slots || [])}
-                    accountsModeFilter={workspaceMode}
+                    accountsModeFilter="all"
                     onAccountsModeFilterChange={setWorkspaceMode}
                     hideAccountsModeFilter
                     workspaceMode={workspaceMode}
