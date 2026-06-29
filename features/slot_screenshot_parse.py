@@ -78,16 +78,37 @@ def _parse_labeled_interview_block(blob: str) -> tuple[str, str, str]:
             d, m = m, d
         date = f"{y:04d}-{_pad2(m)}-{_pad2(d)}"
 
+    # Match the "Time:" label with 12h (5:00 pm) OR 24h (13:00:00) start,
+    # optional seconds, and an optional end time after -, to, until, till.
+    # Reliable label — must win over the phone status-bar clock elsewhere.
     tm = re.search(
-        r"\btime\s*:\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b",
+        r"\btime\s*:\s*"
+        r"(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(am|pm)?"
+        r"(?:\s*(?:-|to|\u2013|\u2014|until|untill|till)\s*"
+        r"(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(am|pm)?)?",
         text,
         re.IGNORECASE,
     )
     if tm:
-        sh, sm = _to_24h(int(tm.group(1)), int(tm.group(2) or 0), tm.group(3))
+        s_ap = (tm.group(3) or "").lower()
+        e_ap = (tm.group(6) or "").lower()
+        # If only the end time carries am/pm, apply it to the start too.
+        if not s_ap and e_ap:
+            s_ap = e_ap
+        if s_ap:
+            sh, sm = _to_24h(int(tm.group(1)), int(tm.group(2) or 0), s_ap)
+        else:
+            sh, sm = int(tm.group(1)) % 24, int(tm.group(2) or 0) % 60
         time_start = _fmt_hhmm(sh, sm)
-        end_total = sh * 60 + sm + 30
-        time_end = _fmt_hhmm(end_total // 60, end_total % 60)
+        if tm.group(4):
+            if e_ap:
+                eh, em = _to_24h(int(tm.group(4)), int(tm.group(5) or 0), e_ap)
+            else:
+                eh, em = int(tm.group(4)) % 24, int(tm.group(5) or 0) % 60
+            time_end = _fmt_hhmm(eh, em)
+        else:
+            end_total = sh * 60 + sm + 30
+            time_end = _fmt_hhmm(end_total // 60, end_total % 60)
 
     return date, time_start, time_end
 
