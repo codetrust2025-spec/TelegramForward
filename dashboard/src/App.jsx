@@ -2435,7 +2435,7 @@ export default function App() {
           </div>
         </DashboardColumn>
         )}
-        center={(
+        center={anyProcessRunning ? (
         <DashboardColumn
           id="center"
           title="Progress"
@@ -2552,7 +2552,7 @@ export default function App() {
             }}
           />
         </DashboardColumn>
-        )}
+        ) : null}
         right={null}
       />
       )}
