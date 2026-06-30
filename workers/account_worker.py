@@ -2439,12 +2439,42 @@ class AccountWorker:
                 acct.forwarding_running = False
                 break
 
-            rest_seconds = pick_forward_rest_seconds()
+            # Adaptive tick interval based on FloodWait history and account health
+            from core.forward_intelligence import (
+                compute_adaptive_tick_interval,
+                should_skip_forward_tick,
+            )
+            
+            health_score = getattr(st, 'health_score', 100.0)
+            
+            # Check if we should skip this tick entirely
+            should_skip, skip_reason = should_skip_forward_tick(self.slot, health_score)
+            if should_skip:
+                await self._log(
+                    f"↷ Skipping next forward tick — {skip_reason}",
+                    "warning",
+                    action="tick_skip",
+                    reason=skip_reason,
+                )
+                # Wait longer when skipping
+                rest_seconds = compute_adaptive_tick_interval(self.slot, health_score)
+                rest_seconds = int(rest_seconds * 1.5)  # 1.5x normal when recovering
+            else:
+                rest_seconds = compute_adaptive_tick_interval(self.slot, health_score)
+            
             rest_m = rest_seconds // 60
+            profile = ""
+            try:
+                from core.forward_intelligence import load_forward_intelligence
+                intel = load_forward_intelligence(self.slot)
+                profile = f" · {intel.recommend_tick_profile(health_score)} mode"
+            except Exception:
+                pass
+            
             await self._wait_countdown(
                 rest_seconds,
                 "waiting",
-                f"⏳ Next forward tick in {rest_m}m ({rest_seconds}s)",
+                f"⏳ Next forward tick in {rest_m}m ({rest_seconds}s){profile}",
                 feature="forwarding",
             )
 

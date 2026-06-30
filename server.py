@@ -913,6 +913,38 @@ async def forward_cycle_selection_get(slot: str):
     }
 
 
+@app.get("/account/{slot}/forward-intelligence")
+async def forward_intelligence_stats(slot: str):
+    """Get forwarding intelligence statistics and adaptive timing info"""
+    if slot not in ACCOUNTS:
+        return {"status": "error", "message": "Invalid slot"}
+    
+    try:
+        from core.forward_intelligence import load_forward_intelligence
+        
+        intel = load_forward_intelligence(slot)
+        stats = intel.get_stats()
+        
+        # Add next tick prediction
+        health_score = ACCOUNTS[slot].get("health_score", 100.0)
+        next_interval = intel.compute_next_tick_interval(health_score)
+        should_skip, skip_reason = intel.should_skip_tick(health_score)
+        
+        return {
+            "status": "ok",
+            "intelligence": {
+                "stats": stats,
+                "next_tick_interval_seconds": next_interval,
+                "next_tick_interval_minutes": round(next_interval / 60, 1),
+                "should_skip_next": should_skip,
+                "skip_reason": skip_reason if should_skip else None,
+                "dead_peers_sample": list(intel.get_dead_peer_set())[:20],  # First 20
+            }
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 @app.post("/account/{slot}/forward-cycle/selection")
 async def forward_cycle_selection_save(slot: str, body: dict):
     if slot not in ACCOUNTS:
