@@ -497,13 +497,24 @@ async def run_forward_tick(
 ) -> ForwardTickResult:
     """
     Forward to a random 60–100 joined groups this tick (no reuse until round completes).
+    Enhanced with adaptive intelligence for 10/10 performance.
     """
     from core.config import FLOOD_END_CYCLE_SECONDS, FLOOD_HARD_BAN_SECONDS
     from core.message_rewrite import prepare_cycle_message
+    from core.forward_intelligence import (
+        load_forward_intelligence,
+        save_forward_intelligence,
+        get_forward_dead_peers,
+    )
+
+    # Load intelligence system
+    intel = load_forward_intelligence(slot)
+    intel.record_tick_start()
 
     result = ForwardTickResult()
     if not settings.is_configured(slot):
         result.end_reason = "not_configured"
+        save_forward_intelligence(intel)
         return result
 
     use_template = (settings.source_type or "").strip().lower() != SOURCE_TELEGRAM
@@ -518,6 +529,7 @@ async def run_forward_tick(
     result.joined_total = len(all_targets)
     if not all_targets:
         result.end_reason = "no_targets"
+        save_forward_intelligence(intel)
         return result
 
     batch_cfg = load_forward_batch_settings()
@@ -527,13 +539,19 @@ async def run_forward_tick(
     )
     result.joined_total = joined_total
     result.tick_round_reset = round_reset
-    if dead_peers:
-        targets = [t for t in targets if not _target_is_dead(t, dead_peers)]
+    
+    # Merge provided dead_peers with intelligence-tracked dead peers
+    intel_dead = intel.get_dead_peer_set()
+    all_dead_peers = (dead_peers or set()) | intel_dead
+    
+    if all_dead_peers:
+        targets = [t for t in targets if not _target_is_dead(t, all_dead_peers)]
     result.total_targets = len(targets)
     if not targets:
         result.end_reason = "no_targets"
         result.next_tick_pending_keys = pending_pool
         result.next_tick_group_offset = len(pending_pool)
+        save_forward_intelligence(intel)
         return result
 
     processed_keys: set[str] = set()
@@ -614,12 +632,19 @@ async def run_forward_tick(
                 _record_forward_failure(result, fail_reason)
                 result.failed += 1
                 tick_outcome = "failed"
+                # Track persistent failures as dead peers
+                if fail_reason in ("invalid", "blocked", "cant_write"):
+                    intel.add_dead_peer(label, fail_reason)
             elif isinstance(outcome, tuple) and outcome[0] == "flood":
                 secs = int((outcome[1] or {}).get("seconds", 60))
                 result.flood_seconds = secs
                 _record_forward_failure(result, "flood")
                 result.failed += 1
                 processed += 1
+                
+                # Record flood event in intelligence system
+                intel.add_flood_event(secs, label)
+                
                 if on_target_done:
                     await on_target_done(
                         "failed", processed, total, batch_idx, fail_reason="flood"
@@ -627,9 +652,13 @@ async def run_forward_tick(
                 if secs >= FLOOD_HARD_BAN_SECONDS:
                     result.hard_flood = True
                     result.end_reason = "flood_break"
+                    intel.record_tick_flooded()
+                    save_forward_intelligence(intel)
                     break
                 if secs >= FLOOD_END_CYCLE_SECONDS:
                     result.end_reason = "flood_break"
+                    intel.record_tick_flooded()
+                    save_forward_intelligence(intel)
                     break
                 await asyncio.sleep(min(secs + random.randint(2, 8), 120))
                 continue
@@ -679,4 +708,9 @@ async def run_forward_tick(
     result.next_tick_group_offset = len(remaining)
     result.tick_group_offset = len(remaining)
 
+    # Record successful tick completion if no flood break
+    if result.end_reason not in ("flood_break", "stopped"):
+        intel.record_tick_success()
+    
+    save_forward_intelligence(intel)
     return result
