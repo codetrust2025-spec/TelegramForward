@@ -104,7 +104,7 @@ function RowActions({ row, busy, canEditAttendee, onEditAttendee, onEditSlot, on
   )
 }
 
-function SlotEditModal({ row, mode, busy, onClose, onSave }) {
+function SlotEditModal({ row, mode, targetStatus, targetLabel, busy, onClose, onSave }) {
   const [attendee, setAttendee] = useState(row.interview_attendee_resolved || row.interview_attendee || 'Bhavana')
   const [date, setDate] = useState(row.date || '')
   const [time, setTime] = useState(row.time || '')
@@ -113,11 +113,18 @@ function SlotEditModal({ row, mode, busy, onClose, onSave }) {
   const [round, setRound] = useState(row.interview_round || '')
   const [error, setError] = useState('')
   const attendeeOnly = mode === 'attendee'
+  const attendeeWithStatus = mode === 'attendee-with-status'
   async function submit(event) {
     event.preventDefault()
     setError('')
     try {
-      await onSave(attendeeOnly ? { attendee } : { date, time, time_end: timeEnd, notes, interview_round: round })
+      if (attendeeOnly) {
+        await onSave({ attendee })
+      } else if (attendeeWithStatus) {
+        await onSave({ attendee, status: targetStatus })
+      } else {
+        await onSave({ date, time, time_end: timeEnd, notes, interview_round: round })
+      }
     } catch (err) {
       setError(err.message || 'Save failed')
     }
@@ -125,12 +132,12 @@ function SlotEditModal({ row, mode, busy, onClose, onSave }) {
   return (
     <div className="cand-modal-backdrop" onMouseDown={event => event.target === event.currentTarget && onClose()}>
       <form className="cand-modal ops-slot-modal" onSubmit={submit}>
-        <header className="cand-modal-header"><div><h3 className="cand-modal-title">{attendeeOnly ? 'Edit attendee' : 'Edit interview slot'}</h3><p className="cand-modal-sub">{row.name}</p></div><button type="button" className="cand-modal-close" onClick={onClose} aria-label="Close">×</button></header>
+        <header className="cand-modal-header"><div><h3 className="cand-modal-title">{attendeeWithStatus ? `Mark as "${targetLabel}"?` : attendeeOnly ? 'Edit attendee' : 'Edit interview slot'}</h3><p className="cand-modal-sub">{attendeeWithStatus ? `Select attendee and update attendance for ${row.name}` : row.name}</p></div><button type="button" className="cand-modal-close" onClick={onClose} aria-label="Close">×</button></header>
         <div className="cand-modal-body">
-          {attendeeOnly ? <label className="cand-field cand-field--span2"><span className="cand-field-label">Attendee</span><input className="cand-input" list="ops-attendee-options" value={attendee} onChange={event => setAttendee(event.target.value)} required autoFocus /><datalist id="ops-attendee-options">{ATTENDEES.map(name => <option key={name} value={name} />)}</datalist></label> : <><label className="cand-field"><span className="cand-field-label">Date</span><input className="cand-input" type="date" value={date} onChange={event => setDate(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Start time</span><input className="cand-input" type="time" value={time} onChange={event => setTime(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">End time</span><input className="cand-input" type="time" value={timeEnd} onChange={event => setTimeEnd(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Interview round</span><select className="cand-input" value={round} onChange={event => setRound(event.target.value)}><option value="">Select round</option><option value="L1">L1</option><option value="L2">L2</option><option value="L3">L3</option><option value="HR">HR</option><option value="Final">Final round</option><option value="Screening">Screening</option></select></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Notes</span><input className="cand-input" value={notes} onChange={event => setNotes(event.target.value)} /></label></>}
+          {(attendeeOnly || attendeeWithStatus) ? <label className="cand-field cand-field--span2"><span className="cand-field-label">Attendee{attendeeWithStatus ? ' (who attended the interview?)' : ''}</span><select className="cand-input" value={attendee} onChange={event => setAttendee(event.target.value)} required autoFocus>{ATTENDEES.map(name => <option key={name} value={name}>{name}</option>)}</select></label> : <><label className="cand-field"><span className="cand-field-label">Date</span><input className="cand-input" type="date" value={date} onChange={event => setDate(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Start time</span><input className="cand-input" type="time" value={time} onChange={event => setTime(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">End time</span><input className="cand-input" type="time" value={timeEnd} onChange={event => setTimeEnd(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Interview round</span><select className="cand-input" value={round} onChange={event => setRound(event.target.value)}><option value="">Select round</option><option value="L1">L1</option><option value="L2">L2</option><option value="L3">L3</option><option value="HR">HR</option><option value="Final">Final round</option><option value="Screening">Screening</option></select></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Notes</span><input className="cand-input" value={notes} onChange={event => setNotes(event.target.value)} /></label></>}
           {error && <p className="admin-error cand-field--span2">{error}</p>}
         </div>
-        <footer className="cand-modal-footer"><button type="button" className="cand-btn cand-btn--ghost" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="cand-btn cand-btn--primary" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button></footer>
+        <footer className="cand-modal-footer"><button type="button" className="cand-btn cand-btn--ghost" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className={`cand-btn cand-btn--primary${attendeeWithStatus && (targetStatus === 'not_attended' || targetStatus === 'cancelled') ? ' cand-btn--danger' : ''}`} disabled={busy}>{busy ? 'Saving…' : attendeeWithStatus ? targetLabel : 'Save changes'}</button></footer>
       </form>
     </div>
   )
@@ -478,15 +485,8 @@ export function InterviewRoster({
                             onChange={async (val) => {
                               if (!val) { saveAttendance(row, val, row.interview_attendee_resolved || row.interview_attendee || 'Bhavana'); return }
                               const label = STATUS_OPTIONS.find(o => o.value === val)?.label || val
-                              const ok = await confirm({
-                                title: `Mark as "${label}"?`,
-                                message: `Update attendance for ${row.name} to "${label}".`,
-                                confirmLabel: label,
-                                variant: val === 'not_attended' || val === 'cancelled' ? 'danger' : 'default',
-                              })
-                              if (ok) {
-                                saveAttendance(row, val, row.interview_attendee_resolved || row.interview_attendee || 'Bhavana')
-                              }
+                              // Show attendee selection before confirming
+                              setEditing({ row, mode: 'attendee-with-status', targetStatus: val, targetLabel: label })
                             }}
                           />
                           <span className={`ops-status-pill ops-status-pill--${statusTone(status)}`}>
@@ -503,7 +503,7 @@ export function InterviewRoster({
           </div>
         </div>
       )}
-      {editing && <SlotEditModal row={editing.row} mode={editing.mode} busy={busyId === editing.row.id} onClose={() => setEditing(null)} onSave={values => editing.mode === 'attendee' ? saveAttendee(editing.row, values.attendee) : saveSlot(editing.row, values)} />}
+      {editing && <SlotEditModal row={editing.row} mode={editing.mode} targetStatus={editing.targetStatus} targetLabel={editing.targetLabel} busy={busyId === editing.row.id} onClose={() => setEditing(null)} onSave={values => editing.mode === 'attendee' ? saveAttendee(editing.row, values.attendee) : editing.mode === 'attendee-with-status' ? saveAttendance(editing.row, values.status, values.attendee) : saveSlot(editing.row, values)} />}
     </section>
   )
 }
