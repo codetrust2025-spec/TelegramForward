@@ -95,16 +95,10 @@ export function AccountPanel({
   }, [activeLoggedInSlots, accountStates, postingModes])
 
   const filteredSlots = useMemo(() => {
-    if (modeFilter === 'all') return activeLoggedInSlots
-    if (modeFilter === 'campaign') {
-      return activeLoggedInSlots.filter(slot =>
-        isCampaignEnabled(accountStates, slot, postingModes),
-      )
-    }
-    return activeLoggedInSlots.filter(slot =>
-      isForwardingEnabled(accountStates, slot, postingModes),
-    )
-  }, [activeLoggedInSlots, modeFilter, accountStates, postingModes])
+    // Always show ALL logged-in accounts, don't filter by mode
+    // Users should see their accounts even if mode isn't configured yet
+    return activeLoggedInSlots
+  }, [activeLoggedInSlots])
 
   const nextAvailable = useMemo(
     () => getNextAvailableSlot(allSlots, accountInfo),
