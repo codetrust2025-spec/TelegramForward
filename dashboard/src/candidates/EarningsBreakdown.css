@@ -234,6 +234,24 @@
   color: var(--text-dim, #7b8a9e);
   font-size: 11px;
 }
+.earn-breakdown-proof-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+  padding: 2px 6px;
+  border: 1px solid rgba(99,102,241,.35);
+  border-radius: 4px;
+  background: rgba(99,102,241,.12);
+  color: #c7d2fe;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.earn-breakdown-proof-btn:hover {
+  background: rgba(99,102,241,.25);
+  border-color: rgba(99,102,241,.6);
+}
 .earn-breakdown-total {
   border-top: 2px solid rgba(99,102,241,.3);
   margin-top: 4px;
