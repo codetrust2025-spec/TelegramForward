@@ -1074,7 +1074,7 @@ function _Component29({
   }, [a, h, p]);
   const O = Number(t == null ? undefined : t.owed) || 0;
   const L = w.useMemo(() => A.reduce((P, j) => P + (Number(j.amount) || 0), 0), [A]);
-  const M = t != null ? Number(t.paid) || 0 : L;
+  const M = L;
   const C = O - M;
   const Y = {
     count: A.length
