@@ -2856,6 +2856,11 @@ def assign_interview_slot(
     _validate_interview_slot_times(slot_time, time_end)
 
     if _candidate_has_confirmed_slot(existing):
+        # Block exact duplicate — same date + same time
+        existing_day = (_clean_str(existing.get("date")) or "")[:10]
+        existing_time = (_clean_str(existing.get("time")) or "")[:5]
+        if existing_day == day and existing_time == slot_time[:5]:
+            raise ValueError(f"This slot is already booked for {existing.get('name') or 'this candidate'} on {day} at {slot_time}. No duplicate needed.")
         return _duplicate_candidate_slot(
             existing,
             date=day,
