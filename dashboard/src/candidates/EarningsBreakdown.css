@@ -80,8 +80,7 @@
   border: 1px solid rgba(255,255,255,.06);
 }
 .earn-table {
-  width: auto;
-  max-width: 100%;
+  width: 100%;
   border-collapse: collapse;
   font-size: 12px;
   min-width: 900px;
@@ -101,10 +100,10 @@
   white-space: nowrap;
 }
 .earn-th--num { text-align: center; width: 50px; }
-.earn-th--money { text-align: right; width: 100px; }
+.earn-th--money { text-align: right; }
 .earn-th--status { text-align: center; width: 70px; }
 .earn-th--action { text-align: right; width: 90px; }
-.earn-th--name { width: 130px; }
+.earn-th--name { }
 
 .earn-table tbody td {
   padding: 10px 8px;
