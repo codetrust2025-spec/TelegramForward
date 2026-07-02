@@ -230,6 +230,20 @@
   color: #4ade80;
   font-variant-numeric: tabular-nums;
 }
+.earn-breakdown-date {
+  color: var(--text-dim, #7b8a9e);
+  font-size: 11px;
+}
+.earn-breakdown-total {
+  border-top: 2px solid rgba(99,102,241,.3);
+  margin-top: 4px;
+  padding-top: 12px;
+  background: rgba(99,102,241,.06);
+}
+.earn-breakdown-amount--total {
+  font-size: 16px;
+  color: #38bdf8;
+}
 .earn-detail-loading {
   font-size: 12px;
   color: var(--text-dim, #7b8a9e);
