@@ -1329,15 +1329,22 @@ def list_candidates(*, stage: str | None = None, task: str | None = None,
     reconcile_resume_metadata()
     data = _load()
     rows = [_with_computed(r) for r in (data.get("candidates") or [])]
-    # Consolidate before filtering.  Otherwise a Thrilok filter can select an
-    # old duplicate slot before the profile's current Ravinder referral wins.
+    # Apply month filter BEFORE collapse so we don't accidentally pick
+    # a June slot when filtering for July (collapse picks newest by updated_at).
+    if month and month != "all":
+        if month == "undated":
+            rows = [r for r in rows if not _row_month(r) and not _row_display_month(r)]
+        else:
+            rows = [r for r in rows if _row_in_month(r, month)]
+    # Consolidate after month filtering. Reference filter still needs to happen
+    # after collapse to respect the Ravinder fallback logic.
     rows = _collapse_profile_candidates(rows)
     return _apply_list_filters(
         rows,
         stage=stage,
         task=task,
         search=search,
-        month=month,
+        month=None,  # Already applied above
         pending_only=pending_only,
         reference=reference,
         service_type=service_type,
