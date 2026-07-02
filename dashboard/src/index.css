@@ -11191,15 +11191,16 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   font-variant-numeric: tabular-nums;
 }
 .cand-exp-cat {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.3px;
-  padding: 2px 8px;
+  padding: 2px 6px;
   border-radius: 999px;
   background: rgba(99, 102, 241, 0.15);
   color: #c7d2fe;
   border: 1px solid rgba(99, 102, 241, 0.3);
+  white-space: nowrap;
 }
 .cand-exp-cat--commission { background: rgba(16, 185, 129, 0.18); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.35); }
 .cand-exp-cat--travel     { background: rgba(59, 130, 246, 0.18); color: #93c5fd; border-color: rgba(59, 130, 246, 0.35); }
@@ -11711,12 +11712,16 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 .cand-exp-kind-tag {
   display: inline-flex;
   align-items: center;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.3px;
-  padding: 1px 8px;
+  padding: 1px 6px;
   border-radius: 999px;
   text-transform: uppercase;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cand-exp-kind-tag--earning {
   background: rgba(16, 185, 129, 0.18);
@@ -11791,7 +11796,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 }
 .cand-allexp-form {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 10px 14px;
   padding: 14px 16px;
   border-radius: 10px;
@@ -11805,11 +11810,14 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   justify-content: flex-end;
   gap: 8px;
 }
-@media (max-width: 900px) {
-  .cand-allexp-form { grid-template-columns: 1fr 1fr; }
+@media (min-width: 700px) {
+  .cand-allexp-form { grid-template-columns: 1fr 1fr 1fr 1fr; }
 }
 @media (max-width: 520px) {
   .cand-allexp-form { grid-template-columns: 1fr; }
+}
+.cand-modal--xl .cand-modal-body {
+  overflow-x: hidden;
 }
 
 .cand-allexp-filters {
@@ -11827,10 +11835,8 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 }
 .cand-allexp-table {
   width: 100%;
-  min-width: 680px;
   border-collapse: collapse;
   font-size: 13px;
-  table-layout: fixed;
 }
 .cand-allexp-table thead th {
   position: sticky;
@@ -11845,13 +11851,8 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   font-weight: 600;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   z-index: 1;
+  white-space: nowrap;
 }
-.cand-allexp-table colgroup col:nth-child(1) { width: 16%; }
-.cand-allexp-table colgroup col:nth-child(2) { width: 14%; }
-.cand-allexp-table colgroup col:nth-child(3) { width: 20%; }
-.cand-allexp-table colgroup col:nth-child(4) { width: 14%; }
-.cand-allexp-table colgroup col:nth-child(5) { width: 28%; }
-.cand-allexp-table colgroup col:nth-child(6) { width: 8%; }
 .cand-allexp-table tbody td {
   padding: 9px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
