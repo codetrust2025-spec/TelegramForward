@@ -118,14 +118,14 @@
 .daily-ops-page--dashboard{padding:6px 10px 8px;max-width:100%;width:100%;gap:0;display:flex;flex-direction:column;min-height:0}
 /* Remove gap between top sections */
 .ops-dashboard{display:flex;flex-direction:column;gap:0;min-height:0;width:100%}
-/* Make the top area a single non-wrapping row */
+/* Make the top area a single wrapping row */
 .ops-dashboard > .ops-topbar,
 .ops-dashboard > .ops-dash-top-row {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 .ops-dashboard > .ops-dash-controls-row {
-  display: inline-flex;
-  flex-wrap: nowrap;
+  display: flex;
+  flex-wrap: wrap;
 }
 .ops-dashboard--v2.ops-dashboard--enterprise .ops-dash-board{gap:6px}
 .ops-dashboard--v2 .ops-dash-row{grid-template-columns:minmax(0,13fr) minmax(0,7fr);gap:6px}
@@ -1376,17 +1376,17 @@
    ───────────────────────────────────────────────────────────────────────── */
 
 .ops-topbar {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 8px;
   padding: 0;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   min-width: 0;
   margin-bottom: 0;
 }
 /* Merge topbar and controls into single line */
 .ops-topbar + .ops-dash-controls-row {
-  display: inline-flex;
+  display: flex;
   margin-top: 0;
   padding-top: 0;
   border-top: none;
