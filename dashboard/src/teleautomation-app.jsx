@@ -37047,6 +37047,7 @@ function _Component29({
   const [h, x] = w.useState("all");
   const [v, g] = w.useState("all");
   const [p, m] = w.useState("all");
+  const [apiTotal, setApiTotal] = w.useState(0);
   const [_, y] = w.useState(null);
   const [k, T] = w.useState(() => ({
     reference: e[0] || "",
@@ -37068,6 +37069,7 @@ function _Component29({
       if (U.status === "ok") {
         i(U.expenses || []);
         c(U.available_months || []);
+        setApiTotal(Number(U.total) || 0);
       } else {
         f(U.message || "Failed to load");
       }
@@ -37104,8 +37106,8 @@ function _Component29({
   }, [a, h, p]);
   // Calculate totals from the FILTERED list (A) so header badges match the table
   const L = w.useMemo(() => A.reduce((P, j) => P + (Number(j.amount) || 0), 0), [A]);
-  // Paid out: use stats API for "all time", otherwise sum filtered expenses
-  const M = v === "all" ? (Number(t?.paid) || 0) : Math.abs(L);
+  // Paid out: use backend total (apiTotal) as primary, fall back to client sum
+  const M = apiTotal || L;
   // Owed amount should also respect filters - get from stats API with same month filter
   const O = Number(t == null ? undefined : t.owed) || 0;
   const C = O - M;

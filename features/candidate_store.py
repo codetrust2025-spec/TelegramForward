@@ -1247,7 +1247,7 @@ def _slim_list_row(row: dict) -> dict:
     return slim
 
 
-def _collapse_profile_candidates(rows: list[dict]) -> list[dict]:
+def _collapse_profile_candidates(rows: list[dict], *, month: str | None = None) -> list[dict]:
     """Show one Candidates-page record per profile candidate.
 
     Multiple interview slots are stored as separate rows for scheduling, but
@@ -1266,7 +1266,16 @@ def _collapse_profile_candidates(rows: list[dict]) -> list[dict]:
             continue
         grouped.setdefault(key, []).append(row)
     for group in grouped.values():
-        newest = max(group, key=lambda r: (r.get("updated_at") or "", r.get("date") or ""))
+        # When a month filter is active, prefer the row whose date matches that month.
+        # This prevents picking a row with an empty date or wrong month as the winner.
+        if month and month != "all":
+            month_matching = [r for r in group if _row_display_month(r) == month]
+            if month_matching:
+                newest = max(month_matching, key=lambda r: (r.get("date") or "", r.get("updated_at") or ""))
+            else:
+                newest = max(group, key=lambda r: (r.get("updated_at") or "", r.get("date") or ""))
+        else:
+            newest = max(group, key=lambda r: (r.get("updated_at") or "", r.get("date") or ""))
         merged = dict(newest)
         merged["slot_count"] = len(group)
         # Use the max payment across all slot clones for this profile.
@@ -1338,7 +1347,7 @@ def list_candidates(*, stage: str | None = None, task: str | None = None,
             rows = [r for r in rows if _row_in_month(r, month)]
     # Consolidate after month filtering. Reference filter still needs to happen
     # after collapse to respect the Ravinder fallback logic.
-    rows = _collapse_profile_candidates(rows)
+    rows = _collapse_profile_candidates(rows, month=month)
     return _apply_list_filters(
         rows,
         stage=stage,

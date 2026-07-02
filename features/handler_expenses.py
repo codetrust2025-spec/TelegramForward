@@ -36,7 +36,20 @@ from threading import Lock
 from core.config import DATA_DIR
 
 _FILE = os.path.join(DATA_DIR, "handler_expenses.json")
+PROOFS_DIR = os.path.join(DATA_DIR, "handler_expense_proofs")
 _lock = Lock()
+
+MAX_PROOF_BYTES = 8 * 1024 * 1024  # 8 MB per screenshot
+
+_ALLOWED_MIME = {
+    "image/jpeg": "jpg",
+    "image/jpg":  "jpg",
+    "image/png":  "png",
+    "image/webp": "webp",
+    "image/gif":  "gif",
+    "image/heic": "heic",
+    "image/heif": "heif",
+}
 
 VALID_CATEGORIES = {
     "commission", "travel", "food", "gym",
@@ -140,6 +153,7 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         "category":   category,
         "note":       _clean_str(record.get("note", base.get("note")))[:240],
         "date":       _clean_str(record.get("date", base.get("date"))),
+        "proofs":     base.get("proofs") or [],
         "created_at": base.get("created_at") or _now_iso(),
         "updated_at": _now_iso(),
     }
@@ -263,3 +277,109 @@ def available_months() -> list[dict]:
             "is_current": m == current,
         })
     return out
+
+
+# ── Payment-proof helpers for handler expenses ──────────────────────────────
+
+
+def _proof_dir(eid: str) -> str:
+    """Each expense gets its own folder for screenshots."""
+    return os.path.join(PROOFS_DIR, eid)
+
+
+def _ext_from_mime(mime: str, fallback_name: str = "") -> str:
+    mime = (mime or "").lower().split(";")[0].strip()
+    if mime in _ALLOWED_MIME:
+        return _ALLOWED_MIME[mime]
+    if fallback_name and "." in fallback_name:
+        ext = fallback_name.rsplit(".", 1)[-1].lower()
+        if ext in {"jpg", "jpeg", "png", "webp", "gif", "heic", "heif"}:
+            return "jpeg" if ext == "jpeg" else ext
+    return ""
+
+
+def add_proof(eid: str, *, data: bytes, original_name: str, mime_type: str,
+              note: str = "") -> dict | None:
+    """Persist a payment screenshot for expense `eid`. Returns the new proof
+    entry or None when the expense doesn't exist. Raises ValueError on
+    rejection (wrong mime, too big, empty)."""
+    if not data:
+        raise ValueError("Empty upload")
+    if len(data) > MAX_PROOF_BYTES:
+        raise ValueError(f"File too large (max {MAX_PROOF_BYTES // (1024*1024)} MB)")
+    ext = _ext_from_mime(mime_type, original_name)
+    if not ext:
+        raise ValueError("Only image files (jpg / png / webp / gif / heic) are allowed")
+
+    store = _load()
+    rows = store.get("expenses") or []
+    idx = next((i for i, r in enumerate(rows) if r.get("id") == eid), -1)
+    if idx < 0:
+        return None
+
+    pid = uuid.uuid4().hex[:12]
+    filename = f"{pid}.{ext}"
+    folder = _proof_dir(eid)
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, filename)
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+
+    entry = {
+        "id":            pid,
+        "filename":      filename,
+        "original_name": (original_name or filename)[:160],
+        "mime_type":     mime_type or f"image/{ext}",
+        "size":          len(data),
+        "note":          _clean_str(note)[:200],
+        "uploaded_at":   _now_iso(),
+        "url":           f"/handler-expenses/{eid}/proofs/{pid}",
+    }
+    proofs = list(rows[idx].get("proofs") or [])
+    proofs.append(entry)
+    rows[idx]["proofs"] = proofs
+    rows[idx]["updated_at"] = _now_iso()
+    store["expenses"] = rows
+    _save(store)
+    return entry
+
+
+def get_proof(eid: str, pid: str) -> tuple[str, dict] | None:
+    """Locate the proof on-disk path + metadata. Returns (path, entry) or None."""
+    for r in (_load().get("expenses") or []):
+        if r.get("id") != eid:
+            continue
+        for p in (r.get("proofs") or []):
+            if p.get("id") == pid:
+                path = os.path.join(_proof_dir(eid), p["filename"])
+                if not os.path.exists(path):
+                    return None
+                return path, p
+    return None
+
+
+def delete_proof(eid: str, pid: str) -> bool:
+    """Remove a proof from an expense. Returns True on success."""
+    store = _load()
+    rows = store.get("expenses") or []
+    for row in rows:
+        if row.get("id") != eid:
+            continue
+        proofs = list(row.get("proofs") or [])
+        for i, p in enumerate(proofs):
+            if p.get("id") == pid:
+                path = os.path.join(_proof_dir(eid), p["filename"])
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except OSError:
+                    pass
+                proofs.pop(i)
+                row["proofs"] = proofs
+                row["updated_at"] = _now_iso()
+                store["expenses"] = rows
+                _save(store)
+                return True
+    return False
