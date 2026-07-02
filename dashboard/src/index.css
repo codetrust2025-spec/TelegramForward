@@ -11791,8 +11791,8 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 
 /* All-expenses modal */
 .cand-modal--xl {
-  max-width: 1200px;
-  width: min(97vw, 1200px);
+  max-width: 96vw;
+  width: 96vw;
 }
 .cand-allexp-form {
   display: grid;
@@ -11810,7 +11810,11 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   justify-content: flex-end;
   gap: 8px;
 }
-@media (min-width: 700px) {
+@media (min-width: 900px) {
+  .cand-modal--xl {
+    max-width: 1300px;
+    width: min(97vw, 1300px);
+  }
   .cand-allexp-form { grid-template-columns: 1fr 1fr 1fr 1fr; }
 }
 @media (max-width: 520px) {
@@ -11832,6 +11836,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   max-height: 50vh;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.06);
+  margin: 0 -4px;
 }
 .cand-allexp-table {
   width: 100%;
@@ -11843,7 +11848,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   top: 0;
   background: #1a1d2c;
   text-align: left;
-  padding: 8px 10px;
+  padding: 8px 8px;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
@@ -11854,7 +11859,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   white-space: nowrap;
 }
 .cand-allexp-table tbody td {
-  padding: 9px 10px;
+  padding: 9px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   color: var(--text, #e5e7eb);
   vertical-align: middle;
