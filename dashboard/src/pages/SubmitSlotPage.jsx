@@ -389,11 +389,11 @@ export function SubmitSlotPage() {
                 {triedSubmit && !interviewRound && <span className="sbs-hint sbs-hint--warn">Required — select a round to confirm.</span>}
               </label>
 
-              <label className="sbs-field">
+              <div className="sbs-field">
                 <span className="sbs-label">Interview invite screenshot</span>
                 <SubmitSlotFileDrop hint="Teams, Gmail, Calendar, or Zoom — date and time must be visible." file={slotFile} previewUrl={slotPreview} disabled={busy} busy={parsing} onFile={onSlotFileChange} />
                 {triedSubmit && !slotFile && <span className="sbs-hint sbs-hint--warn">Upload your interview invite screenshot to confirm.</span>}
-              </label>
+              </div>
 
               {parsing && <div className="sbs-status sbs-status--loading"><Spinner size={18} /><span>Reading your invite…</span></div>}
 
