@@ -1378,11 +1378,11 @@
 .ops-topbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0;
+  gap: 12px;
+  padding: 6px 0;
   flex-wrap: wrap;
   min-width: 0;
-  margin-bottom: 0;
+  margin-bottom: 4px;
 }
 /* Merge topbar and controls into single line */
 .ops-topbar + .ops-dash-controls-row {
@@ -1440,22 +1440,22 @@
 .ops-topbar__kpis {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
   flex: 1 1 auto;
   min-width: 0;
   flex-wrap: wrap;
 }
 
 .ops-topbar__kpis .ops-dash-kpi {
-  flex: 1 1 70px;
-  min-width: 64px;
-  max-width: 130px;
-  min-height: 32px;
-  padding: 3px 8px;
+  flex: 0 1 auto;
+  min-width: 80px;
+  max-width: 160px;
+  min-height: 34px;
+  padding: 4px 12px;
   border-radius: 7px;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .ops-topbar__kpis .ops-dash-kpi__label {
