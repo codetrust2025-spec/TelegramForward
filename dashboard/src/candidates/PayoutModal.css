@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════
-   Payout Modal — wide, no-scroll desktop layout
+   Payout Modal — unified grid, no-scroll desktop
    ═══════════════════════════════════════════════════════ */
 
 .payout-modal {
@@ -25,78 +25,91 @@
   flex-shrink: 0;
 }
 .payout-modal__title {
-  margin: 0;
+  margin: 0 auto 0 0;
   font-size: 16px;
   font-weight: 700;
   color: var(--text, #eef2f7);
-  margin-right: auto;
 }
 .payout-modal__header .cand-modal-close {
   margin-left: 8px;
 }
 
-/* ─── Two-column top row ─── */
-.payout-modal__top-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 16px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border, #3d4a5c);
+/* ─── Form section ─── */
+.payout-modal__form-section {
   flex-shrink: 0;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #3d4a5c);
 }
 
-/* Form (left column) */
-.payout-modal__form {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
-}
-.payout-modal__form-grid {
+/* Row 1: 4-column grid — Handler, Amount, Category, Date */
+.payout-modal__row1 {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr 1fr;
-  gap: 6px 10px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px 16px;
+  align-items: end;
 }
+
+/* Row 2: Note (3 cols) + Period filter (1 col) */
+.payout-modal__row2 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px 16px;
+  margin-top: 12px;
+  align-items: end;
+}
+.payout-modal__row2-note {
+  grid-column: span 3;
+}
+.payout-modal__row2-period {
+  grid-column: span 1;
+}
+
+/* Row 3: Actions (screenshot + buttons) left, category filter right */
+.payout-modal__row3 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.payout-modal__row3-spacer {
+  flex: 1;
+}
+
+/* ─── Field styling ─── */
 .payout-modal__field {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
+  min-width: 0;
 }
-.payout-modal__field--wide {
-  grid-column: 1 / -1;
+.payout-modal__field .cand-field-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--text-dim, #7b8a9e);
+  margin: 0;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .payout-modal__input {
-  padding: 6px 8px !important;
-  min-height: 32px !important;
-  font-size: 12px !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  max-height: 34px !important;
+  padding: 0 10px !important;
+  font-size: 13px !important;
+  border-radius: 8px !important;
+  box-sizing: border-box;
 }
-.payout-modal__form .cand-field-label {
-  font-size: 10px;
-  margin-bottom: 0;
-}
-.payout-modal__form-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-/* Filters (right column) */
-.payout-modal__filters {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 170px;
-  justify-content: flex-start;
-}
-.payout-modal__filter-field {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.payout-modal__filters .cand-field-label {
-  font-size: 10px;
-  margin-bottom: 0;
+/* Badge above amount — do not affect row height */
+.payout-modal__field .cand-exp-kind-tag {
+  display: inline;
+  font-size: 9px;
+  vertical-align: baseline;
+  margin-left: 4px;
 }
 
 /* ─── Table area ─── */
@@ -138,8 +151,6 @@
 .payout-modal__row--editing {
   background: rgba(99,102,241,.12);
 }
-
-/* Column widths */
 .payout-col--handler { width: 14%; }
 .payout-col--amount  { width: 12%; }
 .payout-col--cat     { width: 16%; }
@@ -183,42 +194,56 @@
   text-align: center;
 }
 
-/* ─── Responsive: stack on small screens ─── */
-@media (max-width: 900px) {
+/* ─── Error ─── */
+.payout-modal__error {
+  margin-top: 8px;
+  grid-column: 1 / -1;
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 1199px) and (min-width: 769px) {
+  .payout-modal__row1 {
+    grid-template-columns: 1fr 1fr;
+  }
+  .payout-modal__row2 {
+    grid-template-columns: 1fr 1fr;
+  }
+  .payout-modal__row2-note {
+    grid-column: span 1;
+  }
+  .payout-modal__row2-period {
+    grid-column: span 1;
+  }
+}
+
+@media (max-width: 768px) {
   .payout-modal {
     width: 100%;
     max-width: 100%;
     max-height: 92dvh;
     border-radius: 16px 16px 0 0;
   }
-  .payout-modal__top-row {
+  .payout-modal__row1,
+  .payout-modal__row2 {
     grid-template-columns: 1fr;
   }
-  .payout-modal__form-grid {
-    grid-template-columns: 1fr 1fr;
+  .payout-modal__row2-note,
+  .payout-modal__row2-period {
+    grid-column: span 1;
   }
-  .payout-modal__filters {
-    flex-direction: row;
-    gap: 10px;
-    min-width: 0;
+  .payout-modal__row3 {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .payout-modal__row3-spacer {
+    display: none;
   }
   .payout-modal__table-area {
     overflow-x: auto;
-    overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
   .payout-modal__table {
     table-layout: auto;
     min-width: 700px;
-  }
-}
-
-@media (max-width: 599px) {
-  .payout-modal__form-grid {
-    grid-template-columns: 1fr;
-  }
-  .payout-modal__header {
-    flex-direction: column;
-    align-items: flex-start;
   }
 }

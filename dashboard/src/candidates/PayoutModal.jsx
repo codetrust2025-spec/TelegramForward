@@ -209,62 +209,64 @@ export default function PayoutModal({
           <button type="button" className="cand-modal-close" onClick={onClose} aria-label="Close">×</button>
         </header>
 
-        {/* ─── TWO-COLUMN ROW: form left | filters right ─── */}
-        <div className="payout-modal__top-row">
-          {/* LEFT: Payout entry form */}
-          <form className="payout-modal__form" onSubmit={handleSubmit}>
-            <div className="payout-modal__form-grid">
-              <label className="payout-modal__field">
-                <span className="cand-field-label">Handler *</span>
-                <select className="cand-input payout-modal__input" value={filterHandler} onChange={ev => { setFilterHandler(ev.target.value); setForm(f => ({ ...f, reference: ev.target.value === "all" ? "" : ev.target.value })); }}>
-                  <option value="all">All handlers</option>
-                  {allHandlers.map(n => <option value={n} key={n}>{n}</option>)}
-                </select>
-              </label>
-              <label className="payout-modal__field">
-                <span className="cand-field-label">Amount (₹) * <span className="cand-exp-kind-tag cand-exp-kind-tag--payout">subtracted from what's owed</span></span>
-                <input className="cand-input payout-modal__input" type="number" min="0" step="100" value={form.amount} onChange={ev => setForm(f => ({ ...f, amount: ev.target.value }))} placeholder="5000" required />
-              </label>
-              <label className="payout-modal__field">
-                <span className="cand-field-label">Category</span>
-                <select className="cand-input payout-modal__input" value={form.category} onChange={ev => setForm(f => ({ ...f, category: ev.target.value }))}>{B0.map(c => <option value={c.value} key={c.value}>{c.label}</option>)}</select>
-              </label>
-              <label className="payout-modal__field">
-                <span className="cand-field-label">Date</span>
-                <input className="cand-input payout-modal__input" type="date" value={form.date} onChange={ev => setForm(f => ({ ...f, date: ev.target.value }))} />
-              </label>
-              <label className="payout-modal__field payout-modal__field--wide">
-                <span className="cand-field-label">Note</span>
-                <input className="cand-input payout-modal__input" value={form.note} onChange={ev => setForm(f => ({ ...f, note: ev.target.value }))} placeholder="e.g. May commission · taxi to client meeting" />
-              </label>
-            </div>
-            <div className="payout-modal__form-actions">
-              {<div className={`cand-payout-attach${proofFile ? " cand-payout-attach--done" : ""}`} onClick={() => proofInputRef.current?.click()} role="button" tabIndex={0} title={proofFile ? proofFile.name : editId ? "Attach new screenshot (optional)" : "Attach payment screenshot (required)"}>
-                <input ref={proofInputRef} type="file" accept="image/*" onChange={ev => { const file = ev.target.files?.[0]; if (file) { if (!/^image\//.test(file.type || "")) { setError("Only image files allowed"); return; } if (file.size > 8 * 1024 * 1024) { setError("File too large (max 8 MB)"); return; } setProofFile(file); setError(""); } }} hidden />
-                <span className="cand-payout-attach-icon">{proofFile ? "✓" : "📷"}</span>
-                <span className="cand-payout-attach-text">{proofFile ? proofFile.name.slice(0, 20) : editId ? "Update screenshot" : "Attach screenshot *"}</span>
-              </div>}
-              {editId && <button type="button" className="cand-btn cand-btn--ghost" onClick={resetForm}>Cancel edit</button>}
-              <button type="submit" className="cand-btn cand-btn--primary" disabled={saving || (!editId && !proofFile)}>{saving ? "Saving…" : editId ? "Save changes" : "+ Log payout"}</button>
-            </div>
-            {error && <div className="cand-modal-error" style={{ marginTop: 6 }}>{error}</div>}
-          </form>
+        {/* ─── FORM SECTION: unified grid ─── */}
+        <form className="payout-modal__form-section" onSubmit={handleSubmit}>
+          {/* Row 1: Handler | Amount | Payout Category | Date */}
+          <div className="payout-modal__row1">
+            <label className="payout-modal__field">
+              <span className="cand-field-label">Handler *</span>
+              <select className="cand-input payout-modal__input" value={filterHandler} onChange={ev => { setFilterHandler(ev.target.value); setForm(f => ({ ...f, reference: ev.target.value === "all" ? "" : ev.target.value })); }}>
+                <option value="all">All handlers</option>
+                {allHandlers.map(n => <option value={n} key={n}>{n}</option>)}
+              </select>
+            </label>
+            <label className="payout-modal__field">
+              <span className="cand-field-label">Amount (₹) * <span className="cand-exp-kind-tag cand-exp-kind-tag--payout">subtracted from what's owed</span></span>
+              <input className="cand-input payout-modal__input" type="number" min="0" step="100" value={form.amount} onChange={ev => setForm(f => ({ ...f, amount: ev.target.value }))} placeholder="5000" required />
+            </label>
+            <label className="payout-modal__field">
+              <span className="cand-field-label">Payout category</span>
+              <select className="cand-input payout-modal__input" value={form.category} onChange={ev => setForm(f => ({ ...f, category: ev.target.value }))}>{B0.map(c => <option value={c.value} key={c.value}>{c.label}</option>)}</select>
+            </label>
+            <label className="payout-modal__field">
+              <span className="cand-field-label">Date</span>
+              <input className="cand-input payout-modal__input" type="date" value={form.date} onChange={ev => setForm(f => ({ ...f, date: ev.target.value }))} />
+            </label>
+          </div>
 
-          {/* RIGHT: Filters */}
-          <div className="payout-modal__filters">
-            <label className="payout-modal__filter-field">
+          {/* Row 2: Note (3 cols) | Period filter (1 col) */}
+          <div className="payout-modal__row2">
+            <label className="payout-modal__field payout-modal__row2-note">
+              <span className="cand-field-label">Note</span>
+              <input className="cand-input payout-modal__input" value={form.note} onChange={ev => setForm(f => ({ ...f, note: ev.target.value }))} placeholder="e.g. May commission · taxi to client meeting" />
+            </label>
+            <label className="payout-modal__field payout-modal__row2-period">
               <span className="cand-field-label">Period</span>
               <select className="cand-input payout-modal__input" value={filterMonth} onChange={ev => setFilterMonth(ev.target.value)}>{monthOptions.map(m => <option value={m.value} key={m.value}>{m.label}</option>)}</select>
             </label>
-            <label className="payout-modal__filter-field">
-              <span className="cand-field-label">Category</span>
+          </div>
+
+          {/* Row 3: Attach + buttons left | filter category right */}
+          <div className="payout-modal__row3">
+            <div className={`cand-payout-attach${proofFile ? " cand-payout-attach--done" : ""}`} onClick={() => proofInputRef.current?.click()} role="button" tabIndex={0} title={proofFile ? proofFile.name : editId ? "Attach new screenshot (optional)" : "Attach payment screenshot (required)"}>
+              <input ref={proofInputRef} type="file" accept="image/*" onChange={ev => { const file = ev.target.files?.[0]; if (file) { if (!/^image\//.test(file.type || "")) { setError("Only image files allowed"); return; } if (file.size > 8 * 1024 * 1024) { setError("File too large (max 8 MB)"); return; } setProofFile(file); setError(""); } }} hidden />
+              <span className="cand-payout-attach-icon">{proofFile ? "✓" : "📷"}</span>
+              <span className="cand-payout-attach-text">{proofFile ? proofFile.name.slice(0, 20) : editId ? "Update screenshot" : "Attach screenshot *"}</span>
+            </div>
+            {editId && <button type="button" className="cand-btn cand-btn--ghost" onClick={resetForm}>Cancel edit</button>}
+            <button type="submit" className="cand-btn cand-btn--primary" disabled={saving || (!editId && !proofFile)}>{saving ? "Saving…" : editId ? "Save changes" : "+ Log payout"}</button>
+            <span className="payout-modal__row3-spacer" />
+            <label className="payout-modal__field" style={{ minWidth: 150 }}>
+              <span className="cand-field-label">Filter category</span>
               <select className="cand-input payout-modal__input" value={filterCat} onChange={ev => setFilterCat(ev.target.value)}>
                 <option value="all">All categories</option>
                 {B0.map(c => <option value={c.value} key={c.value}>{c.label}</option>)}
               </select>
             </label>
           </div>
-        </div>
+
+          {error && <div className="cand-modal-error payout-modal__error">{error}</div>}
+        </form>
 
         {/* ─── TABLE ─── */}
         <div className="payout-modal__table-area">
