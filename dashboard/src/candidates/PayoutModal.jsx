@@ -145,11 +145,27 @@ export default function PayoutModal({
     try {
       let res;
       if (editId) {
-        res = await (await fetch(`${ve}/handler-expenses/${editId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reference: form.reference.trim(), amount: amt, category: form.category, note: form.note.trim(), date: form.date }),
-        })).json();
+        if (proofFile) {
+          // Editing with new screenshot — use multipart FormData
+          const fd = new FormData();
+          fd.append("reference", form.reference.trim());
+          fd.append("amount", String(amt));
+          fd.append("category", form.category);
+          fd.append("note", form.note.trim());
+          fd.append("date", form.date);
+          fd.append("file", proofFile);
+          res = await (await fetch(`${ve}/handler-expenses/${editId}`, {
+            method: "PATCH",
+            body: fd,
+          })).json();
+        } else {
+          // Editing without new screenshot — JSON PATCH
+          res = await (await fetch(`${ve}/handler-expenses/${editId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reference: form.reference.trim(), amount: amt, category: form.category, note: form.note.trim(), date: form.date }),
+          })).json();
+        }
       } else {
         const fd = new FormData();
         fd.append("reference", form.reference.trim());
@@ -226,10 +242,10 @@ export default function PayoutModal({
               </label>
             </div>
             <div className="payout-modal__form-actions">
-              {!editId && <div className={`cand-payout-attach${proofFile ? " cand-payout-attach--done" : ""}`} onClick={() => proofInputRef.current?.click()} role="button" tabIndex={0} title={proofFile ? proofFile.name : "Attach payment screenshot (required)"}>
+              {<div className={`cand-payout-attach${proofFile ? " cand-payout-attach--done" : ""}`} onClick={() => proofInputRef.current?.click()} role="button" tabIndex={0} title={proofFile ? proofFile.name : editId ? "Attach new screenshot (optional)" : "Attach payment screenshot (required)"}>
                 <input ref={proofInputRef} type="file" accept="image/*" onChange={ev => { const file = ev.target.files?.[0]; if (file) { if (!/^image\//.test(file.type || "")) { setError("Only image files allowed"); return; } if (file.size > 8 * 1024 * 1024) { setError("File too large (max 8 MB)"); return; } setProofFile(file); setError(""); } }} hidden />
                 <span className="cand-payout-attach-icon">{proofFile ? "✓" : "📷"}</span>
-                <span className="cand-payout-attach-text">{proofFile ? proofFile.name.slice(0, 20) : "Attach screenshot *"}</span>
+                <span className="cand-payout-attach-text">{proofFile ? proofFile.name.slice(0, 20) : editId ? "Update screenshot" : "Attach screenshot *"}</span>
               </div>}
               {editId && <button type="button" className="cand-btn cand-btn--ghost" onClick={resetForm}>Cancel edit</button>}
               <button type="submit" className="cand-btn cand-btn--primary" disabled={saving || (!editId && !proofFile)}>{saving ? "Saving…" : editId ? "Save changes" : "+ Log payout"}</button>
