@@ -195,14 +195,14 @@ export default function EarningsBreakdown({
                         <div className="earn-detail">
                           {loadingCandidates === p.name && <p className="earn-detail-loading">Loading…</p>}
                           {handlerCandidates[p.name] && (() => {
-                            const rows = handlerCandidates[p.name].filter(c => Number(c.amount_received) > 0);
+                            const rows = handlerCandidates[p.name].filter(c => Number(c.payment) > 0);
                             const pct = (p.commission_pct || 50) / 100;
                             if (rows.length === 0) return <p className="earn-detail-loading">No payments received yet.</p>;
                             return (
                               <ul className="earn-breakdown-list">
                                 {rows.map(c => {
-                                  const received = Number(c.amount_received) || 0;
-                                  const referral = Math.round(received * pct);
+                                  const received = Number(c.payment) || 0;
+                                  const referral = Number(c.handler_commission) || Math.round(received * pct);
                                   return (
                                     <li className="earn-breakdown-item" key={c.id}>
                                       <span className="earn-breakdown-desc">{c.name} · {fmt(received)} received – {fmt(referral)} referral</span>
