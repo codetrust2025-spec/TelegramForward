@@ -52,6 +52,29 @@ export function DailyOpsPanel({
   const [error, setError] = useState('')
   const [rosterCounts, setRosterCounts] = useState(null)
 
+  // Generate month options for the dropdown (last 6 months + current)
+  const monthOptions = React.useMemo(() => {
+    const opts = []
+    const now = new Date()
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+      const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      const label = d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })
+      opts.push({ value, label })
+    }
+    return opts
+  }, [])
+
+  function applyMonth(monthValue) {
+    if (!monthValue) return
+    const [year, month] = monthValue.split('-').map(Number)
+    const from = new Date(year, month - 1, 1)
+    const to = new Date(year, month, 0)
+    setFromDate(from.toISOString().slice(0, 10))
+    setToDate(to.toISOString().slice(0, 10))
+    setRangePreset('custom')
+  }
+
   const upcomingOnly = rangePreset === 'upcoming'
 
   function applyPreset(presetId) {
@@ -150,6 +173,16 @@ export function DailyOpsPanel({
           <span className="ops-date-range__sep">—</span>
           <input className="cand-input ops-ctrl-date" type="date" value={toDate}   onChange={e => applyManualTo(e.target.value)}   aria-label="To date" />
         </div>
+
+        <select
+          className="cand-input ops-ctrl-select"
+          value=""
+          onChange={e => applyMonth(e.target.value)}
+          aria-label="Select month"
+        >
+          <option value="">Select month</option>
+          {monthOptions.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+        </select>
 
         {!handlerScoped && (
           <select
