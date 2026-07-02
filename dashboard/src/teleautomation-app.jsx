@@ -37102,9 +37102,11 @@ function _Component29({
     }
     return P;
   }, [a, h, p]);
-  const O = Number(t == null ? undefined : t.owed) || 0;
+  // Calculate totals from the FILTERED list (A) so header badges match the table
   const L = w.useMemo(() => A.reduce((P, j) => P + (Number(j.amount) || 0), 0), [A]);
-  const M = t != null ? Number(t.paid) || 0 : L;
+  const M = L;  // Paid out = sum of filtered expenses
+  // Owed amount should also respect filters - get from stats API with same month filter
+  const O = Number(t == null ? undefined : t.owed) || 0;
   const C = O - M;
   const Y = {
     count: A.length
