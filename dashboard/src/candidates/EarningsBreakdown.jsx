@@ -193,42 +193,26 @@ export default function EarningsBreakdown({
                     <tr className="earn-detail-row">
                       <td colSpan={11}>
                         <div className="earn-detail">
-                          <p className="earn-detail-formula">
-                            Owed = Commission ({fmt(commission)}) + Salary ({fmt(salary)}) = <strong>{fmt(owed)}</strong> — Paid out ({fmt(paid)}) = <strong className={net > 0 ? "earn-green" : net < 0 ? "earn-red" : "earn-settled"}>Net {net >= 0 ? fmt(net) : `-${fmt(Math.abs(net))}`}</strong>
-                          </p>
-                          {loadingCandidates === p.name && <p className="earn-detail-loading">Loading candidates…</p>}
-                          {handlerCandidates[p.name] && (
-                            <div className="earn-candidates-wrap">
-                              <p className="earn-detail-label" style={{ margin: "8px 0 6px" }}>Commission breakdown — {p.commission_pct || 50}% of each client payment:</p>
-                              <table className="earn-candidates-table">
-                                <thead><tr>
-                                  <th>Candidate</th>
-                                  <th>Technology</th>
-                                  <th>Stage</th>
-                                  <th style={{ textAlign: "right" }}>Client paid</th>
-                                  <th style={{ textAlign: "right" }}>{p.commission_pct || 50}% commission</th>
-                                </tr></thead>
-                                <tbody>
-                                  {handlerCandidates[p.name].filter(c => Number(c.amount_received) > 0 || c.stage === "completed").map(c => {
-                                    const clientPaid = Number(c.amount_received) || 0;
-                                    const commShare = Math.round(clientPaid * ((p.commission_pct || 50) / 100));
-                                    return (
-                                      <tr key={c.id}>
-                                        <td><strong>{c.name}</strong></td>
-                                        <td>{c.technology || "—"}</td>
-                                        <td><span className={`cand-badge ${c.stage === "completed" ? "cand-badge--good" : "cand-badge--info"}`}>{c.stage || "—"}</span></td>
-                                        <td style={{ textAlign: "right" }}>{fmt(clientPaid)}</td>
-                                        <td style={{ textAlign: "right" }} className="earn-green"><strong>{fmt(commShare)}</strong></td>
-                                      </tr>
-                                    );
-                                  })}
-                                  {handlerCandidates[p.name].filter(c => Number(c.amount_received) > 0 || c.stage === "completed").length === 0 && (
-                                    <tr><td colSpan={5} className="earn-empty" style={{ padding: 10 }}>No payments received yet for this handler's candidates.</td></tr>
-                                  )}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
+                          {loadingCandidates === p.name && <p className="earn-detail-loading">Loading…</p>}
+                          {handlerCandidates[p.name] && (() => {
+                            const rows = handlerCandidates[p.name].filter(c => Number(c.amount_received) > 0);
+                            const pct = (p.commission_pct || 50) / 100;
+                            if (rows.length === 0) return <p className="earn-detail-loading">No payments received yet.</p>;
+                            return (
+                              <ul className="earn-breakdown-list">
+                                {rows.map(c => {
+                                  const received = Number(c.amount_received) || 0;
+                                  const referral = Math.round(received * pct);
+                                  return (
+                                    <li className="earn-breakdown-item" key={c.id}>
+                                      <span className="earn-breakdown-desc">{c.name} · {fmt(received)} received – {fmt(referral)} referral</span>
+                                      <strong className="earn-breakdown-amount">{fmt(referral)}</strong>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            );
+                          })()}
                         </div>
                       </td>
                     </tr>

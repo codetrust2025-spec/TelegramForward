@@ -205,27 +205,30 @@
   border: 1px solid rgba(255,255,255,.04);
 }
 
-/* Sub-table for per-candidate breakdown */
-.earn-candidates-wrap { margin-top: 8px; }
-.earn-candidates-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
+/* Sub-list for per-candidate breakdown */
+.earn-breakdown-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
-.earn-candidates-table th {
-  text-align: left;
-  padding: 6px 8px;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .03em;
-  color: var(--text-dim, #7b8a9e);
-  border-bottom: 1px solid rgba(255,255,255,.08);
+.earn-breakdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  font-size: 13px;
+  color: var(--text-muted, #a8b4c4);
 }
-.earn-candidates-table td {
-  padding: 6px 8px;
-  border-bottom: 1px solid rgba(255,255,255,.03);
-  vertical-align: middle;
+.earn-breakdown-item:last-child { border-bottom: none; }
+.earn-breakdown-desc { flex: 1; min-width: 0; }
+.earn-breakdown-amount {
+  flex-shrink: 0;
+  margin-left: 16px;
+  font-size: 14px;
+  font-weight: 800;
+  color: #4ade80;
+  font-variant-numeric: tabular-nums;
 }
 .earn-detail-loading {
   font-size: 12px;
