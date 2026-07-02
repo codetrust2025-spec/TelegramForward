@@ -3713,18 +3713,19 @@ def _row_month(row: dict) -> str:
 
 
 def _row_display_month(row: dict) -> str:
-    """Month the candidate was registered (logged_date).
+    """Month for filtering — uses the 'date' field (interview/activity date).
     
-    Uses logged_date (when the lead was first added) as the canonical month.
-    Falls back to date only if logged_date is not available.
+    This is the date that represents when the candidate's service activity
+    (slot booking, payment) happened — not when the lead was first logged.
+    Falls back to logged_date if date is empty.
     """
-    logged = _clean_str(row.get("logged_date"))[:10]
-    if len(logged) >= 7 and logged[4] == "-":
-        return logged[:7]
-    # Fallback to date if logged_date missing
     visible = _clean_str(row.get("date"))[:10]
     if len(visible) >= 7 and visible[4] == "-":
         return visible[:7]
+    # Fallback to logged_date if date is missing
+    logged = _clean_str(row.get("logged_date"))[:10]
+    if len(logged) >= 7 and logged[4] == "-":
+        return logged[:7]
     return ""
 
 
