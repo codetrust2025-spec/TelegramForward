@@ -896,6 +896,8 @@ function _Component29({
     date: new Date().toISOString().slice(0, 10)
   }));
   const [S, E] = w.useState(false);
+  const [proofFile, setProofFile] = w.useState(null);
+  const proofInputRef = w.useRef(null);
   const b = w.useCallback(async () => {
     u(true);
     f("");
@@ -962,6 +964,8 @@ function _Component29({
   }, [a, e]);
   function G() {
     y(null);
+    setProofFile(null);
+    if (proofInputRef.current) { proofInputRef.current.value = ""; }
     T({
       reference: h !== "all" ? h : J[0] || "",
       amount: "",
@@ -1003,24 +1007,42 @@ function _Component29({
       f("Amount must be greater than zero");
       return;
     }
+    if (!_ && !proofFile) {
+      f("Payment screenshot is required");
+      return;
+    }
     E(true);
     f("");
     try {
-      const W = {
-        reference: k.reference.trim(),
-        amount: j,
-        category: k.category,
-        note: k.note.trim(),
-        date: k.date
-      };
-      const H = _ ? `${ve}/handler-expenses/${_}` : `${ve}/handler-expenses`;
-      const pe = await (await fetch(H, {
-        method: _ ? "PATCH" : "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(W)
-      })).json();
+      let H, pe;
+      if (_) {
+        const W = {
+          reference: k.reference.trim(),
+          amount: j,
+          category: k.category,
+          note: k.note.trim(),
+          date: k.date
+        };
+        H = `${ve}/handler-expenses/${_}`;
+        pe = await (await fetch(H, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(W)
+        })).json();
+      } else {
+        const fd = new FormData();
+        fd.append("reference", k.reference.trim());
+        fd.append("amount", String(j));
+        fd.append("category", k.category);
+        fd.append("note", k.note.trim());
+        fd.append("date", k.date);
+        fd.append("file", proofFile);
+        H = `${ve}/handler-expenses`;
+        pe = await (await fetch(H, {
+          method: "POST",
+          body: fd
+        })).json();
+      }
       if (pe.status !== "ok") {
         f(pe.message || "Save failed");
         return;
@@ -1078,7 +1100,7 @@ function _Component29({
             }))} /></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Note</span><input className="cand-input" value={k.note} onChange={P => T(j => ({
               ...j,
               note: P.target.value
-            }))} placeholder="e.g. May commission · taxi to client meeting" /></label><div className="cand-exp-form-actions cand-allexp-form-actions">{_ && <button type="button" className="cand-btn cand-btn--ghost" onClick={G}>Cancel edit</button>}<button type="submit" className="cand-btn cand-btn--primary" disabled={S}>{S ? "Saving…" : _ ? "Save changes" : "+ Log payout"}</button></div></form>{d && <div className="cand-modal-error">{d}</div>}<div className="cand-allexp-filters"><select className="cand-input cand-input--compact" value={h} onChange={P => x(P.target.value)} aria-label="Filter by handler"><option value="all">All handlers</option>{J.map(P => <option value={P} key={P}>{P}</option>)}</select><select className="cand-input cand-input--compact" value={v} onChange={P => g(P.target.value)} aria-label="Filter by month">{Z.map(P => <option value={P.value} key={P.value}>{P.label}</option>)}</select><select className="cand-input cand-input--compact" value={p} onChange={P => m(P.target.value)} aria-label="Filter by category"><option value="all">All categories</option>{B0.map(P => <option value={P.value} key={P.value}>{P.label}</option>)}</select>{(h !== "all" || v !== "all" || p !== "all") && <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => {
+            }))} placeholder="e.g. May commission · taxi to client meeting" /></label>{!_ && <label className="cand-field cand-field--span2"><span className="cand-field-label">Payment screenshot *</span><div className={`cand-proof-upload-zone${proofFile ? " cand-proof-upload-zone--has-file" : ""}`} onClick={() => proofInputRef.current && proofInputRef.current.click()} role="button" tabIndex={0} onKeyDown={P => { if (P.key === "Enter" || P.key === " ") { proofInputRef.current && proofInputRef.current.click(); } }}><input ref={proofInputRef} type="file" accept="image/*" onChange={P => { const file = P.target.files && P.target.files[0]; if (file) { if (!/^image\//.test(file.type || "")) { f("Only image files are allowed (jpg / png / webp / gif / heic)"); return; } if (file.size > 8 * 1024 * 1024) { f("File too large (max 8 MB)"); return; } setProofFile(file); f(""); } }} hidden={true} />{proofFile ? <span className="cand-proof-upload-name">📷 {proofFile.name}</span> : <span className="cand-proof-upload-placeholder">📷 Click to attach payment screenshot (required)</span>}</div></label>}<div className="cand-exp-form-actions cand-allexp-form-actions">{_ && <button type="button" className="cand-btn cand-btn--ghost" onClick={G}>Cancel edit</button>}<button type="submit" className="cand-btn cand-btn--primary" disabled={S || (!_ && !proofFile)}>{S ? "Saving…" : _ ? "Save changes" : "+ Log payout"}</button></div></form>{d && <div className="cand-modal-error">{d}</div>}<div className="cand-allexp-filters"><select className="cand-input cand-input--compact" value={h} onChange={P => x(P.target.value)} aria-label="Filter by handler"><option value="all">All handlers</option>{J.map(P => <option value={P} key={P}>{P}</option>)}</select><select className="cand-input cand-input--compact" value={v} onChange={P => g(P.target.value)} aria-label="Filter by month">{Z.map(P => <option value={P.value} key={P.value}>{P.label}</option>)}</select><select className="cand-input cand-input--compact" value={p} onChange={P => m(P.target.value)} aria-label="Filter by category"><option value="all">All categories</option>{B0.map(P => <option value={P.value} key={P.value}>{P.label}</option>)}</select>{(h !== "all" || v !== "all" || p !== "all") && <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => {
             x("all");
             g("all");
             m("all");
@@ -1086,7 +1108,7 @@ function _Component29({
             x("all");
             g("all");
             m("all");
-          }}>clear filters</button>.</div> : <div className="cand-allexp-table-wrap"><table className="cand-allexp-table"><thead><tr><th>Handler</th><th>Amount</th><th>Category</th><th>Date</th><th>Note</th><th aria-label="actions" /></tr></thead><tbody>{A.map(P => <tr className={`cand-allexp-row cand-allexp-row--payout${_ === P.id ? " cand-allexp-row--editing" : ""}`} key={P.id}><td className="cand-allexp-ref">{P.reference}</td><td className="cand-allexp-amount cand-allexp-amount--payout">−{Jc(P.amount)}</td><td><span className={`cand-exp-cat cand-exp-cat--${P.category}`}>{Ex[P.category] || P.category}</span></td><td className="cand-allexp-date">{rR(P.date)}</td><td className="cand-allexp-note">{P.note || <em>—</em>}</td><td className="cand-allexp-actions"><button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => ce(P)} title="Edit">✎</button><button type="button" className="cand-btn cand-btn--ghost cand-btn--xs cand-btn--danger-ghost" onClick={() => B(P)} title="Delete">🗑</button></td></tr>)}</tbody></table></div>}</div><footer className="cand-modal-footer"><button type="button" className="cand-btn cand-btn--ghost" onClick={r}>Close</button></footer></div></div>;
+          }}>clear filters</button>.</div> : <div className="cand-allexp-table-wrap"><table className="cand-allexp-table"><thead><tr><th>Handler</th><th>Amount</th><th>Category</th><th>Date</th><th>Note</th><th>Proof</th><th aria-label="actions" /></tr></thead><tbody>{A.map(P => <tr className={`cand-allexp-row cand-allexp-row--payout${_ === P.id ? " cand-allexp-row--editing" : ""}`} key={P.id}><td className="cand-allexp-ref">{P.reference}</td><td className="cand-allexp-amount cand-allexp-amount--payout">−{Jc(P.amount)}</td><td><span className={`cand-exp-cat cand-exp-cat--${P.category}`}>{Ex[P.category] || P.category}</span></td><td className="cand-allexp-date">{rR(P.date)}</td><td className="cand-allexp-note">{P.note || <em>—</em>}</td><td className="cand-allexp-proof">{(P.proofs && P.proofs.length > 0) ? <a href={`${ve}${P.proofs[0].url}`} target="_blank" rel="noopener noreferrer" title="View payment proof">📷</a> : <em>—</em>}</td><td className="cand-allexp-actions"><button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => ce(P)} title="Edit">✎</button><button type="button" className="cand-btn cand-btn--ghost cand-btn--xs cand-btn--danger-ghost" onClick={() => B(P)} title="Delete">🗑</button></td></tr>)}</tbody></table></div>}</div><footer className="cand-modal-footer"><button type="button" className="cand-btn cand-btn--ghost" onClick={r}>Close</button></footer></div></div>;
 }
 function At(e) {
   const t = Number(e) || 0;

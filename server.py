@@ -3994,15 +3994,58 @@ async def handler_expenses_list(
 
 
 @app.post("/handler-expenses", dependencies=[Depends(_require_fleet_admin)])
-async def handler_expenses_create(body: dict):
+async def handler_expenses_create(
+    reference: str = Form(...),
+    amount: str = Form(...),
+    category: str = Form(default="commission"),
+    note: str = Form(default=""),
+    date: str = Form(default=""),
+    file: UploadFile = File(...),
+):
     from features import handler_expenses
 
-    if not (body or {}).get("reference", "").strip():
+    if not reference.strip():
         return {"status": "error", "message": "Reference (handler name) is required"}
-    if int((body or {}).get("amount") or 0) <= 0:
+    if int(float(amount or 0)) <= 0:
         return {"status": "error", "message": "Amount must be greater than zero"}
-    row = handler_expenses.create_expense(body or {})
-    return {"status": "ok", "expense": row}
+
+    # Validate the screenshot
+    raw = await file.read()
+    if not raw:
+        return {"status": "error", "message": "Payment screenshot is required"}
+    if len(raw) > handler_expenses.MAX_PROOF_BYTES:
+        return {"status": "error", "message": f"File too large (max {handler_expenses.MAX_PROOF_BYTES // (1024*1024)} MB)"}
+    mime = (file.content_type or "").lower().split(";")[0].strip()
+    if not handler_expenses._ext_from_mime(mime, file.filename or ""):
+        return {"status": "error", "message": "Only image files (jpg / png / webp / gif / heic) are allowed"}
+
+    body = {
+        "reference": reference.strip(),
+        "amount": int(float(amount)),
+        "category": category,
+        "note": note.strip(),
+        "date": date,
+    }
+    row = handler_expenses.create_expense(body)
+
+    # Attach the proof to the newly created expense
+    try:
+        handler_expenses.add_proof(
+            row["id"],
+            data=raw,
+            original_name=file.filename or "",
+            mime_type=file.content_type or "",
+            note=note.strip(),
+        )
+    except ValueError:
+        pass  # expense already created, proof validation already passed above
+
+    # Reload the row to include proofs
+    updated = next(
+        (r for r in handler_expenses.list_expenses() if r.get("id") == row["id"]),
+        row,
+    )
+    return {"status": "ok", "expense": updated}
 
 
 @app.patch("/handler-expenses/{eid}", dependencies=[Depends(_require_fleet_admin)])
@@ -4049,6 +4092,60 @@ async def handler_expenses_summary(
         "total": total,
         "count": sum(b["count"] for b in summary.values()),
     }
+
+
+# ── Handler expense proofs (payment screenshots) ────────────────────────────────
+
+@app.post("/handler-expenses/{eid}/proofs", dependencies=[Depends(_require_fleet_admin)])
+async def handler_expense_upload_proof(
+    eid: str,
+    file: UploadFile = File(...),
+    note: str = Form(default=""),
+):
+    """Attach a payment screenshot to a handler expense entry."""
+    from features import handler_expenses
+
+    try:
+        raw = await file.read()
+        entry = handler_expenses.add_proof(
+            eid,
+            data=raw,
+            original_name=file.filename or "",
+            mime_type=file.content_type or "",
+            note=note or "",
+        )
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+    if entry is None:
+        return {"status": "error", "message": "Expense not found"}
+    return {"status": "ok", "proof": entry}
+
+
+@app.get("/handler-expenses/{eid}/proofs/{pid}")
+async def handler_expense_serve_proof(eid: str, pid: str):
+    """Serve a stored handler expense proof image."""
+    from features import handler_expenses
+
+    hit = handler_expenses.get_proof(eid, pid)
+    if hit is None:
+        return {"status": "error", "message": "Proof not found"}
+    path, entry = hit
+    return FileResponse(
+        path,
+        media_type=entry.get("mime_type") or "application/octet-stream",
+        filename=entry.get("original_name") or entry.get("filename"),
+    )
+
+
+@app.delete("/handler-expenses/{eid}/proofs/{pid}", dependencies=[Depends(_require_fleet_admin)])
+async def handler_expense_delete_proof(eid: str, pid: str):
+    """Remove a proof from a handler expense entry."""
+    from features import handler_expenses
+
+    ok = handler_expenses.delete_proof(eid, pid)
+    if not ok:
+        return {"status": "error", "message": "Proof not found"}
+    return {"status": "ok"}
 
 
 # ── Handler base salaries (hybrid pay model) ────────────────────────────────────
