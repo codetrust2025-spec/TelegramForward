@@ -179,7 +179,7 @@ export function SubmitSlotPage() {
       const data = await res.json()
       if (!res.ok) { setParsedSlot(null); setError('Auto-read failed — enter date & time manually.'); return }
       setParsedSlot(data.slot || null)
-      setInterviewRound(data.slot?.interview_round || '')
+      if (!interviewRound) setInterviewRound(data.slot?.interview_round || '')
       setManualDate(''); setManualTime('')
     } catch { setParsedSlot(null); setError('Network error while reading screenshot') }
     finally { setParsing(false) }
@@ -187,7 +187,7 @@ export function SubmitSlotPage() {
 
   async function onSlotFileChange(file) {
     if (slotPreview) URL.revokeObjectURL(slotPreview)
-    setSlotFile(file || null); setParsedSlot(null); setManualDate(''); setManualTime(''); setInterviewRound(''); setSuccess('')
+    setSlotFile(file || null); setParsedSlot(null); setManualDate(''); setManualTime(''); setSuccess('')
     if (file) { setSlotPreview(URL.createObjectURL(file)); await parseScreenshot(file) }
     else setSlotPreview('')
   }
