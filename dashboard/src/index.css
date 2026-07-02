@@ -11846,6 +11846,106 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   font-weight: 500;
   word-break: break-all;
 }
+
+/* Proof thumbnail in ledger table */
+.cand-proof-thumb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  border: 2px solid rgba(99, 102, 241, 0.3);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+  overflow: hidden;
+  width: 36px;
+  height: 36px;
+}
+.cand-proof-thumb-btn:hover {
+  border-color: #818cf8;
+  transform: scale(1.1);
+}
+.cand-proof-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+/* Proof lightbox overlay */
+.cand-proof-lightbox {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(4px);
+  animation: cand-proof-lb-in 0.15s ease;
+}
+@keyframes cand-proof-lb-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.cand-proof-lightbox-inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 90vw;
+  max-height: 90vh;
+  padding: 12px;
+}
+.cand-proof-lightbox-close {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  z-index: 1;
+}
+.cand-proof-lightbox-close:hover {
+  background: #ef4444;
+  color: #fff;
+}
+.cand-proof-lightbox-img {
+  max-width: 85vw;
+  max-height: 75vh;
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  object-fit: contain;
+}
+.cand-proof-lightbox-note {
+  font-size: 14px;
+  color: #e2e8f0;
+  font-weight: 500;
+  text-align: center;
+  margin: 0;
+}
+.cand-proof-lightbox-meta {
+  font-size: 12px;
+  color: #94a3b8;
+  text-align: center;
+  margin: 0;
+}
 @media (min-width: 900px) {
   .cand-modal--xl {
     max-width: 1300px;
