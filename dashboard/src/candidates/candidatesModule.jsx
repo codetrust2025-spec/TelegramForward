@@ -9,6 +9,8 @@ import { formatIstDate as fmtIstD, formatIstDateTime as fmtIstDt } from '../util
 import { CandidatesActiveRoster } from './CandidatesActiveRoster.jsx'
 import { triggerRosterDownload } from './candidatesRosterUtils.js'
 import { consumePendingWorkOpenIntent } from '../dailyOps/PendingWorksProvider.jsx'
+import PayoutModal from './PayoutModal.jsx'
+import './PayoutModal.css'
 
 const w = React
 const s = { Fragment: React.Fragment }
@@ -1010,238 +1012,17 @@ function _Component29({
   onClose: r,
   onChanged: n
 }) {
-  const [a, i] = w.useState([]);
-  const [l, c] = w.useState([]);
-  const [o, u] = w.useState(true);
-  const [d, f] = w.useState("");
-  const [h, x] = w.useState("all");
-  const [v, g] = w.useState("all");
-  const [p, m] = w.useState("all");
-  const [_, y] = w.useState(null);
-  const [k, T] = w.useState(() => ({
-    reference: e[0] || "",
-    amount: "",
-    category: "commission",
-    note: "",
-    date: new Date().toISOString().slice(0, 10)
-  }));
-  const [S, E] = w.useState(false);
-  const [proofFile, setProofFile] = w.useState(null);
-  const proofInputRef = w.useRef(null);
-  const [previewProof, setPreviewProof] = w.useState(null);
-  const b = w.useCallback(async () => {
-    u(true);
-    f("");
-    try {
-      const P = new URLSearchParams();
-      if (v !== "all") {
-        P.set("month", v);
-      }
-      const U = await (await fetch(`${ve}/handler-expenses?${P.toString()}`)).json();
-      if (U.status === "ok") {
-        i(U.expenses || []);
-        c(U.available_months || []);
-      } else {
-        f(U.message || "Failed to load");
-      }
-    } catch (P) {
-      f(P.message || "Network error");
-    } finally {
-      u(false);
-    }
-  }, [v]);
-  w.useEffect(() => {
-    b();
-  }, [b]);
-  w.useEffect(() => {
-    function P(j) {
-      if (j.key === "Escape" && !_) {
-        if (r != null) {
-          r();
-        }
-      }
-    }
-    document.addEventListener("keydown", P);
-    return () => document.removeEventListener("keydown", P);
-  }, [r, _]);
-  const A = w.useMemo(() => {
-    let P = a;
-    if (h !== "all") {
-      const j = h.toLowerCase();
-      P = P.filter(U => (U.reference || "").toLowerCase() === j);
-    }
-    if (p !== "all") {
-      P = P.filter(j => j.category === p);
-    }
-    return P;
-  }, [a, h, p]);
-  const O = Number(t == null ? undefined : t.owed) || 0;
-  const L = w.useMemo(() => A.reduce((P, j) => P + (Number(j.amount) || 0), 0), [A]);
-  const M = L;
-  const C = O - M;
-  const Y = {
-    count: A.length
-  };
-  const J = w.useMemo(() => {
-    const P = new Map();
-    e.forEach(j => P.set(j.toLowerCase(), j));
-    a.forEach(j => {
-      const U = (j.reference || "").trim();
-      if (U) {
-        P.set(U.toLowerCase(), U);
-      }
-    });
-    return [...P.values()].sort((j, U) => j.localeCompare(U));
-  }, [a, e]);
-  function G() {
-    y(null);
-    setProofFile(null);
-    if (proofInputRef.current) { proofInputRef.current.value = ""; }
-    T({
-      reference: h !== "all" ? h : J[0] || "",
-      amount: "",
-      category: "commission",
-      note: "",
-      date: new Date().toISOString().slice(0, 10)
-    });
-  }
-  function ce(P) {
-    y(P.id);
-    T({
-      reference: P.reference || "",
-      amount: String(P.amount || ""),
-      category: P.category || "other",
-      note: P.note || "",
-      date: P.date || new Date().toISOString().slice(0, 10)
-    });
-    requestAnimationFrame(() => {
-      var j;
-      if ((j = document.querySelector(".cand-allexp-form")) != null) {
-        j.scrollIntoView({
-          behavior: "smooth",
-          block: "start"
-        });
-      }
-    });
-  }
-  async function ee(P) {
-    var U;
-    if ((U = P == null ? undefined : P.preventDefault) != null) {
-      U.call(P);
-    }
-    if (!k.reference.trim()) {
-      f("Handler name is required");
-      return;
-    }
-    const j = Number(k.amount);
-    if (!Number.isFinite(j) || j <= 0) {
-      f("Amount must be greater than zero");
-      return;
-    }
-    if (!_ && !proofFile) {
-      f("Payment screenshot is required");
-      return;
-    }
-    E(true);
-    f("");
-    try {
-      let H, pe;
-      if (_) {
-        // Editing existing entry — JSON PATCH (no new screenshot required)
-        const W = {
-          reference: k.reference.trim(),
-          amount: j,
-          category: k.category,
-          note: k.note.trim(),
-          date: k.date
-        };
-        H = `${ve}/handler-expenses/${_}`;
-        pe = await (await fetch(H, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(W)
-        })).json();
-      } else {
-        // New entry — multipart FormData with mandatory screenshot
-        const fd = new FormData();
-        fd.append("reference", k.reference.trim());
-        fd.append("amount", String(j));
-        fd.append("category", k.category);
-        fd.append("note", k.note.trim());
-        fd.append("date", k.date);
-        fd.append("file", proofFile);
-        H = `${ve}/handler-expenses`;
-        pe = await (await fetch(H, {
-          method: "POST",
-          body: fd
-        })).json();
-      }
-      if (pe.status !== "ok") {
-        f(pe.message || "Save failed");
-        return;
-      }
-      G();
-      b();
-      if (n != null) {
-        n();
-      }
-    } catch (W) {
-      f(W.message || "Network error");
-    } finally {
-      E(false);
-    }
-  }
-  async function B(P) {
-    const j = Ex[P.category] || P.category || "payout";
-    if (window.confirm(`Delete this ₹${P.amount.toLocaleString("en-IN")} ${j} for ${P.reference}?`)) {
-      try {
-        const W = await (await fetch(`${ve}/handler-expenses/${P.id}`, {
-          method: "DELETE"
-        })).json();
-        if (W.status === "ok") {
-          b();
-          if (n != null) {
-            n();
-          }
-        } else {
-          f(W.message || "Delete failed");
-        }
-      } catch (U) {
-        f(U.message || "Network error");
-      }
-    }
-  }
-  const Z = w.useMemo(() => [{
-    value: "all",
-    label: "All time"
-  }, ...l.map(P => ({
-    value: P.value,
-    label: P.is_current ? `${P.label} · this month` : P.label
-  }))], [l]);
-  return <s.Fragment><div className="cand-modal-backdrop" onClick={P => P.target === P.currentTarget && (r == null ? undefined : r())}><div className="cand-modal cand-modal--xl"><header className="cand-modal-header"><div><h3 className="cand-modal-title">Manage handler payouts</h3><p className="cand-modal-sub cand-payout-bar"><span className="cand-payout-chunk"><strong>{Y.count}</strong> entr{Y.count === 1 ? "y" : "ies"}</span><span className="cand-payout-chunk cand-payout-chunk--earn" title="Auto-computed: 50% with shortfall penalty when client paid below prescribed tariff"><span className="cand-payout-pip" /> Owed (50%) <strong>{Jc(O)}</strong></span><span className="cand-payout-chunk cand-payout-chunk--ded" title="Every row in the payout ledger"><span className="cand-payout-pip" /> Paid out <strong>{Jc(M)}</strong></span><span className={`cand-payout-chunk ${C > 0 ? "cand-payout-chunk--net-pos" : C === 0 ? "cand-payout-chunk--net-zero" : "cand-payout-chunk--net-neg"}`}><span className="cand-payout-pip" />{C > 0 ? "Still owe " : C === 0 ? "Settled " : "Overpaid by "}<strong>{Jc(Math.abs(C))}</strong></span></p></div><button type="button" className="cand-modal-close" onClick={r} aria-label="Close">×</button></header><div className="cand-modal-body cand-modal-body--stack"><form className="cand-allexp-form cand-exp-form--payout" onSubmit={ee}><label className="cand-field"><span className="cand-field-label">Handler *</span><input className="cand-input" value={k.reference} onChange={P => T(j => ({
-              ...j,
-              reference: P.target.value
-            }))} placeholder="e.g. Thrilok" list="cand-allexp-ref-list" required={true} /><datalist id="cand-allexp-ref-list">{J.map(P => <option value={P} key={P} />)}</datalist></label><label className="cand-field"><span className="cand-field-label">Amount (₹) *<span className="cand-exp-kind-tag cand-exp-kind-tag--payout">subtracted from what's owed</span></span><input className="cand-input" type="number" min="0" step="100" value={k.amount} onChange={P => T(j => ({
-              ...j,
-              amount: P.target.value
-            }))} placeholder="5000" required={true} /></label><label className="cand-field"><span className="cand-field-label">Category</span><select className="cand-input" value={k.category} onChange={P => T(j => ({
-              ...j,
-              category: P.target.value
-            }))}>{B0.map(P => <option value={P.value} key={P.value}>{P.label}</option>)}</select></label><label className="cand-field"><span className="cand-field-label">Date</span><input className="cand-input" type="date" value={k.date} onChange={P => T(j => ({
-              ...j,
-              date: P.target.value
-            }))} /></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Note</span><input className="cand-input" value={k.note} onChange={P => T(j => ({
-              ...j,
-              note: P.target.value
-            }))} placeholder="e.g. May commission · taxi to client meeting" /></label><div className="cand-exp-form-actions cand-allexp-form-actions">{!_ && <div className={`cand-payout-attach${proofFile ? " cand-payout-attach--done" : ""}`} onClick={() => proofInputRef.current && proofInputRef.current.click()} role="button" tabIndex={0} title={proofFile ? proofFile.name : "Attach payment screenshot (required)"}><input ref={proofInputRef} type="file" accept="image/*" onChange={P => { const file = P.target.files && P.target.files[0]; if (file) { if (!/^image\//.test(file.type || "")) { f("Only image files are allowed (jpg / png / webp / gif / heic)"); return; } if (file.size > 8 * 1024 * 1024) { f("File too large (max 8 MB)"); return; } setProofFile(file); f(""); } }} hidden={true} /><span className="cand-payout-attach-icon">{proofFile ? "✓" : "📷"}</span><span className="cand-payout-attach-text">{proofFile ? proofFile.name.slice(0, 20) : "Attach screenshot *"}</span></div>}{_ && <button type="button" className="cand-btn cand-btn--ghost" onClick={G}>Cancel edit</button>}<button type="submit" className="cand-btn cand-btn--primary" disabled={S || (!_ && !proofFile)}>{S ? "Saving…" : _ ? "Save changes" : "+ Log payout"}</button></div></form>{d && <div className="cand-modal-error">{d}</div>}<div className="cand-allexp-filters"><select className="cand-input cand-input--compact" value={h} onChange={P => x(P.target.value)} aria-label="Filter by handler"><option value="all">All handlers</option>{J.map(P => <option value={P} key={P}>{P}</option>)}</select><select className="cand-input cand-input--compact" value={v} onChange={P => g(P.target.value)} aria-label="Filter by month">{Z.map(P => <option value={P.value} key={P.value}>{P.label}</option>)}</select><select className="cand-input cand-input--compact" value={p} onChange={P => m(P.target.value)} aria-label="Filter by category"><option value="all">All categories</option>{B0.map(P => <option value={P.value} key={P.value}>{P.label}</option>)}</select>{(h !== "all" || v !== "all" || p !== "all") && <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => {
-            x("all");
-            g("all");
-            m("all");
-          }}>Clear filters</button>}</div>{o ? <div className="cand-exp-empty">Loading…</div> : A.length === 0 ? <div className="cand-exp-empty">No entries match the current filters. Use the form above to add the first one, or <button type="button" className="cand-link" onClick={() => {
-            x("all");
-            g("all");
-            m("all");
-          }}>clear filters</button>.</div> : <div className="cand-allexp-table-wrap"><table className="cand-allexp-table"><thead><tr><th>Handler</th><th>Amount</th><th>Category</th><th>Date</th><th>Note</th><th>Proof</th><th aria-label="actions" /></tr></thead><tbody>{A.map(P => <tr className={`cand-allexp-row cand-allexp-row--payout${_ === P.id ? " cand-allexp-row--editing" : ""}`} key={P.id}><td className="cand-allexp-ref">{P.reference}</td><td className="cand-allexp-amount cand-allexp-amount--payout">−{Jc(P.amount)}</td><td><span className={`cand-exp-cat cand-exp-cat--${P.category}`}>{Ex[P.category] || P.category}</span></td><td className="cand-allexp-date">{rR(P.date)}</td><td className="cand-allexp-note">{P.note || <em>—</em>}</td><td className="cand-allexp-proof">{(P.proofs && P.proofs.length > 0) ? <button type="button" className="cand-proof-thumb-btn" onClick={() => setPreviewProof(P.proofs[0])} title="View payment proof"><img src={`${ve}${P.proofs[0].url}`} alt="proof" className="cand-proof-thumb-img" loading="lazy" /></button> : <em>—</em>}</td><td className="cand-allexp-actions"><button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => ce(P)} title="Edit">✎</button><button type="button" className="cand-btn cand-btn--ghost cand-btn--xs cand-btn--danger-ghost" onClick={() => B(P)} title="Delete">🗑</button></td></tr>)}</tbody></table></div>}</div><footer className="cand-modal-footer"><button type="button" className="cand-btn cand-btn--ghost" onClick={r}>Close</button></footer></div></div>{previewProof && <div className="cand-proof-lightbox" onClick={() => setPreviewProof(null)}><div className="cand-proof-lightbox-inner" onClick={P => P.stopPropagation()}><button type="button" className="cand-proof-lightbox-close" onClick={() => setPreviewProof(null)} aria-label="Close preview">×</button><img src={`${ve}${previewProof.url}`} alt={previewProof.note || previewProof.original_name || "Payment proof"} className="cand-proof-lightbox-img" />{previewProof.note && <p className="cand-proof-lightbox-note">{previewProof.note}</p>}<p className="cand-proof-lightbox-meta">{previewProof.original_name}{previewProof.uploaded_at && <span> · {new Date(previewProof.uploaded_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</span>}</p></div></div>}</s.Fragment>;
+  return <PayoutModal
+    handlerNames={e}
+    ownedSummary={t}
+    onClose={r}
+    onChanged={n}
+    apiBase={ve}
+    categories={B0}
+    categoryLabels={Ex}
+    formatCurrency={Jc}
+    formatDate={rR}
+  />;
 }
 function At(e) {
   const t = Number(e) || 0;
