@@ -204,7 +204,7 @@ export default function EarningsBreakdown({
                                 {rows.map(c => {
                                   const received = Number(c.payment) || 0;
                                   const referral = Number(c.handler_commission) || Math.round(received * pct);
-                                  const date = c.date || c.logged_date || "";
+                                  const date = c.logged_date || c.date || "";
                                   const dateStr = date ? new Date(date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "";
                                   return (
                                     <li className="earn-breakdown-item" key={c.id}>

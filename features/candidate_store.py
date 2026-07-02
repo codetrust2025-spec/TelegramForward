@@ -3713,7 +3713,15 @@ def _row_month(row: dict) -> str:
 
 
 def _row_display_month(row: dict) -> str:
-    """Month of the date shown in the Candidates table."""
+    """Month the candidate was registered (logged_date).
+    
+    Uses logged_date (when the lead was first added) as the canonical month.
+    Falls back to date only if logged_date is not available.
+    """
+    logged = _clean_str(row.get("logged_date"))[:10]
+    if len(logged) >= 7 and logged[4] == "-":
+        return logged[:7]
+    # Fallback to date if logged_date missing
     visible = _clean_str(row.get("date"))[:10]
     if len(visible) >= 7 and visible[4] == "-":
         return visible[:7]
