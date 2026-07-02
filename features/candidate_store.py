@@ -3705,15 +3705,14 @@ def _row_display_month(row: dict) -> str:
 
 
 def _row_in_month(row: dict, month: str) -> bool:
-    """Match if the row's displayed date OR logged date falls in the given month.
+    """Match only the visible display date (the 'date' column in the table).
 
-    This must agree with available_months() which counts both _row_month and
-    _row_display_month — otherwise a candidate counted in the picker badge
-    disappears from the table when that month is selected.
+    The month filter should show/hide rows based on what the user sees
+    in the Date column — not internal logged_date metadata.
     """
     if not month or month == "all":
         return True
-    return _row_display_month(row) == month or _row_month(row) == month
+    return _row_display_month(row) == month
 
 
 def _handler_reference_options(
@@ -3797,7 +3796,8 @@ def available_months(rows: list[dict] | None = None) -> list[dict]:
         rows = list_candidates()
     counts: dict[str, int] = {}
     for r in rows:
-        for m in {_row_month(r), _row_display_month(r)} - {""}:
+        m = _row_display_month(r)
+        if m:
             counts[m] = counts.get(m, 0) + 1
 
     # Ensure current month + last month are present even when empty.
