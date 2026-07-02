@@ -100,11 +100,11 @@
   border-bottom: 1px solid rgba(255,255,255,.08);
   white-space: nowrap;
 }
-.earn-th--num { text-align: center; width: 5%; }
-.earn-th--money { text-align: right; width: 10%; }
-.earn-th--status { text-align: center; width: 7%; }
-.earn-th--action { text-align: right; width: 9%; }
-.earn-th--name { width: 14%; }
+.earn-th--num { text-align: center; width: 50px; }
+.earn-th--money { text-align: right; width: 100px; }
+.earn-th--status { text-align: center; width: 70px; }
+.earn-th--action { text-align: right; width: 90px; }
+.earn-th--name { width: auto; }
 
 .earn-table tbody td {
   padding: 10px 8px;
