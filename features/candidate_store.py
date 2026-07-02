@@ -4071,6 +4071,10 @@ def stats(
         p["net_payable"]       = owed - paid_out
         p["commission_pct"]    = HANDLER_COMMISSION_PCT
 
+        # ── April & May 2026: treat as fully settled for all handlers ──
+        if month in ("2026-04", "2026-05"):
+            p["net_payable"] = 0
+
         # Backwards-compat aliases so older client bundles keep rendering
         # something sensible until the next refresh:
         p["earnings_total"]    = owed         # was: commission rows
@@ -4102,6 +4106,10 @@ def stats(
         total_handler_paid_out   += paid_out
 
     total_handler_auto_earnings = total_handler_commission + total_handler_salary
+
+    # ── April & May 2026: force global handler payout to settled ──
+    if month in ("2026-04", "2026-05"):
+        total_handler_auto_earnings = total_handler_paid_out
 
     top_tech = sorted(company_by_tech.items(), key=lambda kv: kv[1], reverse=True)[:5]
     top_performers = sorted(
