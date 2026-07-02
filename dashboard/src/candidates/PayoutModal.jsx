@@ -240,6 +240,13 @@ export default function PayoutModal({
           {/* RIGHT: Filters */}
           <div className="payout-modal__filters">
             <label className="payout-modal__filter-field">
+              <span className="cand-field-label">Handler</span>
+              <select className="cand-input payout-modal__input" value={filterHandler} onChange={ev => setFilterHandler(ev.target.value)}>
+                <option value="all">All handlers</option>
+                {allHandlers.map(n => <option value={n} key={n}>{n}</option>)}
+              </select>
+            </label>
+            <label className="payout-modal__filter-field">
               <span className="cand-field-label">Period</span>
               <select className="cand-input payout-modal__input" value={filterMonth} onChange={ev => setFilterMonth(ev.target.value)}>{monthOptions.map(m => <option value={m.value} key={m.value}>{m.label}</option>)}</select>
             </label>
