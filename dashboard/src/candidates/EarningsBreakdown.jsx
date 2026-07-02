@@ -15,6 +15,7 @@ export default function EarningsBreakdown({
   handlerView = false,
   handlerName = null,
   formatCurrency,
+  apiBase = "",
 }) {
   const fmt = formatCurrency || (v => {
     const n = Number(v) || 0;
@@ -32,6 +33,26 @@ export default function EarningsBreakdown({
 
   const [expanded, setExpanded] = useState(null);
   const [sortBy, setSortBy] = useState("net_payable");
+  const [handlerCandidates, setHandlerCandidates] = useState({});
+  const [loadingCandidates, setLoadingCandidates] = useState(null);
+
+  // Fetch candidates for a specific handler when expanded
+  async function toggleExpand(name) {
+    if (expanded === name) { setExpanded(null); return; }
+    setExpanded(name);
+    if (handlerCandidates[name]) return; // already loaded
+    setLoadingCandidates(name);
+    try {
+      const params = new URLSearchParams();
+      if (month && month !== "all") params.set("month", month);
+      params.set("reference", name);
+      const res = await (await fetch(`${apiBase}/candidates?${params.toString()}`, { credentials: "include" })).json();
+      if (res.status === "ok") {
+        setHandlerCandidates(prev => ({ ...prev, [name]: res.candidates || [] }));
+      }
+    } catch (e) { /* silent */ }
+    finally { setLoadingCandidates(null); }
+  }
 
   const sorted = useMemo(() => {
     const list = [...performers];
@@ -146,7 +167,7 @@ export default function EarningsBreakdown({
 
               return (
                 <Fragment key={p.ref_key || p.name}>
-                  <tr className={`earn-row${isExpanded ? " earn-row--open" : ""}`} onClick={() => setExpanded(isExpanded ? null : p.name)}>
+                  <tr className={`earn-row${isExpanded ? " earn-row--open" : ""}`} onClick={() => toggleExpand(p.name)}>
                     <td className="earn-td--name">
                       <span className="earn-expand-icon">{isExpanded ? "▾" : "▸"}</span>
                       <strong>{p.name}</strong>
@@ -172,35 +193,42 @@ export default function EarningsBreakdown({
                     <tr className="earn-detail-row">
                       <td colSpan={11}>
                         <div className="earn-detail">
-                          <div className="earn-detail-grid">
-                            <div className="earn-detail-card">
-                              <span className="earn-detail-label">Commission rate</span>
-                              <span className="earn-detail-value">{p.commission_pct || 50}%</span>
-                            </div>
-                            {salary > 0 && <div className="earn-detail-card">
-                              <span className="earn-detail-label">Monthly salary</span>
-                              <span className="earn-detail-value earn-blue">{fmt(p.salary_monthly || 0)}/mo</span>
-                            </div>}
-                            <div className="earn-detail-card">
-                              <span className="earn-detail-label">Active leads</span>
-                              <span className="earn-detail-value">{p.in_progress || 0}</span>
-                            </div>
-                            <div className="earn-detail-card">
-                              <span className="earn-detail-label">Failed</span>
-                              <span className="earn-detail-value earn-red">{p.fail || 0}</span>
-                            </div>
-                            <div className="earn-detail-card">
-                              <span className="earn-detail-label">Total pipeline</span>
-                              <span className="earn-detail-value">{fmt(p.revenue_total || 0)}</span>
-                            </div>
-                            <div className="earn-detail-card">
-                              <span className="earn-detail-label">Conversion</span>
-                              <span className="earn-detail-value">{p.conversion_pct || 0}%</span>
-                            </div>
-                          </div>
                           <p className="earn-detail-formula">
                             Owed = Commission ({fmt(commission)}) + Salary ({fmt(salary)}) = <strong>{fmt(owed)}</strong> — Paid out ({fmt(paid)}) = <strong className={net > 0 ? "earn-green" : net < 0 ? "earn-red" : "earn-settled"}>Net {net >= 0 ? fmt(net) : `-${fmt(Math.abs(net))}`}</strong>
                           </p>
+                          {loadingCandidates === p.name && <p className="earn-detail-loading">Loading candidates…</p>}
+                          {handlerCandidates[p.name] && (
+                            <div className="earn-candidates-wrap">
+                              <p className="earn-detail-label" style={{ margin: "8px 0 6px" }}>Commission breakdown — {p.commission_pct || 50}% of each client payment:</p>
+                              <table className="earn-candidates-table">
+                                <thead><tr>
+                                  <th>Candidate</th>
+                                  <th>Technology</th>
+                                  <th>Stage</th>
+                                  <th style={{ textAlign: "right" }}>Client paid</th>
+                                  <th style={{ textAlign: "right" }}>{p.commission_pct || 50}% commission</th>
+                                </tr></thead>
+                                <tbody>
+                                  {handlerCandidates[p.name].filter(c => Number(c.amount_received) > 0 || c.stage === "completed").map(c => {
+                                    const clientPaid = Number(c.amount_received) || 0;
+                                    const commShare = Math.round(clientPaid * ((p.commission_pct || 50) / 100));
+                                    return (
+                                      <tr key={c.id}>
+                                        <td><strong>{c.name}</strong></td>
+                                        <td>{c.technology || "—"}</td>
+                                        <td><span className={`cand-badge ${c.stage === "completed" ? "cand-badge--good" : "cand-badge--info"}`}>{c.stage || "—"}</span></td>
+                                        <td style={{ textAlign: "right" }}>{fmt(clientPaid)}</td>
+                                        <td style={{ textAlign: "right" }} className="earn-green"><strong>{fmt(commShare)}</strong></td>
+                                      </tr>
+                                    );
+                                  })}
+                                  {handlerCandidates[p.name].filter(c => Number(c.amount_received) > 0 || c.stage === "completed").length === 0 && (
+                                    <tr><td colSpan={5} className="earn-empty" style={{ padding: 10 }}>No payments received yet for this handler's candidates.</td></tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
                         </div>
                       </td>
                     </tr>
