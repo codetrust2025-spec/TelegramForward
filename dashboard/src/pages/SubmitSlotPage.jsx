@@ -426,7 +426,7 @@ export function SubmitSlotPage() {
               {error && <p className="sbs-alert sbs-alert--error" role="alert">{error}</p>}
               {success && <p className="sbs-alert sbs-alert--success">{success}</p>}
 
-              <button type="submit" className="sbs-cta sbs-cta--ready" disabled={busy}>
+              <button type="submit" className="sbs-cta sbs-cta--ready" disabled={busy || !name || !slotFile}>
                 {busy ? <Spinner size={18} /> : 'Confirm booking'}
               </button>
             </form>
