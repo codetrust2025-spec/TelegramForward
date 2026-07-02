@@ -125,6 +125,7 @@ export default function PayoutModal({
 
   function startEdit(row) {
     setEditId(row.id);
+    setFilterHandler(row.reference || "all");
     setForm({
       reference: row.reference || "",
       amount: String(row.amount || ""),
@@ -136,7 +137,8 @@ export default function PayoutModal({
 
   async function handleSubmit(ev) {
     ev?.preventDefault?.();
-    if (!form.reference.trim()) { setError("Handler name is required"); return; }
+    if (!form.reference.trim() && filterHandler === "all") { setError("Select a handler first"); return; }
+    const handlerRef = form.reference.trim() || filterHandler;
     const amt = Number(form.amount);
     if (!Number.isFinite(amt) || amt <= 0) { setError("Amount must be greater than zero"); return; }
     if (!editId && !proofFile) { setError("Payment screenshot is required"); return; }
@@ -148,7 +150,7 @@ export default function PayoutModal({
         if (proofFile) {
           // Editing with new screenshot — use multipart FormData
           const fd = new FormData();
-          fd.append("reference", form.reference.trim());
+          fd.append("reference", handlerRef);
           fd.append("amount", String(amt));
           fd.append("category", form.category);
           fd.append("note", form.note.trim());
@@ -163,12 +165,12 @@ export default function PayoutModal({
           res = await (await fetch(`${ve}/handler-expenses/${editId}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ reference: form.reference.trim(), amount: amt, category: form.category, note: form.note.trim(), date: form.date }),
+            body: JSON.stringify({ reference: handlerRef, amount: amt, category: form.category, note: form.note.trim(), date: form.date }),
           })).json();
         }
       } else {
         const fd = new FormData();
-        fd.append("reference", form.reference.trim());
+        fd.append("reference", handlerRef);
         fd.append("amount", String(amt));
         fd.append("category", form.category);
         fd.append("note", form.note.trim());
@@ -221,8 +223,10 @@ export default function PayoutModal({
             <div className="payout-modal__form-grid">
               <label className="payout-modal__field">
                 <span className="cand-field-label">Handler *</span>
-                <input className="cand-input payout-modal__input" value={form.reference} onChange={ev => setForm(f => ({ ...f, reference: ev.target.value }))} placeholder="e.g. Thrilok" list="payout-ref-list" required />
-                <datalist id="payout-ref-list">{allHandlers.map(n => <option value={n} key={n} />)}</datalist>
+                <select className="cand-input payout-modal__input" value={filterHandler} onChange={ev => { setFilterHandler(ev.target.value); setForm(f => ({ ...f, reference: ev.target.value === "all" ? "" : ev.target.value })); }}>
+                  <option value="all">All handlers</option>
+                  {allHandlers.map(n => <option value={n} key={n}>{n}</option>)}
+                </select>
               </label>
               <label className="payout-modal__field">
                 <span className="cand-field-label">Amount (₹) * <span className="cand-exp-kind-tag cand-exp-kind-tag--payout">subtracted from what's owed</span></span>
@@ -255,13 +259,6 @@ export default function PayoutModal({
 
           {/* RIGHT: Filters */}
           <div className="payout-modal__filters">
-            <label className="payout-modal__filter-field">
-              <span className="cand-field-label">Handler</span>
-              <select className="cand-input payout-modal__input" value={filterHandler} onChange={ev => setFilterHandler(ev.target.value)}>
-                <option value="all">All handlers</option>
-                {allHandlers.map(n => <option value={n} key={n}>{n}</option>)}
-              </select>
-            </label>
             <label className="payout-modal__filter-field">
               <span className="cand-field-label">Period</span>
               <select className="cand-input payout-modal__input" value={filterMonth} onChange={ev => setFilterMonth(ev.target.value)}>{monthOptions.map(m => <option value={m.value} key={m.value}>{m.label}</option>)}</select>
