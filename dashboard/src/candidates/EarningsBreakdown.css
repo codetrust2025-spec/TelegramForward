@@ -80,11 +80,11 @@
   border: 1px solid rgba(255,255,255,.06);
 }
 .earn-table {
-  width: 100%;
+  width: auto;
+  max-width: 100%;
   border-collapse: collapse;
   font-size: 12px;
-  min-width: 960px;
-  table-layout: fixed;
+  min-width: 900px;
 }
 .earn-table thead th {
   position: sticky;
@@ -104,7 +104,7 @@
 .earn-th--money { text-align: right; width: 100px; }
 .earn-th--status { text-align: center; width: 70px; }
 .earn-th--action { text-align: right; width: 90px; }
-.earn-th--name { width: auto; }
+.earn-th--name { width: 130px; }
 
 .earn-table tbody td {
   padding: 10px 8px;
