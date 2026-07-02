@@ -198,18 +198,25 @@ export default function EarningsBreakdown({
                             const rows = handlerCandidates[p.name].filter(c => Number(c.payment) > 0);
                             const pct = (p.commission_pct || 50) / 100;
                             if (rows.length === 0) return <p className="earn-detail-loading">No payments received yet.</p>;
+                            const totalComm = rows.reduce((s, c) => s + (Number(c.handler_commission) || Math.round((Number(c.payment) || 0) * pct)), 0);
                             return (
                               <ul className="earn-breakdown-list">
                                 {rows.map(c => {
                                   const received = Number(c.payment) || 0;
                                   const referral = Number(c.handler_commission) || Math.round(received * pct);
+                                  const date = c.date || c.logged_date || "";
+                                  const dateStr = date ? new Date(date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "";
                                   return (
                                     <li className="earn-breakdown-item" key={c.id}>
-                                      <span className="earn-breakdown-desc">{c.name} · {fmt(received)} received – {fmt(referral)} referral</span>
+                                      <span className="earn-breakdown-desc">{c.name} · {fmt(received)} received – {fmt(referral)} referral{dateStr && <span className="earn-breakdown-date"> · {dateStr}</span>}</span>
                                       <strong className="earn-breakdown-amount">{fmt(referral)}</strong>
                                     </li>
                                   );
                                 })}
+                                <li className="earn-breakdown-item earn-breakdown-total">
+                                  <span className="earn-breakdown-desc"><strong>Total ({rows.length} candidates)</strong></span>
+                                  <strong className="earn-breakdown-amount earn-breakdown-amount--total">{fmt(totalComm)}</strong>
+                                </li>
                               </ul>
                             );
                           })()}
