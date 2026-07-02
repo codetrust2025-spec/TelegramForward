@@ -147,26 +147,19 @@ export default function PayoutModal({
     try {
       let res;
       if (editId) {
+        // Step 1: PATCH text fields as JSON
+        res = await (await fetch(`${ve}/handler-expenses/${editId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reference: handlerRef, amount: amt, category: form.category, note: form.note.trim(), date: form.date }),
+        })).json();
+        if (res.status !== "ok") { setError(res.message || "Save failed"); return; }
+        // Step 2: If new proof file, upload separately
         if (proofFile) {
-          // Editing with new screenshot — use multipart FormData
           const fd = new FormData();
-          fd.append("reference", handlerRef);
-          fd.append("amount", String(amt));
-          fd.append("category", form.category);
-          fd.append("note", form.note.trim());
-          fd.append("date", form.date);
           fd.append("file", proofFile);
-          res = await (await fetch(`${ve}/handler-expenses/${editId}`, {
-            method: "PATCH",
-            body: fd,
-          })).json();
-        } else {
-          // Editing without new screenshot — JSON PATCH
-          res = await (await fetch(`${ve}/handler-expenses/${editId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ reference: handlerRef, amount: amt, category: form.category, note: form.note.trim(), date: form.date }),
-          })).json();
+          const proofRes = await (await fetch(`${ve}/handler-expenses/${editId}/proofs`, { method: "POST", body: fd })).json();
+          if (proofRes.status !== "ok") { setError(proofRes.message || "Proof upload failed, but fields saved"); }
         }
       } else {
         const fd = new FormData();
