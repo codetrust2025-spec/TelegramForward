@@ -157,8 +157,8 @@ export default function EarningsBreakdown({
                     <td className="earn-td--money earn-green">{fmt(commission)}</td>
                     <td className="earn-td--money earn-blue">{salary > 0 ? fmt(salary) : "—"}</td>
                     <td className="earn-td--money"><strong>{fmt(owed)}</strong></td>
-                    <td className="earn-td--money earn-red">{fmt(paid)}</td>
-                    <td className={`earn-td--money earn-td--balance ${net > 0 ? "earn-green" : net < 0 ? "earn-red" : "earn-settled"}`}>
+                    <td className="earn-td--money earn-red">{paid > 0 ? fmt(paid) : "₹0"}</td>
+                    <td className={`earn-td--money ${net > 0 ? "earn-green" : net < 0 ? "earn-red" : "earn-settled"}`}>
                       <strong>{net > 0 ? "+" : ""}{fmt(net)}</strong>
                     </td>
                     <td className="earn-td--status">

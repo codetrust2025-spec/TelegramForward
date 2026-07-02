@@ -83,7 +83,8 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
-  min-width: 900px;
+  min-width: 960px;
+  table-layout: fixed;
 }
 .earn-table thead th {
   position: sticky;
@@ -99,31 +100,34 @@
   border-bottom: 1px solid rgba(255,255,255,.08);
   white-space: nowrap;
 }
-.earn-th--num, .earn-th--money { text-align: right; }
-.earn-th--status { text-align: center; }
-.earn-th--action { text-align: right; width: 100px; }
-.earn-th--name { min-width: 140px; }
+.earn-th--num { text-align: center; width: 5%; }
+.earn-th--money { text-align: right; width: 10%; }
+.earn-th--status { text-align: center; width: 7%; }
+.earn-th--action { text-align: right; width: 9%; }
+.earn-th--name { width: 14%; }
 
 .earn-table tbody td {
   padding: 10px 8px;
   border-bottom: 1px solid rgba(255,255,255,.04);
   vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.earn-td--num { text-align: right; font-variant-numeric: tabular-nums; }
+.earn-td--num { text-align: center; font-variant-numeric: tabular-nums; }
 .earn-td--money { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .earn-td--status { text-align: center; }
 .earn-td--action { text-align: right; }
 .earn-td--name {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .earn-expand-icon {
   font-size: 10px;
   color: var(--text-dim, #7b8a9e);
-  width: 14px;
-  flex-shrink: 0;
+  margin-right: 6px;
 }
 
 .earn-row { cursor: pointer; transition: background .12s; }
@@ -203,6 +207,9 @@
   font-weight: 700;
   border-top: 2px solid rgba(99,102,241,.25);
   background: #0f172af2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Responsive */
