@@ -11794,37 +11794,6 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   max-width: 96vw;
   width: 96vw;
 }
-.cand-modal--payout-wide {
-  max-width: 98vw;
-  width: 98vw;
-}
-.cand-modal-header--payout {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-.cand-modal-header--payout .cand-modal-header-left {
-  flex: 1;
-  min-width: 0;
-}
-.cand-modal-header--payout .cand-modal-header-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-}
-.cand-payout-form-grid {
-  display: grid;
-  grid-template-columns: 1fr 200px;
-  gap: 16px;
-  align-items: start;
-}
-.cand-payout-filters-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
 .cand-allexp-form {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -11846,15 +11815,10 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
     max-width: 1300px;
     width: min(97vw, 1300px);
   }
-  .cand-modal--payout-wide {
-    max-width: 1400px;
-    width: min(98vw, 1400px);
-  }
   .cand-allexp-form { grid-template-columns: 1fr 1fr 1fr 1fr; }
 }
 @media (max-width: 520px) {
   .cand-allexp-form { grid-template-columns: 1fr; }
-  .cand-payout-form-grid { grid-template-columns: 1fr; }
 }
 .cand-modal--xl .cand-modal-body {
   overflow-x: hidden;
@@ -11869,10 +11833,10 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 }
 .cand-allexp-table-wrap {
   overflow-x: auto;
-  max-height: 55vh;
+  max-height: 50vh;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.06);
-  margin: 0;
+  margin: 0 -4px;
 }
 .cand-allexp-table {
   width: 100%;
