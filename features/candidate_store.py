@@ -3705,15 +3705,15 @@ def _row_display_month(row: dict) -> str:
 
 
 def _row_in_month(row: dict, month: str) -> bool:
-    """Match only the visible display date (the 'date' column in the table).
+    """Match if the row's displayed date OR logged date falls in the given month.
 
-    Previously this matched either the internal logged_date OR the display date,
-    causing candidates imported in a later month to appear in that month even
-    though their profile date was older. Now we only use the displayed date.
+    This must agree with available_months() which counts both _row_month and
+    _row_display_month — otherwise a candidate counted in the picker badge
+    disappears from the table when that month is selected.
     """
     if not month or month == "all":
         return True
-    return _row_display_month(row) == month
+    return _row_display_month(row) == month or _row_month(row) == month
 
 
 def _handler_reference_options(
