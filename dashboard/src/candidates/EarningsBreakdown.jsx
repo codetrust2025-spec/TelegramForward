@@ -35,6 +35,7 @@ export default function EarningsBreakdown({
   const [sortBy, setSortBy] = useState("net_payable");
   const [handlerCandidates, setHandlerCandidates] = useState({});
   const [loadingCandidates, setLoadingCandidates] = useState(null);
+  const [viewProof, setViewProof] = useState(null);
 
   // Fetch candidates for a specific handler when expanded
   async function toggleExpand(name) {
@@ -211,7 +212,7 @@ export default function EarningsBreakdown({
                                       <span className="earn-breakdown-desc">
                                         {c.name} · {fmt(received)} received – {fmt(referral)} referral
                                         {dateStr && <span className="earn-breakdown-date"> · {dateStr}</span>}
-                                        {c.proofs && c.proofs.length > 0 && <button type="button" className="earn-breakdown-proof-btn" onClick={ev => { ev.stopPropagation(); window.open(`${apiBase}${c.proofs[0].url}`, '_blank', 'noopener'); }} title="View payment proof">📷</button>}
+                                        {c.proofs && c.proofs.length > 0 && <button type="button" className="earn-breakdown-proof-btn" onClick={ev => { ev.stopPropagation(); setViewProof({ url: `${apiBase}${c.proofs[0].url}`, name: c.name }); }} title="View payment proof">📷</button>}
                                       </span>
                                       <strong className="earn-breakdown-amount">{fmt(referral)}</strong>
                                     </li>
@@ -249,6 +250,12 @@ export default function EarningsBreakdown({
           </tfoot>
         </table>
       </div>
+      {/* Proof lightbox */}
+      {viewProof && <div className="cand-proof-lightbox" onClick={() => setViewProof(null)} style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, background: "rgba(0,0,0,.9)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-out" }}>
+        <img src={viewProof.url} alt={`Payment proof - ${viewProof.name}`} style={{ maxWidth: "90vw", maxHeight: "85vh", borderRadius: 10, boxShadow: "0 20px 60px rgba(0,0,0,.8)" }} onClick={ev => ev.stopPropagation()} />
+        <button type="button" onClick={() => setViewProof(null)} style={{ position: "absolute", top: 16, right: 20, width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,.15)", color: "#fff", border: "1px solid rgba(255,255,255,.2)", fontSize: 22, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+        <p style={{ position: "absolute", bottom: 20, color: "#cbd5e1", fontSize: 13 }}>{viewProof.name}</p>
+      </div>}
     </section>
   );
 }
