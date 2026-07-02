@@ -747,7 +747,8 @@ function X8({
         expected_payment: l.expected_payment === "" ? os(l.service_type, l.consultancy, l.interview_scope) : Number(l.expected_payment),
         follow_up: b ? l.follow_up.trim() : "",
         slot_confirmed: !!l.slot_confirmed,
-        slots_group_posted: !!l.slots_group_posted
+        slots_group_posted: !!l.slots_group_posted,
+        logged_date: l.date || l.logged_date || ""
       };
       await r(J);
     } catch (J) {
