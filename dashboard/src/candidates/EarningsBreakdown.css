@@ -84,13 +84,13 @@
   border-collapse: collapse;
   font-size: 12px;
   min-width: 900px;
+  table-layout: fixed;
 }
 .earn-table thead th {
   position: sticky;
   top: 0;
   background: #0f172af2;
-  text-align: left;
-  padding: 10px 8px;
+  padding: 10px 6px;
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -98,15 +98,19 @@
   color: var(--text-dim, #7b8a9e);
   border-bottom: 1px solid rgba(255,255,255,.08);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.earn-th--num { text-align: center; width: 50px; }
-.earn-th--money { text-align: right; }
-.earn-th--status { text-align: center; width: 70px; }
-.earn-th--action { text-align: right; width: 90px; }
-.earn-th--name { }
+/* Column widths — must sum to 100% */
+.earn-th--name    { width: 13%; text-align: left; }
+.earn-th--num     { width: 4%;  text-align: center; }
+.earn-th--money   { width: 10%; text-align: right; }
+.earn-th--status  { width: 6%;  text-align: center; }
+.earn-th--action  { width: 8%;  text-align: right; }
+/* 13 + 4 + 4 + 10 + 10 + 10 + 10 + 10 + 10 + 6 + 8 = 95% — remaining 5% distributed */
 
 .earn-table tbody td {
-  padding: 10px 8px;
+  padding: 10px 6px;
   border-bottom: 1px solid rgba(255,255,255,.04);
   vertical-align: middle;
   overflow: hidden;
@@ -118,6 +122,7 @@
 .earn-td--status { text-align: center; }
 .earn-td--action { text-align: right; }
 .earn-td--name {
+  text-align: left;
   font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
@@ -202,7 +207,7 @@
 
 /* Footer */
 .earn-foot td {
-  padding: 10px 8px;
+  padding: 10px 6px;
   font-weight: 700;
   border-top: 2px solid rgba(99,102,241,.25);
   background: #0f172af2;
