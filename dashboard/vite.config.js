@@ -36,9 +36,9 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       output: {
-        // New URL prefix so browsers drop cached broken index-CwCUIkUq.js bundles.
+        // Force new filename to bust browser cache after each meaningful change
         entryFileNames: 'assets/app-[hash].js',
-        chunkFileNames: 'assets/app-[hash].js',
+        chunkFileNames: 'assets/chunk-[hash].js',
         // pdf.js worker must be served as application/javascript (nginx maps .js, not .mjs).
         assetFileNames: (assetInfo) => {
           const name = assetInfo.names?.[0] || assetInfo.name || ''
