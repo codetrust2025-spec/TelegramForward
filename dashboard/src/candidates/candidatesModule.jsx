@@ -734,6 +734,12 @@ function X8({
       x(A);
       return;
     }
+    // Block save if payment > 0 and no proof uploaded (edit mode only — new candidates need ID first)
+    const paymentAmt = l.payment === "" ? 0 : Number(l.payment);
+    if (e && paymentAmt > 0 && (!o || o.length === 0)) {
+      x("Payment proof is required — upload a screenshot before saving when payment is recorded.");
+      return;
+    }
     f(true);
     x("");
     try {
