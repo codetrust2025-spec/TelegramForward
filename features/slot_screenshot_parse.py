@@ -51,7 +51,6 @@ def _month_num(token: str) -> int:
 def _infer_year(month: int, day: int, ref: datetime | None = None) -> int:
     ref = ref or datetime.now()
     y = ref.year
-    # Always use current year at minimum — never return a past year
     try:
         candidate = datetime(y, month, day).date()
     except ValueError:
@@ -810,14 +809,6 @@ def parse_invite_screenshot(data: bytes, mime: str = "image/jpeg") -> dict[str, 
             "Could not read date and time from the screenshot — "
             "enter date & time manually, or upload a clearer invite image."
         )
-
-    # Auto-correct past years — AI sometimes returns wrong year when none shown
-    detected_date = merged.get("date") or ""
-    if len(detected_date) >= 4:
-        detected_year = int(detected_date[:4])
-        current_year = datetime.now().year
-        if detected_year < current_year:
-            merged["date"] = f"{current_year}{detected_date[4:]}"
 
     merged["parsed"] = True
     merged["method"] = method or "ocr"
