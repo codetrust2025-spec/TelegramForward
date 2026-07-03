@@ -141,9 +141,11 @@ export function SubmitSlotPage() {
   }, [effectiveName, candidates])
 
   const bookingSlot = useMemo(() => {
-    if (parsedSlot?.date && parsedSlot?.time) return { ...parsedSlot, interview_round: interviewRound }
-    if (manualDate && manualTime) return { ...parsedSlot, date: manualDate, time: manualTime, time_end: parsedSlot?.time_end || '', interview_round: interviewRound }
-    return parsedSlot ? { ...parsedSlot, interview_round: interviewRound } : null
+    const effectiveDate = manualDate || parsedSlot?.date || ''
+    const effectiveTime = manualTime || parsedSlot?.time || ''
+    const effectiveEnd = parsedSlot?.time_end || ''
+    if (effectiveDate && effectiveTime) return { ...parsedSlot, date: effectiveDate, time: effectiveTime, time_end: effectiveEnd, interview_round: interviewRound }
+    return null
   }, [parsedSlot, manualDate, manualTime, interviewRound])
 
   const showManualSlotFields = Boolean(slotFile && !parsing)
