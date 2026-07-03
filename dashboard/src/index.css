@@ -16518,6 +16518,10 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 .sbs-alert { padding: 0.65rem 0.85rem; border-radius: 0.65rem; font-size: 0.8125rem; margin: 0; }
 .sbs-alert--error { background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.25); color: #fca5a5; }
 .sbs-alert--success { background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.25); color: #6ee7b7; }
+.sbs-success-anim { display: flex; align-items: center; gap: 0.6rem; animation: sbs-success-pop 0.4s cubic-bezier(0.2,0.8,0.2,1); }
+@keyframes sbs-success-pop { 0% { transform: scale(0.9); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+.sbs-success-anim svg { color: #4ade80; animation: sbs-check-draw 0.5s ease-out 0.15s both; }
+@keyframes sbs-check-draw { 0% { stroke-dasharray: 30; stroke-dashoffset: 30; } 100% { stroke-dashoffset: 0; } }
 .sbs-alert--warn { background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.28); color: #fcd34d; }
 /* CTA button */
 .sbs-cta {
