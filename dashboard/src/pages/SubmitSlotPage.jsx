@@ -238,9 +238,9 @@ export function SubmitSlotPage() {
       setName('')
       setTriedSubmit(false)
       setSuccess(`Slot confirmed for ${data.candidate?.name || effectiveName}.`)
-      // Show success for 2 seconds then switch to confirmed slots
-      setTimeout(() => { setTab('confirmed'); setSuccess('') }, 2000)
+      // Refresh data first, then switch to confirmed tab after 2 seconds
       await refresh()
+      setTimeout(() => { setTab('confirmed'); setSuccess('') }, 2000)
     } catch { setError('Network error — try again') }
     finally { setBusy(false) }
   }

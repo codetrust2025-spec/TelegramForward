@@ -2388,7 +2388,8 @@ def public_booked_interview_slots(*, days: int = 60) -> dict:
         slot_end = (row.get("time_end") or "").strip()
         if not slot_date or not slot_time:
             continue
-        if not _interview_slot_still_upcoming(slot_date, slot_time, slot_end):
+        # Show all of today's slots (even if time passed) so user sees just-booked slot
+        if slot_date != today.isoformat() and not _interview_slot_still_upcoming(slot_date, slot_time, slot_end):
             continue
         slots.append({
             "name": canonical_candidate_name((row.get("name") or "").strip()),
