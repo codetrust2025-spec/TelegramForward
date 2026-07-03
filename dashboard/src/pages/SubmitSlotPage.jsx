@@ -146,7 +146,7 @@ export function SubmitSlotPage() {
     return parsedSlot ? { ...parsedSlot, interview_round: interviewRound } : null
   }, [parsedSlot, manualDate, manualTime, interviewRound])
 
-  const showManualSlotFields = Boolean(slotFile && !parsing && (!parsedSlot?.date || !parsedSlot?.time))
+  const showManualSlotFields = Boolean(slotFile && !parsing)
   const needsPaymentProof = Boolean(selected?.needs_payment_proof && !paymentProofId)
 
   const refresh = useCallback(async () => {
@@ -417,10 +417,10 @@ export function SubmitSlotPage() {
 
               {showManualSlotFields && (
                 <div className="sbs-manual">
-                  <p className="sbs-manual__hint">Include the date line in your screenshot or enter manually.</p>
+                  <p className="sbs-manual__hint">{parsedSlot?.date ? 'Verify detected date & time — correct below if wrong.' : 'Include the date line in your screenshot or enter manually.'}</p>
                   <div className="sbs-manual__grid">
-                    <label className="sbs-field"><span className="sbs-label">Interview date</span><input className="sbs-input" type="date" value={manualDate} onChange={e => setManualDate(e.target.value)} disabled={busy || parsing} /></label>
-                    <label className="sbs-field"><span className="sbs-label">Start time</span><input className="sbs-input" type="time" value={manualTime} onChange={e => setManualTime(e.target.value)} disabled={busy || parsing} /></label>
+                    <label className="sbs-field"><span className="sbs-label">Interview date</span><input className="sbs-input" type="date" value={manualDate || parsedSlot?.date || ''} onChange={e => setManualDate(e.target.value)} disabled={busy || parsing} /></label>
+                    <label className="sbs-field"><span className="sbs-label">Start time</span><input className="sbs-input" type="time" value={manualTime || parsedSlot?.time || ''} onChange={e => setManualTime(e.target.value)} disabled={busy || parsing} /></label>
                   </div>
                 </div>
               )}
