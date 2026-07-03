@@ -779,17 +779,21 @@ def parse_invite_screenshot(data: bytes, mime: str = "image/jpeg") -> dict[str, 
         merged = parse_invite_text(ocr_text)
         method = "ocr"
 
-    # Fallback: Vision API disabled (cost saving) — use manual entry instead
-    # if not merged.get("date") or not merged.get("time"):
-    #     vision = _vision_extract_json(data, mime)
-    pass
+    # Fallback: Vision API only if OCR failed AND API key is available
+    if not merged.get("date") or not merged.get("time"):
+        vision = _vision_extract_json(data, mime)
+        if vision:
+            regex_blob = " ".join(
+                str(v) for v in vision.values() if isinstance(v, str) and v.strip()
+            )
+            regex = parse_invite_text(regex_blob)
+            merged = _merge_parsed(vision, regex if not merged.get("date") else merged)
             method = method or "vision"
 
-    # Vision raw text fallback disabled (cost saving)
-    # if not merged.get("date") or not merged.get("time"):
-    #     raw_text = _vision_extract_raw_text(data, mime)
-    #     if raw_text:
-    #         merged = _apply_text_to_merged(merged, raw_text, method="vision-ocr")
+    if not merged.get("date") or not merged.get("time"):
+        raw_text = _vision_extract_raw_text(data, mime)
+        if raw_text:
+            merged = _apply_text_to_merged(merged, raw_text, method="vision-ocr")
             method = method or "vision-ocr"
 
     from features.candidate_store import canonical_technology, normalise_interview_round
