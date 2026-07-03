@@ -212,7 +212,7 @@ export default function EarningsBreakdown({
                                       <span className="earn-breakdown-desc">
                                         {c.name} · {fmt(received)} received – {fmt(referral)} referral
                                         {dateStr && <span className="earn-breakdown-date"> · {dateStr}</span>}
-                                        {c.proofs && c.proofs.length > 0 && <button type="button" className="earn-breakdown-proof-btn" onClick={ev => { ev.stopPropagation(); setViewProof({ url: `${apiBase}${c.proofs[0].url}`, name: c.name }); }} title="View payment proof">📷</button>}
+                                        {((c.proofs && c.proofs.length > 0) || (c.slot_screenshot_proofs && c.slot_screenshot_proofs.length > 0) || c.proof_count > 0) && <button type="button" className="earn-breakdown-proof-btn" onClick={ev => { ev.stopPropagation(); const proof = (c.proofs && c.proofs[0]) || (c.slot_screenshot_proofs && c.slot_screenshot_proofs[0]); if (proof) setViewProof({ url: `${apiBase}${proof.url}`, name: c.name }); }} title="View payment proof">📷</button>}
                                       </span>
                                       <strong className="earn-breakdown-amount">{fmt(referral)}</strong>
                                     </li>
