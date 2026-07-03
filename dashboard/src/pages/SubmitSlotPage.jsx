@@ -28,7 +28,7 @@ function platformLabel(platform) {
   return map[platform] || platform || ''
 }
 
-const ROUND_OPTIONS = ['L1', 'L2', 'L3', 'HR', 'Final round', 'Screening']
+const ROUND_OPTIONS = ['Screening', 'L1', 'L2', 'Final', 'HR']
 
 function candidateNameKey(value) {
   return String(value || '').trim().toLocaleLowerCase().replace(/[^a-z0-9]/g, '')
@@ -141,9 +141,9 @@ export function SubmitSlotPage() {
   }, [effectiveName, candidates])
 
   const bookingSlot = useMemo(() => {
-    if (parsedSlot?.date && parsedSlot?.time) return { ...parsedSlot, interview_round: interviewRound || parsedSlot.interview_round || '' }
-    if (manualDate && manualTime) return { ...parsedSlot, date: manualDate, time: manualTime, time_end: parsedSlot?.time_end || '', interview_round: interviewRound || parsedSlot?.interview_round || '' }
-    return parsedSlot ? { ...parsedSlot, interview_round: interviewRound || parsedSlot.interview_round || '' } : null
+    if (parsedSlot?.date && parsedSlot?.time) return { ...parsedSlot, interview_round: interviewRound }
+    if (manualDate && manualTime) return { ...parsedSlot, date: manualDate, time: manualTime, time_end: parsedSlot?.time_end || '', interview_round: interviewRound }
+    return parsedSlot ? { ...parsedSlot, interview_round: interviewRound } : null
   }, [parsedSlot, manualDate, manualTime, interviewRound])
 
   const showManualSlotFields = Boolean(slotFile && !parsing && (!parsedSlot?.date || !parsedSlot?.time))
@@ -338,7 +338,7 @@ export function SubmitSlotPage() {
                               </div>
                             </div>
                             <div className="sbs-confirmed-card__right">
-                              {slot.interview_round && <span className="sbs-slot-card__round">{slot.interview_round}</span>}
+                              {slot.interview_round && <span className={`sbs-slot-card__round sbs-slot-card__round--${(slot.interview_round || '').toLowerCase().replace(/\s+/g, '')}`}>{slot.interview_round}</span>}
                               <span className="sbs-confirmed-card__status">
                                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
                                 Booked
