@@ -1830,14 +1830,41 @@ function CandidatesPanelImpl() {
     const targetId = String(intent.candidate_id || '');
     const target = i.find(row => String(row.id) === targetId) || i.find(row => String(row.name || '').trim().toLowerCase() === targetName);
     if (!target) return;
-    const frame = requestAnimationFrame(() => {
-      const row = Array.from(document.querySelectorAll('.cand-page .cand-table tbody tr')).find(node => node.textContent?.toLowerCase().includes(String(target.name || '').toLowerCase()));
-      if (!row) return;
-      row.classList.add('cand-row--pending-focus');
-      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      setTimeout(() => row.classList.remove('cand-row--pending-focus'), 5000);
-    });
-    return () => cancelAnimationFrame(frame);
+    // Open the candidate edit form
+    I(target);
+    // After modal opens, highlight the pending field
+    const pendingKind = intent.kind || intent.label || '';
+    if (pendingKind) {
+      setTimeout(() => {
+        const modal = document.querySelector('.cand-modal-body');
+        if (!modal) return;
+        // Map pending work kinds to field labels
+        const kindToLabel = {
+          'payment_proof': 'Payment Proofs',
+          'follow_up': 'Follow-up',
+          'resume': 'Resume',
+          'payment': 'Received',
+          'reference': 'Reference',
+          'slot': 'Interview slot',
+        };
+        const searchLabel = kindToLabel[pendingKind] || pendingKind;
+        const fields = modal.querySelectorAll('.cand-field, .cand-field-label, label');
+        for (const field of fields) {
+          if (field.textContent?.toLowerCase().includes(searchLabel.toLowerCase())) {
+            field.style.transition = 'box-shadow 0.3s, background 0.3s';
+            field.style.boxShadow = '0 0 0 2px #fbbf24, 0 0 12px rgba(251,191,36,0.4)';
+            field.style.background = 'rgba(251,191,36,0.08)';
+            field.style.borderRadius = '8px';
+            field.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            setTimeout(() => {
+              field.style.boxShadow = '';
+              field.style.background = '';
+            }, 4000);
+            break;
+          }
+        }
+      }, 400);
+    }
   }, [i, f]);
   w.useEffect(() => {
     const timer = setTimeout(() => {

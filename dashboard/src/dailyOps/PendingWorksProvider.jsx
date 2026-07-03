@@ -155,6 +155,7 @@ export function stashPendingWorkOpenIntent(work) {
     sessionStorage.setItem(OPEN_INTENT_KEY, JSON.stringify({
       candidate_id: work.candidate_id || '',
       candidate_name: work.candidate_name || '',
+      kind: work.kind || work.label || '',
     }))
   } catch {}
 }
