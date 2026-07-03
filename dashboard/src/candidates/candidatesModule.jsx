@@ -1824,12 +1824,22 @@ function CandidatesPanelImpl() {
   }, [c, m, T, candTab]);
   w.useEffect(() => {
     if (f || !i.length) return;
-    const intent = consumePendingWorkOpenIntent();
-    if (!intent) return;
+    // Peek at intent without consuming
+    let intentRaw;
+    try { intentRaw = sessionStorage.getItem('cand-open-pending'); } catch {}
+    if (!intentRaw) return;
+    let intent;
+    try { intent = JSON.parse(intentRaw); } catch { return; }
     const targetName = String(intent.candidate_name || '').trim().toLowerCase();
     const targetId = String(intent.candidate_id || '');
     const target = i.find(row => String(row.id) === targetId) || i.find(row => String(row.name || '').trim().toLowerCase() === targetName);
-    if (!target) return;
+    if (!target) {
+      // Candidate not found in current filter — switch to "all" month
+      if (m !== "all") { _("all"); }
+      return;
+    }
+    // Found it — now consume the intent
+    try { sessionStorage.removeItem('cand-open-pending'); } catch {}
     // Open the candidate edit form
     I(target);
     // After modal opens, highlight the pending field
@@ -1838,7 +1848,6 @@ function CandidatesPanelImpl() {
       setTimeout(() => {
         const modal = document.querySelector('.cand-modal-body');
         if (!modal) return;
-        // Map pending work kinds to field labels
         const kindToLabel = {
           'payment_proof': 'Payment Proofs',
           'follow_up': 'Follow-up',
@@ -1865,7 +1874,7 @@ function CandidatesPanelImpl() {
         }
       }, 400);
     }
-  }, [i, f]);
+  }, [i, f, m]);
   w.useEffect(() => {
     const timer = setTimeout(() => {
       const table = document.querySelector(".cand-page .cand-table");
