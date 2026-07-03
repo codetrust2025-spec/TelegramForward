@@ -2857,18 +2857,6 @@ def assign_interview_slot(
     _validate_interview_slot_times(slot_time, time_end)
 
     if _candidate_has_confirmed_slot(existing):
-        # Block exact duplicate — same person + same date + same time across ALL rows
-        all_rows = _load().get("candidates") or []
-        cand_key = _normalise_candidate_name_key(existing.get("name") or "")
-        for row in all_rows:
-            if _normalise_candidate_name_key(row.get("name") or "") != cand_key:
-                continue
-            if not _coerce_bool(row.get("slot_confirmed")):
-                continue
-            row_day = (_clean_str(row.get("date")) or "")[:10]
-            row_time = (_clean_str(row.get("time")) or "")[:5]
-            if row_day == day and row_time == slot_time[:5]:
-                raise ValueError(f"This slot is already booked for {existing.get('name') or 'this candidate'} on {day} at {slot_time}. No duplicate needed.")
         return _duplicate_candidate_slot(
             existing,
             date=day,
