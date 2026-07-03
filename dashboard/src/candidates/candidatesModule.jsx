@@ -754,7 +754,7 @@ function X8({
         follow_up: b ? l.follow_up.trim() : "",
         slot_confirmed: !!l.slot_confirmed,
         slots_group_posted: !!l.slots_group_posted,
-        logged_date: l.date || l.logged_date || ""
+        logged_date: e ? undefined : (l.date || "")
       };
       await r(J);
     } catch (J) {
