@@ -3322,6 +3322,7 @@ def import_confirmed_interview_slot(
     notes: str = "",
     technology: str = "",
     interview_round: str = "",
+    service_type: str = "round_wise",
     source: str = "public-upload",
     payment_proof_id: str | None = None,
     slot_image: bytes | None = None,
@@ -3477,7 +3478,7 @@ def import_confirmed_interview_slot(
             "time_end": slot_end,
             "notes": note,
             "interview_round": rnd,
-            "service_type": "round_wise",
+            "service_type": service_type or "round_wise",
         })
         return _finish_public_slot_import(
             new_candidate,
