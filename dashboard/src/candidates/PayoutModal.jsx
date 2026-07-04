@@ -10,6 +10,7 @@ const ROWS_PER_PAGE = 7;
 
 export default function PayoutModal({
   handlerNames = [],
+  topPerformers = [],
   ownedSummary,
   onClose,
   onChanged,
@@ -86,8 +87,14 @@ export default function PayoutModal({
   }, [entries, filterHandler]);
 
   const owed = useMemo(() => {
+    // When a specific handler is selected, show THEIR owed amount
+    if (filterHandler !== "all") {
+      const lc = filterHandler.toLowerCase();
+      const perf = topPerformers.find(p => (p.name || "").toLowerCase() === lc);
+      if (perf) return Number(perf.auto_earnings_total) || 0;
+    }
     return Number(ownedSummary?.owed) || 0;
-  }, [ownedSummary]);
+  }, [ownedSummary, filterHandler, topPerformers]);
   const paidOut = useMemo(() => filtered.reduce((s, r) => s + (Number(r.amount) || 0), 0), [filtered]);
   const balance = owed - paidOut;
 
