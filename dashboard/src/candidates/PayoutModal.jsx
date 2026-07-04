@@ -274,18 +274,29 @@ export default function PayoutModal({
             <span className="payout-modal__owed-item payout-modal__owed-item--total">= Total owed: <strong>{Jc(owed)}</strong></span>
             {showCommBreakdown && (
               <div className="payout-modal__comm-breakdown">
-                {!commCandidates && !loadingComm && <span className="payout-modal__comm-loading">Loading…</span>}
+                {!commCandidates && !loadingComm && <span className="payout-modal__comm-loading">Click to load…</span>}
                 {loadingComm && <span className="payout-modal__comm-loading">Loading…</span>}
-                {commCandidates && commCandidates.length === 0 && <span className="payout-modal__comm-loading">No payments yet.</span>}
-                {commCandidates && commCandidates.filter(c => Number(c.payment) > 0).map(c => {
-                  const received = Number(c.payment) || 0;
-                  const referral = Number(c.handler_commission) || Math.round(received * 0.5);
-                  return <div className="payout-modal__comm-row" key={c.id}>
-                    <span className="payout-modal__comm-name">{c.name}</span>
-                    <span className="payout-modal__comm-detail">₹{received.toLocaleString("en-IN")} received</span>
-                    <strong className="payout-modal__comm-amount">₹{referral.toLocaleString("en-IN")}</strong>
-                  </div>;
-                })}
+                {commCandidates && (() => {
+                  const rows = commCandidates.filter(c => Number(c.payment) > 0);
+                  if (!rows.length) return <span className="payout-modal__comm-loading">No payments yet.</span>;
+                  const totalComm = rows.reduce((s, c) => s + (Number(c.handler_commission) || 0), 0);
+                  return <>
+                    {rows.map(c => {
+                      const received = Number(c.payment) || 0;
+                      const referral = Number(c.handler_commission) || 0;
+                      return <div className="payout-modal__comm-row" key={c.id}>
+                        <span className="payout-modal__comm-name">{c.name}</span>
+                        <span className="payout-modal__comm-detail">₹{received.toLocaleString("en-IN")} received</span>
+                        <strong className="payout-modal__comm-amount">₹{referral.toLocaleString("en-IN")}</strong>
+                      </div>;
+                    })}
+                    <div className="payout-modal__comm-row" style={{ borderTop: "1px solid rgba(99,102,241,.2)", paddingTop: 4, marginTop: 4 }}>
+                      <span className="payout-modal__comm-name"><strong>Total ({rows.length} candidates)</strong></span>
+                      <span className="payout-modal__comm-detail"></span>
+                      <strong className="payout-modal__comm-amount" style={{ color: "#38bdf8" }}>₹{totalComm.toLocaleString("en-IN")}</strong>
+                    </div>
+                  </>;
+                })()}
               </div>
             )}
           </div>;
