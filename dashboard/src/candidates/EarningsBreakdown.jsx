@@ -176,7 +176,7 @@ export default function EarningsBreakdown({
                     </td>
                     <td className="earn-td--num">{p.count || 0}</td>
                     <td className="earn-td--num earn-green">{p.completed || 0}</td>
-                    <td className="earn-td--money">{fmt(p.revenue_completed || 0)}</td>
+                    <td className="earn-td--money">{fmt(p.revenue_total || 0)}</td>
                     <td className="earn-td--money earn-green">{fmt(commission)}</td>
                     <td className="earn-td--money earn-blue">{salary > 0 ? fmt(salary) : "—"}</td>
                     <td className="earn-td--money"><strong>{fmt(owed)}</strong></td>
@@ -255,7 +255,7 @@ export default function EarningsBreakdown({
               <td><strong>Totals</strong></td>
               <td className="earn-td--num">{performers.reduce((s, p) => s + (p.count || 0), 0)}</td>
               <td className="earn-td--num">{performers.reduce((s, p) => s + (p.completed || 0), 0)}</td>
-              <td className="earn-td--money">{fmt(performers.reduce((s, p) => s + (Number(p.revenue_completed) || 0), 0))}</td>
+              <td className="earn-td--money">{fmt(performers.reduce((s, p) => s + (Number(p.revenue_total) || 0), 0))}</td>
               <td className="earn-td--money">{fmt(totals.commission)}</td>
               <td className="earn-td--money">{fmt(totals.salary)}</td>
               <td className="earn-td--money"><strong>{fmt(totals.owed)}</strong></td>
