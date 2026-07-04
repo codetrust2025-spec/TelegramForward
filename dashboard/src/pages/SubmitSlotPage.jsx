@@ -365,11 +365,25 @@ export function SubmitSlotPage() {
           <div className="sbs-body">
             <form className="sbs-form" onSubmit={submitBook}>
               <label className="sbs-field">
-                <span className="sbs-label">Your name</span>
-                <SlotCandidatePicker candidates={candidates} value={name} onChange={v => { setName(v); setPaymentProofId('') }} disabled={busy || parsing} />
+                <span className="sbs-label">Service type</span>
+                <div className="sbs-select-wrap">
+                  <select className="sbs-select" value={serviceType} onChange={e => { setServiceType(e.target.value); setName(''); setPaymentProofId(''); }} disabled={busy || parsing}>
+                    <option value="round_wise">Round-wise</option>
+                    <option value="profile_service">Profile service</option>
+                  </select>
+                </div>
+              </label>
+
+              <label className="sbs-field">
+                <span className="sbs-label">Client name</span>
+                {serviceType === "round_wise" ? (
+                  <input className="sbs-input" type="text" value={name} onChange={e => { setName(e.target.value); setPaymentProofId(''); }} placeholder="Type client name" disabled={busy || parsing} />
+                ) : (
+                  <SlotCandidatePicker candidates={candidates} value={name} onChange={v => { setName(v); setPaymentProofId('') }} disabled={busy || parsing} />
+                )}
                 {triedSubmit && !effectiveName
-                  ? <span className="sbs-hint sbs-hint--warn">Enter or pick your name to confirm.</span>
-                  : <span className="sbs-hint">Pick from the list or type a new client name.</span>}
+                  ? <span className="sbs-hint sbs-hint--warn">Enter client name to confirm.</span>
+                  : <span className="sbs-hint">{serviceType === "round_wise" ? "Type the client name for this round." : "Pick from the list or type a new client name."}</span>}
               </label>
 
               {selected?.needs_payment_proof && (
@@ -384,16 +398,6 @@ export function SubmitSlotPage() {
                   )}
                 </div>
               )}
-
-              <label className="sbs-field">
-                <span className="sbs-label">Service type</span>
-                <div className="sbs-select-wrap">
-                  <select className="sbs-select" value={serviceType} onChange={e => setServiceType(e.target.value)} disabled={busy || parsing}>
-                    <option value="round_wise">Round-wise</option>
-                    <option value="profile_service">Profile service</option>
-                  </select>
-                </div>
-              </label>
 
               <label className="sbs-field">
                 <span className="sbs-label">Interview round <span className="sbs-required" aria-hidden="true">*</span></span>
