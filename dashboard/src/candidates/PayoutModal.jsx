@@ -46,6 +46,9 @@ export default function PayoutModal({
   const proofInputRef = useRef(null);
   const [previewProof, setPreviewProof] = useState(null);
   const [page, setPage] = useState(0);
+  const [showCommBreakdown, setShowCommBreakdown] = useState(false);
+  const [commCandidates, setCommCandidates] = useState(null);
+  const [loadingComm, setLoadingComm] = useState(false);
 
   // ── Data fetching ──
   const fetchData = useCallback(async () => {
@@ -124,6 +127,25 @@ export default function PayoutModal({
       setFilterHandler(match); // normalize casing to match dropdown option
     }
   }, [allHandlers, filterHandler]);
+
+  // Fetch commission breakdown candidates when expanded
+  useEffect(() => {
+    if (!showCommBreakdown || filterHandler === "all") { setCommCandidates(null); return; }
+    let cancelled = false;
+    setLoadingComm(true);
+    const params = new URLSearchParams();
+    if (filterMonth !== "all") params.set("month", filterMonth);
+    params.set("reference", filterHandler);
+    fetch(`${ve}/candidates?${params.toString()}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(res => { if (!cancelled && res.status === "ok") setCommCandidates(res.candidates || []); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoadingComm(false); });
+    return () => { cancelled = true; };
+  }, [showCommBreakdown, filterHandler, filterMonth, ve]);
+
+  // Reset commission breakdown when handler changes
+  useEffect(() => { setShowCommBreakdown(false); setCommCandidates(null); }, [filterHandler]);
 
   const monthOptions = useMemo(() => [
     { value: "all", label: "All time" },
@@ -242,13 +264,30 @@ export default function PayoutModal({
           if (!perf) return null;
           const salary = Number(perf.salary_total) || 0;
           const priorBal = Number(perf.prior_balance) || 0;
-          // Commission = total owed - salary - prior balance
           const commission = Math.max(0, owed - salary - priorBal);
           return <div className="payout-modal__owed-explain">
-            <span className="payout-modal__owed-item">Commission (50%): <strong>{Jc(commission)}</strong></span>
+            <span className="payout-modal__owed-item payout-modal__owed-item--clickable" onClick={() => setShowCommBreakdown(v => !v)}>
+              {showCommBreakdown ? "▾" : "▸"} Commission (50%): <strong>{Jc(commission)}</strong>
+            </span>
             {salary > 0 && <span className="payout-modal__owed-item">+ Salary: <strong>{Jc(salary)}</strong></span>}
             {priorBal > 0 && <span className="payout-modal__owed-item">+ Carry-forward: <strong>{Jc(priorBal)}</strong></span>}
             <span className="payout-modal__owed-item payout-modal__owed-item--total">= Total owed: <strong>{Jc(owed)}</strong></span>
+            {showCommBreakdown && (
+              <div className="payout-modal__comm-breakdown">
+                {!commCandidates && !loadingComm && <span className="payout-modal__comm-loading">Loading…</span>}
+                {loadingComm && <span className="payout-modal__comm-loading">Loading…</span>}
+                {commCandidates && commCandidates.length === 0 && <span className="payout-modal__comm-loading">No payments yet.</span>}
+                {commCandidates && commCandidates.filter(c => Number(c.payment) > 0).map(c => {
+                  const received = Number(c.payment) || 0;
+                  const referral = Number(c.handler_commission) || Math.round(received * 0.5);
+                  return <div className="payout-modal__comm-row" key={c.id}>
+                    <span className="payout-modal__comm-name">{c.name}</span>
+                    <span className="payout-modal__comm-detail">₹{received.toLocaleString("en-IN")} received</span>
+                    <strong className="payout-modal__comm-amount">₹{referral.toLocaleString("en-IN")}</strong>
+                  </div>;
+                })}
+              </div>
+            )}
           </div>;
         })()}
 
