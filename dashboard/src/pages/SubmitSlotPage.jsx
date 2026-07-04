@@ -132,6 +132,7 @@ export function SubmitSlotPage() {
   const [manualTime, setManualTime] = useState('')
   const [interviewRound, setInterviewRound] = useState('')
   const [serviceType, setServiceType] = useState('round_wise')
+  const [showServiceDrop, setShowServiceDrop] = useState(false)
   const [triedSubmit, setTriedSubmit] = useState(false)
 
   const effectiveName = name.trim()
@@ -366,11 +367,17 @@ export function SubmitSlotPage() {
             <form className="sbs-form" onSubmit={submitBook}>
               <label className="sbs-field">
                 <span className="sbs-label">Service type</span>
-                <div className="sbs-select-wrap">
-                  <select className="sbs-select" value={serviceType} onChange={e => { setServiceType(e.target.value); setName(''); setPaymentProofId(''); }} disabled={busy || parsing}>
-                    <option value="round_wise">Round-wise</option>
-                    <option value="profile_service">Profile service</option>
-                  </select>
+                <div className="sbs-select-wrap sbs-select-wrap--custom">
+                  <button type="button" className="sbs-select sbs-select--custom" onClick={() => setShowServiceDrop(v => !v)} disabled={busy || parsing}>
+                    <span>{serviceType === "round_wise" ? "Round-wise" : "Profile service"}</span>
+                    <svg className="sbs-select__arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9l6 6 6-6"/></svg>
+                  </button>
+                  {showServiceDrop && (
+                    <ul className="sbs-dropdown">
+                      <li className={`sbs-dropdown__item${serviceType === "round_wise" ? " sbs-dropdown__item--active" : ""}`} onClick={() => { setServiceType("round_wise"); setShowServiceDrop(false); setName(""); setPaymentProofId(""); }}>Round-wise</li>
+                      <li className={`sbs-dropdown__item${serviceType === "profile_service" ? " sbs-dropdown__item--active" : ""}`} onClick={() => { setServiceType("profile_service"); setShowServiceDrop(false); setName(""); setPaymentProofId(""); }}>Profile service</li>
+                    </ul>
+                  )}
                 </div>
               </label>
 
