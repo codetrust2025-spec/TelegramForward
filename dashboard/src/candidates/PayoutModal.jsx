@@ -240,9 +240,10 @@ export default function PayoutModal({
           const lc = filterHandler.toLowerCase().trim();
           const perf = topPerformers.find(p => (p.name || "").toLowerCase().trim() === lc || (p.ref_key || "").toLowerCase().trim() === lc);
           if (!perf) return null;
-          const commission = Number(perf.commission_total) || 0;
           const salary = Number(perf.salary_total) || 0;
           const priorBal = Number(perf.prior_balance) || 0;
+          // Commission = total owed - salary - prior balance
+          const commission = Math.max(0, owed - salary - priorBal);
           return <div className="payout-modal__owed-explain">
             <span className="payout-modal__owed-item">Commission (50%): <strong>{Jc(commission)}</strong></span>
             {salary > 0 && <span className="payout-modal__owed-item">+ Salary: <strong>{Jc(salary)}</strong></span>}
