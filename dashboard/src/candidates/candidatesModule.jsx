@@ -1019,12 +1019,14 @@ function rR(e) {
 }
 function _Component29({
   handlerNames: e = [],
+  topPerformers: tp = [],
   ownedSummary: t,
   onClose: r,
   onChanged: n
 }) {
   return <PayoutModal
     handlerNames={e}
+    topPerformers={tp}
     ownedSummary={t}
     onClose={r}
     onChanged={n}
