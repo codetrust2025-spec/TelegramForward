@@ -4148,6 +4148,58 @@ async def handler_expense_delete_proof(eid: str, pid: str):
     return {"status": "ok"}
 
 
+# ── Company expenses (operational costs) ─────────────────────────────────────────
+
+@app.get("/company-expenses")
+async def company_expenses_list(
+    month: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+):
+    from features import company_expenses
+    rows = company_expenses.list_expenses(month=month, category=category)
+    months = company_expenses.available_months()
+    return {
+        "status": "ok",
+        "expenses": rows,
+        "available_months": months,
+        "categories": [
+            {"value": k, "label": v}
+            for k, v in company_expenses.CATEGORY_LABELS.items()
+        ],
+    }
+
+
+@app.post("/company-expenses", dependencies=[Depends(_require_fleet_admin)])
+async def company_expenses_create(body: dict):
+    from features import company_expenses
+    row = company_expenses.create_expense(body)
+    return {"status": "ok", "expense": row}
+
+
+@app.patch("/company-expenses/{eid}", dependencies=[Depends(_require_fleet_admin)])
+async def company_expenses_update(eid: str, body: dict):
+    from features import company_expenses
+    row = company_expenses.update_expense(eid, body)
+    if not row:
+        return {"status": "error", "message": "Not found"}
+    return {"status": "ok", "expense": row}
+
+
+@app.delete("/company-expenses/{eid}", dependencies=[Depends(_require_fleet_admin)])
+async def company_expenses_delete(eid: str):
+    from features import company_expenses
+    ok = company_expenses.delete_expense(eid)
+    return {"status": "ok" if ok else "not_found"}
+
+
+@app.get("/company-expenses/total")
+async def company_expenses_total(month: str | None = Query(default=None)):
+    """Combined view: handler payouts + company expenses = total expenditure."""
+    from features import company_expenses
+    result = company_expenses.total_expenditure(month=month)
+    return {"status": "ok", **result}
+
+
 # ── Handler base salaries (hybrid pay model) ────────────────────────────────────
 #
 # A handler can be on a fixed monthly base salary (this) PLUS their 50%
