@@ -131,6 +131,7 @@ export function SubmitSlotPage() {
   const [manualDate, setManualDate] = useState('')
   const [manualTime, setManualTime] = useState('')
   const [interviewRound, setInterviewRound] = useState('')
+  const [serviceType, setServiceType] = useState('round_wise')
   const [triedSubmit, setTriedSubmit] = useState(false)
 
   const effectiveName = name.trim()
@@ -225,6 +226,7 @@ export function SubmitSlotPage() {
     try {
       const fd = new FormData()
       fd.append('name', effectiveName)
+      fd.append('service_type', serviceType)
       if (bookingSlot?.date) fd.append('date', bookingSlot.date)
       if (bookingSlot?.time) fd.append('time', bookingSlot.time)
       if (bookingSlot?.time_end) fd.append('time_end', bookingSlot.time_end)
@@ -236,7 +238,7 @@ export function SubmitSlotPage() {
       const data = await res.json()
       if (!res.ok) { setError(data.payment_due ? (data.message || 'Payment required.') : (data.message || 'Could not book slot')); return }
       if (slotPreview) URL.revokeObjectURL(slotPreview)
-      setSlotFile(null); setSlotPreview(''); setParsedSlot(null); setManualDate(''); setManualTime(''); setInterviewRound(''); setPaymentProofId('')
+      setSlotFile(null); setSlotPreview(''); setParsedSlot(null); setManualDate(''); setManualTime(''); setInterviewRound(''); setServiceType('round_wise'); setPaymentProofId('')
       setName('')
       setTriedSubmit(false)
       setSuccess(`Slot confirmed for ${data.candidate?.name || effectiveName}.`)
@@ -382,6 +384,16 @@ export function SubmitSlotPage() {
                   )}
                 </div>
               )}
+
+              <label className="sbs-field">
+                <span className="sbs-label">Service type</span>
+                <div className="sbs-select-wrap">
+                  <select className="sbs-select" value={serviceType} onChange={e => setServiceType(e.target.value)} disabled={busy || parsing}>
+                    <option value="round_wise">Round-wise</option>
+                    <option value="profile_service">Profile service</option>
+                  </select>
+                </div>
+              </label>
 
               <label className="sbs-field">
                 <span className="sbs-label">Interview round <span className="sbs-required" aria-hidden="true">*</span></span>
