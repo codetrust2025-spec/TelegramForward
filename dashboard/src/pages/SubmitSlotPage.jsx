@@ -365,7 +365,7 @@ export function SubmitSlotPage() {
           /* ── Book slot tab — direct booking form only ─────── */
           <div className="sbs-body">
             <form className="sbs-form" onSubmit={submitBook}>
-              <label className="sbs-field">
+              <div className="sbs-field">
                 <span className="sbs-label">Service type</span>
                 <div className="sbs-select-wrap sbs-select-wrap--custom">
                   <button type="button" className="sbs-select sbs-select--custom" onClick={() => setShowServiceDrop(v => !v)} disabled={busy || parsing}>
@@ -374,12 +374,12 @@ export function SubmitSlotPage() {
                   </button>
                   {showServiceDrop && (
                     <ul className="sbs-dropdown">
-                      <li className={`sbs-dropdown__item${serviceType === "round_wise" ? " sbs-dropdown__item--active" : ""}`} onClick={() => { setServiceType("round_wise"); setShowServiceDrop(false); setName(""); setPaymentProofId(""); }}>Round-wise</li>
-                      <li className={`sbs-dropdown__item${serviceType === "profile_service" ? " sbs-dropdown__item--active" : ""}`} onClick={() => { setServiceType("profile_service"); setShowServiceDrop(false); setName(""); setPaymentProofId(""); }}>Profile service</li>
+                      <li className={`sbs-dropdown__item${serviceType === "round_wise" ? " sbs-dropdown__item--active" : ""}`} onMouseDown={e => e.preventDefault()} onClick={e => { e.stopPropagation(); setServiceType("round_wise"); setShowServiceDrop(false); setName(""); setPaymentProofId(""); }}>Round-wise</li>
+                      <li className={`sbs-dropdown__item${serviceType === "profile_service" ? " sbs-dropdown__item--active" : ""}`} onMouseDown={e => e.preventDefault()} onClick={e => { e.stopPropagation(); setServiceType("profile_service"); setShowServiceDrop(false); setName(""); setPaymentProofId(""); }}>Profile service</li>
                     </ul>
                   )}
                 </div>
-              </label>
+              </div>
 
               <label className="sbs-field">
                 <span className="sbs-label">Client name</span>
