@@ -3983,13 +3983,34 @@ async def handler_expenses_list(
     reference = handler_payout_reference_scope(request, reference)
     rows = handler_expenses.list_expenses(reference=reference, month=month)
     total = sum(int(r.get("amount") or 0) for r in rows)
+    # Merge months from handler expenses + candidates for complete dropdown
+    months_set = {m["value"] for m in handler_expenses.available_months()}
+    try:
+        from features import candidate_store
+        for m in candidate_store.available_months():
+            if isinstance(m, dict):
+                months_set.add(m["value"])
+            else:
+                months_set.add(m)
+    except Exception:
+        pass
+    month_names = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    all_months = []
+    for m in sorted(months_set, reverse=True):
+        try:
+            y, mo = m.split("-")
+            label = f"{month_names[int(mo) - 1]} {y}"
+        except (ValueError, IndexError):
+            label = m
+        all_months.append({"value": m, "label": label})
     return {
         "status": "ok",
         "expenses": rows,
         "count": len(rows),
         "total": total,
         "categories": handler_expenses.CATEGORY_LABELS,
-        "available_months": handler_expenses.available_months(),
+        "available_months": all_months,
     }
 
 
