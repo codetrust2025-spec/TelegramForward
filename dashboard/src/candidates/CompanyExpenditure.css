@@ -47,6 +47,9 @@
 .compexp-card--company { border-color: rgba(34,197,94,.3); }
 .compexp-card--revenue { border-color: rgba(56,189,248,.4); background: rgba(56,189,248,.08); }
 .compexp-card--profit { border-color: rgba(34,197,94,.4); background: rgba(34,197,94,.08); }
+.compexp-card--selected { outline: 2px solid rgba(99,102,241,.7); outline-offset: -2px; transform: scale(1.02); }
+.compexp-card { cursor: pointer; transition: transform .12s, outline .12s; text-align: left; }
+.compexp-card:hover { transform: scale(1.01); }
 .compexp-card-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim, #7b8a9e); }
 .compexp-card-value { font-size: 20px; font-weight: 800; color: var(--text, #eef2f7); font-variant-numeric: tabular-nums; }
 .compexp-card--grand .compexp-card-value { color: #a5b4fc; }
@@ -154,3 +157,22 @@
   .compexp-bar-row { grid-template-columns: 100px 1fr 70px; }
   .compexp-split-item { grid-template-columns: 90px 1fr 120px; }
 }
+
+/* Content area */
+.compexp-content { flex: 1; overflow-y: auto; padding: 0 20px 14px; }
+
+/* Breakdown section */
+.compexp-breakdown-section { display: flex; flex-direction: column; gap: 12px; }
+.compexp-section-title { margin: 0; font-size: 14px; font-weight: 700; color: var(--text, #eef2f7); padding-top: 8px; }
+
+/* List rows */
+.compexp-list { display: flex; flex-direction: column; border-radius: 8px; border: 1px solid rgba(255,255,255,.06); overflow: hidden; }
+.compexp-list-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,.04); }
+.compexp-list-row:last-child { border-bottom: none; }
+.compexp-list-row--total { background: rgba(99,102,241,.06); border-top: 2px solid rgba(99,102,241,.2); }
+.compexp-list-name { font-size: 13px; color: var(--text, #eef2f7); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.compexp-list-meta { font-size: 11px; color: var(--text-dim, #7b8a9e); white-space: nowrap; }
+.compexp-list-amount { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.compexp-list-amount--revenue { color: #38bdf8; }
+.compexp-list-amount--expense { color: #fca5a5; }
+.compexp-list-amount--profit { color: #86efac; }
