@@ -89,9 +89,20 @@ export default function PayoutModal({
   const owed = useMemo(() => {
     // When a specific handler is selected, show THEIR owed amount
     if (filterHandler !== "all") {
-      const lc = filterHandler.toLowerCase();
-      const perf = topPerformers.find(p => (p.name || "").toLowerCase() === lc);
-      if (perf) return Number(perf.auto_earnings_total) || 0;
+      const lc = filterHandler.toLowerCase().trim();
+      const perf = topPerformers.find(p => 
+        (p.name || "").toLowerCase().trim() === lc ||
+        (p.ref_key || "").toLowerCase().trim() === lc
+      );
+      if (perf) {
+        // auto_earnings_total = total owed (commission + salary)
+        const val = Number(perf.auto_earnings_total) || 0;
+        if (val > 0) return val;
+        // Fallback: reconstruct from net_payable + paid_out_total
+        const net = Number(perf.net_payable) || 0;
+        const paid = Number(perf.paid_out_total) || 0;
+        return net + paid;
+      }
     }
     return Number(ownedSummary?.owed) || 0;
   }, [ownedSummary, filterHandler, topPerformers]);
