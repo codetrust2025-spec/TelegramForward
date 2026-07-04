@@ -262,19 +262,14 @@ export default function PayoutModal({
           if (!perf) return null;
           const salary = Number(perf.salary_total) || 0;
           const priorBal = Number(perf.prior_balance) || 0;
-          // Use actual candidate commission total if loaded, otherwise derive
+          // Use actual candidate commission total if loaded
           const candidateCommTotal = commCandidates ? commCandidates.filter(c => Number(c.payment) > 0).reduce((s, c) => s + (Number(c.handler_commission) || 0), 0) : null;
           const displayCommission = candidateCommTotal !== null ? candidateCommTotal : Math.max(0, owed - salary - priorBal);
-          // Remaining = what's not explained by commission + salary + prior_balance
-          const explained = displayCommission + salary + priorBal;
-          const adjustments = owed - explained;
           return <div className="payout-modal__owed-explain">
             <span className="payout-modal__owed-item payout-modal__owed-item--clickable" onClick={() => setShowCommBreakdown(v => !v)}>
               {showCommBreakdown ? "▾" : "▸"} Commission (50%): <strong>{Jc(displayCommission)}</strong>
             </span>
             {salary > 0 && <span className="payout-modal__owed-item">+ Salary: <strong>{Jc(salary)}</strong></span>}
-            {priorBal > 0 && <span className="payout-modal__owed-item">+ Prior balance: <strong>{Jc(priorBal)}</strong></span>}
-            {adjustments > 0 && <span className="payout-modal__owed-item">+ Salary (prior months): <strong>{Jc(adjustments)}</strong></span>}
             <span className="payout-modal__owed-item payout-modal__owed-item--total">= Total owed: <strong>{Jc(owed)}</strong></span>
             {showCommBreakdown && (
               <div className="payout-modal__comm-breakdown">
