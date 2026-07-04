@@ -89,23 +89,39 @@ export default function PayoutModal({
     return list;
   }, [entries, filterHandler]);
 
+  // Fetch handler-specific stats when handler or period changes
+  const [handlerStats, setHandlerStats] = useState(null);
+  useEffect(() => {
+    if (filterHandler === "all") { setHandlerStats(null); return; }
+    let cancelled = false;
+    const params = new URLSearchParams();
+    if (filterMonth !== "all") params.set("month", filterMonth);
+    params.set("reference", filterHandler);
+    fetch(`${ve}/candidates/stats?${params.toString()}`, { credentials: "include" })
+      .then(r => r.json())
+      .then(res => {
+        if (cancelled) return;
+        const stats = res.stats || res;
+        const perfs = stats.top_performers || [];
+        const lc = filterHandler.toLowerCase().trim();
+        const perf = perfs.find(p => (p.name || "").toLowerCase().trim() === lc || (p.ref_key || "").toLowerCase().trim() === lc);
+        setHandlerStats(perf || null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [filterHandler, filterMonth, ve]);
+
   const owed = useMemo(() => {
     // April & May 2026 are fully settled — no balance
     if (filterMonth === "2026-04" || filterMonth === "2026-05") return 0;
-    // When a specific handler is selected, compute owed = table_paid + net_payable
-    if (filterHandler !== "all") {
-      const lc = filterHandler.toLowerCase().trim();
-      const perf = topPerformers.find(p => 
-        (p.name || "").toLowerCase().trim() === lc ||
-        (p.ref_key || "").toLowerCase().trim() === lc
-      );
-      if (perf) {
-        const netPayable = Number(perf.net_payable) || 0;
-        return netPayable + filtered.reduce((s, r) => s + (Number(r.amount) || 0), 0);
-      }
+    // Use handler-specific stats fetched for this period
+    if (filterHandler !== "all" && handlerStats) {
+      const net = Number(handlerStats.net_payable) || 0;
+      return net + filtered.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     }
+    // Fallback to parent's ownedSummary for "All handlers"
     return Number(ownedSummary?.owed) || 0;
-  }, [ownedSummary, filterHandler, filterMonth, topPerformers, filtered]);
+  }, [ownedSummary, filterHandler, filterMonth, handlerStats, filtered]);
   const paidOut = useMemo(() => filtered.reduce((s, r) => s + (Number(r.amount) || 0), 0), [filtered]);
   const balance = owed - paidOut;
 
@@ -256,15 +272,13 @@ export default function PayoutModal({
         </header>
 
         {/* Owed explanation when handler selected */}
-        {filterHandler !== "all" && (() => {
-          const lc = filterHandler.toLowerCase().trim();
-          const perf = topPerformers.find(p => (p.name || "").toLowerCase().trim() === lc || (p.ref_key || "").toLowerCase().trim() === lc);
-          if (!perf) return null;
+        {filterHandler !== "all" && handlerStats && (() => {
+          const perf = handlerStats;
           const salary = Number(perf.salary_total) || 0;
-          const priorBal = Number(perf.prior_balance) || 0;
-          // Use actual candidate commission total if loaded
+          const commFromBackend = Number(perf.commission_total) || 0;
+          // Use actual candidate commission total if loaded, else backend value
           const candidateCommTotal = commCandidates ? commCandidates.filter(c => Number(c.payment) > 0).reduce((s, c) => s + (Number(c.handler_commission) || 0), 0) : null;
-          const displayCommission = candidateCommTotal !== null ? candidateCommTotal : Math.max(0, owed - salary - priorBal);
+          const displayCommission = candidateCommTotal !== null ? candidateCommTotal : commFromBackend;
           return <div className="payout-modal__owed-explain">
             <span className="payout-modal__owed-item payout-modal__owed-item--clickable" onClick={() => setShowCommBreakdown(v => !v)}>
               {showCommBreakdown ? "▾" : "▸"} Commission (50%): <strong>{Jc(displayCommission)}</strong>
