@@ -163,6 +163,7 @@ export default function EarningsBreakdown({
               const owed = Number(p.auto_earnings_total) || 0;
               const paid = Number(p.paid_out_total) || 0;
               const net = Number(p.net_payable) || 0;
+              const priorBalance = Number(p.prior_balance) || 0;
               const status = getStatus(net);
               const isExpanded = expanded === p.name;
 
@@ -182,6 +183,11 @@ export default function EarningsBreakdown({
                     <td className="earn-td--money earn-red">{paid > 0 ? fmt(paid) : "₹0"}</td>
                     <td className={`earn-td--money ${net > 0 ? "earn-green" : net < 0 ? "earn-red" : "earn-settled"}`}>
                       <strong>{net > 0 ? "+" : ""}{fmt(net)}</strong>
+                      {priorBalance !== 0 && month && month !== "all" && (
+                        <span className="earn-carry-fwd" title={`Carry-forward from prior months: ${fmt(priorBalance)}`}>
+                          {priorBalance > 0 ? "↑" : "↓"}{fmt(Math.abs(priorBalance))} c/f
+                        </span>
+                      )}
                     </td>
                     <td className="earn-td--status">
                       <span className={`earn-status ${status.cls}`}>{status.label}</span>
