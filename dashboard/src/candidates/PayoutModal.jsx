@@ -95,10 +95,8 @@ export default function PayoutModal({
         (p.ref_key || "").toLowerCase().trim() === lc
       );
       if (perf) {
-        // auto_earnings_total = total owed (commission + salary)
-        const val = Number(perf.auto_earnings_total) || 0;
-        if (val > 0) return val;
-        // Fallback: reconstruct from net_payable + paid_out_total
+        // Reconstruct total owed from net_payable + paid_out_total
+        // This is always correct regardless of carry-forward adjustments
         const net = Number(perf.net_payable) || 0;
         const paid = Number(perf.paid_out_total) || 0;
         return net + paid;
