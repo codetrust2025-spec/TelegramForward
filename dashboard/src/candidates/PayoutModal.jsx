@@ -87,7 +87,8 @@ export default function PayoutModal({
   }, [entries, filterHandler]);
 
   const owed = useMemo(() => {
-    // When a specific handler is selected, show THEIR owed amount
+    // When a specific handler is selected, compute owed = table_paid + net_payable
+    // This ensures it always matches the Earnings breakdown view
     if (filterHandler !== "all") {
       const lc = filterHandler.toLowerCase().trim();
       const perf = topPerformers.find(p => 
@@ -95,15 +96,15 @@ export default function PayoutModal({
         (p.ref_key || "").toLowerCase().trim() === lc
       );
       if (perf) {
-        // Reconstruct total owed from net_payable + paid_out_total
-        // This is always correct regardless of carry-forward adjustments
-        const net = Number(perf.net_payable) || 0;
-        const paid = Number(perf.paid_out_total) || 0;
-        return net + paid;
+        // net_payable from Earnings = balance still owed
+        // Add the actual paid out from this modal's filtered table entries
+        const netPayable = Number(perf.net_payable) || 0;
+        // paidOut is already computed from filtered entries below
+        return netPayable + filtered.reduce((s, r) => s + (Number(r.amount) || 0), 0);
       }
     }
     return Number(ownedSummary?.owed) || 0;
-  }, [ownedSummary, filterHandler, topPerformers]);
+  }, [ownedSummary, filterHandler, topPerformers, filtered]);
   const paidOut = useMemo(() => filtered.reduce((s, r) => s + (Number(r.amount) || 0), 0), [filtered]);
   const balance = owed - paidOut;
 
