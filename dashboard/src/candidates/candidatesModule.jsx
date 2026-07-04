@@ -1631,7 +1631,7 @@ function CandidatesPanelImpl() {
       message: "Enter the admin password to open the full earnings and payout board."
     });
   };
-  const me = ge => re(() => j(ge), {
+  const me = ge => re(() => G(true), {
     title: "Edit handler payout",
     message: "Enter the admin password to log or edit payouts for this handler."
   });
