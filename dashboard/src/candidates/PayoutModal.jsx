@@ -235,6 +235,22 @@ export default function PayoutModal({
           <button type="button" className="cand-modal-close" onClick={onClose} aria-label="Close">×</button>
         </header>
 
+        {/* Owed explanation when handler selected */}
+        {filterHandler !== "all" && (() => {
+          const lc = filterHandler.toLowerCase().trim();
+          const perf = topPerformers.find(p => (p.name || "").toLowerCase().trim() === lc || (p.ref_key || "").toLowerCase().trim() === lc);
+          if (!perf) return null;
+          const commission = Number(perf.commission_total) || 0;
+          const salary = Number(perf.salary_total) || 0;
+          const priorBal = Number(perf.prior_balance) || 0;
+          return <div className="payout-modal__owed-explain">
+            <span className="payout-modal__owed-item">Commission (50%): <strong>{Jc(commission)}</strong></span>
+            {salary > 0 && <span className="payout-modal__owed-item">+ Salary: <strong>{Jc(salary)}</strong></span>}
+            {priorBal > 0 && <span className="payout-modal__owed-item">+ Carry-forward: <strong>{Jc(priorBal)}</strong></span>}
+            <span className="payout-modal__owed-item payout-modal__owed-item--total">= Total owed: <strong>{Jc(owed)}</strong></span>
+          </div>;
+        })()}
+
         {/* ─── FORM SECTION ─── */}
         <form className="payout-modal__form-section" onSubmit={handleSubmit}>
           {/* Row 1: Handler | Period | Date | Amount */}

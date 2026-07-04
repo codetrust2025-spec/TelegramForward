@@ -247,3 +247,31 @@
     min-width: 700px;
   }
 }
+
+/* Owed explanation bar */
+.payout-modal__owed-explain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: rgba(99,102,241,.06);
+  border-bottom: 1px solid rgba(99,102,241,.12);
+  font-size: 12px;
+  color: var(--text-muted, #a8b4c4);
+}
+.payout-modal__owed-item {
+  white-space: nowrap;
+}
+.payout-modal__owed-item strong {
+  color: var(--text, #eef2f7);
+  font-weight: 700;
+}
+.payout-modal__owed-item--total {
+  color: #4ade80;
+  font-weight: 600;
+  margin-left: auto;
+}
+.payout-modal__owed-item--total strong {
+  color: #4ade80;
+}
