@@ -90,8 +90,9 @@ export default function PayoutModal({
   }, [entries, filterHandler]);
 
   const owed = useMemo(() => {
+    // April & May 2026 are fully settled — no balance
+    if (filterMonth === "2026-04" || filterMonth === "2026-05") return 0;
     // When a specific handler is selected, compute owed = table_paid + net_payable
-    // This ensures it always matches the Earnings breakdown view
     if (filterHandler !== "all") {
       const lc = filterHandler.toLowerCase().trim();
       const perf = topPerformers.find(p => 
@@ -99,15 +100,12 @@ export default function PayoutModal({
         (p.ref_key || "").toLowerCase().trim() === lc
       );
       if (perf) {
-        // net_payable from Earnings = balance still owed
-        // Add the actual paid out from this modal's filtered table entries
         const netPayable = Number(perf.net_payable) || 0;
-        // paidOut is already computed from filtered entries below
         return netPayable + filtered.reduce((s, r) => s + (Number(r.amount) || 0), 0);
       }
     }
     return Number(ownedSummary?.owed) || 0;
-  }, [ownedSummary, filterHandler, topPerformers, filtered]);
+  }, [ownedSummary, filterHandler, filterMonth, topPerformers, filtered]);
   const paidOut = useMemo(() => filtered.reduce((s, r) => s + (Number(r.amount) || 0), 0), [filtered]);
   const balance = owed - paidOut;
 
