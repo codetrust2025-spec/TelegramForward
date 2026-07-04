@@ -32,7 +32,6 @@ export default function PayoutModal({
   const [error, setError] = useState("");
   const [filterHandler, setFilterHandler] = useState("all");
   const [filterMonth, setFilterMonth] = useState("all");
-  const [filterCat, setFilterCat] = useState("all");
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(() => ({
     reference: handlerNames[0] || "",
@@ -83,9 +82,8 @@ export default function PayoutModal({
       const lc = filterHandler.toLowerCase();
       list = list.filter(r => (r.reference || "").toLowerCase() === lc);
     }
-    if (filterCat !== "all") list = list.filter(r => r.category === filterCat);
     return list;
-  }, [entries, filterHandler, filterCat]);
+  }, [entries, filterHandler]);
 
   const owed = useMemo(() => {
     return Number(ownedSummary?.owed) || 0;
@@ -119,7 +117,7 @@ export default function PayoutModal({
   const totalPages = Math.max(1, Math.ceil(filtered.length / ROWS_PER_PAGE));
   const pagedRows = filtered.slice(page * ROWS_PER_PAGE, (page + 1) * ROWS_PER_PAGE);
   // Reset page when filters change
-  useEffect(() => { setPage(0); }, [filterHandler, filterMonth, filterCat]);
+  useEffect(() => { setPage(0); }, [filterHandler, filterMonth]);
 
   // ── Form helpers ──
   function resetForm() {
@@ -192,8 +190,7 @@ export default function PayoutModal({
   }
 
   async function handleDelete(row) {
-    const catLabel = Ex[row.category] || row.category || "payout";
-    if (!window.confirm(`Delete this ₹${row.amount.toLocaleString("en-IN")} ${catLabel} for ${row.reference}?`)) return;
+    if (!window.confirm(`Delete this ₹${row.amount.toLocaleString("en-IN")} payout for ${row.reference}?`)) return;
     try {
       const res = await (await fetch(`${ve}/handler-expenses/${row.id}`, { method: "DELETE" })).json();
       if (res.status === "ok") { fetchData(); onChanged?.(); }
@@ -201,8 +198,8 @@ export default function PayoutModal({
     } catch (err) { setError(err.message || "Network error"); }
   }
 
-  function clearFilters() { setFilterHandler("all"); setFilterMonth("all"); setFilterCat("all"); }
-  const filtersActive = filterHandler !== "all" || filterMonth !== "all" || filterCat !== "all";
+  function clearFilters() { setFilterHandler("all"); setFilterMonth("all"); }
+  const filtersActive = filterHandler !== "all" || filterMonth !== "all";
 
   // ── Render ──
   return <Fragment>
@@ -221,9 +218,9 @@ export default function PayoutModal({
           <button type="button" className="cand-modal-close" onClick={onClose} aria-label="Close">×</button>
         </header>
 
-        {/* ─── FORM SECTION: unified grid ─── */}
+        {/* ─── FORM SECTION ─── */}
         <form className="payout-modal__form-section" onSubmit={handleSubmit}>
-          {/* Row 1: Handler | Amount | Payout Category | Date */}
+          {/* Row 1: Handler | Period | Date | Amount */}
           <div className="payout-modal__row1">
             <label className="payout-modal__field">
               <span className="cand-field-label">Handler *</span>
@@ -233,32 +230,28 @@ export default function PayoutModal({
               </select>
             </label>
             <label className="payout-modal__field">
-              <span className="cand-field-label">Amount (₹) * <span className="cand-exp-kind-tag cand-exp-kind-tag--payout">subtracted from what's owed</span></span>
-              <input className="cand-input payout-modal__input" type="number" min="0" step="100" value={form.amount} onChange={ev => setForm(f => ({ ...f, amount: ev.target.value }))} placeholder="5000" required />
-            </label>
-            <label className="payout-modal__field">
-              <span className="cand-field-label">Payout category</span>
-              <select className="cand-input payout-modal__input" value={form.category} onChange={ev => setForm(f => ({ ...f, category: ev.target.value }))}>{B0.map(c => <option value={c.value} key={c.value}>{c.label}</option>)}</select>
+              <span className="cand-field-label">Period</span>
+              <select className="cand-input payout-modal__input" value={filterMonth} onChange={ev => setFilterMonth(ev.target.value)}>{monthOptions.map(m => <option value={m.value} key={m.value}>{m.label}</option>)}</select>
             </label>
             <label className="payout-modal__field">
               <span className="cand-field-label">Date</span>
               <input className="cand-input payout-modal__input" type="date" value={form.date} onChange={ev => setForm(f => ({ ...f, date: ev.target.value }))} />
             </label>
+            <label className="payout-modal__field">
+              <span className="cand-field-label">Amount (₹) * <span className="cand-exp-kind-tag cand-exp-kind-tag--payout">subtracted from what's owed</span></span>
+              <input className="cand-input payout-modal__input" type="number" min="0" step="100" value={form.amount} onChange={ev => setForm(f => ({ ...f, amount: ev.target.value }))} placeholder="5000" required />
+            </label>
           </div>
 
-          {/* Row 2: Note (3 cols) | Period filter (1 col) */}
+          {/* Row 2: Note (full width) */}
           <div className="payout-modal__row2">
-            <label className="payout-modal__field payout-modal__row2-note">
+            <label className="payout-modal__field payout-modal__row2-note" style={{ flex: 1 }}>
               <span className="cand-field-label">Note</span>
-              <input className="cand-input payout-modal__input" value={form.note} onChange={ev => setForm(f => ({ ...f, note: ev.target.value }))} placeholder="e.g. May commission · taxi to client meeting" />
-            </label>
-            <label className="payout-modal__field payout-modal__row2-period">
-              <span className="cand-field-label">Period</span>
-              <select className="cand-input payout-modal__input" value={filterMonth} onChange={ev => setFilterMonth(ev.target.value)}>{monthOptions.map(m => <option value={m.value} key={m.value}>{m.label}</option>)}</select>
+              <input className="cand-input payout-modal__input" value={form.note} onChange={ev => setForm(f => ({ ...f, note: ev.target.value }))} placeholder="e.g. June commission · shiva interview charge collected by handler" />
             </label>
           </div>
 
-          {/* Row 3: Attach + buttons left | filter category right */}
+          {/* Row 3: Attach + buttons */}
           <div className="payout-modal__row3">
             <div className={`cand-payout-attach${proofFile ? " cand-payout-attach--done" : ""}`} onClick={() => proofInputRef.current?.click()} role="button" tabIndex={0} title={proofFile ? proofFile.name : editId ? "Attach new screenshot (optional)" : "Attach payment screenshot (required)"}>
               <input ref={proofInputRef} type="file" accept="image/*" onChange={ev => { const file = ev.target.files?.[0]; if (file) { if (!/^image\//.test(file.type || "")) { setError("Only image files allowed"); return; } if (file.size > 8 * 1024 * 1024) { setError("File too large (max 8 MB)"); return; } setProofFile(file); setError(""); } }} hidden />
@@ -267,14 +260,6 @@ export default function PayoutModal({
             </div>
             {editId && <button type="button" className="cand-btn cand-btn--ghost" onClick={resetForm}>Cancel edit</button>}
             <button type="submit" className="cand-btn cand-btn--primary" disabled={saving || (!editId && !proofFile)}>{saving ? "Saving…" : editId ? "Save changes" : "+ Log payout"}</button>
-            <span className="payout-modal__row3-spacer" />
-            <label className="payout-modal__field" style={{ minWidth: 150 }}>
-              <span className="cand-field-label">Filter category</span>
-              <select className="cand-input payout-modal__input" value={filterCat} onChange={ev => setFilterCat(ev.target.value)}>
-                <option value="all">All categories</option>
-                {B0.map(c => <option value={c.value} key={c.value}>{c.label}</option>)}
-              </select>
-            </label>
           </div>
 
           {error && <div className="cand-modal-error payout-modal__error">{error}</div>}
@@ -289,7 +274,6 @@ export default function PayoutModal({
               <thead><tr>
                 <th className="payout-col--handler">Handler</th>
                 <th className="payout-col--amount">Amount</th>
-                <th className="payout-col--cat">Category</th>
                 <th className="payout-col--date">Date</th>
                 <th className="payout-col--note">Note</th>
                 <th className="payout-col--proof">Proof</th>
@@ -300,7 +284,6 @@ export default function PayoutModal({
                   <tr className={`payout-modal__row${editId === row.id ? " payout-modal__row--editing" : ""}`} key={row.id}>
                     <td className="payout-col--handler">{row.reference}</td>
                     <td className="payout-col--amount">−{Jc(row.amount)}</td>
-                    <td className="payout-col--cat"><span className={`cand-exp-cat cand-exp-cat--${row.category}`}>{Ex[row.category] || row.category}</span></td>
                     <td className="payout-col--date">{rR(row.date)}</td>
                     <td className="payout-col--note">{row.note || <em>—</em>}</td>
                     <td className="payout-col--proof">
