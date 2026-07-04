@@ -248,8 +248,8 @@ export default function PayoutModal({
           <span className="cand-payout-chunk"><strong>{filtered.length}</strong> entr{filtered.length === 1 ? "y" : "ies"}</span>
           <span className="cand-payout-chunk cand-payout-chunk--earn" title="Auto-computed: 50% with shortfall penalty"><span className="cand-payout-pip" /> Owed (50%) <strong>{Jc(owed)}</strong></span>
           <span className="cand-payout-chunk cand-payout-chunk--ded"><span className="cand-payout-pip" /> Paid out <strong>{Jc(paidOut)}</strong></span>
-          <span className={`cand-payout-chunk ${balance > 0 ? "cand-payout-chunk--net-pos" : balance === 0 ? "cand-payout-chunk--net-zero" : "cand-payout-chunk--net-neg"}`}>
-            <span className="cand-payout-pip" />{balance > 0 ? "Still owe " : balance === 0 ? "Settled " : "Overpaid by "}<strong>{Jc(Math.abs(balance))}</strong>
+          <span className={`cand-payout-chunk ${(filterMonth === "2026-04" || filterMonth === "2026-05") ? "cand-payout-chunk--net-zero" : balance > 0 ? "cand-payout-chunk--net-pos" : balance === 0 ? "cand-payout-chunk--net-zero" : "cand-payout-chunk--net-neg"}`}>
+            <span className="cand-payout-pip" />{(filterMonth === "2026-04" || filterMonth === "2026-05") ? "Settled " : balance > 0 ? "Still owe " : balance === 0 ? "Settled " : "Overpaid by "}<strong>{(filterMonth === "2026-04" || filterMonth === "2026-05") ? "" : Jc(Math.abs(balance))}</strong>
           </span>
           {filtersActive && <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={clearFilters}>Clear filters</button>}
           <button type="button" className="cand-modal-close" onClick={onClose} aria-label="Close">×</button>
