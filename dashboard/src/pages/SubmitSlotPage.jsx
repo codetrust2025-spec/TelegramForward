@@ -453,7 +453,7 @@ export function SubmitSlotPage() {
               {error && <p className="sbs-alert sbs-alert--error" role="alert">{error}</p>}
               {success && <div className="sbs-alert sbs-alert--success sbs-success-anim"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{flexShrink:0}}><path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg><span>{success}</span></div>}
 
-              <button type="submit" className="sbs-cta sbs-cta--ready" disabled={busy || !name || !slotFile}>
+              <button type="submit" className="sbs-cta sbs-cta--ready" disabled={busy}>
                 {busy ? <Spinner size={18} /> : 'Confirm booking'}
               </button>
             </form>
