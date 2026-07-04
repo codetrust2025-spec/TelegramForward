@@ -53,8 +53,8 @@ export default function CompanyExpenditure({ onClose, apiBase = "" }) {
       const params = new URLSearchParams();
       if (filterMonth !== "all") params.set("month", filterMonth);
       const [expRes, totalRes] = await Promise.all([
-        fetch(`${apiBase}/company-expenses?${params.toString()}`).then(r => r.json()),
-        fetch(`${apiBase}/company-expenses/total?${params.toString()}`).then(r => r.json()),
+        fetch(`${apiBase}/company-expenses?${params.toString()}`, { credentials: "include" }).then(r => r.json()),
+        fetch(`${apiBase}/company-expenses/total?${params.toString()}`, { credentials: "include" }).then(r => r.json()),
       ]);
       if (expRes.status === "ok") {
         setExpenses(expRes.expenses || []);
@@ -117,9 +117,9 @@ export default function CompanyExpenditure({ onClose, apiBase = "" }) {
       const payload = { title: form.title.trim(), amount: amt, category: form.category, note: form.note.trim(), date: form.date, recurring: form.recurring };
       let res;
       if (editId) {
-        res = await (await fetch(`${apiBase}/company-expenses/${editId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })).json();
+        res = await (await fetch(`${apiBase}/company-expenses/${editId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), credentials: "include" })).json();
       } else {
-        res = await (await fetch(`${apiBase}/company-expenses`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })).json();
+        res = await (await fetch(`${apiBase}/company-expenses`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), credentials: "include" })).json();
       }
       if (res.status !== "ok") { setError(res.message || "Save failed"); return; }
       resetForm();
@@ -131,7 +131,7 @@ export default function CompanyExpenditure({ onClose, apiBase = "" }) {
   async function handleDelete(row) {
     if (!window.confirm(`Delete "${row.title}" (${fmt(row.amount)})?`)) return;
     try {
-      const res = await (await fetch(`${apiBase}/company-expenses/${row.id}`, { method: "DELETE" })).json();
+      const res = await (await fetch(`${apiBase}/company-expenses/${row.id}`, { method: "DELETE", credentials: "include" })).json();
       if (res.status === "ok") fetchExpenses();
       else setError(res.message || "Delete failed");
     } catch (e) { setError(e.message || "Network error"); }
