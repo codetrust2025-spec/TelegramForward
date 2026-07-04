@@ -4170,6 +4170,26 @@ def stats(
             scope_key=scope_key,
             service_type_filter=_service_type_param if _service_type_param and _service_type_param != "all" else None,
         )
+        # Make sure every handler with a non-zero carry-forward balance
+        # has a perf bucket, even those with no candidates this month.
+        for key, cf_data in carry_fwd.items():
+            prior_bal = int(cf_data.get("prior_balance") or 0)
+            if prior_bal == 0:
+                continue
+            if _payout_excluded_handler(key):
+                continue
+            ref_key = key  # already lowercased
+            if ref_key not in perf:
+                perf[ref_key] = {
+                    "ref_key": ref_key,
+                    "name": _canonical_reference_name(key) or key.title(),
+                    "count": 0, "completed": 0, "in_progress": 0,
+                    "fail": 0, "dropped": 0, "revenue_total": 0, "revenue_completed": 0,
+                    "pending_total": 0, "pending_count": 0,
+                    "auto_earnings_total": 0, "auto_earnings_completed": 0,
+                    "company_revenue_total": 0, "company_revenue_completed": 0,
+                    "consultancy_count": 0,
+                }
 
     for p in perf.values():
         p["conversion_pct"] = (
@@ -4184,41 +4204,29 @@ def stats(
         owed       = commission + salary
         paid_out   = int(exp_bucket.get("total") or 0)
 
-        # ── Carry-forward: add prior months' unpaid balance ──
+        # ── Carry-forward: only the NET BALANCE from prior months ──
         cf = carry_fwd.get(key, {})
-        prior_commission = int(cf.get("prior_commission") or 0)
-        prior_salary     = int(cf.get("prior_salary") or 0)
-        prior_paid       = int(cf.get("prior_paid") or 0)
+        prior_balance = int(cf.get("prior_balance") or 0)
 
-        # Cumulative totals (this month + all prior months)
-        cumulative_commission = commission + prior_commission
-        cumulative_salary     = salary + prior_salary
-        cumulative_owed       = cumulative_commission + cumulative_salary
-        cumulative_paid       = paid_out + prior_paid
-
-        # Salary-side fields (NEW). Older clients ignore these.
-        p["commission_total"]  = cumulative_commission
-        p["salary_total"]      = cumulative_salary
+        # Salary-side fields — show THIS month's values only.
+        p["commission_total"]  = commission
+        p["salary_total"]      = salary
         p["salary_monthly"]    = int(salary_bucket.get("monthly_salary") or 0)
         p["salary_active"]     = bool(salary_bucket.get("monthly_salary"))
 
-        # Owed = commission + salary. Overwrite auto_earnings_total so
-        # every existing UI bit (chips, "Pay X ₹Y" list, AllExpenses
-        # modal header) automatically picks up the higher number.
-        p["auto_earnings_total"] = cumulative_owed
+        # Owed = commission + salary (THIS month only).
+        p["auto_earnings_total"] = owed
 
-        # New canonical fields used by the UI going forward.
-        p["paid_out_total"]    = cumulative_paid
+        # Paid out = THIS month's payouts only.
+        p["paid_out_total"]    = paid_out
         p["paid_out_count"]    = int(exp_bucket.get("count") or 0)
-        p["net_payable"]       = cumulative_owed - cumulative_paid
+
+        # Balance = this month's (owed - paid) + carry-forward from prior months.
+        p["net_payable"]       = (owed - paid_out) + prior_balance
         p["commission_pct"]    = HANDLER_COMMISSION_PCT
 
-        # Carry-forward detail fields (UI can show breakdown)
-        p["prior_balance"]     = int(cf.get("prior_balance") or 0)
-        p["current_month_commission"] = commission
-        p["current_month_salary"]     = salary
-        p["current_month_owed"]       = owed
-        p["current_month_paid"]       = paid_out
+        # Carry-forward detail field so UI can show the breakdown.
+        p["prior_balance"]     = prior_balance
 
         # ── April & May 2026: treat as fully settled for all handlers ──
         if month in ("2026-04", "2026-05"):
@@ -4227,12 +4235,12 @@ def stats(
 
         # Backwards-compat aliases so older client bundles keep rendering
         # something sensible until the next refresh:
-        p["earnings_total"]    = cumulative_owed         # was: commission rows
-        p["deductions_total"]  = cumulative_paid     # was: non-commission rows
-        p["net_earning"]       = cumulative_owed - cumulative_paid
-        p["expenses_total"]    = cumulative_paid
+        p["earnings_total"]    = owed
+        p["deductions_total"]  = paid_out
+        p["net_earning"]       = (owed - paid_out) + prior_balance
+        p["expenses_total"]    = paid_out
         p["expenses_count"]    = int(exp_bucket.get("count") or 0)
-        p["net_completed"]     = int(p.get("revenue_completed") or 0) - cumulative_paid
+        p["net_completed"]     = int(p.get("revenue_completed") or 0) - paid_out
 
         if _payout_excluded_handler(key) or _payout_excluded_handler(p.get("name") or ""):
             p["payout_excluded"] = True
@@ -4252,11 +4260,13 @@ def stats(
             p["expenses_count"] = 0
             continue
 
-        total_handler_commission += cumulative_commission
-        total_handler_salary     += cumulative_salary
-        total_handler_paid_out   += cumulative_paid
+        total_handler_commission += commission
+        total_handler_salary     += salary
+        total_handler_paid_out   += paid_out
 
     total_handler_auto_earnings = total_handler_commission + total_handler_salary
+    # Sum of all handlers' prior balances for the global net payout
+    total_prior_balance = sum(int(p.get("prior_balance") or 0) for p in perf.values() if not p.get("payout_excluded"))
 
     # ── April & May 2026: force global handler payout to settled ──
     if month in ("2026-04", "2026-05"):
@@ -4304,7 +4314,7 @@ def stats(
         "handler_commission_total":     total_handler_commission,
         "handler_salary_total":         total_handler_salary,
         "handler_paid_out_total":       total_handler_paid_out,
-        "net_handler_payout":           total_handler_auto_earnings - total_handler_paid_out,
+        "net_handler_payout":           (total_handler_auto_earnings - total_handler_paid_out) + total_prior_balance,
         # Backwards-compat fields (older client builds expect these names).
         "handler_earnings_total":   total_handler_auto_earnings,
         "handler_deductions_total": total_handler_paid_out,
