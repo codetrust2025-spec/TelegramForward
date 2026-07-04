@@ -200,11 +200,22 @@ export default function EarningsBreakdown({
                     <tr className="earn-detail-row">
                       <td colSpan={11}>
                         <div className="earn-detail">
+                          {/* Carry-forward explanation */}
+                          {priorBalance !== 0 && month && month !== "all" && (
+                            <div className="earn-carry-fwd-detail">
+                              <span className="earn-carry-fwd-icon">{priorBalance > 0 ? "📋" : "💰"}</span>
+                              <span className="earn-carry-fwd-text">
+                                <strong>{priorBalance > 0 ? "Pending balance" : "Overpaid"} from previous months: {fmt(Math.abs(priorBalance))}</strong>
+                                <span className="earn-carry-fwd-sub"> — carried forward to {scopeLabel || month}</span>
+                              </span>
+                            </div>
+                          )}
                           {loadingCandidates === p.name && <p className="earn-detail-loading">Loading…</p>}
                           {handlerCandidates[p.name] && (() => {
                             const rows = handlerCandidates[p.name].filter(c => Number(c.payment) > 0);
                             const pct = (p.commission_pct || 50) / 100;
-                            if (rows.length === 0) return <p className="earn-detail-loading">No payments received yet.</p>;
+                            if (rows.length === 0 && !priorBalance) return <p className="earn-detail-loading">No payments received yet.</p>;
+                            if (rows.length === 0) return null; // carry-forward shown above is enough
                             const totalComm = rows.reduce((s, c) => s + (Number(c.handler_commission) || Math.round((Number(c.payment) || 0) * pct)), 0);
                             return (
                               <ul className="earn-breakdown-list">
