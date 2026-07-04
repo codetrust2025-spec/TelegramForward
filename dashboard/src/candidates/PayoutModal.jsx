@@ -265,12 +265,16 @@ export default function PayoutModal({
           const salary = Number(perf.salary_total) || 0;
           const priorBal = Number(perf.prior_balance) || 0;
           const commission = Math.max(0, owed - salary - priorBal);
+          // After loading candidates, we can show the real breakdown
+          const candidateCommTotal = commCandidates ? commCandidates.filter(c => Number(c.payment) > 0).reduce((s, c) => s + (Number(c.handler_commission) || 0), 0) : null;
+          const impliedCarryFwd = candidateCommTotal !== null ? Math.max(0, commission - candidateCommTotal) : priorBal;
+          const displayCommission = candidateCommTotal !== null ? candidateCommTotal : commission;
           return <div className="payout-modal__owed-explain">
             <span className="payout-modal__owed-item payout-modal__owed-item--clickable" onClick={() => setShowCommBreakdown(v => !v)}>
-              {showCommBreakdown ? "▾" : "▸"} Commission (50%): <strong>{Jc(commission)}</strong>
+              {showCommBreakdown ? "▾" : "▸"} Commission (50%): <strong>{Jc(displayCommission)}</strong>
             </span>
             {salary > 0 && <span className="payout-modal__owed-item">+ Salary: <strong>{Jc(salary)}</strong></span>}
-            {priorBal > 0 && <span className="payout-modal__owed-item">+ Carry-forward: <strong>{Jc(priorBal)}</strong></span>}
+            {impliedCarryFwd > 0 && <span className="payout-modal__owed-item">+ Prior balance: <strong>{Jc(impliedCarryFwd)}</strong></span>}
             <span className="payout-modal__owed-item payout-modal__owed-item--total">= Total owed: <strong>{Jc(owed)}</strong></span>
             {showCommBreakdown && (
               <div className="payout-modal__comm-breakdown">
