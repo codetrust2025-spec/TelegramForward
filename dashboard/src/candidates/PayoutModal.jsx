@@ -87,7 +87,9 @@ export default function PayoutModal({
     return list;
   }, [entries, filterHandler, filterCat]);
 
-  const owed = Number(ownedSummary?.owed) || 0;
+  const owed = useMemo(() => {
+    return Number(ownedSummary?.owed) || 0;
+  }, [ownedSummary]);
   const paidOut = useMemo(() => filtered.reduce((s, r) => s + (Number(r.amount) || 0), 0), [filtered]);
   const balance = owed - paidOut;
 
@@ -97,6 +99,16 @@ export default function PayoutModal({
     entries.forEach(r => { const n = (r.reference || "").trim(); if (n) map.set(n.toLowerCase(), n); });
     return [...map.values()].sort((a, b) => a.localeCompare(b));
   }, [entries, handlerNames]);
+
+  // Keep handler selection valid after entries reload (case-insensitive match)
+  useEffect(() => {
+    if (filterHandler === "all") return;
+    const lc = filterHandler.toLowerCase();
+    const match = allHandlers.find(h => h.toLowerCase() === lc);
+    if (match && match !== filterHandler) {
+      setFilterHandler(match); // normalize casing to match dropdown option
+    }
+  }, [allHandlers, filterHandler]);
 
   const monthOptions = useMemo(() => [
     { value: "all", label: "All time" },
