@@ -4275,6 +4275,7 @@ if os.path.exists(STATIC_DIR):
             "state", "health", "ws", "inbox", "crm", "stats", "admin", "ai", "voice",
             "candidates", "data-room", "public", "metrics", "alerts", "push", "analytics",
             "handler-expenses", "handler-salaries", "company-expenses",
+            "forward-message", "operator-tasks", "demo-tools", "slot-screenshot",
         }
         first = full_path.split("/")[0] if full_path else ""
         if first in api_roots:

@@ -52,16 +52,20 @@ export default function CompanyExpenditure({ onClose, apiBase = "" }) {
     try {
       const params = new URLSearchParams();
       if (filterMonth !== "all") params.set("month", filterMonth);
-      const [expRes, totalRes] = await Promise.all([
+      const [expRes, totalRes, statsRes] = await Promise.all([
         fetch(`${apiBase}/company-expenses?${params.toString()}`, { credentials: "include" }).then(r => r.json()),
         fetch(`${apiBase}/company-expenses/total?${params.toString()}`, { credentials: "include" }).then(r => r.json()),
+        fetch(`${apiBase}/candidates/stats?${filterMonth !== "all" ? `month=${filterMonth}` : ""}`, { credentials: "include" }).then(r => r.json()).catch(() => null),
       ]);
       if (expRes.status === "ok") {
         setExpenses(expRes.expenses || []);
         setMonths(expRes.available_months || []);
       }
       if (totalRes.status === "ok") {
-        setTotals(totalRes);
+        // Merge revenue data into totals
+        const revenue = Number(statsRes?.stats?.revenue_total ?? statsRes?.revenue_total) || 0;
+        const companyRevenue = Number(statsRes?.stats?.company_revenue_total ?? statsRes?.company_revenue_total) || 0;
+        setTotals({ ...totalRes, revenue, company_revenue: companyRevenue });
       }
     } catch (e) {
       setError(e.message || "Failed to load");
@@ -161,9 +165,18 @@ export default function CompanyExpenditure({ onClose, apiBase = "" }) {
         {/* Summary cards */}
         {totals && (
           <div className="compexp-summary">
+            <div className="compexp-card compexp-card--revenue">
+              <span className="compexp-card-label">Revenue (Collections)</span>
+              <span className="compexp-card-value">{fmt(totals.revenue)}</span>
+            </div>
             <div className="compexp-card compexp-card--grand">
-              <span className="compexp-card-label">Grand Total</span>
+              <span className="compexp-card-label">Total Expenditure</span>
               <span className="compexp-card-value">{fmt(totals.grand_total)}</span>
+            </div>
+            <div className="compexp-card compexp-card--profit">
+              <span className="compexp-card-label">Net Profit</span>
+              <span className="compexp-card-value">{fmt((totals.company_revenue || 0) - (totals.company_expenses?.total || 0))}</span>
+              <span className="compexp-card-count">Company revenue − ops costs</span>
             </div>
             <div className="compexp-card compexp-card--handler">
               <span className="compexp-card-label">Handler Payouts</span>
