@@ -3455,6 +3455,41 @@ def import_confirmed_interview_slot(
     # Never create a candidate or a confirmed Daily Ops slot from an unmatched
     # public/import name.  A real candidate must exist first; otherwise a
     # malformed upload can silently book someone who has no interview.
+    # EXCEPTION: for preset slot bookers (PUBLIC_SLOT_BOOKER_NAMES), auto-create
+    # a candidate record so recurring users like Keerthana aren't blocked.
+    canon_key = _normalise_candidate_name_key(canon)
+    is_preset = any(
+        _normalise_candidate_name_key(n) == canon_key
+        for n in PUBLIC_SLOT_BOOKER_NAMES
+    )
+    if is_preset:
+        # Auto-create candidate for this preset booker (round-wise only)
+        auto_tech = row_candidate_technology({"name": canon})
+        auto_ref = "Thrilok"  # default reference for preset bookers
+        new_candidate = create_candidate({
+            "name": canon,
+            "technology": auto_tech or "Unspecified",
+            "reference": auto_ref,
+            "stage": "in_progress",
+            "date": day,
+            "logged_date": day,
+            "time": slot_time,
+            "time_end": slot_end,
+            "notes": note,
+            "interview_round": rnd,
+            "service_type": "round_wise",
+        })
+        return _finish_public_slot_import(
+            new_candidate,
+            "auto_created",
+            technology=auto_tech,
+            interview_round=rnd,
+            slot_image=slot_image,
+            slot_image_name=slot_image_name,
+            slot_image_mime=slot_image_mime,
+            source=source,
+        )
+
     raise ValueError(
         f"No existing candidate matched {canon}. Add/select the candidate before booking an interview slot."
     )
