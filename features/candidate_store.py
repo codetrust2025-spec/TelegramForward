@@ -3854,6 +3854,116 @@ def available_months(rows: list[dict] | None = None) -> list[dict]:
     return out
 
 
+def _carry_forward_balances(
+    target_month: str,
+    scope_key: str | None = None,
+    service_type_filter: str | None = None,
+) -> dict[str, dict]:
+    """Compute cumulative commission earned and payouts made for each handler
+    across ALL months strictly BEFORE `target_month`.
+
+    Returns {handler_key: {"prior_commission": int, "prior_paid": int}}
+
+    This is READ-ONLY — no writes, no data mutations.
+    """
+    if not target_month or target_month == "all":
+        return {}
+
+    # ── Cumulative commission from prior months ──
+    store_data = _load()
+    all_rows = [_with_computed(r) for r in (store_data.get("candidates") or [])]
+    if scope_key:
+        all_rows = [
+            r for r in all_rows
+            if _reference_key(r.get("reference") or "") == scope_key
+        ]
+    if service_type_filter and service_type_filter != "all":
+        all_rows = [r for r in all_rows if _normalise_service_type(r.get("service_type"), r) == service_type_filter]
+
+    # Only consider candidates from months strictly before target_month
+    prior_rows = [r for r in all_rows if _row_display_month(r) and _row_display_month(r) < target_month]
+    # Exclude April & May 2026 — those months are treated as fully settled
+    prior_rows = [r for r in prior_rows if _row_display_month(r) not in ("2026-04", "2026-05")]
+    # Deduplicate using the same logic as stats
+    prior_rows = _stats_rows_deduped(prior_rows)
+
+    prior_commission: dict[str, int] = {}
+    for r in prior_rows:
+        ref_raw = (r.get("reference") or "").strip()
+        if not ref_raw:
+            continue
+        ref_key = _reference_key(ref_raw)
+        handler_share = referrer_commission_amount(r)
+        prior_commission[ref_key] = prior_commission.get(ref_key, 0) + handler_share
+
+    # ── Cumulative salary from prior months ──
+    prior_salary: dict[str, int] = {}
+    try:
+        from features import handler_salaries as _hs
+        # Compute salary for each prior month individually
+        # salary_owed_by_handler with month=None returns all-time; we need per-month
+        # We'll estimate: if a handler has a monthly salary, multiply by # of prior months
+        # Actually safer to call with each prior month, but that's expensive.
+        # Instead, gather the distinct prior months and sum salary for each.
+        prior_month_set = sorted(set(_row_display_month(r) for r in prior_rows if _row_display_month(r)))
+        for pm in prior_month_set:
+            if pm >= target_month:
+                continue
+            # Skip April & May 2026 — treated as settled
+            if pm in ("2026-04", "2026-05"):
+                continue
+            try:
+                sal = _hs.salary_owed_by_handler(month=pm)
+                for key, sbucket in sal.items():
+                    prior_salary[key] = prior_salary.get(key, 0) + int(sbucket.get("owed") or 0)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # ── Cumulative payouts from prior months ──
+    prior_paid: dict[str, int] = {}
+    try:
+        from features import handler_expenses as _he
+        # Get ALL expenses, then filter to months < target_month
+        all_expenses = _he.list_expenses()
+        for exp in all_expenses:
+            exp_month = (exp.get("date") or "")[:7] if len(exp.get("date") or "") >= 7 else ""
+            if not exp_month or exp_month >= target_month:
+                continue
+            # Skip April & May 2026 — treated as settled
+            if exp_month in ("2026-04", "2026-05"):
+                continue
+            ref = (exp.get("reference") or "").strip()
+            if not ref:
+                continue
+            key = ref.lower()
+            if scope_key and key != scope_key:
+                continue
+            amount = int(exp.get("amount") or 0)
+            prior_paid[key] = prior_paid.get(key, 0) + amount
+    except Exception:
+        pass
+
+    # Merge into result
+    all_keys = set(prior_commission.keys()) | set(prior_salary.keys()) | set(prior_paid.keys())
+    result: dict[str, dict] = {}
+    for key in all_keys:
+        comm = prior_commission.get(key, 0)
+        sal = prior_salary.get(key, 0)
+        paid = prior_paid.get(key, 0)
+        # For April & May 2026, prior months are considered settled
+        # so don't carry anything forward from those months
+        result[key] = {
+            "prior_commission": comm,
+            "prior_salary": sal,
+            "prior_owed": comm + sal,
+            "prior_paid": paid,
+            "prior_balance": (comm + sal) - paid,
+        }
+    return result
+
+
 def stats(
     month: str | None = None,
     reference: str | None = None,
@@ -3918,6 +4028,7 @@ def stats(
     direct_revenue      = 0
 
     perf: dict[str, dict] = {}
+    _service_type_param = service_type  # preserve original param before loop overwrites it
     for r in rows:
         st = r.get("stage") or "in_progress"
         by_stage[st] = by_stage.get(st, 0) + 1
@@ -4051,6 +4162,15 @@ def stats(
     total_handler_salary        = 0
     total_handler_paid_out      = 0
 
+    # ── Carry-forward: compute cumulative balances from prior months ──
+    carry_fwd: dict[str, dict] = {}
+    if month and month != "all":
+        carry_fwd = _carry_forward_balances(
+            target_month=month,
+            scope_key=scope_key,
+            service_type_filter=_service_type_param if _service_type_param and _service_type_param != "all" else None,
+        )
+
     for p in perf.values():
         p["conversion_pct"] = (
             round((p["completed"] / p["count"]) * 100) if p["count"] else 0
@@ -4064,35 +4184,55 @@ def stats(
         owed       = commission + salary
         paid_out   = int(exp_bucket.get("total") or 0)
 
+        # ── Carry-forward: add prior months' unpaid balance ──
+        cf = carry_fwd.get(key, {})
+        prior_commission = int(cf.get("prior_commission") or 0)
+        prior_salary     = int(cf.get("prior_salary") or 0)
+        prior_paid       = int(cf.get("prior_paid") or 0)
+
+        # Cumulative totals (this month + all prior months)
+        cumulative_commission = commission + prior_commission
+        cumulative_salary     = salary + prior_salary
+        cumulative_owed       = cumulative_commission + cumulative_salary
+        cumulative_paid       = paid_out + prior_paid
+
         # Salary-side fields (NEW). Older clients ignore these.
-        p["commission_total"]  = commission
-        p["salary_total"]      = salary
+        p["commission_total"]  = cumulative_commission
+        p["salary_total"]      = cumulative_salary
         p["salary_monthly"]    = int(salary_bucket.get("monthly_salary") or 0)
         p["salary_active"]     = bool(salary_bucket.get("monthly_salary"))
 
         # Owed = commission + salary. Overwrite auto_earnings_total so
         # every existing UI bit (chips, "Pay X ₹Y" list, AllExpenses
         # modal header) automatically picks up the higher number.
-        p["auto_earnings_total"] = owed
+        p["auto_earnings_total"] = cumulative_owed
 
         # New canonical fields used by the UI going forward.
-        p["paid_out_total"]    = paid_out
+        p["paid_out_total"]    = cumulative_paid
         p["paid_out_count"]    = int(exp_bucket.get("count") or 0)
-        p["net_payable"]       = owed - paid_out
+        p["net_payable"]       = cumulative_owed - cumulative_paid
         p["commission_pct"]    = HANDLER_COMMISSION_PCT
+
+        # Carry-forward detail fields (UI can show breakdown)
+        p["prior_balance"]     = int(cf.get("prior_balance") or 0)
+        p["current_month_commission"] = commission
+        p["current_month_salary"]     = salary
+        p["current_month_owed"]       = owed
+        p["current_month_paid"]       = paid_out
 
         # ── April & May 2026: treat as fully settled for all handlers ──
         if month in ("2026-04", "2026-05"):
             p["net_payable"] = 0
+            p["prior_balance"] = 0
 
         # Backwards-compat aliases so older client bundles keep rendering
         # something sensible until the next refresh:
-        p["earnings_total"]    = owed         # was: commission rows
-        p["deductions_total"]  = paid_out     # was: non-commission rows
-        p["net_earning"]       = owed - paid_out
-        p["expenses_total"]    = paid_out
+        p["earnings_total"]    = cumulative_owed         # was: commission rows
+        p["deductions_total"]  = cumulative_paid     # was: non-commission rows
+        p["net_earning"]       = cumulative_owed - cumulative_paid
+        p["expenses_total"]    = cumulative_paid
         p["expenses_count"]    = int(exp_bucket.get("count") or 0)
-        p["net_completed"]     = int(p.get("revenue_completed") or 0) - paid_out
+        p["net_completed"]     = int(p.get("revenue_completed") or 0) - cumulative_paid
 
         if _payout_excluded_handler(key) or _payout_excluded_handler(p.get("name") or ""):
             p["payout_excluded"] = True
@@ -4104,6 +4244,7 @@ def stats(
             p["paid_out_total"] = 0
             p["paid_out_count"] = 0
             p["net_payable"] = 0
+            p["prior_balance"] = 0
             p["earnings_total"] = 0
             p["deductions_total"] = 0
             p["net_earning"] = 0
@@ -4111,9 +4252,9 @@ def stats(
             p["expenses_count"] = 0
             continue
 
-        total_handler_commission += commission
-        total_handler_salary     += salary
-        total_handler_paid_out   += paid_out
+        total_handler_commission += cumulative_commission
+        total_handler_salary     += cumulative_salary
+        total_handler_paid_out   += cumulative_paid
 
     total_handler_auto_earnings = total_handler_commission + total_handler_salary
 

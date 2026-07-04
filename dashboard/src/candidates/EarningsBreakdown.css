@@ -286,3 +286,14 @@
   .earn-detail-grid { gap: 6px; }
   .earn-detail-card { min-width: 80px; padding: 6px 8px; }
 }
+
+/* Carry-forward indicator */
+.earn-carry-fwd {
+  display: block;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-dim, #7b8a9e);
+  margin-top: 2px;
+  opacity: .85;
+  letter-spacing: .02em;
+}
