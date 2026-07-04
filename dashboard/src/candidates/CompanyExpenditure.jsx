@@ -47,6 +47,30 @@ export default function CompanyExpenditure({ onClose, apiBase = "" }) {
   // Tabs: revenue | expenditure | profit | handler | company
   const [activeTab, setActiveTab] = useState("revenue");
 
+  // Expanded handler detail in revenue/handler views
+  const [expandedHandler, setExpandedHandler] = useState(null);
+  const [handlerCandidates, setHandlerCandidates] = useState({});
+  const [loadingHandler, setLoadingHandler] = useState(null);
+
+  async function toggleHandler(name) {
+    if (expandedHandler === name) { setExpandedHandler(null); return; }
+    setExpandedHandler(name);
+    if (handlerCandidates[name]) return;
+    setLoadingHandler(name);
+    try {
+      const params = new URLSearchParams();
+      if (filterMonth !== "all") params.set("month", filterMonth);
+      params.set("reference", name);
+      const res = await (await fetch(`${apiBase}/candidates?${params.toString()}`, { credentials: "include" })).json();
+      if (res.status === "ok") {
+        setHandlerCandidates(prev => ({ ...prev, [name]: res.candidates || [] }));
+      }
+    } catch {} finally { setLoadingHandler(null); }
+  }
+
+  // Reset expanded when month changes
+  useEffect(() => { setExpandedHandler(null); setHandlerCandidates({}); }, [filterMonth]);
+
   // Fetch all data
   const fetchData = useCallback(async () => {
     setLoading(true); setError("");
@@ -197,10 +221,28 @@ export default function CompanyExpenditure({ onClose, apiBase = "" }) {
               {revenueBreakdown.length === 0 ? <p className="compexp-empty">No revenue data.</p> : (
                 <div className="compexp-list">
                   {revenueBreakdown.map(item => (
-                    <div className="compexp-list-row" key={item.name}>
-                      <span className="compexp-list-name">{item.name}</span>
-                      <span className="compexp-list-meta">{item.count} leads · {item.completed} done</span>
-                      <strong className="compexp-list-amount compexp-list-amount--revenue">{fmt(item.amount)}</strong>
+                    <div key={item.name}>
+                      <div className={`compexp-list-row compexp-list-row--clickable${expandedHandler === item.name ? " compexp-list-row--open" : ""}`} onClick={() => toggleHandler(item.name)}>
+                        <span className="compexp-list-name"><span className="compexp-expand-icon">{expandedHandler === item.name ? "▾" : "▸"}</span> {item.name}</span>
+                        <span className="compexp-list-meta">{item.count} leads · {item.completed} done</span>
+                        <strong className="compexp-list-amount compexp-list-amount--revenue">{fmt(item.amount)}</strong>
+                      </div>
+                      {expandedHandler === item.name && (
+                        <div className="compexp-sublist">
+                          {loadingHandler === item.name && <p className="compexp-sublist-loading">Loading…</p>}
+                          {handlerCandidates[item.name] && (() => {
+                            const rows = handlerCandidates[item.name].filter(c => Number(c.payment) > 0);
+                            if (!rows.length) return <p className="compexp-sublist-loading">No payments recorded.</p>;
+                            return rows.map(c => (
+                              <div className="compexp-sublist-row" key={c.id}>
+                                <span className="compexp-sublist-name">{c.name}</span>
+                                <span className="compexp-sublist-date">{fmtDate(c.logged_date || c.date)}</span>
+                                <strong className="compexp-sublist-amount">{fmt(c.payment)}</strong>
+                              </div>
+                            ));
+                          })()}
+                        </div>
+                      )}
                     </div>
                   ))}
                   <div className="compexp-list-row compexp-list-row--total">
@@ -292,10 +334,23 @@ export default function CompanyExpenditure({ onClose, apiBase = "" }) {
               {handlerBreakdown.length === 0 ? <p className="compexp-empty">No handler payouts logged.</p> : (
                 <div className="compexp-list">
                   {handlerBreakdown.map(h => (
-                    <div className="compexp-list-row" key={h.name}>
-                      <span className="compexp-list-name">{h.name}</span>
-                      <span className="compexp-list-meta">{h.count} payout{h.count !== 1 ? "s" : ""}</span>
-                      <strong className="compexp-list-amount compexp-list-amount--expense">{fmt(h.total)}</strong>
+                    <div key={h.name}>
+                      <div className={`compexp-list-row compexp-list-row--clickable${expandedHandler === h.name ? " compexp-list-row--open" : ""}`} onClick={() => setExpandedHandler(expandedHandler === h.name ? null : h.name)}>
+                        <span className="compexp-list-name"><span className="compexp-expand-icon">{expandedHandler === h.name ? "▾" : "▸"}</span> {h.name}</span>
+                        <span className="compexp-list-meta">{h.count} payout{h.count !== 1 ? "s" : ""}</span>
+                        <strong className="compexp-list-amount compexp-list-amount--expense">{fmt(h.total)}</strong>
+                      </div>
+                      {expandedHandler === h.name && (
+                        <div className="compexp-sublist">
+                          {h.items.map(exp => (
+                            <div className="compexp-sublist-row" key={exp.id}>
+                              <span className="compexp-sublist-name">{exp.note || exp.category || "Payout"}</span>
+                              <span className="compexp-sublist-date">{fmtDate(exp.date)}</span>
+                              <strong className="compexp-sublist-amount compexp-sublist-amount--expense">{fmt(exp.amount)}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                   <div className="compexp-list-row compexp-list-row--total">
