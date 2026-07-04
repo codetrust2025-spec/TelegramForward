@@ -29,7 +29,7 @@
 /* Summary cards */
 .compexp-summary {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
   padding: 14px 20px;
 }
@@ -45,11 +45,15 @@
 .compexp-card--grand { border-color: rgba(99,102,241,.4); background: rgba(99,102,241,.08); }
 .compexp-card--handler { border-color: rgba(251,191,36,.3); }
 .compexp-card--company { border-color: rgba(34,197,94,.3); }
+.compexp-card--revenue { border-color: rgba(56,189,248,.4); background: rgba(56,189,248,.08); }
+.compexp-card--profit { border-color: rgba(34,197,94,.4); background: rgba(34,197,94,.08); }
 .compexp-card-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim, #7b8a9e); }
 .compexp-card-value { font-size: 20px; font-weight: 800; color: var(--text, #eef2f7); font-variant-numeric: tabular-nums; }
 .compexp-card--grand .compexp-card-value { color: #a5b4fc; }
 .compexp-card--handler .compexp-card-value { color: #fbbf24; }
 .compexp-card--company .compexp-card-value { color: #4ade80; }
+.compexp-card--revenue .compexp-card-value { color: #38bdf8; }
+.compexp-card--profit .compexp-card-value { color: #86efac; }
 .compexp-card-count { font-size: 11px; color: var(--text-dim, #7b8a9e); }
 
 /* Tabs */
