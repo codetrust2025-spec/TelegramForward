@@ -16999,71 +16999,59 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 }
 
 /* ═══════════════════════════════════════════
-   Edit Candidate Modal — 2-Column Compact Redesign
+   Edit Candidate Modal — Compact Flat Grid
    ═══════════════════════════════════════════ */
 @media (min-width: 900px) {
   .cand-modal {
-    max-width: 1020px;
+    max-width: 900px;
     max-height: 90vh;
     display: flex;
     flex-direction: column;
   }
-  .cand-modal-body--twopanel {
-    display: grid !important;
-    grid-template-columns: 1fr 1fr !important;
-    gap: 0 20px !important;
-    padding: 12px 16px !important;
+  .cand-modal-body {
+    padding: 10px 14px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px 14px;
     overflow-y: auto;
-    max-height: calc(90vh - 110px);
-    align-items: start;
+    max-height: calc(90vh - 100px);
   }
-  .cand-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .cand-panel--left { }
-  .cand-panel--right { }
-  .cand-panel .cand-field { display: flex; flex-direction: column; gap: 3px; }
   .cand-modal-footer {
     position: sticky;
     bottom: 0;
     background: var(--surface, #0f172a);
     border-top: 1px solid rgba(255,255,255,.06);
     z-index: 5;
-    padding: 10px 18px;
+    padding: 8px 16px;
   }
-  /* Compact service cards */
+  /* Service field spans full but is compact */
   .cand-service-options { gap: 6px; }
-  .cand-service-card { padding: 7px 10px; }
-  .cand-service-card em { font-size: 10px; line-height: 1.2; }
+  .cand-service-card { padding: 6px 8px; }
+  .cand-service-card em { font-size: 10px; }
   .cand-service-card strong { font-size: 12px; }
-  /* Compact scope pills */
   .cand-service-scope-options { gap: 5px; }
-  .cand-service-scope-pill { padding: 4px 10px; font-size: 11px; }
-  /* Compact consultancy */
-  .cand-consultancy-field { padding: 5px 8px; }
+  .cand-service-scope-pill { padding: 4px 8px; font-size: 11px; }
+  .cand-consultancy-field { padding: 4px 6px; }
   .cand-consultancy-text em { font-size: 10px; }
-  /* Reduce hints */
-  .cand-panel .cand-field-hint { font-size: 9px; line-height: 1.2; }
-  /* Compact payment */
-  .cand-pay-status { font-size: 11px; padding: 3px 6px; }
-  .cand-pay-handler-share { font-size: 10px; padding: 3px 6px; line-height: 1.2; display: block; margin-top: 3px; }
+  /* Compact fields */
+  .cand-field-hint { font-size: 9px; line-height: 1.2; }
+  .cand-pay-status { font-size: 10px; padding: 2px 5px; }
+  .cand-pay-handler-share { font-size: 10px; padding: 2px 5px; display: block; }
   /* Compact proofs */
-  .cand-panel--right .cand-proofs { gap: 5px; }
-  .cand-panel--right .cand-proofs-drop { padding: 8px; min-height: 60px; }
-  .cand-panel--right .cand-proofs-drop-icon { font-size: 16px; }
-  .cand-panel--right .cand-proofs-drop-text strong { font-size: 11px; }
-  .cand-panel--right .cand-proofs-drop-sub { font-size: 9px; }
-  .cand-panel--right .cand-proofs-grid { gap: 5px; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); }
-  .cand-panel--right .cand-proof-card { max-width: 90px; }
-  .cand-panel--right .cand-proof-card img { max-height: 70px; }
-  .cand-panel--right .cand-proof-meta { font-size: 8px; }
-  /* Compact follow-up */
-  .cand-panel--right .cand-field--required textarea { min-height: 40px; max-height: 65px; }
+  .cand-proofs { gap: 5px; }
+  .cand-proofs-drop { padding: 8px; min-height: 55px; }
+  .cand-proofs-drop-icon { font-size: 16px; }
+  .cand-proofs-drop-text strong { font-size: 11px; }
+  .cand-proofs-drop-sub { font-size: 9px; }
+  .cand-proofs-grid { gap: 5px; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); }
+  .cand-proof-card { max-width: 90px; }
+  .cand-proof-card img { max-height: 65px; }
+  .cand-proof-meta { font-size: 8px; }
+  /* Compact textarea */
+  .cand-field--required textarea.cand-input--textarea { min-height: 40px; max-height: 60px; }
   /* Compact inputs */
-  .cand-panel .cand-input { padding: 6px 9px; font-size: 12px; }
-  .cand-panel .cand-input--textarea { padding: 5px 9px; font-size: 11px; }
-  .cand-panel .cand-field-label { font-size: 9px; text-transform: uppercase; letter-spacing: .03em; }
-  .cand-panel .cand-field-required-tag { font-size: 8px; padding: 1px 4px; }
+  .cand-input { padding: 6px 8px; font-size: 12px; }
+  .cand-input--textarea { padding: 5px 8px; font-size: 11px; }
+  .cand-field-label { font-size: 9px; }
+  .cand-field-required-tag { font-size: 8px; }
 }
