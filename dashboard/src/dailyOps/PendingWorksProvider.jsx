@@ -63,7 +63,7 @@ function usePendingWorksQuery({ month = 'all', enabled = true, deferMs = 5000 } 
   return { works, count, candidateCount, byKind, loading, error, reload }
 }
 
-function usePendingInterviewsQuery({ enabled = true, deferMs = 5000, days = 60 } = {}) {
+function usePendingInterviewsQuery({ enabled = true, deferMs = 5000, days = 7 } = {}) {
   const [pendingCount, setPendingCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -83,7 +83,7 @@ function usePendingInterviewsQuery({ enabled = true, deferMs = 5000, days = 60 }
       }
       const data = await res.json()
       if (!res.ok || data.status !== 'ok') throw new Error(data.message || 'Failed to load pending interviews')
-      setPendingCount(data.pending_count || 0)
+      setPendingCount(data.scheduled_count || data.pending_count || 0)
       setError('')
     } catch (err) {
       if (!silent) setError(err.message || 'Failed to load')
