@@ -17008,21 +17008,28 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
     max-height: 90vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
   }
   .cand-modal-body {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0 24px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0;
     padding: 0;
+    overflow-x: hidden;
     overflow-y: auto;
     max-height: calc(90vh - 100px);
     align-items: start;
+    box-sizing: border-box;
   }
   .cand-panel {
     display: flex;
     flex-direction: column;
     gap: 10px;
     padding: 14px 18px;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
   }
   .cand-panel--left {
     border-right: 1px solid rgba(255,255,255,.06);
@@ -17036,22 +17043,73 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
     text-transform: uppercase;
     color: var(--text-dim, #7b8a9e);
   }
-  .cand-panel .cand-field { display: flex; flex-direction: column; gap: 3px; }
+  .cand-panel .cand-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    max-width: 100%;
+  }
   .cand-panel .cand-field-label { font-size: 11px; }
-  .cand-panel .cand-input { padding: 8px 10px; font-size: 13px; }
-  .cand-panel .cand-input--textarea { padding: 8px 10px; font-size: 12px; min-height: 70px; }
-  .cand-panel .cand-field-hint { font-size: 10px; }
+  .cand-panel .cand-input {
+    padding: 8px 10px;
+    font-size: 13px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    min-width: 0;
+  }
+  .cand-panel .cand-input--textarea {
+    padding: 8px 10px;
+    font-size: 12px;
+    min-height: 70px;
+    max-height: 80px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+  }
+  .cand-panel .cand-field-hint { font-size: 10px; word-wrap: break-word; }
   /* Left panel: fields in 2-col grid */
-  .cand-panel--left { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-content: start; }
+  .cand-panel--left {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 10px;
+    align-content: start;
+  }
   .cand-panel--left > .cand-panel-title { grid-column: 1 / -1; }
   .cand-panel--left > .cand-service-field { grid-column: 1 / -1; }
   .cand-panel--left > .cand-service-scope { grid-column: 1 / -1; }
   .cand-panel--left > .cand-consultancy-field { grid-column: 1 / -1; }
   .cand-panel--left > .cand-bgv-field { grid-column: 1 / -1; }
-  /* Right panel: single column */
-  .cand-panel--right { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-content: start; }
+  /* Right panel: 2-col for amount, then full-width for rest */
+  .cand-panel--right {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 10px;
+    align-content: start;
+  }
   .cand-panel--right > .cand-panel-title { grid-column: 1 / -1; }
   .cand-panel--right > .cand-field:nth-child(n+4) { grid-column: 1 / -1; }
+  /* Payment chips full width and no overflow */
+  .cand-panel .cand-pay-status {
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    word-wrap: break-word;
+    max-width: 100%;
+  }
+  .cand-panel .cand-pay-handler-share {
+    font-size: 11px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    display: block;
+    margin-top: 4px;
+    background: rgba(99,102,241,.06);
+    border: 1px solid rgba(99,102,241,.15);
+    word-wrap: break-word;
+    max-width: 100%;
+  }
   .cand-modal-footer {
     position: sticky;
     bottom: 0;
@@ -17059,21 +17117,47 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
     border-top: 1px solid rgba(255,255,255,.06);
     z-index: 5;
     padding: 10px 18px;
+    box-sizing: border-box;
   }
   /* Compact service cards */
   .cand-panel .cand-service-options { gap: 8px; }
-  .cand-panel .cand-service-card { padding: 10px 12px; }
+  .cand-panel .cand-service-card { padding: 10px 12px; min-width: 0; }
   .cand-panel .cand-service-card strong { font-size: 13px; }
   .cand-panel .cand-service-card em { font-size: 11px; }
   /* Compact scope */
-  .cand-panel .cand-service-scope-options { gap: 6px; }
-  .cand-panel .cand-service-scope-pill { padding: 6px 12px; font-size: 12px; }
-  /* Payment chips */
-  .cand-panel .cand-pay-status { font-size: 12px; padding: 6px 10px; border-radius: 6px; }
-  .cand-panel .cand-pay-handler-share { font-size: 12px; padding: 8px 10px; border-radius: 6px; display: block; margin-top: 4px; background: rgba(99,102,241,.06); border: 1px solid rgba(99,102,241,.15); }
-  /* Compact proofs */
-  .cand-panel .cand-proofs { gap: 8px; }
-  .cand-panel .cand-proofs-drop { padding: 12px; min-height: 100px; }
-  .cand-panel .cand-proofs-grid { gap: 8px; display: flex; flex-wrap: wrap; }
-  .cand-panel .cand-proof-card { max-width: 130px; }
+  .cand-panel .cand-service-scope-options { gap: 6px; flex-wrap: wrap; }
+  .cand-panel .cand-service-scope-pill { padding: 6px 10px; font-size: 11px; white-space: nowrap; }
+  /* Compact proofs — side by side */
+  .cand-panel .cand-proofs {
+    gap: 8px;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .cand-panel .cand-proofs-drop {
+    padding: 10px;
+    min-height: 80px;
+    max-height: 110px;
+  }
+  .cand-panel .cand-proofs-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .cand-panel .cand-proof-card {
+    max-width: 130px;
+    min-width: 0;
+  }
+  .cand-panel .cand-proof-card img { max-height: 80px; }
+  .cand-panel .cand-proofs .cand-input--small {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+}
+@media (max-width: 899px) {
+  .cand-modal-body {
+    display: flex;
+    flex-direction: column;
+  }
+  .cand-panel--left { border-right: none; border-bottom: 1px solid rgba(255,255,255,.06); }
 }
