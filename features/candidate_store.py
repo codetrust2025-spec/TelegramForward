@@ -1299,6 +1299,11 @@ def _collapse_profile_candidates(rows: list[dict], *, month: str | None = None) 
             merged["resumes"] = list(all_resumes.values())
             merged["resume_count"] = len(all_resumes)
             merged["latest_resume"] = max(all_resumes.values(), key=lambda item: item.get("uploaded_at") or "")
+        # Merge proofs from all slot clones so they're visible regardless of which row wins
+        all_proofs = {item.get("id"): item for r in group for item in (r.get("proofs") or []) if item.get("id")}
+        if all_proofs:
+            merged["proofs"] = list(all_proofs.values())
+            merged["proof_count"] = len(all_proofs)
         result.append(merged)
     result.sort(key=lambda r: (r.get("date") or "", r.get("updated_at") or ""), reverse=True)
     return result
