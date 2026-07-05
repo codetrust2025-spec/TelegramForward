@@ -760,7 +760,7 @@ def _coerce_bool(value) -> bool:
 
 _ALLOWED_FIELDS = {
     "name", "stage", "technology", "task", "phone", "reference",
-    "consultancy", "bgv_certificates",
+    "consultancy", "bgv_certificates", "ctc_percentage",
     "payment", "expected_payment", "follow_up",
     "date", "logged_date", "time", "time_end", "expenses", "notes",
     "telegram_slot", "telegram_user_id",
