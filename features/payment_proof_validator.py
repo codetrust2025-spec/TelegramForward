@@ -77,13 +77,12 @@ def validate_payment_proof(image_data: bytes, mime_type: str = "", expected_amou
         if expected_amount > 0:
             detected_amount = _extract_max_amount(text)
             if detected_amount > 0:
-                # Allow if detected amount is at least 50% of expected (partial payments are ok)
-                # But reject if it's less than ₹500 or less than 10% of expected
-                min_acceptable = max(500, expected_amount * 0.1)
-                if detected_amount < min_acceptable:
+                # Must match at least the full due amount
+                if detected_amount < expected_amount:
                     return False, (
-                        f"The payment amount detected (₹{detected_amount:,.0f}) seems too low. "
-                        f"₹{expected_amount:,} is due. Upload the correct payment screenshot."
+                        f"Payment amount detected: ₹{detected_amount:,.0f}. "
+                        f"But ₹{expected_amount:,} is due. "
+                        f"Upload a screenshot showing the full ₹{expected_amount:,} payment."
                     )
         return True, ""
     
