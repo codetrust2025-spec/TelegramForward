@@ -17136,23 +17136,39 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   .cand-panel .cand-proofs-header { margin-bottom: 2px; }
   .cand-panel .cand-proofs-drop {
     padding: 8px;
-    min-height: 70px;
-    max-height: 90px;
+    min-height: 60px;
+    max-height: 80px;
   }
   .cand-panel .cand-proofs-drop-icon { font-size: 18px; }
   .cand-panel .cand-proofs-drop-text strong { font-size: 11px; }
   .cand-panel .cand-proofs-drop-sub { font-size: 9px; }
+  /* Make dropzone + thumbnail grid side by side */
+  .cand-panel .cand-proofs {
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto auto;
+  }
+  .cand-panel .cand-proofs-header { grid-column: 1 / -1; }
+  /* When there are proofs, make drop + grid side by side */
+  .cand-panel .cand-proofs:has(.cand-proofs-grid) {
+    grid-template-columns: 1fr 140px;
+  }
+  .cand-panel .cand-proofs:has(.cand-proofs-grid) .cand-proofs-header { grid-column: 1 / -1; }
+  .cand-panel .cand-proofs:has(.cand-proofs-grid) .cand-proofs-drop { grid-column: 1; grid-row: 2; }
+  .cand-panel .cand-proofs:has(.cand-proofs-grid) .cand-proofs-grid { grid-column: 2; grid-row: 2 / 4; }
+  .cand-panel .cand-proofs:has(.cand-proofs-grid) .cand-input--small { grid-column: 1 / -1; grid-row: 4; }
   .cand-panel .cand-proofs-grid {
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+    flex-direction: column;
+    gap: 4px;
+    align-items: center;
   }
   .cand-panel .cand-proof-card {
-    max-width: 110px;
+    max-width: 130px;
     min-width: 0;
   }
-  .cand-panel .cand-proof-card img { max-height: 70px; }
-  .cand-panel .cand-proof-meta { font-size: 9px; }
+  .cand-panel .cand-proof-card img { max-height: 70px; object-fit: cover; border-radius: 4px; }
+  .cand-panel .cand-proof-meta { font-size: 8px; padding: 2px; text-align: center; }
   .cand-panel .cand-proofs .cand-input--small {
     width: 100%;
     max-width: 100%;
