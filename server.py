@@ -3811,6 +3811,19 @@ async def candidates_delete_proof(cid: str, pid: str, request: Request):
     if not ok:
         return {"status": "error", "message": "Proof not found"}
     row = candidate_store.get_candidate(cid)
+    # Return merged proofs from all slot clones so the UI stays consistent
+    if row:
+        name_key = candidate_store._normalise_candidate_name_key(row.get("name") or "")
+        if name_key:
+            all_rows = [r for r in (candidate_store._load().get("candidates") or [])
+                        if candidate_store._normalise_candidate_name_key(r.get("name") or "") == name_key]
+            merged_proofs = {}
+            for r in all_rows:
+                for p in (r.get("proofs") or []):
+                    if p.get("id") and p["id"] not in merged_proofs:
+                        merged_proofs[p["id"]] = p
+            row = dict(row)
+            row["proofs"] = list(merged_proofs.values())
     return {"status": "ok", "candidate": row}
 
 
