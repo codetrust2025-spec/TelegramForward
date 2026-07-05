@@ -1301,15 +1301,29 @@ def _collapse_profile_candidates(rows: list[dict], *, month: str | None = None) 
             merged["latest_resume"] = max(all_resumes.values(), key=lambda item: item.get("uploaded_at") or "")
         # Merge proofs from all slot clones so they're visible regardless of which row wins
         # Deduplicate by proof ID to avoid showing the same proof multiple times
+        # Exclude slot screenshots (they should appear separately, not in payment proofs)
         all_proofs = {}
+        slot_proofs = {}
         for r in group:
+            slot_ss_id = r.get("slot_screenshot_proof_id")
             for item in (r.get("proofs") or []):
                 pid = item.get("id")
-                if pid and pid not in all_proofs:
+                if not pid or pid in all_proofs or pid in slot_proofs:
+                    continue
+                # Identify slot screenshots by their note or by matching the slot_screenshot_proof_id
+                is_slot_ss = (
+                    pid == slot_ss_id
+                    or (item.get("note") or "").lower().startswith("interview slot screenshot")
+                )
+                if is_slot_ss:
+                    slot_proofs[pid] = item
+                else:
                     all_proofs[pid] = item
         if all_proofs:
             merged["proofs"] = list(all_proofs.values())
             merged["proof_count"] = len(all_proofs)
+        if slot_proofs:
+            merged["slot_screenshot_proofs"] = list(slot_proofs.values())
         result.append(merged)
     result.sort(key=lambda r: (r.get("date") or "", r.get("updated_at") or ""), reverse=True)
     return result
