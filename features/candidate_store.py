@@ -1300,7 +1300,13 @@ def _collapse_profile_candidates(rows: list[dict], *, month: str | None = None) 
             merged["resume_count"] = len(all_resumes)
             merged["latest_resume"] = max(all_resumes.values(), key=lambda item: item.get("uploaded_at") or "")
         # Merge proofs from all slot clones so they're visible regardless of which row wins
-        all_proofs = {item.get("id"): item for r in group for item in (r.get("proofs") or []) if item.get("id")}
+        # Deduplicate by proof ID to avoid showing the same proof multiple times
+        all_proofs = {}
+        for r in group:
+            for item in (r.get("proofs") or []):
+                pid = item.get("id")
+                if pid and pid not in all_proofs:
+                    all_proofs[pid] = item
         if all_proofs:
             merged["proofs"] = list(all_proofs.values())
             merged["proof_count"] = len(all_proofs)
