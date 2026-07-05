@@ -17003,19 +17003,28 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
    ═══════════════════════════════════════════ */
 @media (min-width: 900px) {
   .cand-modal {
-    max-width: 960px;
+    max-width: 1020px;
     max-height: 90vh;
     display: flex;
     flex-direction: column;
   }
-  .cand-modal-body {
-    padding: 12px 16px;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px 16px;
+  .cand-modal-body--twopanel {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 0 20px !important;
+    padding: 12px 16px !important;
     overflow-y: auto;
     max-height: calc(90vh - 110px);
+    align-items: start;
   }
+  .cand-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .cand-panel--left { }
+  .cand-panel--right { }
+  .cand-panel .cand-field { display: flex; flex-direction: column; gap: 3px; }
   .cand-modal-footer {
     position: sticky;
     bottom: 0;
@@ -17024,50 +17033,37 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
     z-index: 5;
     padding: 10px 18px;
   }
-  /* Force span-2 items back to single column where appropriate */
-  .cand-modal-body .cand-field--span2 { grid-column: span 1; }
-  /* Service and scope sections span full width */
-  .cand-modal-body .cand-service-field { grid-column: 1 / -1; }
-  .cand-modal-body .cand-service-scope { grid-column: 1 / -1; }
-  .cand-modal-body .cand-consultancy-field { grid-column: 1 / -1; }
-  /* Proofs take full width */
-  .cand-modal-body > .cand-field:has(.cand-proofs) { grid-column: 1 / -1; }
-  /* Follow-up takes full width */
-  .cand-modal-body .cand-field--required { grid-column: 1 / -1; }
   /* Compact service cards */
-  .cand-service-options { gap: 8px; }
-  .cand-service-card { padding: 8px 10px; }
-  .cand-service-card em { font-size: 10px; line-height: 1.3; }
-  .cand-service-card strong { font-size: 13px; }
+  .cand-service-options { gap: 6px; }
+  .cand-service-card { padding: 7px 10px; }
+  .cand-service-card em { font-size: 10px; line-height: 1.2; }
+  .cand-service-card strong { font-size: 12px; }
   /* Compact scope pills */
-  .cand-service-scope-options { gap: 6px; }
-  .cand-service-scope-pill { padding: 5px 10px; font-size: 11px; }
+  .cand-service-scope-options { gap: 5px; }
+  .cand-service-scope-pill { padding: 4px 10px; font-size: 11px; }
   /* Compact consultancy */
-  .cand-consultancy-field { padding: 6px 8px; }
+  .cand-consultancy-field { padding: 5px 8px; }
   .cand-consultancy-text em { font-size: 10px; }
-  /* Reduce hint text */
-  .cand-field-hint { font-size: 9px; line-height: 1.2; margin-top: 2px; }
-  /* Compact payment status */
+  /* Reduce hints */
+  .cand-panel .cand-field-hint { font-size: 9px; line-height: 1.2; }
+  /* Compact payment */
   .cand-pay-status { font-size: 11px; padding: 3px 6px; }
-  .cand-pay-handler-share { font-size: 10px; padding: 4px 6px; line-height: 1.3; }
+  .cand-pay-handler-share { font-size: 10px; padding: 3px 6px; line-height: 1.2; display: block; margin-top: 3px; }
   /* Compact proofs */
-  .cand-proofs { gap: 6px; }
-  .cand-proofs-drop { padding: 10px; min-height: 70px; }
-  .cand-proofs-drop-icon { font-size: 18px; }
-  .cand-proofs-drop-text strong { font-size: 11px; }
-  .cand-proofs-drop-sub { font-size: 9px; }
-  .cand-proofs-grid { gap: 6px; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
-  .cand-proof-card { max-width: 110px; }
-  .cand-proof-card img { max-height: 90px; }
-  .cand-proof-meta { font-size: 9px; }
+  .cand-panel--right .cand-proofs { gap: 5px; }
+  .cand-panel--right .cand-proofs-drop { padding: 8px; min-height: 60px; }
+  .cand-panel--right .cand-proofs-drop-icon { font-size: 16px; }
+  .cand-panel--right .cand-proofs-drop-text strong { font-size: 11px; }
+  .cand-panel--right .cand-proofs-drop-sub { font-size: 9px; }
+  .cand-panel--right .cand-proofs-grid { gap: 5px; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); }
+  .cand-panel--right .cand-proof-card { max-width: 90px; }
+  .cand-panel--right .cand-proof-card img { max-height: 70px; }
+  .cand-panel--right .cand-proof-meta { font-size: 8px; }
   /* Compact follow-up */
-  .cand-field--required textarea.cand-input--textarea { min-height: 45px; max-height: 70px; resize: vertical; }
+  .cand-panel--right .cand-field--required textarea { min-height: 40px; max-height: 65px; }
   /* Compact inputs */
-  .cand-input { padding: 7px 10px; font-size: 13px; }
-  .cand-input--textarea { padding: 6px 10px; font-size: 12px; }
-  .cand-field-label { font-size: 10px; margin-bottom: 1px; }
-  /* Reduce field required tag */
-  .cand-field-required-tag { font-size: 9px; padding: 1px 5px; }
-  /* BGV compact */
-  .cand-bgv-option { padding: 4px 8px; margin-top: 2px; }
+  .cand-panel .cand-input { padding: 6px 9px; font-size: 12px; }
+  .cand-panel .cand-input--textarea { padding: 5px 9px; font-size: 11px; }
+  .cand-panel .cand-field-label { font-size: 9px; text-transform: uppercase; letter-spacing: .03em; }
+  .cand-panel .cand-field-required-tag { font-size: 8px; padding: 1px 4px; }
 }
