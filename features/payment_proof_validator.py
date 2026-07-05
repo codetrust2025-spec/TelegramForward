@@ -41,12 +41,14 @@ PAYMENT_PATTERNS = [
 MIN_KEYWORD_MATCHES = 2
 
 
-def validate_payment_proof(image_data: bytes, mime_type: str = "") -> tuple[bool, str]:
+def validate_payment_proof(image_data: bytes, mime_type: str = "", expected_amount: int = 0) -> tuple[bool, str]:
     """Validate if the image looks like a payment screenshot.
     
     Returns (is_valid, reason).
     - (True, "") if it looks like a payment proof
     - (False, "reason") if it doesn't look like one
+    
+    If expected_amount > 0, also checks that the detected amount is reasonable.
     """
     if not image_data:
         return False, "Empty image"
@@ -71,6 +73,18 @@ def validate_payment_proof(image_data: bytes, mime_type: str = "") -> tuple[bool
     
     # If we find enough indicators, it's valid
     if keyword_matches >= MIN_KEYWORD_MATCHES or pattern_matches >= 1:
+        # Now check the amount if expected_amount is provided
+        if expected_amount > 0:
+            detected_amount = _extract_max_amount(text)
+            if detected_amount > 0:
+                # Allow if detected amount is at least 50% of expected (partial payments are ok)
+                # But reject if it's less than ₹500 or less than 10% of expected
+                min_acceptable = max(500, expected_amount * 0.1)
+                if detected_amount < min_acceptable:
+                    return False, (
+                        f"The payment amount detected (₹{detected_amount:,.0f}) seems too low. "
+                        f"₹{expected_amount:,} is due. Upload the correct payment screenshot."
+                    )
         return True, ""
     
     # Check if it looks like an interview invite (common false upload)
@@ -85,6 +99,31 @@ def validate_payment_proof(image_data: bytes, mime_type: str = "") -> tuple[bool
     
     # Borderline — allow with 1 keyword match
     return True, ""
+
+
+def _extract_max_amount(text: str) -> float:
+    """Extract the largest rupee amount found in the text."""
+    amounts = []
+    # Match ₹X,XXX or Rs.X,XXX patterns
+    for match in re.finditer(r'₹\s*([\d,]+(?:\.\d{1,2})?)', text):
+        try:
+            amounts.append(float(match.group(1).replace(',', '')))
+        except ValueError:
+            pass
+    for match in re.finditer(r'[Rr][Ss]\.?\s*([\d,]+(?:\.\d{1,2})?)', text):
+        try:
+            amounts.append(float(match.group(1).replace(',', '')))
+        except ValueError:
+            pass
+    # Also match standalone large numbers near payment keywords
+    for match in re.finditer(r'(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)', text):
+        try:
+            val = float(match.group(1).replace(',', ''))
+            if val >= 100:  # Only consider amounts >= ₹100
+                amounts.append(val)
+        except ValueError:
+            pass
+    return max(amounts) if amounts else 0
 
 
 def _extract_text(image_data: bytes, mime_type: str = "") -> Optional[str]:
