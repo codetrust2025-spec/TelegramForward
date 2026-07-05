@@ -48,7 +48,9 @@ def install_public_slot_routes(app) -> None:
             # Validate the image looks like a payment screenshot
             try:
                 from features.payment_proof_validator import validate_payment_proof
-                is_valid, reason = validate_payment_proof(raw, file.content_type or "")
+                # Get the due amount for this candidate
+                due_amount = cs.merged_balance_due_for_name(name) if name else 0
+                is_valid, reason = validate_payment_proof(raw, file.content_type or "", expected_amount=due_amount)
                 if not is_valid:
                     return _json_error(reason or "This doesn't look like a payment screenshot.")
             except Exception:
