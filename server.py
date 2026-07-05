@@ -3763,6 +3763,17 @@ async def candidates_upload_proof(
     assert_candidate_row_access(request, existing)
     try:
         raw = await file.read()
+        # Validate: must look like a payment screenshot
+        try:
+            from features.payment_proof_validator import validate_payment_proof
+            expected = candidate_store.effective_expected_payment(existing)
+            paid = int(existing.get("payment") or 0)
+            due = max(0, expected - paid)
+            is_valid, reason = validate_payment_proof(raw, file.content_type or "", expected_amount=due)
+            if not is_valid:
+                return {"status": "error", "message": reason}
+        except Exception:
+            pass
         entry = candidate_store.add_proof(
             cid,
             data=raw,
@@ -4141,6 +4152,14 @@ async def handler_expense_upload_proof(
 
     try:
         raw = await file.read()
+        # Validate: must look like a payment/transfer screenshot
+        try:
+            from features.payment_proof_validator import validate_handler_payout_proof
+            is_valid, reason = validate_handler_payout_proof(raw, file.content_type or "")
+            if not is_valid:
+                return {"status": "error", "message": reason}
+        except Exception:
+            pass
         entry = handler_expenses.add_proof(
             eid,
             data=raw,
