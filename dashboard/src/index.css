@@ -17003,7 +17003,8 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
    ═══════════════════════════════════════════ */
 @media (min-width: 900px) {
   .cand-modal {
-    max-width: 900px;
+    max-width: 1050px;
+    width: 95vw;
     max-height: 90vh;
     display: flex;
     flex-direction: column;
@@ -17012,10 +17013,18 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
     padding: 10px 14px;
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 7px 14px;
+    gap: 6px 16px;
     overflow-y: auto;
     max-height: calc(90vh - 100px);
   }
+  /* Keep span-2 items inside their column */
+  .cand-modal-body > .cand-field--span2 { grid-column: span 1; }
+  .cand-modal-body > .cand-service-field { grid-column: span 1; }
+  .cand-modal-body > .cand-service-scope { grid-column: span 1; }
+  .cand-modal-body > .cand-consultancy-field { grid-column: span 1; }
+  /* Follow-up and proofs span full width */
+  .cand-modal-body > .cand-field--required { grid-column: 1 / -1; }
+  .cand-modal-body > .cand-field:last-of-type { grid-column: 1 / -1; }
   .cand-modal-footer {
     position: sticky;
     bottom: 0;
@@ -17024,34 +17033,40 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
     z-index: 5;
     padding: 8px 16px;
   }
-  /* Service field spans full but is compact */
-  .cand-service-options { gap: 6px; }
-  .cand-service-card { padding: 6px 8px; }
-  .cand-service-card em { font-size: 10px; }
-  .cand-service-card strong { font-size: 12px; }
-  .cand-service-scope-options { gap: 5px; }
-  .cand-service-scope-pill { padding: 4px 8px; font-size: 11px; }
-  .cand-consultancy-field { padding: 4px 6px; }
-  .cand-consultancy-text em { font-size: 10px; }
-  /* Compact fields */
-  .cand-field-hint { font-size: 9px; line-height: 1.2; }
-  .cand-pay-status { font-size: 10px; padding: 2px 5px; }
-  .cand-pay-handler-share { font-size: 10px; padding: 2px 5px; display: block; }
-  /* Compact proofs */
-  .cand-proofs { gap: 5px; }
-  .cand-proofs-drop { padding: 8px; min-height: 55px; }
-  .cand-proofs-drop-icon { font-size: 16px; }
-  .cand-proofs-drop-text strong { font-size: 11px; }
-  .cand-proofs-drop-sub { font-size: 9px; }
-  .cand-proofs-grid { gap: 5px; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); }
-  .cand-proof-card { max-width: 90px; }
-  .cand-proof-card img { max-height: 65px; }
-  .cand-proof-meta { font-size: 8px; }
+  /* Compact service cards */
+  .cand-service-options { gap: 5px; }
+  .cand-service-card { padding: 5px 8px; }
+  .cand-service-card em { font-size: 9px; line-height: 1.2; }
+  .cand-service-card strong { font-size: 11px; }
+  /* Compact scope */
+  .cand-service-scope-options { gap: 4px; }
+  .cand-service-scope-pill { padding: 3px 8px; font-size: 10px; }
+  /* Compact consultancy */
+  .cand-consultancy-field { padding: 3px 6px; }
+  .cand-consultancy-text em { font-size: 9px; }
+  /* Compact hints */
+  .cand-field-hint { font-size: 8px; line-height: 1.1; margin-top: 1px; }
+  /* Compact payment */
+  .cand-pay-status { font-size: 10px; padding: 2px 4px; }
+  .cand-pay-handler-share { font-size: 9px; padding: 2px 4px; display: block; margin-top: 2px; }
+  /* Compact proofs - horizontal layout */
+  .cand-proofs { gap: 4px; }
+  .cand-proofs-header { margin-bottom: 2px; }
+  .cand-proofs-drop { padding: 6px; min-height: 50px; }
+  .cand-proofs-drop-icon { font-size: 14px; }
+  .cand-proofs-drop-text strong { font-size: 10px; }
+  .cand-proofs-drop-sub { font-size: 8px; }
+  .cand-proofs-grid { gap: 4px; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); }
+  .cand-proof-card { max-width: 80px; }
+  .cand-proof-card img { max-height: 55px; }
+  .cand-proof-meta { font-size: 7px; padding: 2px 4px; }
+  .cand-proofs .cand-input--small { font-size: 10px; padding: 3px 6px; }
   /* Compact textarea */
-  .cand-field--required textarea.cand-input--textarea { min-height: 40px; max-height: 60px; }
+  .cand-field--required textarea.cand-input--textarea { min-height: 35px; max-height: 55px; }
   /* Compact inputs */
-  .cand-input { padding: 6px 8px; font-size: 12px; }
-  .cand-input--textarea { padding: 5px 8px; font-size: 11px; }
-  .cand-field-label { font-size: 9px; }
-  .cand-field-required-tag { font-size: 8px; }
+  .cand-input { padding: 5px 7px; font-size: 12px; }
+  .cand-input--textarea { padding: 4px 7px; font-size: 11px; }
+  .cand-field-label { font-size: 9px; margin-bottom: 0; }
+  .cand-field-required-tag { font-size: 7px; padding: 1px 3px; }
+  .cand-field { gap: 2px; }
 }
