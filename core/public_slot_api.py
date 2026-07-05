@@ -45,6 +45,14 @@ def install_public_slot_routes(app) -> None:
     ):
         try:
             raw = await file.read()
+            # Validate the image looks like a payment screenshot
+            try:
+                from features.payment_proof_validator import validate_payment_proof
+                is_valid, reason = validate_payment_proof(raw, file.content_type or "")
+                if not is_valid:
+                    return _json_error(reason or "This doesn't look like a payment screenshot.")
+            except Exception:
+                pass  # If validator fails, allow upload
             result = cs.public_add_payment_proof_for_name(
                 name,
                 data=raw,
