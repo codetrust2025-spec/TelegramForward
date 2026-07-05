@@ -4544,13 +4544,14 @@ def get_proof(cid: str, pid: str) -> tuple[str, dict] | None:
 
 
 def delete_proof(cid: str, pid: str) -> bool:
-    """Remove a proof from the candidate + delete its file from disk."""
+    """Remove a proof from the candidate + delete its file from disk.
+    Also searches slot-clone rows with the same name in case proof was merged from another row."""
     cdata = _load()
     rows = cdata.get("candidates") or []
-    for r in rows:
-        if r.get("id") != cid:
-            continue
-        proofs = list(r.get("proofs") or [])
+    # First try the exact row
+    target_row = next((r for r in rows if r.get("id") == cid), None)
+    if target_row:
+        proofs = list(target_row.get("proofs") or [])
         for i, p in enumerate(proofs):
             if p.get("id") == pid:
                 path = os.path.join(_proof_dir(cid), p["filename"])
@@ -4560,12 +4561,34 @@ def delete_proof(cid: str, pid: str) -> bool:
                 except OSError:
                     pass
                 proofs.pop(i)
-                r["proofs"] = proofs
-                r["updated_at"] = _now_iso()
+                target_row["proofs"] = proofs
+                target_row["updated_at"] = _now_iso()
                 cdata["candidates"] = rows
                 _save(cdata)
                 return True
-        return False
+    # If not found on the target row, search all rows with the same name (slot clones)
+    if target_row:
+        name_key = _normalise_candidate_name_key(target_row.get("name") or "")
+        for r in rows:
+            if r.get("id") == cid:
+                continue
+            if _normalise_candidate_name_key(r.get("name") or "") != name_key:
+                continue
+            proofs = list(r.get("proofs") or [])
+            for i, p in enumerate(proofs):
+                if p.get("id") == pid:
+                    path = os.path.join(_proof_dir(r["id"]), p["filename"])
+                    try:
+                        if os.path.exists(path):
+                            os.remove(path)
+                    except OSError:
+                        pass
+                    proofs.pop(i)
+                    r["proofs"] = proofs
+                    r["updated_at"] = _now_iso()
+                    cdata["candidates"] = rows
+                    _save(cdata)
+                    return True
     return False
 
 
