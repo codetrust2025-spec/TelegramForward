@@ -145,3 +145,84 @@ def _extract_text(image_data: bytes, mime_type: str = "") -> Optional[str]:
     except Exception:
         # Any OCR error — skip validation (don't block uploads)
         return None
+
+
+# ── Interview Invite Validator ──────────────────────────────────────────────────
+
+INVITE_KEYWORDS = {
+    "interview", "meeting", "teams", "zoom", "google meet", "calendar",
+    "invite", "scheduled", "join", "link", "webex", "hangouts",
+    "video call", "conference", "agenda", "organizer", "accepted",
+    "pm", "am", "ist", "time", "date",
+}
+
+INVITE_PATTERNS = [
+    r"https?://teams\.microsoft\.com",
+    r"https?://zoom\.us",
+    r"https?://meet\.google\.com",
+    r"https?://.*\.webex\.com",
+    r"\d{1,2}:\d{2}\s*(am|pm|AM|PM)",
+    r"(Mon|Tue|Wed|Thu|Fri|Sat|Sun)",
+    r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)",
+]
+
+
+def validate_interview_invite(image_data: bytes, mime_type: str = "") -> tuple[bool, str]:
+    """Validate if the image looks like an interview invite screenshot.
+    
+    Returns (is_valid, reason).
+    """
+    if not image_data:
+        return False, "Empty image"
+    
+    text = _extract_text(image_data, mime_type)
+    if text is None:
+        return True, ""  # OCR unavailable — allow
+    
+    if not text.strip():
+        return True, ""  # No text — could be calendar screenshot, allow
+    
+    text_lower = text.lower()
+    
+    keyword_matches = sum(1 for kw in INVITE_KEYWORDS if kw in text_lower)
+    pattern_matches = sum(1 for pat in INVITE_PATTERNS if re.search(pat, text))
+    
+    if keyword_matches >= 2 or pattern_matches >= 1:
+        return True, ""
+    
+    # Check if it looks like a payment screenshot (wrong upload)
+    payment_matches = sum(1 for kw in PAYMENT_KEYWORDS if kw in text_lower)
+    if payment_matches >= 2:
+        return False, "This looks like a payment screenshot, not an interview invite. Upload your Teams/Zoom/Calendar interview invite instead."
+    
+    # Generic — not enough interview indicators
+    if keyword_matches == 0 and pattern_matches == 0:
+        return False, "This doesn't look like an interview invite. Upload a screenshot from Teams, Zoom, Google Calendar, or your email showing the interview details."
+    
+    return True, ""
+
+
+def validate_handler_payout_proof(image_data: bytes, mime_type: str = "") -> tuple[bool, str]:
+    """Validate if the image looks like a payment/transfer proof for handler payout."""
+    if not image_data:
+        return False, "Empty image"
+    
+    text = _extract_text(image_data, mime_type)
+    if text is None:
+        return True, ""  # OCR unavailable — allow
+    
+    if not text.strip():
+        return True, ""
+    
+    text_lower = text.lower()
+    
+    keyword_matches = sum(1 for kw in PAYMENT_KEYWORDS if kw in text_lower)
+    pattern_matches = sum(1 for pat in PAYMENT_PATTERNS if re.search(pat, text_lower))
+    
+    if keyword_matches >= 2 or pattern_matches >= 1:
+        return True, ""
+    
+    if keyword_matches == 0 and pattern_matches == 0:
+        return False, "This doesn't look like a payment screenshot. Upload a UPI/bank transfer receipt showing the payout."
+    
+    return True, ""

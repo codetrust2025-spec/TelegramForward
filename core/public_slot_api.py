@@ -101,6 +101,14 @@ def install_public_slot_routes(app) -> None:
             slot_image = await file.read()
             slot_image_name = file.filename or "slot.jpg"
             slot_image_mime = file.content_type or "image/jpeg"
+            # Validate: must look like an interview invite
+            try:
+                from features.payment_proof_validator import validate_interview_invite
+                is_valid, reason = validate_interview_invite(slot_image, slot_image_mime)
+                if not is_valid:
+                    return _json_error(reason)
+            except Exception:
+                pass
 
         day = date.strip()
         slot_time = time.strip()
