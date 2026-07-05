@@ -17127,7 +17127,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   /* Compact scope */
   .cand-panel .cand-service-scope-options { gap: 6px; flex-wrap: wrap; }
   .cand-panel .cand-service-scope-pill { padding: 6px 10px; font-size: 11px; white-space: nowrap; }
-  /* Compact proofs — side by side layout */
+  /* Compact proofs — prevent overflow */
   .cand-panel .cand-proofs {
     display: grid;
     grid-template-columns: 1fr;
@@ -17135,15 +17135,19 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
     gap: 6px;
     min-width: 0;
     max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
   }
   .cand-panel .cand-proofs-header {
     grid-column: 1 / -1;
     margin-bottom: 2px;
+    min-width: 0;
   }
-  /* When there are proofs, make drop + thumbnail side by side */
+  /* When there are proofs, side by side with safe minmax(0,1fr) */
   .cand-panel .cand-proofs:has(.cand-proofs-grid) {
-    grid-template-columns: minmax(220px, 1fr) 145px;
-    grid-template-rows: auto auto auto;
+    grid-template-columns: minmax(0, 1fr) 110px;
+    grid-template-rows: auto auto;
   }
   .cand-panel .cand-proofs:has(.cand-proofs-grid) .cand-proofs-header {
     grid-column: 1 / -1;
@@ -17152,54 +17156,68 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   .cand-panel .cand-proofs:has(.cand-proofs-grid) .cand-proofs-drop {
     grid-column: 1;
     grid-row: 2;
+    min-width: 0;
   }
   .cand-panel .cand-proofs:has(.cand-proofs-grid) .cand-proofs-grid {
     grid-column: 2;
     grid-row: 2;
+    min-width: 0;
+    max-width: 110px;
   }
   .cand-panel .cand-proofs:has(.cand-proofs-grid) .cand-input--small {
     grid-column: 1 / -1;
     grid-row: 3;
   }
-  /* Upload dropzone */
+  /* Upload dropzone — flexible, never overflows */
   .cand-panel .cand-proofs-drop {
-    min-width: 220px;
-    height: 96px;
-    min-height: 80px;
-    max-height: 100px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    height: 90px;
+    max-height: 90px;
     padding: 10px;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
-    white-space: normal;
+    overflow: hidden;
   }
-  .cand-panel .cand-proofs-drop-icon { font-size: 20px; }
+  .cand-panel .cand-proofs-drop-icon { font-size: 18px; }
   .cand-panel .cand-proofs-drop-text strong {
     font-size: 11px;
-    white-space: nowrap;
+    white-space: normal;
+    text-align: center;
+    word-break: break-word;
   }
   .cand-panel .cand-proofs-drop-sub {
     font-size: 9px;
-    white-space: nowrap;
+    white-space: normal;
+    text-align: center;
   }
-  /* Thumbnail card */
+  /* Thumbnail card — fixed 110px, never overflows */
   .cand-panel .cand-proofs-grid {
     display: flex;
     flex-direction: column;
     gap: 4px;
     align-items: center;
-    max-width: 145px;
+    width: 110px;
+    max-width: 110px;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow: hidden;
   }
   .cand-panel .cand-proof-card {
-    max-width: 140px;
-    width: 140px;
+    width: 110px;
+    max-width: 110px;
     min-width: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    position: relative;
   }
   .cand-panel .cand-proof-card img {
-    max-height: 85px;
-    height: 85px;
+    max-height: 75px;
+    height: 75px;
     width: 100%;
     object-fit: cover;
     border-radius: 4px;
@@ -17211,14 +17229,17 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    max-width: 110px;
   }
-  /* Note input below upload + thumbnail row, full width */
+  /* Note input below upload + thumbnail row, full width, no clip */
   .cand-panel .cand-proofs .cand-input--small {
     width: 100%;
     max-width: 100%;
+    min-width: 0;
     box-sizing: border-box;
     font-size: 11px;
     padding: 4px 8px;
+    overflow: hidden;
   }
 }
 @media (max-width: 899px) {
