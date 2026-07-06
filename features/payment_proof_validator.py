@@ -87,9 +87,8 @@ def validate_payment_proof(image_data: bytes, mime_type: str = "", expected_amou
                 tolerance = expected_amount * 0.05
                 if detected_amount < (expected_amount - tolerance):
                     return False, (
-                        f"Payment amount detected: ₹{detected_amount:,.0f}. "
-                        f"But ₹{expected_amount:,} is due. "
-                        f"Upload a screenshot showing the full ₹{expected_amount:,} payment."
+                        f"₹{detected_amount:,.0f} payment detected but ₹{expected_amount:,} is due. "
+                        f"Upload proof of full ₹{expected_amount:,} payment."
                     )
                 # Also reject if detected amount doesn't make sense
                 # (e.g., OCR misread ₹7k as ₹27k — reject amounts that aren't
@@ -102,9 +101,8 @@ def validate_payment_proof(image_data: bytes, mime_type: str = "", expected_amou
                         partial = int(amt_str[i:])
                         if partial > 0 and partial < expected_amount:
                             return False, (
-                                f"Payment amount detected: ₹{detected_amount:,.0f} (may be misread). "
-                                f"₹{expected_amount:,} is due. "
-                                f"Upload a screenshot showing the full ₹{expected_amount:,} payment."
+                                f"₹{partial:,} payment detected but ₹{expected_amount:,} is due. "
+                                f"Upload proof of full ₹{expected_amount:,} payment."
                             )
             else:
                 # Could not detect any amount — require full amount proof
