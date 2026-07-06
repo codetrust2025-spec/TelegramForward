@@ -1449,6 +1449,14 @@ def _merge_profile_rows_for_pending(rows: list[dict]) -> dict:
     # Match dashboard merge: use representative row's channel-aware expected, not max across clones.
     expected = effective_expected_payment(rep)
     resume_count = max(len(r.get("resumes") or []) for r in rows)
+    # Merge resumes from all clones into the representative row
+    all_resumes_merged = {}
+    for r in rows:
+        for res in (r.get("resumes") or []):
+            rid = res.get("id")
+            if rid and rid not in all_resumes_merged:
+                all_resumes_merged[rid] = res
+    merged_resumes = list(all_resumes_merged.values())
     phone = next((r.get("phone") for r in rows if _clean_str(r.get("phone"))), "")
     reference = next(
         (
@@ -1465,7 +1473,8 @@ def _merge_profile_rows_for_pending(rows: list[dict]) -> dict:
         "payment": payment,
         "expected_payment": expected,
         "balance_due": max(0, expected - payment),
-        "resume_count": resume_count,
+        "resume_count": len(merged_resumes),
+        "resumes": merged_resumes,
         "phone": phone or rep.get("phone"),
         "reference": reference or rep.get("reference"),
         "follow_up": follow_up or rep.get("follow_up"),
