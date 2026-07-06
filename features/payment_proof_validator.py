@@ -101,28 +101,39 @@ def validate_payment_proof(image_data: bytes, mime_type: str = "", expected_amou
 
 
 def _extract_max_amount(text: str) -> float:
-    """Extract the largest rupee amount found in the text."""
-    amounts = []
-    # Match ₹X,XXX or Rs.X,XXX patterns
+    """Extract the largest rupee amount found in the text.
+    
+    Prioritizes ₹-prefixed amounts. Standalone numbers are capped at ₹10,00,000
+    to avoid matching transaction IDs, phone numbers, etc.
+    """
+    prefixed_amounts = []
+    # Match ₹X,XXX or Rs.X,XXX patterns — these are reliable
     for match in re.finditer(r'₹\s*([\d,]+(?:\.\d{1,2})?)', text):
         try:
-            amounts.append(float(match.group(1).replace(',', '')))
+            prefixed_amounts.append(float(match.group(1).replace(',', '')))
         except ValueError:
             pass
     for match in re.finditer(r'[Rr][Ss]\.?\s*([\d,]+(?:\.\d{1,2})?)', text):
         try:
-            amounts.append(float(match.group(1).replace(',', '')))
+            prefixed_amounts.append(float(match.group(1).replace(',', '')))
         except ValueError:
             pass
-    # Also match standalone large numbers near payment keywords
-    for match in re.finditer(r'(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)', text):
+    
+    # If we found ₹-prefixed amounts, use the max of those (most reliable)
+    if prefixed_amounts:
+        return max(prefixed_amounts)
+    
+    # Fallback: match standalone comma-formatted numbers (₹100 to ₹10,00,000)
+    # but cap at 10 lakh to avoid transaction IDs
+    fallback_amounts = []
+    for match in re.finditer(r'(\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)', text):
         try:
             val = float(match.group(1).replace(',', ''))
-            if val >= 100:  # Only consider amounts >= ₹100
-                amounts.append(val)
+            if 100 <= val <= 1000000:  # Only ₹100 to ₹10 lakh
+                fallback_amounts.append(val)
         except ValueError:
             pass
-    return max(amounts) if amounts else 0
+    return max(fallback_amounts) if fallback_amounts else 0
 
 
 def _extract_text(image_data: bytes, mime_type: str = "") -> Optional[str]:
