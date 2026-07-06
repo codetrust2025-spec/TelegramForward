@@ -82,13 +82,30 @@ def validate_payment_proof(image_data: bytes, mime_type: str = "", expected_amou
             detected_amount = _extract_max_amount(text)
             print(f"[PAYMENT-PROOF-VALIDATOR] detected_amount={detected_amount}, expected={expected_amount}")
             if detected_amount > 0:
-                # Must match at least the full due amount
-                if detected_amount < expected_amount:
+                # Amount must match expected (within 5% tolerance for OCR errors)
+                # OR be greater than expected (overpayment is OK)
+                tolerance = expected_amount * 0.05
+                if detected_amount < (expected_amount - tolerance):
                     return False, (
                         f"Payment amount detected: ₹{detected_amount:,.0f}. "
                         f"But ₹{expected_amount:,} is due. "
                         f"Upload a screenshot showing the full ₹{expected_amount:,} payment."
                     )
+                # Also reject if detected amount doesn't make sense
+                # (e.g., OCR misread ₹7k as ₹27k — reject amounts that aren't
+                # a clean multiple of the expected or a recognizable payment)
+                if detected_amount != expected_amount and detected_amount > expected_amount:
+                    # Check if this could be an OCR misread by checking if
+                    # removing leading digit(s) gives expected or a partial
+                    amt_str = str(int(detected_amount))
+                    for i in range(1, len(amt_str)):
+                        partial = int(amt_str[i:])
+                        if partial > 0 and partial < expected_amount:
+                            return False, (
+                                f"Payment amount detected: ₹{detected_amount:,.0f} (may be misread). "
+                                f"₹{expected_amount:,} is due. "
+                                f"Upload a screenshot showing the full ₹{expected_amount:,} payment."
+                            )
             else:
                 # Could not detect any amount — require full amount proof
                 return False, (
