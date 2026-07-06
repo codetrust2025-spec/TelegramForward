@@ -260,6 +260,35 @@ function ResumeUpload({ candidateId, resumes = [] }) {
   return <div className="cand-proofs cand-resume-upload"><div className="cand-proofs-header"><span className="cand-field-label">Resume<span className="cand-proofs-count">{resumes.length}</span></span></div>{disabled ? <div className="cand-proofs-empty cand-proofs-empty--blocked"><strong>Save the candidate first</strong>, then upload the resume.</div> : <><input ref={inputRef} type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden onChange={event => upload(event.target.files?.[0])} disabled={busy} /><button type="button" className="cand-btn cand-btn--primary" onClick={() => inputRef.current?.click()} disabled={busy}>{busy ? 'Uploading…' : 'Upload resume'}</button><span className="cand-field-hint">PDF, DOC, or DOCX · up to 10 MB</span></>}{message && <div className="cand-proofs-error">{message}</div>}</div>
 }
 
+function ResumeCell({ candidate, onRefresh }) {
+  const inputRef = w.useRef(null);
+  const [busy, setBusy] = w.useState(false);
+  const count = Number(candidate.resume_count) || (Array.isArray(candidate.resumes) ? candidate.resumes.length : 0);
+
+  async function upload(file) {
+    if (!file || !candidate.id) return;
+    setBusy(true);
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      const result = await (await fetch(`${ve}/candidates/${candidate.id}/resumes`, { method: "POST", body })).json();
+      if (result.status !== "ok") throw new Error(result.message || "Upload failed");
+      if (onRefresh) await onRefresh();
+    } catch (err) {
+      window.alert(err.message || "Resume upload failed");
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  }
+
+  return <span className="cand-resume-cell-react">
+    {count > 0 && <span className="cand-resume-badge">📄 {count} {count === 1 ? "resume" : "resumes"}</span>}
+    <input ref={inputRef} type="file" accept=".pdf,.doc,.docx" hidden onChange={ev => upload(ev.target.files && ev.target.files[0])} disabled={busy} />
+    <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => inputRef.current && inputRef.current.click()} disabled={busy}>{busy ? "…" : count ? "Update" : "Upload resume"}</button>
+  </span>;
+}
+
 function _Component23({
   phone: e,
   defaultCountry: t = "91",
@@ -1958,8 +1987,7 @@ function CandidatesPanelImpl() {
       const rows = Array.from(table.querySelectorAll("tbody tr"));
       const sortedCandidates = i.slice().sort((a2, b2) => { const da = a2.logged_date || a2.date || ''; const db = b2.logged_date || b2.date || ''; return db.localeCompare(da); });
       rows.forEach((row, index) => {
-        row.querySelector(".cand-cell-resume")?.remove();
-        // Match candidate by data-cid attribute or hidden .cand-cid span
+        // Resume column is now rendered by React — only do non-resume DOM patches here
         const rowCid = row.getAttribute("data-cid") || (row.querySelector(".cand-cid") || {}).textContent || "";
         const candidate = rowCid ? (i.find(c => c && c.id === rowCid) || sortedCandidates.find(c => c && c.id === rowCid)) : sortedCandidates[index];
         if (!candidate || !candidate.id) return;
@@ -1973,63 +2001,9 @@ function CandidatesPanelImpl() {
           complete.textContent = "✓";
           nameCell.append(complete);
         }
-        // Service type now rendered by React in 2nd column — no DOM patching needed
         // Hide service badge from name cell (legacy DOM badges)
         const allBadges = row.querySelectorAll(".cand-cell-name .cand-channel-tag, .cand-cell-name .cand-service-badge");
         allBadges.forEach(b => b.style.display = "none");
-        const cell = document.createElement("td");
-        cell.className = "cand-cell-resume";
-        cell.onclick = event => event.stopPropagation();
-        const resumes = Array.isArray(candidate.resumes) ? candidate.resumes : [];
-        const count = Number(candidate.resume_count) || resumes.length;
-        const latest = candidate.latest_resume || resumes[resumes.length - 1];
-        if (count && latest && latest.id) {
-          const link = document.createElement("button");
-          link.type = "button";
-          link.className = "cand-resume-link";
-          link.title = `Manage ${count} resume version${count === 1 ? "" : "s"}`;
-          link.onclick = () => openResumeManager(candidate);
-          link.innerHTML = `<span aria-hidden="true">📄</span><span>${count} ${count === 1 ? "resume" : "resumes"}</span>`;
-          cell.append(link);
-        } else {
-          const empty = document.createElement("span");
-          empty.className = "cand-resume-empty";
-          empty.title = "No resume saved";
-          empty.textContent = "—";
-          cell.append(empty);
-        }
-        const input = document.createElement("input");
-        input.type = "file";
-        input.accept = ".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-        input.hidden = true;
-        const upload = document.createElement("button");
-        upload.type = "button";
-        upload.className = "cand-btn cand-btn--ghost cand-btn--xs cand-resume-upload-btn";
-        upload.textContent = count ? "Update" : "Upload resume";
-        upload.title = count ? "Upload a newer resume version" : "Upload resume";
-        upload.onclick = () => input.click();
-        input.onchange = async () => {
-          const file = input.files && input.files[0];
-          if (!file) return;
-          upload.disabled = true;
-          upload.textContent = "Uploading…";
-          try {
-            const body = new FormData();
-            body.append("file", file);
-            const result = await (await fetch(`${ve}/candidates/${candidate.id}/resumes`, { method: "POST", body })).json();
-            if (result.status !== "ok") throw new Error(result.message || "Resume upload failed");
-            await fe();
-          } catch (error) {
-            window.alert(error.message || "Resume upload failed");
-          } finally {
-            upload.disabled = false;
-            upload.textContent = count ? "Update" : "Upload resume";
-            input.value = "";
-          }
-        };
-        cell.append(input, upload);
-        const actions = row.querySelector(".cand-cell-actions");
-        row.insertBefore(cell, actions || null);
       });
     }, 0);
     return () => clearTimeout(timer);
@@ -2117,9 +2091,9 @@ function CandidatesPanelImpl() {
       label: Be.count > 0 ? `${Be.name} · ${Be.count}` : Be.name
     }))];
   }, [c, m]);
-  return <div className="cand-page"><header className="cand-header"><div className="cand-header-titles"><h2 className="cand-title">Candidates</h2><p className="cand-subtitle">{n ? `Your referred candidates and earnings${t ? ` — ${t}` : ""}.` : "Tracker for every profile you take on — replaces the old Profiles list update Form sheet."}</p></div><div className="cand-header-actions"><button type="button" className="cand-btn cand-btn--ghost" onClick={() => setRo(true)} title="View all in-progress candidates grouped by technology">Active list</button><button type="button" className="cand-btn cand-btn--ghost" onClick={() => triggerRosterDownload({ month: "all", reference: T })} title="Download CSV of all active (in-progress) candidates">Download active CSV</button>{a && <button type="button" className="cand-btn cand-btn--ghost" onClick={ue} title="View, edit, or delete every handler earning + deduction (admin password required)"><span aria-hidden={true}>₹</span> Manage expenses{((c == null ? undefined : c.handler_deductions_total) > 0 || (c == null ? undefined : c.handler_earnings_total) > 0) && <span className="cand-btn-badge">{(c.handler_earnings_total || 0) + (c.handler_deductions_total || 0) > 0 ? "●" : ""}</span>}</button>}<button type="button" className="cand-btn cand-btn--primary" onClick={q}><span aria-hidden={true}>＋</span> Add candidate</button></div></header><nav className="cand-tabs" role="tablist" aria-label="Candidates sections"><button type="button" role="tab" aria-selected={candTab === "overview"} className={`cand-tabs__btn${candTab === "overview" ? " cand-tabs__btn--active" : ""}`} onClick={() => setCandTab("overview")}>Overview</button><button type="button" role="tab" aria-selected={candTab === "candidates"} className={`cand-tabs__btn${candTab === "candidates" ? " cand-tabs__btn--active" : ""}`} onClick={() => setCandTab("candidates")}>Candidates</button><button type="button" role="tab" aria-selected={candTab === "performers"} className={`cand-tabs__btn${candTab === "performers" ? " cand-tabs__btn--active" : ""}`} onClick={() => setCandTab("performers")}>Earnings</button></nav><div className="cand-toolbar" role="region" aria-label="Candidate filters"><input className="cand-input cand-input--search" placeholder="Search name, tech, reference, phone, notes…" value={E} onChange={ge => b(ge.target.value)} /><select className="cand-input" value={m} onChange={ge => _(ge.target.value)} aria-label="Filter by month">{Le.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select><select className="cand-input" value={g} onChange={ge => p(ge.target.value)}>{dR.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select>{a && <select className={`cand-input${T !== "all" ? " cand-input--active" : ""}`} value={T} onChange={ge => S(ge.target.value)} aria-label="Filter by handler / reference" title="Show only candidates referred by this handler">{st.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select>}<label className={`cand-toggle${y ? " cand-toggle--on" : ""}${(c == null ? undefined : c.pending_count) > 0 ? " cand-toggle--has-pending" : ""}`} title="Show only candidates with a pending balance"><input type="checkbox" checked={y} onChange={ge => k(ge.target.checked)} /><span>Pending only</span>{(c == null ? undefined : c.pending_count) > 0 && <span className="cand-toggle-badge">{c.pending_count}</span>}</label><button type="button" className="cand-btn cand-btn--ghost cand-btn--sm" onClick={() => setRo(true)} title="View all in-progress candidates grouped by technology">☷ Active list</button><button type="button" className="cand-btn cand-btn--ghost cand-btn--sm" onClick={() => triggerRosterDownload({ month: "all", reference: T })} title="Download CSV of all active (in-progress) candidates">⇩ Download active CSV</button>{a && <button type="button" className="cand-btn cand-btn--ghost cand-btn--sm" onClick={ue} title="View, edit, or delete every handler earning + deduction (admin password required)">₹ Manage expenses{((c == null ? undefined : c.handler_deductions_total) > 0 || (c == null ? undefined : c.handler_earnings_total) > 0) && <span className="cand-btn-badge">●</span>}</button>}{a && <button type="button" className="cand-btn cand-btn--ghost cand-btn--sm" onClick={() => setShowExpenditure(true)} title="View total company expenditure — handler payouts + operational costs">📊 Total expenditure</button>}<button type="button" className="cand-btn cand-btn--primary cand-btn--sm" onClick={q}>+ Add candidate</button></div>{candTab === "overview" && c && <><J8 stats={c} scopeLabel={$e} onPayoutsClick={pe} handlerView={n} handlerName={t} scopeReference={T !== "all" ? T : n ? t : null} /></>}{candTab === "performers" && c && <EarningsBreakdown stats={c} allStats={u} month={m} onMonthChange={_} monthOptions={Le} onEditPayout={a ? me : undefined} handlerView={n} handlerName={t} formatCurrency={Jc} apiBase={ve} />}{x && <div className="cand-error">{x}</div>}{candTab === "candidates" && <div className="cand-table-wrap"><table className="cand-table"><thead><tr><th>Name</th><th>Service type</th><th>Technology</th><th>Stage</th><th>Payment</th><th>Date</th><th>Phone</th>{a && <th>Reference</th>}<th aria-label="Actions" /></tr></thead><tbody>{f && i.length === 0 ? <tr><td colSpan={a ? 9 : 8} className="cand-table-empty">Loading…</td></tr> : i.length === 0 ? <tr><td colSpan={a ? 9 : 8} className="cand-table-empty">No candidates match these filters. <button type="button" className="cand-link" onClick={q}>Add one</button>.</td></tr> : i.slice().sort((a2, b2) => { const da = a2.logged_date || a2.date || ''; const db = b2.logged_date || b2.date || ''; return db.localeCompare(da); }).map(ge => {
+  return <div className="cand-page"><header className="cand-header"><div className="cand-header-titles"><h2 className="cand-title">Candidates</h2><p className="cand-subtitle">{n ? `Your referred candidates and earnings${t ? ` — ${t}` : ""}.` : "Tracker for every profile you take on — replaces the old Profiles list update Form sheet."}</p></div><div className="cand-header-actions"><button type="button" className="cand-btn cand-btn--ghost" onClick={() => setRo(true)} title="View all in-progress candidates grouped by technology">Active list</button><button type="button" className="cand-btn cand-btn--ghost" onClick={() => triggerRosterDownload({ month: "all", reference: T })} title="Download CSV of all active (in-progress) candidates">Download active CSV</button>{a && <button type="button" className="cand-btn cand-btn--ghost" onClick={ue} title="View, edit, or delete every handler earning + deduction (admin password required)"><span aria-hidden={true}>₹</span> Manage expenses{((c == null ? undefined : c.handler_deductions_total) > 0 || (c == null ? undefined : c.handler_earnings_total) > 0) && <span className="cand-btn-badge">{(c.handler_earnings_total || 0) + (c.handler_deductions_total || 0) > 0 ? "●" : ""}</span>}</button>}<button type="button" className="cand-btn cand-btn--primary" onClick={q}><span aria-hidden={true}>＋</span> Add candidate</button></div></header><nav className="cand-tabs" role="tablist" aria-label="Candidates sections"><button type="button" role="tab" aria-selected={candTab === "overview"} className={`cand-tabs__btn${candTab === "overview" ? " cand-tabs__btn--active" : ""}`} onClick={() => setCandTab("overview")}>Overview</button><button type="button" role="tab" aria-selected={candTab === "candidates"} className={`cand-tabs__btn${candTab === "candidates" ? " cand-tabs__btn--active" : ""}`} onClick={() => setCandTab("candidates")}>Candidates</button><button type="button" role="tab" aria-selected={candTab === "performers"} className={`cand-tabs__btn${candTab === "performers" ? " cand-tabs__btn--active" : ""}`} onClick={() => setCandTab("performers")}>Earnings</button></nav><div className="cand-toolbar" role="region" aria-label="Candidate filters"><input className="cand-input cand-input--search" placeholder="Search name, tech, reference, phone, notes…" value={E} onChange={ge => b(ge.target.value)} /><select className="cand-input" value={m} onChange={ge => _(ge.target.value)} aria-label="Filter by month">{Le.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select><select className="cand-input" value={g} onChange={ge => p(ge.target.value)}>{dR.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select>{a && <select className={`cand-input${T !== "all" ? " cand-input--active" : ""}`} value={T} onChange={ge => S(ge.target.value)} aria-label="Filter by handler / reference" title="Show only candidates referred by this handler">{st.map(ge => <option value={ge.value} key={ge.value}>{ge.label}</option>)}</select>}<label className={`cand-toggle${y ? " cand-toggle--on" : ""}${(c == null ? undefined : c.pending_count) > 0 ? " cand-toggle--has-pending" : ""}`} title="Show only candidates with a pending balance"><input type="checkbox" checked={y} onChange={ge => k(ge.target.checked)} /><span>Pending only</span>{(c == null ? undefined : c.pending_count) > 0 && <span className="cand-toggle-badge">{c.pending_count}</span>}</label><button type="button" className="cand-btn cand-btn--ghost cand-btn--sm" onClick={() => setRo(true)} title="View all in-progress candidates grouped by technology">☷ Active list</button><button type="button" className="cand-btn cand-btn--ghost cand-btn--sm" onClick={() => triggerRosterDownload({ month: "all", reference: T })} title="Download CSV of all active (in-progress) candidates">⇩ Download active CSV</button>{a && <button type="button" className="cand-btn cand-btn--ghost cand-btn--sm" onClick={ue} title="View, edit, or delete every handler earning + deduction (admin password required)">₹ Manage expenses{((c == null ? undefined : c.handler_deductions_total) > 0 || (c == null ? undefined : c.handler_earnings_total) > 0) && <span className="cand-btn-badge">●</span>}</button>}{a && <button type="button" className="cand-btn cand-btn--ghost cand-btn--sm" onClick={() => setShowExpenditure(true)} title="View total company expenditure — handler payouts + operational costs">📊 Total expenditure</button>}<button type="button" className="cand-btn cand-btn--primary cand-btn--sm" onClick={q}>+ Add candidate</button></div>{candTab === "overview" && c && <><J8 stats={c} scopeLabel={$e} onPayoutsClick={pe} handlerView={n} handlerName={t} scopeReference={T !== "all" ? T : n ? t : null} /></>}{candTab === "performers" && c && <EarningsBreakdown stats={c} allStats={u} month={m} onMonthChange={_} monthOptions={Le} onEditPayout={a ? me : undefined} handlerView={n} handlerName={t} formatCurrency={Jc} apiBase={ve} />}{x && <div className="cand-error">{x}</div>}{candTab === "candidates" && <div className="cand-table-wrap"><table className="cand-table"><thead><tr><th>Name</th><th>Service type</th><th>Technology</th><th>Stage</th><th>Payment</th><th>Date</th><th>Phone</th>{a && <th>Reference</th>}<th>Resume</th><th aria-label="Actions" /></tr></thead><tbody>{f && i.length === 0 ? <tr><td colSpan={a ? 9 : 8} className="cand-table-empty">Loading…</td></tr> : i.length === 0 ? <tr><td colSpan={a ? 9 : 8} className="cand-table-empty">No candidates match these filters. <button type="button" className="cand-link" onClick={q}>Add one</button>.</td></tr> : i.slice().sort((a2, b2) => { const da = a2.logged_date || a2.date || ''; const db = b2.logged_date || b2.date || ''; return db.localeCompare(da); }).map(ge => {
             const Ge = fR(ge.stage);
-            return <tr className={`cand-row${ge.needs_followup ? " cand-row--pending" : ""}`} onClick={() => I(ge)} key={ge.id} data-cid={ge.id}><td className="cand-cell-name"><span className="cand-name">{ge.name}</span><span className="cand-cid" hidden>{ge.id}</span>{ge.notes && <span className="cand-cell-note" title={ge.notes}>· {ge.notes.slice(0, 30)}{ge.notes.length > 30 ? "…" : ""}</span>}{ge.follow_up && <span className="cand-cell-followup" title={ge.follow_up}><span aria-hidden={true}>⟳</span> {ge.follow_up.slice(0, 60)}{ge.follow_up.length > 60 ? "…" : ""}</span>}</td><td>{ge.service_type === "round_wise" ? <span className="cand-channel-tag cand-channel-tag--roundwise">Round-wise</span> : <span className="cand-channel-tag cand-channel-tag--profile">Profile-wise</span>}</td><td>{ge.technology || "—"}</td><td><span className={`cand-badge ${Ge.cls}`}>{Ge.label}</span></td><td><_Component27 row={ge} onViewProofs={Z} /></td><td className="cand-cell-mono">{pR(ge.logged_date || ge.created_at || ge.date)}</td><td className="cand-cell-mono cand-cell-phone" onClick={Ze => Ze.stopPropagation()}><_Component23 phone={ge.phone} /></td>{a && <td className="cand-cell-ref">{ge.reference || "—"}</td>}<td className="cand-cell-actions" onClick={Ze => Ze.stopPropagation()}><button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => I(ge)} title="Edit">✎</button>{a && <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs cand-btn--danger-ghost" onClick={() => Pe(ge)} title="Delete">🗑</button>}</td></tr>;
+            return <tr className={`cand-row${ge.needs_followup ? " cand-row--pending" : ""}`} onClick={() => I(ge)} key={ge.id} data-cid={ge.id}><td className="cand-cell-name"><span className="cand-name">{ge.name}</span><span className="cand-cid" hidden>{ge.id}</span>{ge.notes && <span className="cand-cell-note" title={ge.notes}>· {ge.notes.slice(0, 30)}{ge.notes.length > 30 ? "…" : ""}</span>}{ge.follow_up && <span className="cand-cell-followup" title={ge.follow_up}><span aria-hidden={true}>⟳</span> {ge.follow_up.slice(0, 60)}{ge.follow_up.length > 60 ? "…" : ""}</span>}</td><td>{ge.service_type === "round_wise" ? <span className="cand-channel-tag cand-channel-tag--roundwise">Round-wise</span> : <span className="cand-channel-tag cand-channel-tag--profile">Profile-wise</span>}</td><td>{ge.technology || "—"}</td><td><span className={`cand-badge ${Ge.cls}`}>{Ge.label}</span></td><td><_Component27 row={ge} onViewProofs={Z} /></td><td className="cand-cell-mono">{pR(ge.logged_date || ge.created_at || ge.date)}</td><td className="cand-cell-mono cand-cell-phone" onClick={Ze => Ze.stopPropagation()}><_Component23 phone={ge.phone} /></td>{a && <td className="cand-cell-ref">{ge.reference || "—"}</td>}<td className="cand-cell-resume" onClick={Ze => Ze.stopPropagation()}><ResumeCell candidate={ge} onRefresh={fe} /></td><td className="cand-cell-actions" onClick={Ze => Ze.stopPropagation()}><button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => I(ge)} title="Edit">✎</button>{a && <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs cand-btn--danger-ghost" onClick={() => Pe(ge)} title="Delete">🗑</button>}</td></tr>;
           })}</tbody></table></div>}{L && <X8 initial={C} handlerReference={n ? t : null} lockReference={n} isAdmin={a} referenceOptions={((c == null ? undefined : c.handler_references) || []).map(ge => ge.name).filter(Boolean)} onClose={Oe} onSave={Re} />}{ce && <_Component28 stats={c} scopeLabel={$e} onClose={() => ee(false)} onManage={a ? ue : undefined} />}{J && a && <_Component29 handlerNames={((c == null ? undefined : c.top_performers) || []).map(ge => ge.name).filter(Boolean)} topPerformers={(c == null ? undefined : c.top_performers) || []} ownedSummary={{
       owed: (c == null ? undefined : c.handler_auto_earnings_total) ?? (c == null ? undefined : c.handler_earnings_total) ?? 0,
       paid: (c == null ? undefined : c.handler_paid_out_total) ?? (c == null ? undefined : c.handler_deductions_total) ?? 0,
