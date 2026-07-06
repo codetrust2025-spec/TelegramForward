@@ -50,11 +50,15 @@ def install_public_slot_routes(app) -> None:
                 from features.payment_proof_validator import validate_payment_proof
                 # Get the due amount for this candidate
                 due_amount = cs.merged_balance_due_for_name(name) if name else 0
+                logger.info("Payment proof validation: name=%s, due=%s, size=%d", name, due_amount, len(raw))
                 is_valid, reason = validate_payment_proof(raw, file.content_type or "", expected_amount=due_amount)
+                logger.info("Payment proof result: valid=%s, reason=%s", is_valid, reason)
                 if not is_valid:
                     return _json_error(reason or "This doesn't look like a payment screenshot.")
-            except Exception:
-                pass  # If validator fails, allow upload
+            except ImportError:
+                logger.warning("Payment proof validator import failed — allowing upload")
+            except Exception as exc:
+                logger.exception("Payment proof validation error: %s", exc)
             result = cs.public_add_payment_proof_for_name(
                 name,
                 data=raw,
