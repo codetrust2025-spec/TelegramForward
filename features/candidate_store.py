@@ -4425,7 +4425,7 @@ def stats(
         # by /candidates.  Raw stats rows can retain an old referrer on a
         # duplicate profile, which makes a badge disagree with the table.
         "handler_references": _handler_reference_options(
-            list_candidates(month=month),
+            list_candidates(month="all"),
             month=None,
             scope_key=scope_key,
         ),
