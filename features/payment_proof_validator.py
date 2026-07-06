@@ -56,14 +56,16 @@ def validate_payment_proof(image_data: bytes, mime_type: str = "", expected_amou
     text = _extract_text(image_data, mime_type)
     if text is None:
         # OCR not available — allow the upload (don't block if OCR fails)
+        print("[PAYMENT-PROOF-VALIDATOR] OCR returned None (unavailable)")
         return True, ""
     
     if not text.strip():
         # Could not extract any text — might be a photo of cash/handwritten receipt
-        # Allow it since we can't determine
+        print("[PAYMENT-PROOF-VALIDATOR] OCR returned empty text")
         return True, ""
     
     text_lower = text.lower()
+    print(f"[PAYMENT-PROOF-VALIDATOR] OCR text (first 500 chars): {text[:500]!r}")
     
     # Check for payment keywords
     keyword_matches = sum(1 for kw in PAYMENT_KEYWORDS if kw in text_lower)
@@ -71,11 +73,14 @@ def validate_payment_proof(image_data: bytes, mime_type: str = "", expected_amou
     # Check for payment patterns (₹ amounts, UTR numbers, etc.)
     pattern_matches = sum(1 for pat in PAYMENT_PATTERNS if re.search(pat, text_lower))
     
-    # If we find enough indicators, it's valid
+    print(f"[PAYMENT-PROOF-VALIDATOR] keywords={keyword_matches}, patterns={pattern_matches}")
+    
+    # If we find enough indicators, it's valid as a payment screenshot
     if keyword_matches >= MIN_KEYWORD_MATCHES or pattern_matches >= 1:
         # Now check the amount if expected_amount is provided
         if expected_amount > 0:
             detected_amount = _extract_max_amount(text)
+            print(f"[PAYMENT-PROOF-VALIDATOR] detected_amount={detected_amount}, expected={expected_amount}")
             if detected_amount > 0:
                 # Must match at least the full due amount
                 if detected_amount < expected_amount:
@@ -84,6 +89,13 @@ def validate_payment_proof(image_data: bytes, mime_type: str = "", expected_amou
                         f"But ₹{expected_amount:,} is due. "
                         f"Upload a screenshot showing the full ₹{expected_amount:,} payment."
                     )
+            else:
+                # Could not detect any amount — require full amount proof
+                return False, (
+                    f"Could not detect payment amount in screenshot. "
+                    f"₹{expected_amount:,} is due. "
+                    f"Upload a clear screenshot showing the full ₹{expected_amount:,} payment amount."
+                )
         return True, ""
     
     # Check if it looks like an interview invite (common false upload)
