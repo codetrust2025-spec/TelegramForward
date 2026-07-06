@@ -131,7 +131,7 @@ export function SubmitSlotPage() {
   const [manualDate, setManualDate] = useState('')
   const [manualTime, setManualTime] = useState('')
   const [interviewRound, setInterviewRound] = useState('')
-  const [serviceType, setServiceType] = useState('round_wise')
+  const [serviceType, setServiceType] = useState('profile_service')
   const [showServiceDrop, setShowServiceDrop] = useState(false)
   const [triedSubmit, setTriedSubmit] = useState(false)
 
@@ -239,7 +239,7 @@ export function SubmitSlotPage() {
       const data = await res.json()
       if (!res.ok) { setError(data.payment_due ? (data.message || 'Payment required.') : (data.message || 'Could not book slot')); return }
       if (slotPreview) URL.revokeObjectURL(slotPreview)
-      setSlotFile(null); setSlotPreview(''); setParsedSlot(null); setManualDate(''); setManualTime(''); setInterviewRound(''); setServiceType('round_wise'); setPaymentProofId('')
+      setSlotFile(null); setSlotPreview(''); setParsedSlot(null); setManualDate(''); setManualTime(''); setInterviewRound(''); setServiceType('profile_service'); setPaymentProofId('')
       setName('')
       setTriedSubmit(false)
       setSuccess(`Slot confirmed for ${data.candidate?.name || effectiveName}.`)
