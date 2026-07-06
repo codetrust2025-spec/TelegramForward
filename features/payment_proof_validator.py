@@ -130,54 +130,79 @@ def validate_payment_proof(image_data: bytes, mime_type: str = "", expected_amou
 def _extract_max_amount(text: str) -> float:
     """Extract the payment amount from the text.
     
-    Strategy: find the most frequently occurring amount (appears 2+ times),
-    which is more reliable than max (OCR often misreads ₹ symbol as a digit).
-    Falls back to the max ₹-prefixed amount if no repeats found.
+    Handles common OCR misreads: ₹ → %, ₹ → 2 (prefix digit).
+    Strategy: find amounts from ₹/Rs/% prefixed patterns, use the most
+    frequently occurring one (appears 2+ times).
     """
-    all_amounts = []
+    prefixed_amounts = []
     
-    # Match ₹X,XXX or Rs.X,XXX patterns
+    # Match ₹X,XXX patterns
     for match in re.finditer(r'₹\s*([\d,]+(?:\.\d{1,2})?)', text):
         try:
-            all_amounts.append(float(match.group(1).replace(',', '')))
+            prefixed_amounts.append(float(match.group(1).replace(',', '')))
         except ValueError:
             pass
+    # Match Rs.X,XXX patterns
     for match in re.finditer(r'[Rr][Ss]\.?\s*([\d,]+(?:\.\d{1,2})?)', text):
         try:
-            all_amounts.append(float(match.group(1).replace(',', '')))
+            prefixed_amounts.append(float(match.group(1).replace(',', '')))
+        except ValueError:
+            pass
+    # Match %X,XXX patterns (OCR misread of ₹)
+    for match in re.finditer(r'%\s*([\d,]+(?:\.\d{1,2})?)', text):
+        try:
+            val = float(match.group(1).replace(',', ''))
+            if val >= 100:
+                prefixed_amounts.append(val)
         except ValueError:
             pass
     
-    # Also match comma-formatted numbers (Indian format: 1,00,000 or 10,000)
+    # If we found prefixed amounts, use the most frequent one
+    if prefixed_amounts:
+        from collections import Counter
+        counts = Counter(prefixed_amounts)
+        # Most common amount (if repeated)
+        most_common = counts.most_common(1)[0]
+        if most_common[1] >= 2:
+            return most_common[0]
+        # If all unique, return the one that appears in a "reasonable" range
+        # Filter out amounts that look like OCR corruption (leading digit added)
+        # e.g., 25000 when real is 5000 — check if removing first digit gives a valid amount
+        clean = []
+        for amt in prefixed_amounts:
+            amt_str = str(int(amt))
+            # If amount > 10000 and removing first digit gives another amount in the list
+            if len(amt_str) > 4:
+                partial = int(amt_str[1:])
+                if partial in [int(a) for a in prefixed_amounts if a != amt]:
+                    clean.append(partial)
+                    continue
+            clean.append(int(amt))
+        if clean:
+            from collections import Counter as C2
+            c2 = C2(clean)
+            mc = c2.most_common(1)[0]
+            return float(mc[0])
+        return max(prefixed_amounts)
+    
+    # Fallback: match standalone comma-formatted numbers (₹500 to ₹10L)
+    fallback = []
     for match in re.finditer(r'(\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)', text):
         try:
             val = float(match.group(1).replace(',', ''))
-            if 100 <= val <= 1000000:
-                all_amounts.append(val)
+            if 500 <= val <= 1000000:
+                fallback.append(val)
         except ValueError:
             pass
+    if fallback:
+        from collections import Counter as C3
+        c3 = C3(fallback)
+        mc = c3.most_common(1)[0]
+        if mc[1] >= 2:
+            return float(mc[0])
+        return min(v for v in fallback if v >= 500)
     
-    if not all_amounts:
-        return 0
-    
-    # Count frequency of each amount
-    from collections import Counter
-    counts = Counter(all_amounts)
-    
-    # If any amount appears 2+ times, it's likely the real transaction amount
-    repeated = [(amt, cnt) for amt, cnt in counts.items() if cnt >= 2]
-    if repeated:
-        # Return the repeated amount (most frequent, then highest if tie)
-        repeated.sort(key=lambda x: (-x[1], -x[0]))
-        return repeated[0][0]
-    
-    # No repeats — return the smallest ₹-prefixed amount between ₹100 and ₹10L
-    # (smaller is safer — OCR tends to ADD digits, not remove them)
-    valid = [a for a in all_amounts if 100 <= a <= 1000000]
-    if valid:
-        return min(valid)
-    
-    return max(all_amounts) if all_amounts else 0
+    return 0
 
 
 def _extract_text(image_data: bytes, mime_type: str = "") -> Optional[str]:
