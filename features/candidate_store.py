@@ -2151,7 +2151,10 @@ def public_add_payment_proof_for_name(
     mime_type: str,
     note: str = "",
 ) -> dict:
-    """Attach a payment screenshot from the public submit-slot page."""
+    """Attach a payment screenshot from the public submit-slot page.
+    
+    Also auto-updates the received payment amount based on OCR detection.
+    """
     canon = canonical_candidate_name(_clean_str(name))
     if not canon:
         raise ValueError("Enter your name")
@@ -2173,13 +2176,38 @@ def public_add_payment_proof_for_name(
     )
     if entry is None:
         raise ValueError("Could not save payment screenshot — try again")
+    # Auto-update received amount: add the due amount to payment
+    # (since validation already confirmed the proof covers the full due)
+    try:
+        _auto_increment_payment_on_proof(cid, due)
+    except Exception:
+        pass  # Don't fail the upload if auto-update fails
+    new_due = merged_balance_due_for_name(canon)
     return {
         "candidate_id": cid,
         "proof_id": entry["id"],
         "proof": entry,
-        "balance_due": due,
+        "balance_due": new_due,
         "name": canon,
     }
+
+
+def _auto_increment_payment_on_proof(cid: str, amount_proven: int) -> None:
+    """Add the proven amount to the candidate's received payment field."""
+    data = _load(force=True)
+    rows = data.get("candidates") or []
+    for i, row in enumerate(rows):
+        if row.get("id") == cid:
+            current_payment = int(row.get("payment") or 0)
+            expected = effective_expected_payment(row)
+            new_payment = min(current_payment + amount_proven, expected)
+            if new_payment > current_payment:
+                rows[i] = dict(row)
+                rows[i]["payment"] = new_payment
+                rows[i]["updated_at"] = _now_iso()
+                data["candidates"] = rows
+                _save(data)
+            return
 
 def _resolve_public_slot_conflicts(
     *,
