@@ -393,6 +393,17 @@ export function SubmitSlotPage() {
                   : <span className="sbs-hint">{serviceType === "round_wise" ? "Type the client name for this round." : "Pick from the list or type a new client name."}</span>}
               </label>
 
+              <label className="sbs-field">
+                <span className="sbs-label">Interview round <span className="sbs-required" aria-hidden="true">*</span></span>
+                <div className={`sbs-select-wrap${triedSubmit && !interviewRound ? ' sbs-select-wrap--required' : ''}`}>
+                  <select className="sbs-select" value={interviewRound} onChange={e => setInterviewRound(e.target.value)} disabled={busy || parsing} required>
+                    <option value="">Select round (L1, L2…)</option>
+                    {ROUND_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </div>
+                {triedSubmit && !interviewRound && <span className="sbs-hint sbs-hint--warn">Required — select a round to confirm.</span>}
+              </label>
+
               {selected?.needs_payment_proof && (
                 <div className="sbs-pay-card">
                   <div className="sbs-pay-head"><span>Payment due</span><strong>₹{(selected.balance_due || 0).toLocaleString('en-IN')}</strong></div>
@@ -405,17 +416,6 @@ export function SubmitSlotPage() {
                   )}
                 </div>
               )}
-
-              <label className="sbs-field">
-                <span className="sbs-label">Interview round <span className="sbs-required" aria-hidden="true">*</span></span>
-                <div className={`sbs-select-wrap${triedSubmit && !interviewRound ? ' sbs-select-wrap--required' : ''}`}>
-                  <select className="sbs-select" value={interviewRound} onChange={e => setInterviewRound(e.target.value)} disabled={busy || parsing} required>
-                    <option value="">Select round (L1, L2…)</option>
-                    {ROUND_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
-                  </select>
-                </div>
-                {triedSubmit && !interviewRound && <span className="sbs-hint sbs-hint--warn">Required — select a round to confirm.</span>}
-              </label>
 
               <div className="sbs-field">
                 <span className="sbs-label">Interview invite screenshot</span>
