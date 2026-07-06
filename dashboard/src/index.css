@@ -10178,9 +10178,9 @@ body {
   position: sticky;
   top: 0;
   z-index: 100;
-  display: flex;
+  display: flex !important;
   gap: 8px;
-  flex-wrap: nowrap;
+  flex-wrap: nowrap !important;
   align-items: center;
   background: #0b1020;
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -10193,6 +10193,10 @@ body {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
+}
+.cand-toolbar > * {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .cand-table-wrap {
   position: relative;
