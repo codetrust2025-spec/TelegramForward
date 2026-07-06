@@ -2115,12 +2115,20 @@ def slot_booking_payment_block_reason(
     if due <= 0:
         return None
     canon = canonical_candidate_name(_clean_str(name))
+    # If candidate already has payment proofs on file, allow booking
+    cid = candidate_id_for_slot_name(name)
+    if cid:
+        data = _load()
+        for row in data.get("candidates") or []:
+            if row.get("id") == cid:
+                if row.get("proofs") and len(row.get("proofs", [])) > 0:
+                    return None  # Has proofs on file — allow
+                break
     if not payment_proof_id:
         return (
             f"₹{due:,} payment is pending for {canon or name}. "
             "Upload your payment screenshot first, then book the interview slot."
         )
-    cid = candidate_id_for_slot_name(name)
     if not cid:
         return "Candidate not found — contact your coordinator."
     hit = get_proof(cid, payment_proof_id.strip())
@@ -3639,6 +3647,8 @@ def interview_slot_picker_rows(
     for r in rows:
         canon = canonical_candidate_name((r.get("name") or "").strip())
         due = merged_balance_due_for_name(canon)
+        # If candidate already has payment proofs on file, don't block slot booking
+        has_proofs = bool(r.get("proofs")) and len(r.get("proofs", [])) > 0
         out.append({
             "id": r.get("id"),
             "name": canon,
@@ -3648,7 +3658,7 @@ def interview_slot_picker_rows(
             "time": r.get("time") or "",
             "service_type": r.get("service_type") or "",
             "balance_due": due,
-            "needs_payment_proof": due > 0,
+            "needs_payment_proof": due > 0 and not has_proofs,
             "payment_blocked": False,
         })
     if profile_channel:
