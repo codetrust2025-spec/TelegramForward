@@ -2076,7 +2076,7 @@ function CandidatesPanelImpl() {
   const st = w.useMemo(() => {
     const ge = ((c == null ? undefined : c.handler_references) || []).map(Be => ({
       name: Be.name,
-      count: m === "all" ? Be.total_count || 0 : Be.month_count || 0
+      count: Be.total_count || 0
     }));
     ge.sort((Be, Xe) => Xe.count !== Be.count ? Xe.count - Be.count : Be.name.localeCompare(Xe.name));
     return [{
