@@ -285,7 +285,7 @@ function ResumeCell({ candidate, onRefresh }) {
   return <span className="cand-resume-cell-react">
     {count > 0 && <span className="cand-resume-badge">📄 {count} {count === 1 ? "resume" : "resumes"}</span>}
     <input ref={inputRef} type="file" accept=".pdf,.doc,.docx" hidden onChange={ev => upload(ev.target.files && ev.target.files[0])} disabled={busy} />
-    <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => inputRef.current && inputRef.current.click()} disabled={busy}>{busy ? "…" : count ? "Update" : "Upload resume"}</button>
+    <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={ev => { ev.stopPropagation(); ev.preventDefault(); inputRef.current && inputRef.current.click(); }} disabled={busy}>{busy ? "…" : count ? "Update" : "Upload resume"}</button>
   </span>;
 }
 
