@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { API } from '../config.js'
 import { useAuth } from '../context/AuthContext.jsx'
+import { useInterviewNotifications } from './useInterviewNotifications.js'
 
 const PendingWorksContext = createContext(null)
 
@@ -111,6 +112,9 @@ export function PendingWorksProvider({ children, mainView = 'dashboard' }) {
   const { enabled: authEnabled, authenticated, loading: authLoading } = useAuth()
   const deferCandidates = mainView === 'candidates'
   const authReady = !authEnabled || (authenticated && !authLoading)
+
+  // Browser notifications 20 min before interviews
+  useInterviewNotifications()
 
   const pendingWorks = usePendingWorksQuery({
     enabled: authReady && !deferCandidates,
