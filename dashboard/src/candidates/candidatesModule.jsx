@@ -1959,7 +1959,9 @@ function CandidatesPanelImpl() {
       const sortedCandidates = i.slice().sort((a2, b2) => { const da = a2.logged_date || a2.date || ''; const db = b2.logged_date || b2.date || ''; return db.localeCompare(da); });
       rows.forEach((row, index) => {
         row.querySelector(".cand-cell-resume")?.remove();
-        const candidate = sortedCandidates[index];
+        // Match by candidate name from the row's first cell
+        const rowName = (row.querySelector(".cand-cell-name .cand-name") || row.querySelector(".cand-cell-name"))?.textContent?.trim() || "";
+        const candidate = sortedCandidates.find(c => c && c.name && c.name.trim() === rowName) || sortedCandidates[index];
         if (!candidate || !candidate.id) return;
         const nameCell = row.querySelector(".cand-cell-name");
         nameCell?.querySelector(".cand-row-complete")?.remove();
