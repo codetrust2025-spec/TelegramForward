@@ -1984,77 +1984,23 @@ function CandidatesPanelImpl() {
       const table = document.querySelector(".cand-page .cand-table");
       if (!table) return;
       const header = table.querySelector("thead tr");
-      if (header && !header.querySelector("[data-resume-column]")) {
-        const cell = document.createElement("th");
-        cell.dataset.resumeColumn = "true";
-        cell.textContent = "Resume";
-        const actions = header.querySelector('th[aria-label="Actions"]');
-        header.insertBefore(cell, actions || null);
-      }
+      // Remove old DOM-added resume header if present (React now renders it)
+      const oldResumeHeader = header?.querySelector("[data-resume-column]");
+      if (oldResumeHeader) oldResumeHeader.remove();
       const serviceHeader = Array.from(header?.querySelectorAll("th") || []).find(cell => cell.textContent.trim() === "Slot" || cell.textContent.trim() === "Service type");
       if (serviceHeader) {
         serviceHeader.textContent = "Service type";
         serviceHeader.title = "Profile-wise or round-wise support";
       }
-      const openResumeManager = async candidate => {
-        const backdrop = document.createElement("div");
-        backdrop.className = "cand-modal-backdrop cand-resume-manager";
-        const panel = document.createElement("div");
-        panel.className = "cand-modal cand-modal--resume";
-        const close = () => backdrop.remove();
-        backdrop.onclick = event => { if (event.target === backdrop) close(); };
-        backdrop.append(panel);
-        document.body.append(backdrop);
-        const render = async () => {
-          panel.innerHTML = '<header class="cand-modal-header"><div><h3 class="cand-modal-title">Resume · ' + candidate.name + '</h3><p class="cand-modal-sub">Manage saved resume versions</p></div><button type="button" class="cand-modal-close" aria-label="Close">×</button></header><div class="cand-modal-body cand-modal-body--stack"><p class="cand-exp-empty">Loading resumes…</p></div>';
-          panel.querySelector('.cand-modal-close').onclick = close;
-          let details = candidate;
-          try {
-            const response = await fetch(`${ve}/candidates/${candidate.id}`, { credentials: "include" });
-            const payload = await response.json();
-            if (payload.status === "ok" && payload.candidate) details = payload.candidate;
-          } catch (_) {}
-          const resumes = Array.isArray(details.resumes) ? details.resumes.slice().sort((a, b) => String(b.uploaded_at || "").localeCompare(String(a.uploaded_at || ""))) : [];
-          const body = panel.querySelector('.cand-modal-body');
-          body.innerHTML = '';
-          const actions = document.createElement('div');
-          actions.className = 'cand-resumes-modal-actions';
-          const input = document.createElement('input');
-          input.type = 'file'; input.hidden = true;
-          input.accept = '.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-          const upload = document.createElement('button');
-          upload.type = 'button'; upload.className = 'cand-btn cand-btn--primary cand-btn--sm'; upload.textContent = 'Upload new resume';
-          upload.onclick = () => input.click();
-          input.onchange = async () => {
-            const file = input.files && input.files[0]; if (!file) return;
-            upload.disabled = true; upload.textContent = 'Uploading…';
-            try { const form = new FormData(); form.append('file', file); const result = await (await fetch(`${ve}/candidates/${candidate.id}/resumes`, { method: 'POST', body: form })).json(); if (result.status !== 'ok') throw new Error(result.message || 'Upload failed'); await fe(); await render(); }
-            catch (error) { window.alert(error.message || 'Upload failed'); }
-            finally { input.value = ''; upload.disabled = false; upload.textContent = 'Upload new resume'; }
-          };
-          actions.append(input, upload); body.append(actions);
-          if (!resumes.length) { const empty = document.createElement('p'); empty.className = 'cand-exp-empty'; empty.textContent = 'No resume uploaded yet.'; body.append(empty); return; }
-          const list = document.createElement('ul'); list.className = 'cand-resumes-list cand-resumes-list--modal';
-          resumes.forEach(entry => {
-            const item = document.createElement('li'); item.className = 'cand-resume-item';
-            const meta = document.createElement('div'); meta.className = 'cand-resume-meta';
-            const name = document.createElement('div'); name.className = 'cand-resume-name'; name.textContent = entry.note || entry.original_name || entry.filename || 'Resume';
-            const sub = document.createElement('div'); sub.className = 'cand-proof-sub'; sub.textContent = entry.uploaded_at ? new Date(entry.uploaded_at).toLocaleString() : '';
-            const rowActions = document.createElement('div'); rowActions.className = 'cand-resume-actions';
-            const view = document.createElement('button'); view.type = 'button'; view.className = 'cand-btn cand-btn--ghost cand-btn--xs'; view.textContent = 'View'; view.onclick = () => { const fileUrl = `${window.location.origin}/candidates/${candidate.id}/resumes/${entry.id}/preview`; const ext = ((entry.original_name || entry.filename || '').split('.').pop() || '').toLowerCase(); if (ext === 'pdf') { window.open(fileUrl, '_blank', 'noopener'); } else { window.open(`https://docs.google.com/gview?url=${encodeURIComponent(fileUrl)}&embedded=true`, '_blank', 'noopener'); } };
-            const rename = document.createElement('button'); rename.type = 'button'; rename.className = 'cand-btn cand-btn--ghost cand-btn--xs'; rename.textContent = 'Rename'; rename.onclick = async () => { const note = window.prompt('Resume name / note', entry.note || entry.original_name || ''); if (note === null) return; const result = await (await fetch(`${ve}/candidates/${candidate.id}/resumes/${entry.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note }) })).json(); if (result.status !== 'ok') return window.alert(result.message || 'Rename failed'); await fe(); await render(); };
-            const download = document.createElement('a'); download.className = 'cand-btn cand-btn--ghost cand-btn--xs'; download.textContent = 'Download'; download.href = `${ve}/candidates/${candidate.id}/resumes/${entry.id}`; download.download = entry.original_name || entry.filename || 'resume';
-            const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'cand-btn cand-btn--ghost cand-btn--xs cand-btn--danger-ghost'; remove.textContent = 'Delete'; remove.title = 'Delete resume'; remove.onclick = async () => { if (!window.confirm('Delete this resume version?')) return; const result = await (await fetch(`${ve}/candidates/${candidate.id}/resumes/${entry.id}`, { method: 'DELETE' })).json(); if (result.status !== 'ok') return window.alert(result.message || 'Delete failed'); await fe(); await render(); };
-            meta.append(name, sub); rowActions.append(view, rename, download, remove); item.append(meta, rowActions); list.append(item);
-          });
-          body.append(list);
-        };
-        await render();
-      };
       const rows = Array.from(table.querySelectorAll("tbody tr"));
       const sortedCandidates = i.slice().sort((a2, b2) => { const da = a2.logged_date || a2.date || ''; const db = b2.logged_date || b2.date || ''; return db.localeCompare(da); });
       rows.forEach((row, index) => {
         // Resume column is now rendered by React — only do non-resume DOM patches here
+        // Remove any old DOM-added resume cells
+        row.querySelectorAll(".cand-cell-resume:not([data-react])").forEach(el => {
+          // Only remove if it's a DOM-added one (React ones have the react cell inside)
+          if (!el.querySelector(".cand-resume-cell-react")) el.remove();
+        });
         const rowCid = row.getAttribute("data-cid") || (row.querySelector(".cand-cid") || {}).textContent || "";
         const candidate = rowCid ? (i.find(c => c && c.id === rowCid) || sortedCandidates.find(c => c && c.id === rowCid)) : sortedCandidates[index];
         if (!candidate || !candidate.id) return;
