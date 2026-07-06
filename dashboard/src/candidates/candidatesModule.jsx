@@ -263,7 +263,7 @@ function ResumeUpload({ candidateId, resumes = [] }) {
 function ResumeCell({ candidate, onRefresh }) {
   const inputRef = w.useRef(null);
   const [busy, setBusy] = w.useState(false);
-  const count = Number(candidate.resume_count) || (Array.isArray(candidate.resumes) ? candidate.resumes.length : 0);
+  const count = Number(candidate.resume_count) || (Array.isArray(candidate.resumes) ? candidate.resumes.filter(r => r && r.id).length : 0);
 
   async function upload(file) {
     if (!file || !candidate.id) return;
