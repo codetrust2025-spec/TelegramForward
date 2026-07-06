@@ -10180,7 +10180,7 @@ body {
   z-index: 100;
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   background: #0b1020;
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -10190,6 +10190,9 @@ body {
   margin-bottom: 8px;
   isolation: isolate;
   order: -1;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
 .cand-table-wrap {
   position: relative;
