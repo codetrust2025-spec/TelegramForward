@@ -3689,30 +3689,7 @@ def interview_slot_picker_rows(
             "needs_payment_proof": due > 0 and not has_proofs,
             "payment_blocked": False,
         })
-    if profile_channel:
-        seen = {_slot_picker_dedupe_key({"name": r["name"]}) for r in out}
-        for preset in PUBLIC_SLOT_BOOKER_NAMES:
-            canon = canonical_candidate_name(preset)
-            if excluded_from_public_slot_booking(canon):
-                continue
-            key = _slot_picker_dedupe_key({"name": canon})
-            if not canon or key in seen:
-                continue
-            due = merged_balance_due_for_name(canon)
-            out.append({
-                "id": "",
-                "name": canon,
-                "technology": "",
-                "phone": "",
-                "date": "",
-                "time": "",
-                "service_type": "profile_service",
-                "balance_due": due,
-                "needs_payment_proof": due > 0,
-                "payment_blocked": False,
-            })
-            seen.add(key)
-        out.sort(key=lambda r: (r.get("name") or "").lower())
+    out.sort(key=lambda r: (r.get("name") or "").lower())
     return out
 
 
