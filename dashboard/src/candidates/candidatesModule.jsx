@@ -282,10 +282,77 @@ function ResumeCell({ candidate, onRefresh }) {
     }
   }
 
+  function openManager(ev) {
+    ev.stopPropagation();
+    ev.preventDefault();
+    // Open resume manager modal
+    const backdrop = document.createElement("div");
+    backdrop.className = "cand-modal-backdrop cand-resume-manager";
+    const panel = document.createElement("div");
+    panel.className = "cand-modal cand-modal--resume";
+    const close = () => backdrop.remove();
+    backdrop.onclick = event => { if (event.target === backdrop) close(); };
+    backdrop.append(panel);
+    document.body.append(backdrop);
+    const render = async () => {
+      panel.innerHTML = '<header class="cand-modal-header"><div><h3 class="cand-modal-title">Resume \u00b7 ' + candidate.name + '</h3><p class="cand-modal-sub">Manage saved resume versions</p></div><button type="button" class="cand-modal-close" aria-label="Close">\u00d7</button></header><div class="cand-modal-body cand-modal-body--stack"><p class="cand-exp-empty">Loading resumes\u2026</p></div>';
+      panel.querySelector('.cand-modal-close').onclick = close;
+      let details = candidate;
+      try {
+        const response = await fetch(`${ve}/candidates/${candidate.id}`, { credentials: "include" });
+        const payload = await response.json();
+        if (payload.status === "ok" && payload.candidate) details = payload.candidate;
+      } catch (_) {}
+      const resumes = Array.isArray(details.resumes) ? details.resumes : [];
+      const body = panel.querySelector('.cand-modal-body');
+      body.innerHTML = '';
+      const actions = document.createElement('div');
+      actions.className = 'cand-resumes-modal-actions';
+      const input = document.createElement('input');
+      input.type = 'file'; input.hidden = true;
+      input.accept = '.pdf,.doc,.docx';
+      const uploadBtn = document.createElement('button');
+      uploadBtn.type = 'button'; uploadBtn.className = 'cand-btn cand-btn--primary';
+      uploadBtn.textContent = 'Upload new resume';
+      uploadBtn.onclick = () => input.click();
+      input.onchange = async () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        uploadBtn.disabled = true; uploadBtn.textContent = 'Uploading\u2026';
+        try {
+          const fd = new FormData(); fd.append('file', file);
+          const result = await (await fetch(`${ve}/candidates/${candidate.id}/resumes`, { method: 'POST', body: fd })).json();
+          if (result.status !== 'ok') throw new Error(result.message || 'Upload failed');
+          if (onRefresh) await onRefresh();
+          await render();
+        } catch (err) { window.alert(err.message); }
+        finally { uploadBtn.disabled = false; uploadBtn.textContent = 'Upload new resume'; input.value = ''; }
+      };
+      actions.append(input, uploadBtn); body.append(actions);
+      if (!resumes.length) { const empty = document.createElement('p'); empty.className = 'cand-exp-empty'; empty.textContent = 'No resume uploaded yet.'; body.append(empty); return; }
+      const list = document.createElement('ul'); list.className = 'cand-resumes-list cand-resumes-list--modal';
+      resumes.forEach(entry => {
+        const item = document.createElement('li'); item.className = 'cand-resume-item';
+        const meta = document.createElement('div'); meta.className = 'cand-resume-meta';
+        const name = document.createElement('div'); name.className = 'cand-resume-name'; name.textContent = entry.note || entry.original_name || entry.filename || 'Resume';
+        const sub = document.createElement('div'); sub.className = 'cand-proof-sub'; sub.textContent = entry.uploaded_at ? new Date(entry.uploaded_at).toLocaleString() : '';
+        const rowActions = document.createElement('div'); rowActions.className = 'cand-resume-actions';
+        const view = document.createElement('button'); view.type = 'button'; view.className = 'cand-btn cand-btn--ghost cand-btn--xs'; view.textContent = 'View';
+        view.onclick = () => { const fileUrl = `${window.location.origin}/candidates/${candidate.id}/resumes/${entry.id}/preview`; const ext = ((entry.original_name || entry.filename || '').split('.').pop() || '').toLowerCase(); if (ext === 'pdf') { window.open(fileUrl, '_blank', 'noopener'); } else { window.open(`https://docs.google.com/gview?url=${encodeURIComponent(fileUrl)}&embedded=true`, '_blank', 'noopener'); } };
+        const rename = document.createElement('button'); rename.type = 'button'; rename.className = 'cand-btn cand-btn--ghost cand-btn--xs'; rename.textContent = 'Rename'; rename.onclick = async () => { const note = window.prompt('Resume name / note', entry.note || entry.original_name || ''); if (note === null) return; const result = await (await fetch(`${ve}/candidates/${candidate.id}/resumes/${entry.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note }) })).json(); if (result.status !== 'ok') return window.alert(result.message || 'Rename failed'); if (onRefresh) await onRefresh(); await render(); };
+        const download = document.createElement('a'); download.className = 'cand-btn cand-btn--ghost cand-btn--xs'; download.textContent = 'Download'; download.href = `${ve}/candidates/${candidate.id}/resumes/${entry.id}`; download.download = entry.original_name || entry.filename || 'resume';
+        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'cand-btn cand-btn--ghost cand-btn--xs cand-btn--danger-ghost'; remove.textContent = 'Delete'; remove.title = 'Delete resume'; remove.onclick = async () => { if (!window.confirm('Delete this resume version?')) return; const result = await (await fetch(`${ve}/candidates/${candidate.id}/resumes/${entry.id}`, { method: 'DELETE' })).json(); if (result.status !== 'ok') return window.alert(result.message || 'Delete failed'); if (onRefresh) await onRefresh(); await render(); };
+        meta.append(name, sub); rowActions.append(view, rename, download, remove); item.append(meta, rowActions); list.append(item);
+      });
+      body.append(list);
+    };
+    render();
+  }
+
   return <span className="cand-resume-cell-react" onMouseDown={ev => ev.stopPropagation()} onClick={ev => ev.stopPropagation()}>
-    {count > 0 && <span className="cand-resume-badge">📄 {count} {count === 1 ? "resume" : "resumes"}</span>}
+    {count > 0 && <button type="button" className="cand-resume-link" onMouseDown={ev => ev.stopPropagation()} onClick={openManager}><span aria-hidden="true">📄</span> {count} {count === 1 ? "resume" : "resumes"}</button>}
     <input ref={inputRef} type="file" accept=".pdf,.doc,.docx" hidden onChange={ev => upload(ev.target.files && ev.target.files[0])} disabled={busy} />
-    <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onMouseDown={ev => ev.stopPropagation()} onClick={ev => { ev.stopPropagation(); ev.preventDefault(); if (inputRef.current) inputRef.current.click(); }} disabled={busy}>{busy ? "…" : count ? "Update" : "Upload resume"}</button>
+    <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onMouseDown={ev => ev.stopPropagation()} onClick={count > 0 ? openManager : (ev => { ev.stopPropagation(); ev.preventDefault(); if (inputRef.current) inputRef.current.click(); })} disabled={busy}>{busy ? "…" : count ? "Update" : "Upload resume"}</button>
   </span>;
 }
 
