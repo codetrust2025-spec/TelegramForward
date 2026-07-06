@@ -3859,12 +3859,17 @@ async def candidates_update_proof_note(cid: str, pid: str, body: dict, request: 
 def _resume_file_response(path: str, entry: dict, *, inline: bool = False) -> FileResponse:
     mime = entry.get("mime_type") or "application/octet-stream"
     name = entry.get("original_name") or entry.get("filename") or "resume"
-    disposition = "inline" if inline else "attachment"
+    if inline:
+        # For inline viewing, don't set filename (prevents forced download)
+        return FileResponse(
+            path,
+            media_type=mime,
+            headers={"Content-Disposition": f'inline; filename="{name}"'},
+        )
     return FileResponse(
         path,
         media_type=mime,
         filename=name,
-        headers={"Content-Disposition": f'{disposition}; filename="{name}"'},
     )
 
 
