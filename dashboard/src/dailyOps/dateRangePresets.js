@@ -48,7 +48,7 @@ export function resolvePresetRange(presetId) {
     case 'currentMonth':
       return currentMonthRangeIso(today)
     case 'upcoming':
-      return { from: today, to: addDaysIso(today, 14) }
+      return { from: today, to: addDaysIso(today, 30) }
     case 'thisWeek':
       return { from: startOfWeekIso(today), to: endOfWeekIso(today) }
     case 'last7':
