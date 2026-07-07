@@ -599,7 +599,7 @@ def parse_invite_text(blob: str) -> dict[str, Any]:
     g_date, g_start, g_end = _parse_gmail_calendar_line(blob)
     lf_date, lf_start, lf_end = _parse_longform_invite_line(blob)
     md24_date, md24_start, md24_end = _parse_month_day_24h_line(blob)
-    date = labeled_date or relative_date or g_date or lf_date or md24_date or _parse_date_token(blob)
+    date = labeled_date or g_date or lf_date or md24_date or _parse_date_token(blob) or relative_date
     if labeled_start:
         start, end = labeled_start, labeled_end
     elif relative_start:
