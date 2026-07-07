@@ -16603,6 +16603,14 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   box-shadow: 0 4px 16px rgba(99,102,241,0.3);
 }
 .sbs-cta--ready:hover { background: rgba(99,102,241,0.95); }
+.sbs-cta:disabled, .sbs-cta--ready:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+  background: rgba(100,116,139,0.3);
+  border-color: rgba(100,116,139,0.3);
+  box-shadow: none;
+}
 /* Payment card */
 .sbs-pay-card { padding: 0.85rem; border-radius: 0.75rem; border: 1px solid rgba(251,191,36,0.2); background: rgba(251,191,36,0.05); display: flex; flex-direction: column; gap: 0.65rem; }
 .sbs-pay-head { display: flex; justify-content: space-between; align-items: center; font-size: 0.8125rem; color: var(--text,#eef2f7); }
