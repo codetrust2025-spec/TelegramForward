@@ -150,7 +150,7 @@ export function SubmitSlotPage() {
     return null
   }, [parsedSlot, manualDate, manualTime, interviewRound])
 
-  const showManualSlotFields = Boolean(slotFile && !parsing)
+  const showManualSlotFields = Boolean(slotFile && !parsing && (!aiExtraction || aiExtraction.manual_fields_required || aiExtraction.confidence_score < 70))
   const needsPaymentProof = Boolean(selected?.needs_payment_proof && !paymentProofId)
 
   const refresh = useCallback(async () => {
@@ -174,16 +174,68 @@ export function SubmitSlotPage() {
     if (sessionPreview) URL.revokeObjectURL(sessionPreview)
   }, [slotPreview, sessionPreview])
 
+  const [aiExtraction, setAiExtraction] = useState(null)
+  const [aiBlocked, setAiBlocked] = useState('')
+  const [userEditedFields, setUserEditedFields] = useState({})
+
   async function parseScreenshot(file) {
-    if (!file) { setParsedSlot(null); return }
-    setParsing(true); setError(''); setSuccess('')
+    if (!file) { setParsedSlot(null); setAiExtraction(null); setAiBlocked(''); return }
+    setParsing(true); setError(''); setSuccess(''); setAiExtraction(null); setAiBlocked('')
     try {
+      // Try AI extraction first
       const fd = new FormData(); fd.append('file', file)
-      const res = await fetch(`${API_BASE}/public/slots/parse-screenshot`, { method: 'POST', body: fd })
+      const res = await fetch(`${API_BASE}/public/slots/extract-invite-ai`, { method: 'POST', body: fd })
       const data = await res.json()
-      if (!res.ok) { setParsedSlot(null); setError('Auto-read failed — enter date & time manually.'); return }
-      setParsedSlot(data.slot || null)
-      if (!interviewRound) setInterviewRound(data.slot?.interview_round || '')
+      
+      if (res.ok && data.status === 'ok' && data.data) {
+        const ext = data.data
+        setAiExtraction(ext)
+        
+        // Check if it's a payment screenshot
+        if (ext.is_payment_screenshot) {
+          setAiBlocked('This looks like a payment screenshot. Please upload the interview invite screenshot here.')
+          setParsedSlot(null)
+          setParsing(false)
+          return
+        }
+        // Check if it doesn't look like an invite
+        if (ext.looks_like_interview_invite === false) {
+          setAiBlocked('This image does not look like an interview invite.')
+          setParsedSlot(null)
+          setParsing(false)
+          return
+        }
+        
+        // Auto-fill fields (only if user hasn't manually edited them)
+        const slot = {}
+        if (ext.interview_date && !userEditedFields.date) slot.date = ext.interview_date
+        if (ext.start_time && !userEditedFields.time) slot.time = ext.start_time
+        if (ext.end_time && !userEditedFields.time_end) slot.time_end = ext.end_time
+        if (ext.meeting_platform) slot.platform = ext.meeting_platform
+        if (ext.technology) slot.technology = ext.technology
+        if (ext.interview_round && !interviewRound && !userEditedFields.round) {
+          setInterviewRound(ext.interview_round)
+          slot.interview_round = ext.interview_round
+        }
+        
+        setParsedSlot(slot)
+        if (!userEditedFields.date) setManualDate(ext.interview_date || '')
+        if (!userEditedFields.time) setManualTime(ext.start_time || '')
+        setParsing(false)
+        return
+      }
+    } catch (e) {
+      console.warn('AI extraction failed, falling back to OCR:', e)
+    }
+    
+    // Fallback to existing OCR endpoint
+    try {
+      const fd2 = new FormData(); fd2.append('file', file)
+      const res2 = await fetch(`${API_BASE}/public/slots/parse-screenshot`, { method: 'POST', body: fd2 })
+      const data2 = await res2.json()
+      if (!res2.ok) { setParsedSlot(null); setError('Auto-read failed — enter date & time manually.'); return }
+      setParsedSlot(data2.slot || null)
+      if (!interviewRound) setInterviewRound(data2.slot?.interview_round || '')
       setManualDate(''); setManualTime('')
     } catch { setParsedSlot(null); setError('Network error while reading screenshot') }
     finally { setParsing(false) }
@@ -191,7 +243,7 @@ export function SubmitSlotPage() {
 
   async function onSlotFileChange(file) {
     if (slotPreview) URL.revokeObjectURL(slotPreview)
-    setSlotFile(file || null); setParsedSlot(null); setManualDate(''); setManualTime(''); setSuccess('')
+    setSlotFile(file || null); setParsedSlot(null); setManualDate(''); setManualTime(''); setSuccess(''); setAiExtraction(null); setAiBlocked(''); setUserEditedFields({})
     if (file) { setSlotPreview(URL.createObjectURL(file)); await parseScreenshot(file) }
     else setSlotPreview('')
   }
@@ -425,7 +477,29 @@ export function SubmitSlotPage() {
 
               {parsing && <div className="sbs-status sbs-status--loading"><Spinner size={18} /><span>Reading your invite…</span></div>}
 
-              {parsedSlot?.date && parsedSlot?.time && (
+              {aiBlocked && <div className="sbs-alert sbs-alert--error" role="alert">{aiBlocked}</div>}
+
+              {aiExtraction && !aiBlocked && aiExtraction.confidence_score > 0 && (
+                <div className="sbs-detected">
+                  <span className={`sbs-detected__badge ${aiExtraction.confidence_score >= 90 ? 'sbs-detected__badge--green' : aiExtraction.confidence_score >= 70 ? 'sbs-detected__badge--yellow' : 'sbs-detected__badge--red'}`}>
+                    AI · {aiExtraction.confidence_score}%
+                  </span>
+                  <div className="sbs-detected__main">
+                    {aiExtraction.interview_date && <span className="sbs-detected__date">{formatFriendlyDate(aiExtraction.interview_date)}</span>}
+                    {aiExtraction.start_time && <span className="sbs-detected__time">{aiExtraction.start_time}{aiExtraction.end_time ? ` – ${aiExtraction.end_time}` : ''}</span>}
+                  </div>
+                  <div className="sbs-detected__chips">
+                    {aiExtraction.interview_round && <span className="sbs-chip">{aiExtraction.interview_round}</span>}
+                    {aiExtraction.technology && <span className="sbs-chip sbs-chip--muted">{aiExtraction.technology}</span>}
+                    {aiExtraction.meeting_platform && <span className="sbs-chip sbs-chip--muted">{platformLabel(aiExtraction.meeting_platform)}</span>}
+                  </div>
+                  {aiExtraction.warnings && aiExtraction.warnings.length > 0 && (
+                    <div className="sbs-detected__warnings">{aiExtraction.warnings.map((w, i) => <span key={i} className="sbs-hint sbs-hint--warn">{w}</span>)}</div>
+                  )}
+                </div>
+              )}
+
+              {!aiExtraction && parsedSlot?.date && parsedSlot?.time && (
                 <div className="sbs-detected">
                   <span className="sbs-detected__badge">Detected</span>
                   <div className="sbs-detected__main">
@@ -444,8 +518,8 @@ export function SubmitSlotPage() {
                 <div className="sbs-manual">
                   <p className="sbs-manual__hint">{parsedSlot?.date ? 'Verify detected date & time — correct below if wrong.' : 'Include the date line in your screenshot or enter manually.'}</p>
                   <div className="sbs-manual__grid">
-                    <label className="sbs-field"><span className="sbs-label">Interview date</span><input className="sbs-input" type="date" value={manualDate || parsedSlot?.date || ''} onChange={e => setManualDate(e.target.value)} disabled={busy || parsing} /></label>
-                    <label className="sbs-field"><span className="sbs-label">Start time</span><input className="sbs-input" type="time" value={manualTime || parsedSlot?.time || ''} onChange={e => setManualTime(e.target.value)} disabled={busy || parsing} /></label>
+                    <label className="sbs-field"><span className="sbs-label">Interview date</span><input className="sbs-input" type="date" value={manualDate || parsedSlot?.date || ''} onChange={e => { setManualDate(e.target.value); setUserEditedFields(f => ({...f, date: true})); }} disabled={busy || parsing} /></label>
+                    <label className="sbs-field"><span className="sbs-label">Start time</span><input className="sbs-input" type="time" value={manualTime || parsedSlot?.time || ''} onChange={e => { setManualTime(e.target.value); setUserEditedFields(f => ({...f, time: true})); }} disabled={busy || parsing} /></label>
                   </div>
                 </div>
               )}

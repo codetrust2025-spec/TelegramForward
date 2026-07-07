@@ -16540,6 +16540,10 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   border-radius: 999px;
   margin-bottom: 0.4rem;
 }
+.sbs-detected__badge--green { color: #6ee7b7; background: rgba(16,185,129,0.15); }
+.sbs-detected__badge--yellow { color: #fbbf24; background: rgba(251,191,36,0.15); }
+.sbs-detected__badge--red { color: #f87171; background: rgba(248,113,113,0.15); }
+.sbs-detected__warnings { margin-top: 0.3rem; display: flex; flex-direction: column; gap: 2px; }
 .sbs-detected__main { margin-bottom: 0.4rem; }
 .sbs-detected__date { display: block; font-size: 1rem; font-weight: 700; color: var(--text,#eef2f7); }
 .sbs-detected__time { display: block; font-size: 0.8125rem; color: var(--text-muted,#a8b4c4); }
