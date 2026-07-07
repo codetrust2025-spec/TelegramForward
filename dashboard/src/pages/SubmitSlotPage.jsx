@@ -306,11 +306,23 @@ export function SubmitSlotPage() {
     finally { setBusy(false) }
   }
 
+  const effectiveBookingDate = manualDate || parsedSlot?.date || ''
+  const isPastDate = (() => {
+    if (!effectiveBookingDate) return false
+    const today = new Date(); today.setHours(0,0,0,0)
+    const d = new Date(effectiveBookingDate + 'T00:00:00'); d.setHours(0,0,0,0)
+    return d < today
+  })()
+
   async function submitBook(ev) {
     ev.preventDefault()
     if (!effectiveName || !slotFile || !interviewRound || needsPaymentProof) {
       setTriedSubmit(true)
       setError('')
+      return
+    }
+    if (isPastDate) {
+      setError('Interview date is in the past. Please select today or a future date.')
       return
     }
     setBusy(true); setError(''); setSuccess('')
@@ -559,13 +571,14 @@ export function SubmitSlotPage() {
                     <label className="sbs-field"><span className="sbs-label">Interview date</span><input className="sbs-input" type="date" value={manualDate || parsedSlot?.date || ''} onChange={e => { setManualDate(e.target.value); setUserEditedFields(f => ({...f, date: true})); }} disabled={busy || parsing} /></label>
                     <label className="sbs-field"><span className="sbs-label">Start time</span><input className="sbs-input" type="text" placeholder="e.g. 02:00 PM" value={manualTime || parsedSlot?.time || ''} onChange={e => { setManualTime(e.target.value); setUserEditedFields(f => ({...f, time: true})); }} disabled={busy || parsing} /></label>
                   </div>
+                  {isPastDate && <span className="sbs-hint sbs-hint--warn">Interview date is in the past. Please select today or a future date.</span>}
                 </div>
               )}
 
               {error && <p className="sbs-alert sbs-alert--error" role="alert">{error}</p>}
               {success && <div className="sbs-alert sbs-alert--success sbs-success-anim"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{flexShrink:0}}><path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg><span>{success}</span></div>}
 
-              <button type="submit" className="sbs-cta sbs-cta--ready" disabled={busy}>
+              <button type="submit" className="sbs-cta sbs-cta--ready" disabled={busy || isPastDate}>
                 {busy ? <Spinner size={18} /> : 'Confirm booking'}
               </button>
             </form>
