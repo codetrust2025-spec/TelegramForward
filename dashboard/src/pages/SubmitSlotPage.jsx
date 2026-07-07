@@ -16,11 +16,49 @@ function formatFriendlyDate(iso) {
 
 function formatFriendlyTime(hhmm) {
   if (!hhmm) return ''
+  // Already in 12h format? (e.g., "02:00 PM")
+  if (/\d{1,2}:\d{2}\s*(AM|PM|am|pm)/i.test(hhmm)) return hhmm
   const [h, m] = hhmm.split(':').map(Number)
   if (Number.isNaN(h)) return hhmm
   const d = new Date()
   d.setHours(h, m || 0, 0, 0)
   return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })
+}
+
+/** Convert any time to 12-hour "hh:mm AM/PM" format */
+function normalizeTo12h(val) {
+  if (!val) return ''
+  val = val.trim()
+  // Already 12h? e.g., "02:00 PM", "2:30 pm"
+  const m12 = val.match(/^(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)$/i)
+  if (m12) { return `${m12[1].padStart(2,'0')}:${m12[2]} ${m12[3].toUpperCase()}` }
+  // Short 12h: "2 PM"
+  const ms = val.match(/^(\d{1,2})\s*(AM|PM|am|pm)$/i)
+  if (ms) { return `${ms[1].padStart(2,'0')}:00 ${ms[2].toUpperCase()}` }
+  // 24h: "14:00"
+  const m24 = val.match(/^(\d{1,2}):(\d{2})$/)
+  if (m24) {
+    let h = parseInt(m24[1]), min = m24[2]
+    if (h === 0) return `12:${min} AM`
+    if (h < 12) return `${String(h).padStart(2,'0')}:${min} AM`
+    if (h === 12) return `12:${min} PM`
+    return `${String(h-12).padStart(2,'0')}:${min} PM`
+  }
+  return val
+}
+
+/** Convert 12h "02:00 PM" to 24h "14:00" for native inputs or submission */
+function to24h(val) {
+  if (!val) return ''
+  val = val.trim()
+  // Already 24h?
+  if (/^\d{1,2}:\d{2}$/.test(val)) return val
+  const m = val.match(/^(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)$/i)
+  if (!m) return val
+  let h = parseInt(m[1]), min = m[2], ap = m[3].toUpperCase()
+  if (ap === 'AM' && h === 12) h = 0
+  else if (ap === 'PM' && h !== 12) h += 12
+  return `${String(h).padStart(2,'0')}:${min}`
 }
 
 function platformLabel(platform) {
@@ -149,7 +187,7 @@ export function SubmitSlotPage() {
     const effectiveDate = manualDate || parsedSlot?.date || ''
     const effectiveTime = manualTime || parsedSlot?.time || ''
     const effectiveEnd = parsedSlot?.time_end || ''
-    if (effectiveDate && effectiveTime) return { ...parsedSlot, date: effectiveDate, time: effectiveTime, time_end: effectiveEnd, interview_round: interviewRound }
+    if (effectiveDate && effectiveTime) return { ...parsedSlot, date: effectiveDate, time: to24h(effectiveTime), time_end: to24h(effectiveEnd), interview_round: interviewRound }
     return null
   }, [parsedSlot, manualDate, manualTime, interviewRound])
 
@@ -208,8 +246,8 @@ export function SubmitSlotPage() {
         // Auto-fill fields (only if user hasn't manually edited them)
         const slot = {}
         if (ext.interview_date && !userEditedFields.date) slot.date = ext.interview_date
-        if (ext.start_time && !userEditedFields.time) slot.time = ext.start_time
-        if (ext.end_time && !userEditedFields.time_end) slot.time_end = ext.end_time
+        if ((ext.start_time || ext.time) && !userEditedFields.time) slot.time = normalizeTo12h(ext.start_time || ext.time)
+        if ((ext.end_time || ext.time_end) && !userEditedFields.time_end) slot.time_end = normalizeTo12h(ext.end_time || ext.time_end)
         if (ext.meeting_platform) slot.platform = ext.meeting_platform
         if (ext.technology) slot.technology = ext.technology
         if (ext.interview_round && !interviewRound && !userEditedFields.round) {
@@ -217,9 +255,10 @@ export function SubmitSlotPage() {
           slot.interview_round = ext.interview_round
         }
         
+        console.log('[Invite extraction]', { raw: ext, mapped: slot })
         setParsedSlot(slot)
         if (!userEditedFields.date) setManualDate(ext.interview_date || '')
-        if (!userEditedFields.time) setManualTime(ext.start_time || '')
+        if (!userEditedFields.time) setManualTime(normalizeTo12h(ext.start_time || ext.time || ''))
         setParsing(false)
         return
       }
@@ -518,7 +557,7 @@ export function SubmitSlotPage() {
                   <p className="sbs-manual__hint">{parsedSlot?.date ? 'Verify detected date & time — correct below if wrong.' : 'Include the date line in your screenshot or enter manually.'}</p>
                   <div className="sbs-manual__grid">
                     <label className="sbs-field"><span className="sbs-label">Interview date</span><input className="sbs-input" type="date" value={manualDate || parsedSlot?.date || ''} onChange={e => { setManualDate(e.target.value); setUserEditedFields(f => ({...f, date: true})); }} disabled={busy || parsing} /></label>
-                    <label className="sbs-field"><span className="sbs-label">Start time</span><input className="sbs-input" type="time" value={manualTime || parsedSlot?.time || ''} onChange={e => { setManualTime(e.target.value); setUserEditedFields(f => ({...f, time: true})); }} disabled={busy || parsing} /></label>
+                    <label className="sbs-field"><span className="sbs-label">Start time</span><input className="sbs-input" type="text" placeholder="e.g. 02:00 PM" value={manualTime || parsedSlot?.time || ''} onChange={e => { setManualTime(e.target.value); setUserEditedFields(f => ({...f, time: true})); }} disabled={busy || parsing} /></label>
                   </div>
                 </div>
               )}
