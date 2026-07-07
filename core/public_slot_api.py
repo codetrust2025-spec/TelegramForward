@@ -86,6 +86,49 @@ def install_public_slot_routes(app) -> None:
             return _json_error(f"Could not read screenshot: {exc}", status=500)
         return {"status": "ok", "slot": parsed}
 
+    @app.post("/public/slots/extract-invite-ai")
+    async def public_slot_extract_invite_ai(file: UploadFile = File(...)):
+        """AI-powered interview invite extraction using Ollama vision models."""
+        raw = await file.read()
+        mime = file.content_type or "image/jpeg"
+        try:
+            from features.ollama_invite_extract import extract_interview_invite_with_ollama
+
+            result = await asyncio.to_thread(extract_interview_invite_with_ollama, raw, mime)
+        except Exception as exc:
+            logger.exception("AI invite extraction failed")
+            # Return graceful fallback
+            return {
+                "status": "ok",
+                "success": False,
+                "extraction_source": "error",
+                "data": {
+                    "candidate_name": "",
+                    "interview_date": "",
+                    "start_time": "",
+                    "end_time": "",
+                    "interview_round": "",
+                    "technology": "",
+                    "meeting_platform": "",
+                    "confidence_score": 0,
+                    "missing_fields": ["interview_date", "start_time", "interview_round"],
+                    "warnings": [f"AI extraction failed: {exc}. Use manual entry."],
+                    "is_payment_screenshot": False,
+                    "looks_like_interview_invite": True,
+                    "manual_fields_required": True,
+                },
+            }
+        
+        is_success = bool(result and result.get("confidence_score", 0) > 0)
+        return {
+            "status": "ok",
+            "success": is_success,
+            "extraction_source": result.get("extraction_source", "unknown"),
+            "primary_model": result.get("primary_model", ""),
+            "backup_model": result.get("backup_model", ""),
+            "data": result,
+        }
+
     @app.post("/public/slots/book")
     async def public_slot_book(
         name: str = Form(...),
