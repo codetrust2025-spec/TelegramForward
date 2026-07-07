@@ -134,6 +134,9 @@ export function SubmitSlotPage() {
   const [serviceType, setServiceType] = useState('profile_service')
   const [showServiceDrop, setShowServiceDrop] = useState(false)
   const [triedSubmit, setTriedSubmit] = useState(false)
+  const [aiExtraction, setAiExtraction] = useState(null)
+  const [aiBlocked, setAiBlocked] = useState('')
+  const [userEditedFields, setUserEditedFields] = useState({})
 
   const effectiveName = name.trim()
   const selected = useMemo(() => {
@@ -173,10 +176,6 @@ export function SubmitSlotPage() {
     if (slotPreview) URL.revokeObjectURL(slotPreview)
     if (sessionPreview) URL.revokeObjectURL(sessionPreview)
   }, [slotPreview, sessionPreview])
-
-  const [aiExtraction, setAiExtraction] = useState(null)
-  const [aiBlocked, setAiBlocked] = useState('')
-  const [userEditedFields, setUserEditedFields] = useState({})
 
   async function parseScreenshot(file) {
     if (!file) { setParsedSlot(null); setAiExtraction(null); setAiBlocked(''); return }
