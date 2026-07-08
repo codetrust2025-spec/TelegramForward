@@ -6,6 +6,11 @@ using Ollama models running on the developer's laptop (tunneled via SSH).
 Primary model: qwen2.5vl:7b (reliable structured extraction)
 Backup model: moondream (lightweight fallback)
 Falls back to existing OCR only if both AI models fail.
+
+Hybrid flow (fast path):
+  1. OCR image → raw text (Tesseract, instant)
+  2. If OCR finds date+time, send raw text to qwen2.5:7b text model for JSON cleanup (fast, ~10s)
+  3. Only if OCR fails, call qwen2.5vl:7b vision model (slow, ~5 min)
 """
 from __future__ import annotations
 
@@ -27,6 +32,7 @@ OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
 OLLAMA_BACKUP_VISION_MODEL = os.environ.get("OLLAMA_BACKUP_VISION_MODEL", "moondream")
 OLLAMA_REASONING_MODEL = os.environ.get("OLLAMA_REASONING_MODEL", "qwen2.5:7b")
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "900"))
+OLLAMA_TEXT_TIMEOUT = int(os.environ.get("OLLAMA_TEXT_TIMEOUT", "60"))
 
 # ── Prompt ──────────────────────────────────────────────────────────────────
 INVITE_EXTRACTION_PROMPT = """You are an interview invite screenshot extraction assistant.
@@ -35,7 +41,7 @@ Read the uploaded screenshot carefully. It may be from Gmail, Teams, Zoom, Googl
 Return ONLY valid JSON. Do not explain. Do not use markdown. Do not wrap JSON inside code blocks.
 
 Schema:
-{"candidate_name": "", "candidate_phone": "", "client_name": "", "technology": "", "service_type": "", "interview_round": "", "interview_date": "YYYY-MM-DD", "start_time": "hh:mm AM/PM", "end_time": "hh:mm AM/PM", "timezone": "Asia/Kolkata", "meeting_platform": "", "meeting_link": "", "attendee_name": "", "confidence_score": 0, "missing_fields": [], "warnings": [], "raw_detected_text": "", "is_payment_screenshot": false, "looks_like_interview_invite": true}
+{"candidate_name": "", "candidate_phone": "", "client_name": "", "technology": "", "service_type": "", "interview_round": "", "interview_date": "YYYY-MM-DD", "start_time": "hh:mm AM/PM", "end_time": "hh:mm AM/PM", "timezone": "Asia/Kolkata", "meeting_platform": "", "screenshot_source": "", "meeting_link": "", "attendee_name": "", "confidence_score": 0, "missing_fields": [], "warnings": [], "raw_detected_text": "", "is_payment_screenshot": false, "looks_like_interview_invite": true}
 
 Rules:
 - Extract only visible information.
@@ -51,14 +57,40 @@ Rules:
 - If screenshot shows 09:00, return 09:00 AM.
 - If screenshot shows 11 AM, return 11:00 AM.
 - If screenshot shows 7 PM, return 07:00 PM.
-- If end time is not visible but duration is visible, calculate end_time in 12-hour hh:mm AM/PM format and add warning.
-- If end time is not visible and duration is also not visible, keep end_time empty.
+- If end time is not visible and duration is not visible, keep end_time empty. Do not guess end_time.
 - If date/time is ambiguous, keep confidence_score below 80.
+- screenshot_source is the app the screenshot was taken FROM (WhatsApp, Gmail, Teams, Telegram, etc.)
+- meeting_platform is the ACTUAL interview platform (FloCareer, HirePro, Zoom, Teams, Google Meet, BarRaiser, etc.)
+- Do NOT confuse screenshot_source with meeting_platform. They are different fields.
+- technology should be the job role or tech stack (Java, React JS, Data Engineer, Sr Data Reliability Engineer, etc.)
+- Do NOT put meeting platform names in technology field.
 - If the screenshot is a payment receipt, UPI screenshot, bank transfer screenshot, transaction proof, or payment confirmation, set is_payment_screenshot=true.
 - If it is not an interview invite, set looks_like_interview_invite=false.
 - confidence_score must be between 0 and 100."""
 
 RETRY_PROMPT = "Your previous response was not valid JSON. Return only valid JSON matching the schema. No markdown. No explanation."
+
+# ── Text cleanup prompt (for qwen2.5:7b text model after OCR) ───────────────
+TEXT_CLEANUP_PROMPT = """You are an interview invite text extraction assistant.
+The following raw OCR text was extracted from an interview invite screenshot.
+Parse it and return ONLY valid JSON. Do not explain. Do not use markdown.
+
+IMPORTANT RULES:
+- screenshot_source is the app the screenshot was taken from (WhatsApp, Gmail, Teams, Telegram, etc.)
+- meeting_platform is the actual interview platform (FloCareer, HirePro, Zoom, Teams, Google Meet, BarRaiser, etc.)
+- Do NOT confuse screenshot_source with meeting_platform.
+- technology should be the job role/tech stack (Java, React JS, Data Engineer, Sr Data Reliability Engineer, etc.)
+- Do NOT put meeting platform names in technology field.
+- If only start_time is visible and no end_time or duration is mentioned, leave end_time empty.
+- Convert all times to 12-hour hh:mm AM/PM format.
+- Convert all dates to YYYY-MM-DD.
+- confidence_score must be between 0 and 100.
+
+Schema:
+{"candidate_name": "", "candidate_phone": "", "client_name": "", "technology": "", "service_type": "", "interview_round": "", "interview_date": "YYYY-MM-DD", "start_time": "hh:mm AM/PM", "end_time": "hh:mm AM/PM", "timezone": "Asia/Kolkata", "meeting_platform": "", "screenshot_source": "", "meeting_link": "", "attendee_name": "", "confidence_score": 0, "missing_fields": [], "warnings": [], "raw_detected_text": "", "is_payment_screenshot": false, "looks_like_interview_invite": true}
+
+OCR TEXT:
+"""
 
 
 # ── Time normalization ──────────────────────────────────────────────────────
@@ -196,6 +228,9 @@ def parse_strict_json_response(response_text: str) -> dict[str, Any] | None:
             lines = lines[:-1]
         text = "\n".join(lines).strip()
     
+    # Remove thinking tags if present (qwen2.5 sometimes adds these)
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+    
     # Try direct parse
     try:
         return json.loads(text)
@@ -212,6 +247,50 @@ def parse_strict_json_response(response_text: str) -> dict[str, Any] | None:
             pass
     
     return None
+
+
+def call_ollama_text_model(
+    model_name: str,
+    prompt: str,
+    *,
+    timeout: int = OLLAMA_TEXT_TIMEOUT,
+) -> str | None:
+    """Call Ollama text model (no image) for OCR text cleanup.
+    
+    Returns the raw text response or None on failure.
+    """
+    try:
+        payload = {
+            "model": model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            "stream": False,
+            "options": {
+                "temperature": 0.1,
+                "num_predict": 2048,
+            },
+        }
+        resp = httpx.post(
+            f"{OLLAMA_BASE_URL}/api/chat",
+            json=payload,
+            timeout=timeout,
+        )
+        if resp.status_code != 200:
+            logger.warning("Ollama text %s returned %d: %s", model_name, resp.status_code, resp.text[:200])
+            return None
+        data = resp.json()
+        content = data.get("message", {}).get("content", "")
+        return content if content else None
+    except httpx.TimeoutException:
+        logger.warning("Ollama text %s timed out after %ds", model_name, timeout)
+        return None
+    except Exception as e:
+        logger.warning("Ollama text %s error: %s", model_name, e)
+        return None
 
 
 def retry_invalid_json_once(
@@ -266,6 +345,10 @@ def validate_invite_extraction(extracted: dict[str, Any]) -> dict[str, Any]:
     extracted.setdefault("is_payment_screenshot", False)
     extracted.setdefault("looks_like_interview_invite", True)
     extracted.setdefault("warnings", [])
+    extracted.setdefault("screenshot_source", "")
+    
+    # Do not auto-set end_time — only keep it if explicitly extracted
+    # If end_time was not in the original extraction, leave it empty
     
     return extracted
 
@@ -317,6 +400,7 @@ def _empty_extraction() -> dict[str, Any]:
         "end_time": "",
         "timezone": "Asia/Kolkata",
         "meeting_platform": "",
+        "screenshot_source": "",
         "meeting_link": "",
         "attendee_name": "",
         "confidence_score": 0,
@@ -334,12 +418,14 @@ def extract_interview_invite_with_ollama(
     image_data: bytes,
     mime_type: str = "image/jpeg",
 ) -> dict[str, Any]:
-    """Extract interview invite details using Ollama vision models.
+    """Extract interview invite details using hybrid OCR + AI approach.
     
-    Flow:
-      1. Try qwen2.5vl:7b (primary) with full OLLAMA_TIMEOUT (900s).
-      2. If primary fails/times out, try moondream (backup).
-      3. Only fall back to OCR if BOTH AI models fail.
+    Hybrid flow (optimized for speed):
+      1. OCR image → raw text (Tesseract, instant)
+      2. If OCR gets enough text, send to qwen2.5:7b text model for JSON cleanup (~10-30s)
+      3. Only if OCR fails or text cleanup fails, call qwen2.5vl:7b vision model (~5 min)
+      4. If vision fails, try moondream backup
+      5. If all AI fails, fall back to regex OCR parsing
     
     Ollama runs on the developer's laptop, tunneled to VPS via SSH.
     """
@@ -348,17 +434,38 @@ def extract_interview_invite_with_ollama(
         logger.info("Ollama not reachable (SSH tunnel may be down), falling back to OCR")
         return _fallback_to_existing_ocr(image_data, mime_type)
     
-    # Encode image to base64
+    # ── Step 1: Try OCR + text model (fast path) ────────────────────────────
+    ocr_text = _run_tesseract_ocr(image_data)
+    
+    if ocr_text and len(ocr_text) > 30:
+        logger.info("OCR extracted %d chars, trying text model cleanup", len(ocr_text))
+        extracted = _try_text_model_cleanup(ocr_text)
+        if extracted:
+            extracted = validate_invite_extraction(extracted)
+            if extracted.get("interview_date") and extracted.get("start_time"):
+                # Fast path succeeded
+                extracted["extraction_source"] = "ocr_ai_cleanup"
+                extracted["primary_model"] = OLLAMA_REASONING_MODEL
+                extracted["backup_model"] = ""
+                extracted["detected_by"] = f"OCR + {OLLAMA_REASONING_MODEL}"
+                extracted["extraction_method"] = "hybrid_fast"
+                logger.info("Fast path succeeded: date=%s time=%s", extracted["interview_date"], extracted["start_time"])
+                return extracted
+            else:
+                logger.info("Text model cleanup didn't find date/time, falling through to vision")
+    else:
+        logger.info("OCR text too short (%d chars), going to vision model", len(ocr_text or ""))
+    
+    # ── Step 2: Try vision model (slow path) ────────────────────────────────
     img_b64 = base64.b64encode(image_data).decode("utf-8")
     
-    # ── Step 1: Try primary model (qwen2.5vl:7b) with full timeout ──────────
-    logger.info("Calling primary model: %s (timeout=%ds)", OLLAMA_VISION_MODEL, OLLAMA_TIMEOUT)
+    logger.info("Calling vision model: %s (timeout=%ds)", OLLAMA_VISION_MODEL, OLLAMA_TIMEOUT)
     start = time.time()
     response = call_ollama_vision_model(
         OLLAMA_VISION_MODEL, img_b64, INVITE_EXTRACTION_PROMPT, timeout=OLLAMA_TIMEOUT
     )
     elapsed = time.time() - start
-    logger.info("Primary model responded in %.1fs", elapsed)
+    logger.info("Vision model responded in %.1fs", elapsed)
     
     extracted = None
     used_model = OLLAMA_VISION_MODEL
@@ -366,13 +473,12 @@ def extract_interview_invite_with_ollama(
     if response:
         extracted = parse_strict_json_response(response)
         if not extracted:
-            # Retry once for invalid JSON
-            logger.info("Invalid JSON from primary, retrying...")
+            logger.info("Invalid JSON from vision, retrying...")
             extracted = retry_invalid_json_once(OLLAMA_VISION_MODEL, img_b64, response)
     
-    # ── Step 2: If primary failed, try backup model (moondream) ─────────────
+    # ── Step 3: If vision failed, try backup model (moondream) ──────────────
     if not extracted:
-        logger.warning("Primary model (%s) failed, trying backup: %s", OLLAMA_VISION_MODEL, OLLAMA_BACKUP_VISION_MODEL)
+        logger.warning("Vision model (%s) failed, trying backup: %s", OLLAMA_VISION_MODEL, OLLAMA_BACKUP_VISION_MODEL)
         backup_response = call_ollama_vision_model(
             OLLAMA_BACKUP_VISION_MODEL, img_b64, INVITE_EXTRACTION_PROMPT, timeout=OLLAMA_TIMEOUT
         )
@@ -381,9 +487,9 @@ def extract_interview_invite_with_ollama(
             if extracted:
                 used_model = OLLAMA_BACKUP_VISION_MODEL
     
-    # ── Step 3: If both AI models failed, fall back to OCR ──────────────────
+    # ── Step 4: If all AI failed, fall back to regex OCR ────────────────────
     if not extracted:
-        logger.warning("Both AI models failed, falling back to OCR")
+        logger.warning("All AI models failed, falling back to OCR")
         return _fallback_to_existing_ocr(image_data, mime_type)
     
     # Validate and normalize
@@ -394,7 +500,30 @@ def extract_interview_invite_with_ollama(
     extracted["primary_model"] = used_model
     extracted["backup_model"] = OLLAMA_BACKUP_VISION_MODEL
     extracted["detected_by"] = used_model
+    extracted["extraction_method"] = "vision"
     
+    return extracted
+
+
+def _run_tesseract_ocr(image_data: bytes) -> str:
+    """Run Tesseract OCR on image and return raw text."""
+    try:
+        from features.slot_screenshot_parse import _local_ocr_text
+        return _local_ocr_text(image_data)
+    except Exception as e:
+        logger.warning("Tesseract OCR failed: %s", e)
+        return ""
+
+
+def _try_text_model_cleanup(ocr_text: str) -> dict[str, Any] | None:
+    """Send OCR text to qwen2.5:7b text model for structured JSON extraction."""
+    prompt = TEXT_CLEANUP_PROMPT + ocr_text[:3000]
+    
+    response = call_ollama_text_model(OLLAMA_REASONING_MODEL, prompt, timeout=OLLAMA_TEXT_TIMEOUT)
+    if not response:
+        return None
+    
+    extracted = parse_strict_json_response(response)
     return extracted
 
 
