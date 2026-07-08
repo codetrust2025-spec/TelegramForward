@@ -66,6 +66,26 @@ function platformLabel(platform) {
   return map[platform] || platform || ''
 }
 
+/** Fix dates where AI/OCR returned wrong year (e.g. 2023 instead of 2026) */
+function fixPastYear(dateStr) {
+  if (!dateStr) return dateStr
+  try {
+    const d = new Date(dateStr + 'T00:00:00')
+    const today = new Date(); today.setHours(0,0,0,0)
+    const diffDays = (today - d) / (1000*60*60*24)
+    if (diffDays > 7) {
+      // Date is more than 7 days in the past — likely wrong year
+      const corrected = new Date(today.getFullYear(), d.getMonth(), d.getDate())
+      if ((today - corrected) / (1000*60*60*24) <= 7) return corrected.toISOString().slice(0,10)
+      if (corrected > today) return corrected.toISOString().slice(0,10)
+      // Still in past with current year, try next year
+      const next = new Date(today.getFullYear() + 1, d.getMonth(), d.getDate())
+      return next.toISOString().slice(0,10)
+    }
+    return dateStr
+  } catch { return dateStr }
+}
+
 /** De-duplicate chip values case-insensitively, removing empties */
 function uniqueNonEmptyTags(values) {
   const seen = new Set()
@@ -284,8 +304,9 @@ export function SubmitSlotPage() {
       const data2 = await res2.json()
       if (!res2.ok) { setParsedSlot(null); setError('Auto-read failed — enter date & time manually.'); return }
       const slot = data2.slot || null
-      // Normalize all times to 12h format
+      // Normalize all times to 12h format and fix wrong year
       if (slot) {
+        if (slot.date) slot.date = fixPastYear(slot.date)
         if (slot.time) slot.time = normalizeTo12h(slot.time)
         if (slot.time_end) slot.time_end = normalizeTo12h(slot.time_end)
       }
