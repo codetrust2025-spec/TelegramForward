@@ -40,8 +40,13 @@ Read the uploaded screenshot carefully. It may be from Gmail, Teams, Zoom, Googl
 
 Return ONLY valid JSON. Do not explain. Do not use markdown. Do not wrap JSON inside code blocks.
 
+IMPORTANT: Today's date is {today}. Use this to resolve relative dates:
+- "Tomorrow" means {tomorrow}
+- "Today" means {today}
+- If only month and day are visible (e.g. "JUL 9"), use the current year {year} unless it would be in the past, then use {year} + 1.
+
 Schema:
-{"candidate_name": "", "candidate_phone": "", "client_name": "", "technology": "", "service_type": "", "interview_round": "", "interview_date": "YYYY-MM-DD", "start_time": "hh:mm AM/PM", "end_time": "hh:mm AM/PM", "timezone": "Asia/Kolkata", "meeting_platform": "", "screenshot_source": "", "meeting_link": "", "attendee_name": "", "confidence_score": 0, "missing_fields": [], "warnings": [], "raw_detected_text": "", "is_payment_screenshot": false, "looks_like_interview_invite": true}
+{{"candidate_name": "", "candidate_phone": "", "client_name": "", "technology": "", "service_type": "", "interview_round": "", "interview_date": "YYYY-MM-DD", "start_time": "hh:mm AM/PM", "end_time": "hh:mm AM/PM", "timezone": "Asia/Kolkata", "meeting_platform": "", "screenshot_source": "", "meeting_link": "", "attendee_name": "", "confidence_score": 0, "missing_fields": [], "warnings": [], "raw_detected_text": "", "is_payment_screenshot": false, "looks_like_interview_invite": true}}
 
 Rules:
 - Extract only visible information.
@@ -67,6 +72,15 @@ Rules:
 - If the screenshot is a payment receipt, UPI screenshot, bank transfer screenshot, transaction proof, or payment confirmation, set is_payment_screenshot=true.
 - If it is not an interview invite, set looks_like_interview_invite=false.
 - confidence_score must be between 0 and 100."""
+
+def _get_invite_prompt() -> str:
+    """Get the invite extraction prompt with today's date filled in."""
+    from datetime import datetime, timedelta
+    today = datetime.now().strftime("%Y-%m-%d")
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    year = datetime.now().year
+    return INVITE_EXTRACTION_PROMPT.format(today=today, tomorrow=tomorrow, year=year)
+
 
 RETRY_PROMPT = "Your previous response was not valid JSON. Return only valid JSON matching the schema. No markdown. No explanation."
 
@@ -437,7 +451,7 @@ def extract_interview_invite_with_ollama(
     # ── Step 1: Try OCR + text model (fast path) ────────────────────────────
     ocr_text = _run_tesseract_ocr(image_data)
     
-    if ocr_text and len(ocr_text) > 20:
+    if ocr_text and len(ocr_text) > 10:
         logger.info("OCR extracted %d chars, trying fast extraction", len(ocr_text))
         
         # Try regex first (instant) — works great for structured invites
@@ -495,7 +509,7 @@ def extract_interview_invite_with_ollama(
     logger.info("Calling vision model: %s (timeout=%ds)", OLLAMA_VISION_MODEL, OLLAMA_TIMEOUT)
     start = time.time()
     response = call_ollama_vision_model(
-        OLLAMA_VISION_MODEL, img_b64, INVITE_EXTRACTION_PROMPT, timeout=OLLAMA_TIMEOUT
+        OLLAMA_VISION_MODEL, img_b64, _get_invite_prompt(), timeout=OLLAMA_TIMEOUT
     )
     elapsed = time.time() - start
     logger.info("Vision model responded in %.1fs", elapsed)
@@ -513,7 +527,7 @@ def extract_interview_invite_with_ollama(
     if not extracted:
         logger.warning("Vision model (%s) failed, trying backup: %s", OLLAMA_VISION_MODEL, OLLAMA_BACKUP_VISION_MODEL)
         backup_response = call_ollama_vision_model(
-            OLLAMA_BACKUP_VISION_MODEL, img_b64, INVITE_EXTRACTION_PROMPT, timeout=OLLAMA_TIMEOUT
+            OLLAMA_BACKUP_VISION_MODEL, img_b64, _get_invite_prompt(), timeout=OLLAMA_TIMEOUT
         )
         if backup_response:
             extracted = parse_strict_json_response(backup_response)
@@ -550,7 +564,12 @@ def _run_tesseract_ocr(image_data: bytes) -> str:
 
 def _try_text_model_cleanup(ocr_text: str) -> dict[str, Any] | None:
     """Send OCR text to qwen2.5:7b text model for structured JSON extraction."""
-    prompt = TEXT_CLEANUP_PROMPT + ocr_text[:3000]
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    tomorrow = (datetime.now() + __import__('datetime').timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    date_context = f"\n\nIMPORTANT: Today's date is {today}. If the text says 'Tomorrow', use {tomorrow}. If it says 'Today', use {today}. Resolve all relative dates to absolute YYYY-MM-DD format.\n\nOCR TEXT:\n"
+    prompt = TEXT_CLEANUP_PROMPT.rsplit("OCR TEXT:\n", 1)[0] + date_context + ocr_text[:3000]
     
     response = call_ollama_text_model(OLLAMA_REASONING_MODEL, prompt, timeout=OLLAMA_TEXT_TIMEOUT)
     if not response:
@@ -594,3 +613,4 @@ def _fallback_to_existing_ocr(image_data: bytes, mime_type: str) -> dict[str, An
         result["extraction_source"] = "failed"
         result["warnings"] = ["AI extraction unavailable. Using standard OCR/manual entry."]
         return result
+
