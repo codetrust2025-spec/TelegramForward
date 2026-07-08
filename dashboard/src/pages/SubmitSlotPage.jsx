@@ -66,6 +66,17 @@ function platformLabel(platform) {
   return map[platform] || platform || ''
 }
 
+/** De-duplicate chip values case-insensitively, removing empties */
+function uniqueNonEmptyTags(values) {
+  const seen = new Set()
+  return values.filter(Boolean).map(v => String(v).trim()).filter(v => {
+    const key = v.toLowerCase()
+    if (!v || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 const ROUND_OPTIONS = ['Screening', 'L1', 'L2', 'Final', 'HR']
 
 function candidateNameKey(value) {
@@ -541,9 +552,13 @@ export function SubmitSlotPage() {
                     {aiExtraction.start_time && <span className="sbs-detected__time">{aiExtraction.start_time}{aiExtraction.end_time ? ` – ${aiExtraction.end_time}` : ''}</span>}
                   </div>
                   <div className="sbs-detected__chips">
-                    {aiExtraction.interview_round && <span className="sbs-chip">{aiExtraction.interview_round}</span>}
-                    {aiExtraction.technology && <span className="sbs-chip sbs-chip--muted">{aiExtraction.technology}</span>}
-                    {aiExtraction.meeting_platform && <span className="sbs-chip sbs-chip--muted">{platformLabel(aiExtraction.meeting_platform)}</span>}
+                    {uniqueNonEmptyTags([
+                      aiExtraction.interview_round,
+                      aiExtraction.meeting_platform ? platformLabel(aiExtraction.meeting_platform) : '',
+                      aiExtraction.technology,
+                    ]).map((tag, i) => (
+                      <span key={i} className={`sbs-chip${i > 0 ? ' sbs-chip--muted' : ''}`}>{tag}</span>
+                    ))}
                   </div>
                   {aiExtraction.warnings && aiExtraction.warnings.length > 0 && (
                     <div className="sbs-detected__warnings">{aiExtraction.warnings.map((w, i) => <span key={i} className="sbs-hint sbs-hint--warn">{w}</span>)}</div>
