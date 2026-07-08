@@ -62,6 +62,9 @@ Rules:
 - If screenshot shows 09:00, return 09:00 AM.
 - If screenshot shows 11 AM, return 11:00 AM.
 - If screenshot shows 7 PM, return 07:00 PM.
+- IMPORTANT: If a time RANGE is visible (e.g. "12:30 – 1:00 pm", "2:00 PM - 3:00 PM"), extract BOTH start_time AND end_time.
+- For "12:30 – 1:00 pm": start_time = "12:30 PM", end_time = "01:00 PM"
+- For "2:00 PM – 2:30 PM": start_time = "02:00 PM", end_time = "02:30 PM"
 - If end time is not visible and duration is not visible, keep end_time empty. Do not guess end_time.
 - If date/time is ambiguous, keep confidence_score below 80.
 - screenshot_source is the app the screenshot was taken FROM (WhatsApp, Gmail, Teams, Telegram, etc.)
