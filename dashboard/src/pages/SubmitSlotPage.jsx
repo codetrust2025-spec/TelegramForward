@@ -283,8 +283,14 @@ export function SubmitSlotPage() {
       const res2 = await fetch(`${API_BASE}/public/slots/parse-screenshot`, { method: 'POST', body: fd2 })
       const data2 = await res2.json()
       if (!res2.ok) { setParsedSlot(null); setError('Auto-read failed — enter date & time manually.'); return }
-      setParsedSlot(data2.slot || null)
-      if (!interviewRound) setInterviewRound(data2.slot?.interview_round || '')
+      const slot = data2.slot || null
+      // Normalize all times to 12h format
+      if (slot) {
+        if (slot.time) slot.time = normalizeTo12h(slot.time)
+        if (slot.time_end) slot.time_end = normalizeTo12h(slot.time_end)
+      }
+      setParsedSlot(slot)
+      if (!interviewRound) setInterviewRound(slot?.interview_round || '')
       setManualDate(''); setManualTime('')
     } catch { setParsedSlot(null); setError('Network error while reading screenshot') }
     finally { setParsing(false) }
@@ -554,8 +560,9 @@ export function SubmitSlotPage() {
                   <div className="sbs-detected__chips">
                     {uniqueNonEmptyTags([
                       aiExtraction.interview_round,
-                      aiExtraction.meeting_platform ? platformLabel(aiExtraction.meeting_platform) : '',
                       aiExtraction.technology,
+                      aiExtraction.meeting_platform ? platformLabel(aiExtraction.meeting_platform) : '',
+                      aiExtraction.screenshot_source,
                     ]).map((tag, i) => (
                       <span key={i} className={`sbs-chip${i > 0 ? ' sbs-chip--muted' : ''}`}>{tag}</span>
                     ))}
@@ -586,7 +593,7 @@ export function SubmitSlotPage() {
                   <p className="sbs-manual__hint">{parsedSlot?.date ? 'Verify detected date & time — correct below if wrong.' : 'Include the date line in your screenshot or enter manually.'}</p>
                   <div className="sbs-manual__grid">
                     <label className="sbs-field"><span className="sbs-label">Interview date</span><input className="sbs-input" type="date" value={manualDate || parsedSlot?.date || ''} onChange={e => { setManualDate(e.target.value); setUserEditedFields(f => ({...f, date: true})); }} disabled={busy || parsing} /></label>
-                    <label className="sbs-field"><span className="sbs-label">Start time</span><input className="sbs-input" type="text" placeholder="e.g. 02:00 PM" value={manualTime || parsedSlot?.time || ''} onChange={e => { setManualTime(e.target.value); setUserEditedFields(f => ({...f, time: true})); }} disabled={busy || parsing} /></label>
+                    <label className="sbs-field"><span className="sbs-label">Start time</span><input className="sbs-input" type="text" placeholder="e.g. 02:00 PM" value={normalizeTo12h(manualTime || parsedSlot?.time || '')} onChange={e => { setManualTime(e.target.value); setUserEditedFields(f => ({...f, time: true})); }} disabled={busy || parsing} /></label>
                   </div>
                   {isPastDate && <span className="sbs-hint sbs-hint--warn">Interview date is in the past. Please select today or a future date.</span>}
                 </div>
