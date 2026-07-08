@@ -334,6 +334,10 @@ def validate_invite_extraction(extracted: dict[str, Any]) -> dict[str, Any]:
     if extracted.get("end_time"):
         extracted["end_time"] = normalize_time_to_12h(extracted["end_time"])
     
+    # ── Fix wrong year: if extracted date is in the past, correct year ──────
+    if extracted.get("interview_date"):
+        extracted["interview_date"] = _fix_past_year(extracted["interview_date"])
+    
     # Ensure confidence_score is an integer 0-100
     score = extracted.get("confidence_score", 0)
     try:
@@ -361,10 +365,46 @@ def validate_invite_extraction(extracted: dict[str, Any]) -> dict[str, Any]:
     extracted.setdefault("warnings", [])
     extracted.setdefault("screenshot_source", "")
     
-    # Do not auto-set end_time — only keep it if explicitly extracted
-    # If end_time was not in the original extraction, leave it empty
-    
     return extracted
+
+
+def _fix_past_year(date_str: str) -> str:
+    """If the extracted date is in the past, fix the year to current/next year.
+    
+    Vision models sometimes return wrong years (e.g., 2023 instead of 2026)
+    because their training data is from that era.
+    """
+    if not date_str:
+        return date_str
+    try:
+        from datetime import datetime, date
+        parts = date_str.split("-")
+        if len(parts) != 3:
+            return date_str
+        y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+        extracted_date = date(y, m, d)
+        today = date.today()
+        
+        # If date is more than 7 days in the past, the year is likely wrong
+        if (today - extracted_date).days > 7:
+            # Try current year first
+            try:
+                corrected = date(today.year, m, d)
+                if (today - corrected).days <= 7:
+                    # Current year, within a week — accept it
+                    return corrected.isoformat()
+                elif corrected > today:
+                    # Current year, in the future — accept it
+                    return corrected.isoformat()
+                else:
+                    # Still in the past with current year, try next year
+                    corrected = date(today.year + 1, m, d)
+                    return corrected.isoformat()
+            except ValueError:
+                return date_str
+        return date_str
+    except (ValueError, TypeError):
+        return date_str
 
 
 def detect_payment_screenshot_from_ai(extracted: dict[str, Any]) -> bool:
