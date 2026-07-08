@@ -532,7 +532,9 @@ export function SubmitSlotPage() {
               {aiExtraction && !aiBlocked && aiExtraction.confidence_score > 0 && (
                 <div className="sbs-detected">
                   <span className={`sbs-detected__badge ${aiExtraction.confidence_score >= 90 ? 'sbs-detected__badge--green' : aiExtraction.confidence_score >= 70 ? 'sbs-detected__badge--yellow' : 'sbs-detected__badge--red'}`}>
-                    AI · {aiExtraction.confidence_score}%
+                    {aiExtraction.extraction_source === 'ollama'
+                      ? `Detected by ${aiExtraction.detected_by || aiExtraction.primary_model || 'AI'} · ${aiExtraction.confidence_score}%`
+                      : `AI · ${aiExtraction.confidence_score}%`}
                   </span>
                   <div className="sbs-detected__main">
                     {aiExtraction.interview_date && <span className="sbs-detected__date">{formatFriendlyDate(aiExtraction.interview_date)}</span>}

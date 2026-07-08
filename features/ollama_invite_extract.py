@@ -1,9 +1,11 @@
 """Ollama vision model integration for interview invite screenshot extraction.
 
 Enhances the existing slot_screenshot_parse.py with AI-powered extraction
-using local Ollama models (qwen3-vl:32b primary, qwen2.5vl:32b backup).
+using Ollama models running on the developer's laptop (tunneled via SSH).
 
-Falls back to existing OCR if Ollama is unavailable.
+Primary model: qwen2.5vl:7b (reliable structured extraction)
+Backup model: moondream (lightweight fallback)
+Falls back to existing OCR only if both AI models fail.
 """
 from __future__ import annotations
 
@@ -21,10 +23,10 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ───────────────────────────────────────────────────────────
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "qwen3-vl:32b")
-OLLAMA_BACKUP_VISION_MODEL = os.environ.get("OLLAMA_BACKUP_VISION_MODEL", "qwen2.5vl:32b")
+OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
+OLLAMA_BACKUP_VISION_MODEL = os.environ.get("OLLAMA_BACKUP_VISION_MODEL", "moondream")
 OLLAMA_REASONING_MODEL = os.environ.get("OLLAMA_REASONING_MODEL", "qwen2.5:7b")
-OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "120"))
+OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "900"))
 
 # ── Prompt ──────────────────────────────────────────────────────────────────
 INVITE_EXTRACTION_PROMPT = """You are an interview invite screenshot extraction assistant.
@@ -334,56 +336,64 @@ def extract_interview_invite_with_ollama(
 ) -> dict[str, Any]:
     """Extract interview invite details using Ollama vision models.
     
-    Returns structured extraction result with confidence score.
-    Falls back to existing OCR if Ollama is unavailable.
+    Flow:
+      1. Try qwen2.5vl:7b (primary) with full OLLAMA_TIMEOUT (900s).
+      2. If primary fails/times out, try moondream (backup).
+      3. Only fall back to OCR if BOTH AI models fail.
+    
+    Ollama runs on the developer's laptop, tunneled to VPS via SSH.
     """
-    # Check if Ollama is available
+    # Check if Ollama is reachable (tunnel must be active)
     if not _is_ollama_available():
-        logger.info("Ollama not available, falling back to existing OCR")
+        logger.info("Ollama not reachable (SSH tunnel may be down), falling back to OCR")
         return _fallback_to_existing_ocr(image_data, mime_type)
     
     # Encode image to base64
     img_b64 = base64.b64encode(image_data).decode("utf-8")
     
-    # Call primary model
-    logger.info("Calling primary model: %s", OLLAMA_VISION_MODEL)
+    # ── Step 1: Try primary model (qwen2.5vl:7b) with full timeout ──────────
+    logger.info("Calling primary model: %s (timeout=%ds)", OLLAMA_VISION_MODEL, OLLAMA_TIMEOUT)
     start = time.time()
-    response = call_ollama_vision_model(OLLAMA_VISION_MODEL, img_b64, INVITE_EXTRACTION_PROMPT)
+    response = call_ollama_vision_model(
+        OLLAMA_VISION_MODEL, img_b64, INVITE_EXTRACTION_PROMPT, timeout=OLLAMA_TIMEOUT
+    )
     elapsed = time.time() - start
     logger.info("Primary model responded in %.1fs", elapsed)
     
-    if not response:
-        logger.warning("Primary model returned no response, trying backup")
-        response = call_ollama_vision_model(OLLAMA_BACKUP_VISION_MODEL, img_b64, INVITE_EXTRACTION_PROMPT)
-        if not response:
-            return _fallback_to_existing_ocr(image_data, mime_type)
+    extracted = None
+    used_model = OLLAMA_VISION_MODEL
     
-    # Parse JSON
-    extracted = parse_strict_json_response(response)
-    if not extracted:
-        # Retry once
-        logger.info("Invalid JSON from primary, retrying...")
-        extracted = retry_invalid_json_once(OLLAMA_VISION_MODEL, img_b64, response)
+    if response:
+        extracted = parse_strict_json_response(response)
         if not extracted:
-            return _fallback_to_existing_ocr(image_data, mime_type)
+            # Retry once for invalid JSON
+            logger.info("Invalid JSON from primary, retrying...")
+            extracted = retry_invalid_json_once(OLLAMA_VISION_MODEL, img_b64, response)
+    
+    # ── Step 2: If primary failed, try backup model (moondream) ─────────────
+    if not extracted:
+        logger.warning("Primary model (%s) failed, trying backup: %s", OLLAMA_VISION_MODEL, OLLAMA_BACKUP_VISION_MODEL)
+        backup_response = call_ollama_vision_model(
+            OLLAMA_BACKUP_VISION_MODEL, img_b64, INVITE_EXTRACTION_PROMPT, timeout=OLLAMA_TIMEOUT
+        )
+        if backup_response:
+            extracted = parse_strict_json_response(backup_response)
+            if extracted:
+                used_model = OLLAMA_BACKUP_VISION_MODEL
+    
+    # ── Step 3: If both AI models failed, fall back to OCR ──────────────────
+    if not extracted:
+        logger.warning("Both AI models failed, falling back to OCR")
+        return _fallback_to_existing_ocr(image_data, mime_type)
     
     # Validate and normalize
     extracted = validate_invite_extraction(extracted)
     
-    # Cross-check with backup model if confidence is low
-    if extracted.get("confidence_score", 0) < 90 or extracted.get("missing_fields"):
-        logger.info("Low confidence (%d), calling backup model", extracted.get("confidence_score", 0))
-        backup_response = call_ollama_vision_model(OLLAMA_BACKUP_VISION_MODEL, img_b64, INVITE_EXTRACTION_PROMPT)
-        if backup_response:
-            backup = parse_strict_json_response(backup_response)
-            if backup:
-                backup = validate_invite_extraction(backup)
-                extracted = compare_primary_backup_extractions(extracted, backup)
-    
     # Add metadata
     extracted["extraction_source"] = "ollama"
-    extracted["primary_model"] = OLLAMA_VISION_MODEL
+    extracted["primary_model"] = used_model
     extracted["backup_model"] = OLLAMA_BACKUP_VISION_MODEL
+    extracted["detected_by"] = used_model
     
     return extracted
 
