@@ -440,48 +440,7 @@ def extract_interview_invite_with_ollama(
     if ocr_text and len(ocr_text) > 20:
         logger.info("OCR extracted %d chars, trying text model cleanup", len(ocr_text))
         
-        # First try: regex parsing from OCR (instant, no AI needed)
-        try:
-            from features.slot_screenshot_parse import parse_invite_text
-            regex_result = parse_invite_text(ocr_text)
-            if regex_result.get("date") and regex_result.get("time"):
-                # OCR regex found date+time, now enhance with text model for better fields
-                extracted = _try_text_model_cleanup(ocr_text)
-                if extracted and extracted.get("interview_date") and extracted.get("start_time"):
-                    extracted = validate_invite_extraction(extracted)
-                    extracted["extraction_source"] = "ocr_ai_cleanup"
-                    extracted["primary_model"] = OLLAMA_REASONING_MODEL
-                    extracted["backup_model"] = ""
-                    extracted["detected_by"] = f"OCR + {OLLAMA_REASONING_MODEL}"
-                    extracted["extraction_method"] = "hybrid_fast"
-                    logger.info("Fast path (text model) succeeded: date=%s time=%s", extracted["interview_date"], extracted["start_time"])
-                    return extracted
-                else:
-                    # Text model failed but regex worked — use regex result directly
-                    logger.info("Text model cleanup failed, using regex OCR result directly")
-                    result = _empty_extraction()
-                    result["extraction_source"] = "ocr_regex"
-                    result["primary_model"] = "tesseract+regex"
-                    result["backup_model"] = ""
-                    result["detected_by"] = "OCR"
-                    result["extraction_method"] = "ocr_regex"
-                    result["interview_date"] = regex_result.get("date", "")
-                    result["start_time"] = normalize_time_to_12h(regex_result.get("time", ""))
-                    result["end_time"] = normalize_time_to_12h(regex_result.get("time_end", ""))
-                    result["interview_round"] = regex_result.get("interview_round", "")
-                    result["meeting_platform"] = regex_result.get("platform", "")
-                    result["technology"] = regex_result.get("technology", "")
-                    result["looks_like_interview_invite"] = True
-                    fields_found = sum(1 for f in ["interview_date", "start_time", "interview_round"] if result.get(f))
-                    result["confidence_score"] = min(85, fields_found * 30)
-                    result["missing_fields"] = [f for f in ["interview_date", "start_time", "interview_round"] if not result.get(f)]
-                    result["manual_fields_required"] = bool(result["missing_fields"])
-                    result = validate_invite_extraction(result)
-                    return result
-        except Exception as e:
-            logger.warning("Regex parse failed: %s", e)
-        
-        # Second try: just text model without regex pre-check
+        # Always try text model first for best quality extraction
         extracted = _try_text_model_cleanup(ocr_text)
         if extracted:
             extracted = validate_invite_extraction(extracted)
@@ -491,10 +450,36 @@ def extract_interview_invite_with_ollama(
                 extracted["backup_model"] = ""
                 extracted["detected_by"] = f"OCR + {OLLAMA_REASONING_MODEL}"
                 extracted["extraction_method"] = "hybrid_fast"
-                logger.info("Fast path (text model only) succeeded: date=%s time=%s", extracted["interview_date"], extracted["start_time"])
+                logger.info("Fast path (text model) succeeded: date=%s time=%s", extracted["interview_date"], extracted["start_time"])
                 return extracted
-            else:
-                logger.info("Text model cleanup didn't find date/time, falling through to vision")
+        
+        # Fallback: regex parsing from OCR (instant, no AI needed)
+        try:
+            from features.slot_screenshot_parse import parse_invite_text
+            regex_result = parse_invite_text(ocr_text)
+            if regex_result.get("date") and regex_result.get("time"):
+                logger.info("Regex fast path: date=%s time=%s", regex_result["date"], regex_result["time"])
+                result = _empty_extraction()
+                result["extraction_source"] = "ocr_regex"
+                result["primary_model"] = "tesseract+regex"
+                result["backup_model"] = ""
+                result["detected_by"] = "OCR"
+                result["extraction_method"] = "ocr_regex"
+                result["interview_date"] = regex_result.get("date", "")
+                result["start_time"] = normalize_time_to_12h(regex_result.get("time", ""))
+                result["end_time"] = normalize_time_to_12h(regex_result.get("time_end", ""))
+                result["interview_round"] = regex_result.get("interview_round", "")
+                result["meeting_platform"] = regex_result.get("platform", "")
+                result["technology"] = regex_result.get("technology", "")
+                result["looks_like_interview_invite"] = True
+                fields_found = sum(1 for f in ["interview_date", "start_time", "interview_round", "meeting_platform"] if result.get(f))
+                result["confidence_score"] = min(90, fields_found * 25)
+                result["missing_fields"] = [f for f in ["interview_date", "start_time", "interview_round"] if not result.get(f)]
+                result["manual_fields_required"] = bool(result["missing_fields"])
+                result = validate_invite_extraction(result)
+                return result
+        except Exception as e:
+            logger.warning("Regex parse failed: %s", e)
     else:
         logger.info("OCR text too short (%d chars), going to vision model", len(ocr_text or ""))
     
