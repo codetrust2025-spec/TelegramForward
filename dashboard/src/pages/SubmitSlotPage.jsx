@@ -549,8 +549,8 @@ export function SubmitSlotPage() {
               {aiExtraction && !aiBlocked && aiExtraction.confidence_score > 0 && (
                 <div className="sbs-detected">
                   <span className={`sbs-detected__badge ${aiExtraction.confidence_score >= 90 ? 'sbs-detected__badge--green' : aiExtraction.confidence_score >= 70 ? 'sbs-detected__badge--yellow' : 'sbs-detected__badge--red'}`}>
-                    {aiExtraction.extraction_source === 'ollama'
-                      ? `Detected by ${aiExtraction.detected_by || aiExtraction.primary_model || 'AI'} · ${aiExtraction.confidence_score}%`
+                    {aiExtraction.detected_by
+                      ? `Detected by ${aiExtraction.detected_by} · ${aiExtraction.confidence_score}%`
                       : `AI · ${aiExtraction.confidence_score}%`}
                   </span>
                   <div className="sbs-detected__main">
