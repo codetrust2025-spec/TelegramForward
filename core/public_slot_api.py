@@ -204,6 +204,48 @@ def install_public_slot_routes(app) -> None:
             "data": result,
         }
 
+    @app.post("/public/slots/extract-resume-ai")
+    async def public_slot_extract_resume_ai(file: UploadFile = File(...)):
+        """AI-powered resume PDF extraction using Ollama.
+
+        Reads PDF resumes and extracts: name, phone, email, technology,
+        years of experience, skills, education, current company.
+        """
+        raw = await file.read()
+        mime = file.content_type or "application/pdf"
+        try:
+            from features.ollama_resume_extract import extract_resume_with_ollama
+
+            result = await asyncio.to_thread(extract_resume_with_ollama, raw, mime)
+        except Exception as exc:
+            logger.exception("AI resume extraction failed")
+            return {
+                "status": "ok",
+                "success": False,
+                "extraction_source": "error",
+                "data": {
+                    "candidate_name": "",
+                    "technology": "",
+                    "phone": "",
+                    "confidence_score": 0,
+                    "is_resume": False,
+                    "error": str(exc),
+                },
+            }
+
+        is_success = bool(
+            result
+            and result.get("is_resume")
+            and result.get("candidate_name")
+        )
+        return {
+            "status": "ok",
+            "success": is_success,
+            "extraction_source": result.get("extraction_source", "unknown"),
+            "primary_model": result.get("primary_model", ""),
+            "data": result,
+        }
+
     @app.post("/public/slots/book")
     async def public_slot_book(
         name: str = Form(...),

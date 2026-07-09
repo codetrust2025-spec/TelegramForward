@@ -3951,7 +3951,19 @@ async def candidates_upload_resume(
     if entry is None:
         return {"status": "error", "message": "Candidate not found"}
     row = candidate_store.get_candidate(cid)
-    return {"status": "ok", "resume": entry, "candidate": row}
+    # AI-powered resume extraction (non-blocking enrichment)
+    ai_extraction = None
+    try:
+        mime = file.content_type or ""
+        if "pdf" in mime.lower():
+            from features.ollama_resume_extract import extract_resume_with_ollama
+            ai_extraction = await asyncio.to_thread(extract_resume_with_ollama, raw, mime)
+    except Exception:
+        pass
+    resp = {"status": "ok", "resume": entry, "candidate": row}
+    if ai_extraction and ai_extraction.get("is_resume"):
+        resp["ai_extraction"] = ai_extraction
+    return resp
 
 
 @app.get("/candidates/{cid}/resumes/{rid}")
