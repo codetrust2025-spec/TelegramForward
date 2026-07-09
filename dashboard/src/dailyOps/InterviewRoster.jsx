@@ -498,7 +498,9 @@ export function InterviewRoster({
                         </div>
                       </td>
                       <td data-label="Notes" className="ops-interview-notes-cell">
-                        {row.interview_attendance_remark || '—'}
+                        {row.interview_attendance_remark
+                          ? <span className="ops-interview-notes-text" title={row.interview_attendance_remark}>{row.interview_attendance_remark}</span>
+                          : '—'}
                       </td>
                       {canManage && <td data-label="Actions" className="ops-dash-attend-cell"><RowActions row={row} busy={busyId === row.id} canEditAttendee={canEditAttendee} onEditAttendee={() => setEditing({ row, mode: 'attendee' })} onEditSlot={() => setEditing({ row, mode: 'slot' })} onRemove={removeSlot} /></td>}
                     </tr>
