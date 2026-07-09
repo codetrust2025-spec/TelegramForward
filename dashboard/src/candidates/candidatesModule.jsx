@@ -244,21 +244,26 @@ function $8({
             v(b.note || "");
           }} title="Click to edit">{b.note || <em>add a note…</em>}</button>}<div className="cand-proof-sub"><span>{Nx(b.uploaded_at)}</span><span>·</span><span>{kx(b.size)}</span></div></div><button type="button" className="cand-proof-delete" onClick={() => S(b)} title="Delete proof" aria-label="Delete proof">×</button></li>)}</ul>}{u && <div className="cand-proof-lightbox" onClick={() => d(null)} role="dialog" aria-label="Payment proof preview"><button type="button" className="cand-proof-lightbox-close" onClick={() => d(null)} aria-label="Close preview">×</button><img src={`${ve}${u.url}`} alt={u.note || u.original_name} onClick={b => b.stopPropagation()} /><div className="cand-proof-lightbox-caption" onClick={b => b.stopPropagation()}>{u.note && <strong>{u.note}</strong>}<span>{Nx(u.uploaded_at)} · {kx(u.size)}</span><a href={`${ve}${u.url}`} download={u.original_name || u.filename} className="cand-btn cand-btn--ghost cand-btn--xs">Download</a></div></div>}</div>;
 }
-function ResumeUpload({ candidateId, resumes = [] }) {
+function ResumeUpload({ candidateId, resumes = [], onExtracted }) {
   const [busy, setBusy] = w.useState(false)
   const [message, setMessage] = w.useState('')
+  const [aiData, setAiData] = w.useState(null)
   const inputRef = w.useRef(null)
   const disabled = !candidateId
   async function upload(file) {
     if (!file || disabled) return
     setBusy(true)
     setMessage('')
+    setAiData(null)
     try {
       const body = new FormData()
       body.append('file', file)
       const result = await (await fetch(`${ve}/candidates/${candidateId}/resumes`, { method: 'POST', body })).json()
       if (result.status !== 'ok') throw new Error(result.message || 'Resume upload failed')
-      setMessage('Resume uploaded. The pending task is cleared.')
+      setMessage('Resume uploaded successfully.')
+      if (result.ai_extraction && result.ai_extraction.is_resume) {
+        setAiData(result.ai_extraction)
+      }
     } catch (err) {
       setMessage(err.message || 'Resume upload failed')
     } finally {
@@ -266,7 +271,14 @@ function ResumeUpload({ candidateId, resumes = [] }) {
       if (inputRef.current) inputRef.current.value = ''
     }
   }
-  return <div className="cand-proofs cand-resume-upload"><div className="cand-proofs-header"><span className="cand-field-label">Resume<span className="cand-proofs-count">{resumes.length}</span></span></div>{disabled ? <div className="cand-proofs-empty cand-proofs-empty--blocked"><strong>Save the candidate first</strong>, then upload the resume.</div> : <><input ref={inputRef} type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden onChange={event => upload(event.target.files?.[0])} disabled={busy} /><button type="button" className="cand-btn cand-btn--primary" onClick={() => inputRef.current?.click()} disabled={busy}>{busy ? 'Uploading…' : 'Upload resume'}</button><span className="cand-field-hint">PDF, DOC, or DOCX · up to 10 MB</span></>}{message && <div className="cand-proofs-error">{message}</div>}</div>
+  function handleFillProfile() {
+    if (aiData && onExtracted) {
+      onExtracted(aiData)
+      setAiData(null)
+      setMessage('Profile fields updated from resume.')
+    }
+  }
+  return <div className="cand-proofs cand-resume-upload"><div className="cand-proofs-header"><span className="cand-field-label">Resume<span className="cand-proofs-count">{resumes.length}</span></span></div>{disabled ? <div className="cand-proofs-empty cand-proofs-empty--blocked"><strong>Save the candidate first</strong>, then upload the resume.</div> : <><input ref={inputRef} type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden onChange={event => upload(event.target.files?.[0])} disabled={busy} /><button type="button" className="cand-btn cand-btn--primary" onClick={() => inputRef.current?.click()} disabled={busy}>{busy ? 'Analyzing resume…' : 'Upload resume'}</button><span className="cand-field-hint">PDF, DOC, or DOCX · up to 10 MB · AI auto-extracts profile</span></>}{message && <div className="cand-proofs-error">{message}</div>}{aiData && <div style={{margin:"8px 0",padding:"10px 12px",borderRadius:"6px",background:"rgba(99,102,241,.08)",border:"1px solid rgba(99,102,241,.2)",fontSize:"12px",lineHeight:"1.5"}}><div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"6px"}}><strong style={{color:"#a5b4fc",fontSize:"12px"}}>📄 AI Resume Extraction</strong><button type="button" onClick={()=>setAiData(null)} style={{background:"none",border:"none",cursor:"pointer",color:"rgba(148,163,184,.6)",fontSize:"13px"}}>×</button></div><div style={{display:"flex",flexWrap:"wrap",gap:"6px 14px",color:"rgba(226,232,240,.85)",fontSize:"12px"}}>{aiData.candidate_name&&<span>👤 {aiData.candidate_name}</span>}{aiData.technology&&<span>💻 {aiData.technology}</span>}{aiData.years_of_experience&&<span>📅 {aiData.years_of_experience} yrs</span>}{aiData.phone&&<span>📱 {aiData.phone}</span>}{aiData.current_company&&<span>🏢 {aiData.current_company}</span>}{aiData.email&&<span>✉ {aiData.email}</span>}</div>{aiData.skills&&aiData.skills.length>0&&<div style={{marginTop:"4px",fontSize:"11px",color:"rgba(148,163,184,.7)"}}>Skills: {aiData.skills.slice(0,6).join(", ")}{aiData.skills.length>6?"…":""}</div>}{onExtracted&&<button type="button" onClick={handleFillProfile} style={{marginTop:"8px",padding:"5px 12px",borderRadius:"5px",background:"#6366f1",color:"#fff",border:"none",fontSize:"12px",fontWeight:500,cursor:"pointer"}}>Fill profile from resume</button>}</div>}</div>
 }
 
 function ResumeCell({ candidate, onRefresh }) {
