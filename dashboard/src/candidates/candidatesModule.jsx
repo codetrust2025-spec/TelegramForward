@@ -428,10 +428,7 @@ function _Component23({
   function g(p) {
     p.stopPropagation();
   }
-  return <span className={`cand-phone-cell${r ? " cand-phone-cell--inline" : ""}`} ref={o} onClick={g}><button type="button" className="cand-phone-trigger" onClick={p => {
-      p.stopPropagation();
-      i(m => !m);
-    }} title="Click for call / WhatsApp / copy"><span className="cand-phone-icon" aria-hidden={true}>☎</span><span className="cand-phone-num">{n}</span></button>{a && <div className="cand-phone-menu" role="menu"><a href={h} className="cand-phone-menu-item cand-phone-menu-item--call" onClick={() => i(false)} role="menuitem"><span className="cand-phone-menu-ico" aria-hidden={true}>📞</span><span className="cand-phone-menu-text"><strong>Call</strong><em>{d}</em></span></a><a href={x} target="_blank" rel="noopener noreferrer" className="cand-phone-menu-item cand-phone-menu-item--wa" onClick={() => i(false)} role="menuitem"><span className="cand-phone-menu-ico" aria-hidden={true}>💬</span><span className="cand-phone-menu-text"><strong>WhatsApp</strong><em>wa.me/{f}</em></span></a><button type="button" className="cand-phone-menu-item cand-phone-menu-item--copy" onClick={v} role="menuitem"><span className="cand-phone-menu-ico" aria-hidden={true}>📋</span><span className="cand-phone-menu-text"><strong>Copy number</strong><em>{n}</em></span></button></div>}{l && <span className="cand-phone-toast" role="status">{l}</span>}</span>;
+  return <span className={`cand-phone-cell${r ? " cand-phone-cell--inline" : ""}`} ref={o} onClick={g}><a href={x} target="_blank" rel="noopener noreferrer" className="cand-phone-trigger" title="Open WhatsApp chat" onClick={p => p.stopPropagation()}><span className="cand-phone-icon" aria-hidden={true}>☎</span><span className="cand-phone-num">{n}</span></a>{l && <span className="cand-phone-toast" role="status">{l}</span>}</span>;
 }
 const Cu = 20000;
 const k_ = 15000;
