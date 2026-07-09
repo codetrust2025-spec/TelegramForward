@@ -3786,7 +3786,25 @@ async def candidates_upload_proof(
     if entry is None:
         return {"status": "error", "message": "Candidate not found"}
     row = candidate_store.get_candidate(cid)
-    return {"status": "ok", "proof": entry, "candidate": row}
+    # AI-powered payment extraction (non-blocking enrichment)
+    ai_extraction = None
+    try:
+        from features.ollama_payment_extract import (
+            extract_payment_with_ollama,
+            verify_payment_against_due,
+        )
+        ai_result = await asyncio.to_thread(extract_payment_with_ollama, raw, file.content_type or "image/jpeg")
+        if ai_result and ai_result.get("is_payment_screenshot"):
+            expected = candidate_store.effective_expected_payment(existing)
+            paid = int(existing.get("payment") or 0)
+            due = max(0, expected - paid)
+            ai_extraction = verify_payment_against_due(ai_result, due)
+    except Exception:
+        pass
+    resp = {"status": "ok", "proof": entry, "candidate": row}
+    if ai_extraction:
+        resp["ai_extraction"] = ai_extraction
+    return resp
 
 
 @app.get("/candidates/{cid}/proofs/{pid}")
