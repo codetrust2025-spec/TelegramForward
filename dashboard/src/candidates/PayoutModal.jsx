@@ -243,7 +243,13 @@ export default function PayoutModal({
   }
 
   async function handleDelete(row) {
-    if (!window.confirm(`Delete this ₹${row.amount.toLocaleString("en-IN")} payout for ${row.reference}?`)) return;
+    const ok = await window.__TA_CONFIRM_VALUE__?.confirm?.({
+      title: 'Delete payout?',
+      message: `Remove ₹${row.amount.toLocaleString("en-IN")} payout for ${row.reference}?`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
+    if (!ok) return;
     try {
       const res = await (await fetch(`${ve}/handler-expenses/${row.id}`, { method: "DELETE" })).json();
       if (res.status === "ok") { fetchData(); onChanged?.(); }
