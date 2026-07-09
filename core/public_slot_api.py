@@ -67,9 +67,25 @@ def install_public_slot_routes(app) -> None:
                 mime_type=file.content_type or "image/jpeg",
                 note=note or "",
             )
+            # AI extraction (non-blocking addition to response)
+            ai_extraction = None
+            try:
+                from features.ollama_payment_extract import (
+                    extract_payment_with_ollama,
+                    verify_payment_against_due,
+                )
+                ai_result = await asyncio.to_thread(extract_payment_with_ollama, raw, file.content_type or "image/jpeg")
+                if ai_result and ai_result.get("is_payment_screenshot"):
+                    due = cs.merged_balance_due_for_name(name) if name else 0
+                    ai_extraction = verify_payment_against_due(ai_result, due)
+            except Exception as ai_exc:
+                logger.debug("AI payment extraction skipped: %s", ai_exc)
         except ValueError as e:
             return _json_error(str(e))
-        return {"status": "ok", **result}
+        resp = {"status": "ok", **result}
+        if ai_extraction:
+            resp["ai_extraction"] = ai_extraction
+        return resp
 
     @app.post("/public/slots/parse-screenshot")
     async def public_slot_parse_screenshot(file: UploadFile = File(...)):
@@ -126,6 +142,65 @@ def install_public_slot_routes(app) -> None:
             "extraction_source": result.get("extraction_source", "unknown"),
             "primary_model": result.get("primary_model", ""),
             "backup_model": result.get("backup_model", ""),
+            "data": result,
+        }
+
+    @app.post("/public/slots/extract-payment-ai")
+    async def public_slot_extract_payment_ai(
+        file: UploadFile = File(...),
+        candidate_name: str = Form(default=""),
+    ):
+        """AI-powered payment proof extraction using Ollama vision models.
+
+        Reads UPI/bank screenshots and extracts: amount, sender, UTR, date, status.
+        If candidate_name is provided, auto-verifies against their balance due.
+        """
+        raw = await file.read()
+        mime = file.content_type or "image/jpeg"
+        try:
+            from features.ollama_payment_extract import (
+                extract_payment_with_ollama,
+                verify_payment_against_due,
+            )
+
+            result = await asyncio.to_thread(extract_payment_with_ollama, raw, mime)
+
+            # Auto-verify against candidate's due amount if name provided
+            if candidate_name.strip() and result.get("is_payment_screenshot"):
+                try:
+                    amount_due = cs.merged_balance_due_for_name(candidate_name.strip())
+                    result = verify_payment_against_due(result, amount_due)
+                except Exception as vex:
+                    logger.warning("Payment verification failed: %s", vex)
+                    result["warnings"] = list(result.get("warnings") or [])
+                    result["warnings"].append(f"Auto-verify failed: {vex}")
+
+        except Exception as exc:
+            logger.exception("AI payment extraction failed")
+            return {
+                "status": "ok",
+                "success": False,
+                "extraction_source": "error",
+                "data": {
+                    "amount": 0,
+                    "is_payment_screenshot": False,
+                    "confidence_score": 0,
+                    "warnings": [f"AI extraction failed: {exc}"],
+                    "verified": False,
+                    "verification_result": "Extraction failed",
+                },
+            }
+
+        is_success = bool(
+            result
+            and result.get("is_payment_screenshot")
+            and result.get("amount", 0) > 0
+        )
+        return {
+            "status": "ok",
+            "success": is_success,
+            "extraction_source": result.get("extraction_source", "unknown"),
+            "primary_model": result.get("primary_model", ""),
             "data": result,
         }
 
