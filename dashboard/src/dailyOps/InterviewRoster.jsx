@@ -450,6 +450,7 @@ export function InterviewRoster({
                   <th>Round</th>
                   {!handlerView && !effectiveAttendee && <th>Attendee</th>}
                   <th>Attendance</th>
+                  <th>Notes</th>
                   {canManage && <th aria-label="Actions" />}
                 </tr>
               </thead>
@@ -495,6 +496,9 @@ export function InterviewRoster({
                             {statusLabel(status)}
                           </span>
                         </div>
+                      </td>
+                      <td data-label="Notes" className="ops-interview-notes-cell">
+                        {row.interview_attendance_remark || '—'}
                       </td>
                       {canManage && <td data-label="Actions" className="ops-dash-attend-cell"><RowActions row={row} busy={busyId === row.id} canEditAttendee={canEditAttendee} onEditAttendee={() => setEditing({ row, mode: 'attendee' })} onEditSlot={() => setEditing({ row, mode: 'slot' })} onRemove={removeSlot} /></td>}
                     </tr>
