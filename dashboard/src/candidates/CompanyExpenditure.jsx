@@ -164,7 +164,13 @@ export default function CompanyExpenditure({ onClose, apiBase = "" }) {
   }
 
   async function handleDelete(row) {
-    if (!window.confirm(`Delete "${row.title}" (${fmt(row.amount)})?`)) return;
+    const ok = await window.__TA_CONFIRM_VALUE__?.confirm?.({
+      title: 'Delete expense?',
+      message: `Delete "${row.title}" (${fmt(row.amount)})?`,
+      confirmLabel: 'Delete',
+      variant: 'danger',
+    });
+    if (!ok) return;
     try { const res = await (await fetch(`${apiBase}/company-expenses/${row.id}`, { method: "DELETE", credentials: "include" })).json(); if (res.status === "ok") fetchData(); else setError(res.message || "Delete failed"); }
     catch (e) { setError(e.message || "Network error"); }
   }

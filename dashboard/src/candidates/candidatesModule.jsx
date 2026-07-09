@@ -163,9 +163,15 @@ function $8({
   }
   async function S(b) {
     var A;
-    if (e && window.confirm(`Remove this proof?
-${b.note || b.original_name || b.filename}`)) {
-      try {
+    if (!e) return;
+    const ok = await window.__TA_CONFIRM_VALUE__?.confirm?.({
+      title: 'Remove this proof?',
+      message: b.note || b.original_name || b.filename,
+      confirmLabel: 'Remove',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    try {
         const L = await (await fetch(`${ve}/candidates/${e}/proofs/${b.id}`, {
           method: "DELETE"
         })).json();
@@ -179,7 +185,6 @@ ${b.note || b.original_name || b.filename}`)) {
       } catch (O) {
         l(O.message || "Network error");
       }
-    }
   }
   async function E(b) {
     if (e) {
