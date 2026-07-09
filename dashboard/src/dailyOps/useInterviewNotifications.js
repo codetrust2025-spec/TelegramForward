@@ -5,6 +5,7 @@
  */
 import { useEffect, useRef } from 'react'
 import { useAuth } from '../context/AuthContext.jsx'
+import { getSharedAudioContext } from '../utils/notificationSound.js'
 
 const API = typeof window !== 'undefined' && window.location.port === '3000'
   ? '' : (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.host}` : '')
@@ -54,6 +55,56 @@ function sendNotification(interview) {
     })
   } catch (e) {
     console.warn('Notification failed:', e)
+  }
+
+  // Play an alert sound so the user doesn't miss the notification
+  playInterviewAlertSound()
+}
+
+/** Two-tone ascending chime — louder than DM sounds to grab attention. */
+function playInterviewAlertSound() {
+  const ctx = getSharedAudioContext()
+  if (!ctx) return
+
+  const play = () => {
+    try {
+      const t0 = ctx.currentTime
+      const master = ctx.createGain()
+      master.gain.setValueAtTime(0.6, t0)
+      master.gain.exponentialRampToValueAtTime(0.001, t0 + 1.2)
+      master.connect(ctx.destination)
+
+      const tone = (freq, start, dur) => {
+        const osc = ctx.createOscillator()
+        const g = ctx.createGain()
+        osc.type = 'sine'
+        osc.frequency.setValueAtTime(freq, t0 + start)
+        g.gain.setValueAtTime(0.001, t0 + start)
+        g.gain.exponentialRampToValueAtTime(0.9, t0 + start + 0.03)
+        g.gain.exponentialRampToValueAtTime(0.001, t0 + start + dur)
+        osc.connect(g)
+        g.connect(master)
+        osc.start(t0 + start)
+        osc.stop(t0 + start + dur + 0.03)
+      }
+
+      // Three ascending tones — urgent but not harsh
+      tone(660, 0, 0.18)
+      tone(880, 0.2, 0.18)
+      tone(1100, 0.4, 0.25)
+      // Repeat pattern after a short pause
+      tone(660, 0.75, 0.15)
+      tone(880, 0.9, 0.15)
+      tone(1100, 1.05, 0.2)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (ctx.state === 'suspended') {
+    ctx.resume().then(play).catch(() => {})
+  } else {
+    play()
   }
 }
 
