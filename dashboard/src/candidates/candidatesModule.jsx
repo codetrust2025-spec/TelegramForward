@@ -259,14 +259,37 @@ function ResumeAutoFill({ onExtracted }) {
     try {
       const body = new FormData()
       body.append('file', file)
-      const res = await (await fetch(`${ve}/public/slots/extract-resume-ai`, { method: 'POST', body })).json()
-      if (res.status === 'ok' && res.success && res.data) {
-        setAiData(res.data)
+      // Use a long timeout — AI model may take up to 2 minutes on cold start
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 200000) // 200s
+      let res
+      try {
+        const resp = await fetch(`${ve}/public/slots/extract-resume-ai`, { method: 'POST', body, signal: controller.signal })
+        res = await resp.json()
+      } finally {
+        clearTimeout(timer)
+      }
+      if (res.status === 'ok' && res.data) {
+        const d = res.data
+        const hasUsefulData = d.candidate_name || d.phone || d.email || d.technology
+        if (res.success || hasUsefulData) {
+          setAiData(d)
+          // Warn user if it was partial (regex-only, no AI)
+          if (!res.success && hasUsefulData) {
+            setError('Partial extraction (AI unavailable). Review fields before saving.')
+          }
+        } else {
+          setError(d.error || 'Could not extract profile from resume. Fill fields manually.')
+        }
       } else {
-        setError('Could not extract profile from resume. Fill fields manually.')
+        setError(res.data?.error || 'Could not extract profile from resume. Fill fields manually.')
       }
     } catch (err) {
-      setError(err.message || 'Resume extraction failed')
+      if (err.name === 'AbortError') {
+        setError('Request timed out. Make sure Ollama tunnel is running on your laptop.')
+      } else {
+        setError(err.message || 'Resume extraction failed')
+      }
     } finally {
       setBusy(false)
       if (inputRef.current) inputRef.current.value = ''
@@ -278,7 +301,7 @@ function ResumeAutoFill({ onExtracted }) {
       setFilled(true)
     }
   }
-  return <div style={{margin:"0 20px 12px",padding:"12px 14px",borderRadius:"8px",background:"rgba(99,102,241,.06)",border:"1px dashed rgba(99,102,241,.25)"}}><div style={{display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}><input ref={inputRef} type="file" accept=".pdf,application/pdf" hidden onChange={ev => handleFile(ev.target.files?.[0])} disabled={busy} /><button type="button" onClick={() => inputRef.current?.click()} disabled={busy} style={{padding:"6px 14px",borderRadius:"6px",background:"rgba(99,102,241,.15)",border:"1px solid rgba(99,102,241,.3)",color:"#a5b4fc",fontSize:"12px",fontWeight:500,cursor:"pointer",whiteSpace:"nowrap"}}>{busy ? "⏳ Analyzing…" : "📄 Upload resume PDF to auto-fill"}</button><span style={{fontSize:"11px",color:"rgba(148,163,184,.7)"}}>AI reads the PDF and fills name, phone, technology automatically</span></div>{error && <div style={{marginTop:"6px",fontSize:"12px",color:"#f87171"}}>{error}</div>}{aiData && !filled && <div style={{marginTop:"8px",padding:"8px 10px",borderRadius:"6px",background:"rgba(34,197,94,.08)",border:"1px solid rgba(34,197,94,.2)",fontSize:"12px"}}><div style={{display:"flex",flexWrap:"wrap",gap:"6px 14px",color:"rgba(226,232,240,.85)",marginBottom:"6px"}}>{aiData.candidate_name&&<span>👤 {aiData.candidate_name}</span>}{aiData.technology&&<span>💻 {aiData.technology}</span>}{aiData.phone&&<span>📱 {aiData.phone}</span>}{aiData.years_of_experience&&<span>📅 {aiData.years_of_experience} yrs</span>}{aiData.current_company&&<span>🏢 {aiData.current_company}</span>}</div><button type="button" onClick={handleFill} style={{padding:"5px 12px",borderRadius:"5px",background:"#22c55e",color:"#fff",border:"none",fontSize:"12px",fontWeight:500,cursor:"pointer"}}>✓ Fill profile fields</button></div>}{filled && <div style={{marginTop:"6px",fontSize:"12px",color:"#22c55e"}}>✓ Fields filled from resume</div>}</div>
+  return <div style={{margin:"0 20px 12px",padding:"12px 14px",borderRadius:"8px",background:"rgba(99,102,241,.06)",border:"1px dashed rgba(99,102,241,.25)"}}><div style={{display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}><input ref={inputRef} type="file" accept=".pdf,application/pdf" hidden onChange={ev => handleFile(ev.target.files?.[0])} disabled={busy} /><button type="button" onClick={() => inputRef.current?.click()} disabled={busy} style={{padding:"6px 14px",borderRadius:"6px",background:"rgba(99,102,241,.15)",border:"1px solid rgba(99,102,241,.3)",color:"#a5b4fc",fontSize:"12px",fontWeight:500,cursor:"pointer",whiteSpace:"nowrap"}}>{busy ? "⏳ AI analyzing (~30-60s)…" : "📄 Upload resume PDF to auto-fill"}</button><span style={{fontSize:"11px",color:"rgba(148,163,184,.7)"}}>AI reads the PDF and fills name, phone, technology automatically</span></div>{error && <div style={{marginTop:"6px",fontSize:"12px",color: error.startsWith('Partial') ? "#fbbf24" : "#f87171"}}>{error}</div>}{aiData && !filled && <div style={{marginTop:"8px",padding:"8px 10px",borderRadius:"6px",background:"rgba(34,197,94,.08)",border:"1px solid rgba(34,197,94,.2)",fontSize:"12px"}}><div style={{display:"flex",flexWrap:"wrap",gap:"6px 14px",color:"rgba(226,232,240,.85)",marginBottom:"6px"}}>{aiData.candidate_name&&<span>👤 {aiData.candidate_name}</span>}{aiData.technology&&<span>💻 {aiData.technology}</span>}{aiData.phone&&<span>📱 {aiData.phone}</span>}{aiData.years_of_experience&&<span>📅 {aiData.years_of_experience} yrs</span>}{aiData.current_company&&<span>🏢 {aiData.current_company}</span>}{aiData.email&&<span>✉ {aiData.email}</span>}</div><button type="button" onClick={handleFill} style={{padding:"5px 12px",borderRadius:"5px",background:"#22c55e",color:"#fff",border:"none",fontSize:"12px",fontWeight:500,cursor:"pointer"}}>✓ Fill profile fields</button></div>}{filled && <div style={{marginTop:"6px",fontSize:"12px",color:"#22c55e"}}>✓ Fields filled from resume</div>}</div>
 }
 function ResumeUpload({ candidateId, resumes = [], onExtracted }) {
   const [busy, setBusy] = w.useState(false)
