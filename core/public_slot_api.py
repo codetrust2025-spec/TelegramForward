@@ -233,10 +233,15 @@ def install_public_slot_routes(app) -> None:
                 },
             }
 
+        # Success if we have at least a name OR enough contact/skill signals.
+        # Regex fallback (no Ollama) is still useful if it found phone/email/tech.
+        has_name = bool(result.get("candidate_name"))
+        has_contact = bool(result.get("phone") or result.get("email"))
+        has_tech = bool(result.get("technology"))
         is_success = bool(
             result
             and result.get("is_resume")
-            and result.get("candidate_name")
+            and (has_name or (has_contact and has_tech))
         )
         return {
             "status": "ok",

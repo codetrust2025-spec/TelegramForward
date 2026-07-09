@@ -38,6 +38,8 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_REASONING_MODEL = os.environ.get("OLLAMA_REASONING_MODEL", "qwen2.5:7b")
 OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
 OLLAMA_TEXT_TIMEOUT = int(os.environ.get("OLLAMA_TEXT_TIMEOUT", "60"))
+# Resume extraction may need longer timeout (model cold start on first call)
+OLLAMA_RESUME_TEXT_TIMEOUT = int(os.environ.get("OLLAMA_RESUME_TEXT_TIMEOUT", "180"))
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "900"))
 
 
@@ -277,11 +279,55 @@ def _pdf_first_page_to_image(pdf_data: bytes) -> str | None:
 
 
 # ── Regex fallback extraction ───────────────────────────────────────────────
+def _extract_name_from_text(text: str) -> str:
+    """Heuristic: candidate name is typically the first prominent non-address line.
+
+    Strategy:
+    1. Skip blank lines and lines that look like contact info (email, phone, URL, city/country).
+    2. Take the first remaining line that is 2-5 words of title-case or ALL-CAPS text.
+    """
+    skip_patterns = re.compile(
+        r'@|http|www\.|linkedin|github|'           # contact / urls
+        r'\d{5,}|'                                  # phone / zip
+        r'(?:india|hyderabad|bangalore|mumbai|delhi|chennai|pune|'
+        r'noida|gurugram|gurgaon|kolkata|ahmedabad)',
+        re.IGNORECASE,
+    )
+    lines = text.splitlines()
+    for line in lines[:20]:  # Only look in first 20 lines
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if skip_patterns.search(stripped):
+            continue
+        # Must be 2-5 words, no digits, no special chars except spaces and hyphens
+        words = stripped.split()
+        if not (2 <= len(words) <= 5):
+            continue
+        if re.search(r'[^A-Za-z\s\-\.]', stripped):
+            continue
+        # Words should look like a name: title-case or ALL-CAPS
+        name_like = all(
+            w[0].isupper() or w.isupper()
+            for w in words
+            if len(w) > 1
+        )
+        if name_like:
+            # Convert ALL-CAPS to title case for readability
+            return " ".join(w.title() if w.isupper() else w for w in words)
+    return ""
+
+
 def _regex_extract_from_text(text: str) -> dict[str, Any]:
     """Basic regex extraction when AI is unavailable."""
     result = _empty_extraction()
     if not text:
         return result
+
+    # Candidate name — heuristic from top of resume
+    name = _extract_name_from_text(text)
+    if name:
+        result["candidate_name"] = name
 
     # Phone number (Indian 10-digit)
     phone_match = re.search(r'(?:\+91[\s\-]?)?([6-9]\d{9})', text)
@@ -293,13 +339,26 @@ def _regex_extract_from_text(text: str) -> dict[str, Any]:
     if email_match:
         result["email"] = email_match.group(0)
 
-    # Common technologies
+    # Common technologies — extended with QA/Automation stack
     tech_keywords = [
+        # Automation / QA
+        "Selenium", "Playwright", "Cypress", "Appium", "TestNG", "JUnit",
+        "Cucumber BDD", "Rest Assured", "REST Assured", "Postman",
+        # Java ecosystem
+        "Java", "Spring Boot", "Spring",
+        # SAP
         "SAP BASIS", "SAP HANA", "SAP FICO", "SAP MM", "SAP SD", "SAP ABAP",
-        "React", "Angular", "Vue", "Node.js", "Python", "Java", "C#", ".NET",
-        "AWS", "Azure", "GCP", "DevOps", "Docker", "Kubernetes",
-        "Salesforce", "ServiceNow", "Workday", "Oracle", "SQL Server",
+        # Frontend
+        "React", "Angular", "Vue", "Next.js", "TypeScript", "JavaScript",
+        # Backend
+        "Node.js", "Python", "C#", ".NET", "Go", "Ruby on Rails",
+        # Cloud / DevOps
+        "AWS", "Azure", "GCP", "DevOps", "Docker", "Kubernetes", "Jenkins",
+        # Data
         "Data Engineer", "Machine Learning", "AI/ML", "Full Stack",
+        "SQL Server", "Oracle", "PostgreSQL", "MySQL",
+        # Other
+        "Salesforce", "ServiceNow", "Workday",
         "iOS", "Android", "Flutter", "React Native",
     ]
     text_lower = text.lower()
@@ -313,10 +372,27 @@ def _regex_extract_from_text(text: str) -> dict[str, Any]:
     if exp_match:
         result["years_of_experience"] = exp_match.group(1)
 
+    # Location — common Indian cities
+    location_match = re.search(
+        r'\b(Hyderabad|Bangalore|Bengaluru|Mumbai|Delhi|Chennai|Pune|Noida|'
+        r'Gurugram|Gurgaon|Kolkata|Ahmedabad|Chandigarh|Jaipur|Kochi)\b',
+        text, re.IGNORECASE,
+    )
+    if location_match:
+        result["location"] = location_match.group(1)
+
+    # Current company — line after keywords like "at", "working at", or after experience header
+    company_match = re.search(
+        r'(?:currently\s+(?:working\s+)?(?:at|with)|employer|company)\s*[:\-]?\s*([A-Z][A-Za-z0-9\s\.\,&]+)',
+        text, re.IGNORECASE,
+    )
+    if company_match:
+        result["current_company"] = company_match.group(1).strip()[:60]
+
     result["extraction_source"] = "regex_only"
     result["extraction_method"] = "regex_fallback"
     result["is_resume"] = bool(result["phone"] or result["email"] or result["technology"])
-    result["confidence_score"] = sum(10 for f in ["phone", "email", "technology", "years_of_experience"] if result.get(f))
+    result["confidence_score"] = sum(10 for f in ["candidate_name", "phone", "email", "technology", "years_of_experience"] if result.get(f))
     return result
 
 
@@ -351,7 +427,7 @@ def extract_resume_with_ollama(
             prompt = RESUME_EXTRACTION_PROMPT.format(
                 resume_text=pdf_text[:6000]  # Limit to avoid token overflow
             )
-            response = _call_text_model(prompt, timeout=OLLAMA_TEXT_TIMEOUT)
+            response = _call_text_model(prompt, timeout=OLLAMA_RESUME_TEXT_TIMEOUT)
             elapsed = time.time() - start
             logger.info("Text model responded in %.1fs", elapsed)
 
