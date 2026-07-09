@@ -3523,6 +3523,36 @@ def import_confirmed_interview_slot(
             source=source,
         )
 
+    # Round-wise candidates without a confirmed slot can still book new rounds.
+    # Find any existing row by name and clone it for the new interview slot.
+    if _normalise_service_type(service_type, {}) == "round_wise":
+        any_match = next(
+            (
+                r for r in rows
+                if _normalise_candidate_name_key(r.get("name") or "") == _normalise_candidate_name_key(canon)
+            ),
+            None,
+        )
+        if any_match:
+            row = _duplicate_candidate_slot(
+                any_match,
+                date=day,
+                time=slot_time,
+                time_end=slot_end,
+                notes=note,
+                interview_round=rnd,
+            )
+            return _finish_public_slot_import(
+                row,
+                "cloned",
+                technology=tech,
+                interview_round=rnd,
+                slot_image=slot_image,
+                slot_image_name=slot_image_name,
+                slot_image_mime=slot_image_mime,
+                source=source,
+            )
+
     # Never create a candidate or a confirmed Daily Ops slot from an unmatched
     # public/import name.  A real candidate must exist first; otherwise a
     # malformed upload can silently book someone who has no interview.
