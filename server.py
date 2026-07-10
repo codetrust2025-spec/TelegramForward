@@ -3792,6 +3792,7 @@ async def candidates_upload_proof(
         from features.ollama_payment_extract import (
             extract_payment_with_ollama,
             verify_payment_against_due,
+            generate_payment_narrative,
         )
         ai_result = await asyncio.to_thread(extract_payment_with_ollama, raw, file.content_type or "image/jpeg")
         if ai_result and ai_result.get("is_payment_screenshot"):
@@ -3799,6 +3800,18 @@ async def candidates_upload_proof(
             paid = int(existing.get("payment") or 0)
             due = max(0, expected - paid)
             ai_extraction = verify_payment_against_due(ai_result, due)
+            # Generate plain-English confidence narrative
+            try:
+                narrative = await asyncio.to_thread(
+                    generate_payment_narrative,
+                    ai_extraction,
+                    candidate_name=(existing.get("name") or ""),
+                    expected_amount=expected,
+                    received_amount=paid,
+                )
+                ai_extraction["narrative"] = narrative
+            except Exception:
+                pass
     except Exception:
         pass
     resp = {"status": "ok", "proof": entry, "candidate": row}
