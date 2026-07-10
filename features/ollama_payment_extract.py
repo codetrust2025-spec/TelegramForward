@@ -643,3 +643,166 @@ def verify_payment_against_due(
         )
 
     return result
+
+
+# ── Confidence narrative (human-readable summary for payout modal) ──────────
+
+def _rule_based_narrative(
+    extraction: dict[str, Any],
+    candidate_name: str,
+    expected_amount: int,
+    received_amount: int,
+) -> str:
+    """Deterministic narrative when Ollama is unavailable.
+
+    Produces a sentence like:
+      "Amount ₹10,000 matches expected ₹10,000 · UTR 123456789012 · PhonePe ·
+       date 2025-06-01 · status success — looks valid."
+    """
+    parts: list[str] = []
+    detected = int(extraction.get("amount") or 0)
+    due = max(0, expected_amount - received_amount)
+
+    # Amount check
+    if detected > 0:
+        if due > 0:
+            tolerance = due * 0.05
+            if detected >= due - tolerance:
+                parts.append(f"Amount ₹{detected:,} matches due ₹{due:,}")
+            else:
+                parts.append(f"Amount ₹{detected:,} detected but ₹{due:,} was due")
+        else:
+            parts.append(f"Amount ₹{detected:,} detected (candidate is fully paid)")
+    else:
+        parts.append("Amount not detected")
+
+    # Receiver name check
+    receiver = (extraction.get("receiver_name") or "").strip()
+    if receiver and candidate_name:
+        canon = " ".join(candidate_name.strip().lower().split())
+        recv_key = " ".join(receiver.lower().split())
+        # Check for partial name overlap
+        name_words = [w for w in canon.split() if len(w) > 2]
+        if any(w in recv_key for w in name_words):
+            parts.append(f"receiver name '{receiver}' matches candidate")
+        else:
+            parts.append(f"receiver '{receiver}' (verify against candidate name '{candidate_name}')")
+
+    # UTR
+    utr = (extraction.get("utr_number") or extraction.get("reference_number") or "").strip()
+    if utr:
+        parts.append(f"UTR {utr}")
+
+    # App
+    app = (extraction.get("payment_app") or "").strip()
+    if app:
+        parts.append(app)
+
+    # Date
+    pay_date = (extraction.get("payment_date") or "").strip()
+    if pay_date:
+        today_str = date.today().isoformat()
+        if pay_date <= today_str:
+            parts.append(f"date {pay_date}")
+        else:
+            parts.append(f"date {pay_date} (future date — verify)")
+
+    # Status
+    status = (extraction.get("status") or "unknown").lower()
+    if status == "success":
+        parts.append("status success")
+    elif status == "pending":
+        parts.append("status pending — payment not yet settled")
+    elif status == "failed":
+        parts.append("status failed — do not accept")
+
+    if not parts:
+        return "Could not extract payment details — review screenshot manually."
+
+    summary = " · ".join(parts)
+    verified = extraction.get("verified", False)
+    suffix = " — looks valid." if verified else " — review manually."
+    return summary + suffix
+
+
+_NARRATIVE_PROMPT_TEMPLATE = """You are a concise payment verification assistant for a recruiting operations tool.
+
+A payment screenshot was uploaded for candidate: {candidate_name}
+Expected payment: ₹{expected_amount}
+Already received: ₹{received_amount}
+Amount still due: ₹{due_amount}
+
+Extracted payment details from screenshot:
+- Detected amount: ₹{detected_amount}
+- Receiver name: {receiver_name}
+- UTR / Reference: {utr}
+- Payment app: {payment_app}
+- Payment date: {payment_date}
+- Status: {status}
+- Confidence score: {confidence}/100
+
+Write ONE plain-English sentence (max 35 words) summarising whether this payment screenshot looks valid. Mention:
+1. Whether the amount matches what's due
+2. Whether the receiver name matches the candidate (if available)
+3. Whether the date is plausible
+4. A brief verdict: "looks valid", "needs review", or "reject"
+
+Do not use bullet points. Do not use markdown. Return only the sentence.
+"""
+
+
+def generate_payment_narrative(
+    extraction: dict[str, Any],
+    *,
+    candidate_name: str = "",
+    expected_amount: int = 0,
+    received_amount: int = 0,
+) -> str:
+    """Generate a plain-English confidence summary for the payout modal.
+
+    Uses qwen2.5:7b (fast text model) if Ollama is available, otherwise
+    falls back to a deterministic rule-based sentence.
+
+    Example outputs:
+      "Amount ₹10,000 matches due · UTR 320022345678 · PhonePe · date 2025-06-01 — looks valid."
+      "Amount ₹5,000 detected but ₹10,000 was due — short by ₹5,000, needs review."
+    """
+    due = max(0, expected_amount - received_amount)
+    detected = int(extraction.get("amount") or 0)
+    utr = (extraction.get("utr_number") or extraction.get("reference_number") or "").strip() or "—"
+    receiver = (extraction.get("receiver_name") or "").strip() or "—"
+    app = (extraction.get("payment_app") or "").strip() or "—"
+    pay_date = (extraction.get("payment_date") or "").strip() or "—"
+    status = (extraction.get("status") or "unknown").strip()
+    confidence = int(extraction.get("confidence_score") or 0)
+
+    # Try Ollama text model first (fast, ~10-30s)
+    if _is_ollama_available():
+        prompt = _NARRATIVE_PROMPT_TEMPLATE.format(
+            candidate_name=candidate_name or "Unknown",
+            expected_amount=f"{expected_amount:,}" if expected_amount else "0",
+            received_amount=f"{received_amount:,}" if received_amount else "0",
+            due_amount=f"{due:,}" if due else "0 (fully paid)",
+            detected_amount=f"{detected:,}" if detected else "not detected",
+            receiver_name=receiver,
+            utr=utr,
+            payment_app=app,
+            payment_date=pay_date,
+            status=status,
+            confidence=confidence,
+        )
+        try:
+            response = _call_text_model(prompt, timeout=45)
+            if response:
+                # Strip any stray quotes or markdown the model adds
+                narrative = response.strip().strip('"\'`').strip()
+                # Sanity: must be a non-empty sentence under 300 chars
+                if 10 < len(narrative) < 300:
+                    logger.info("Narrative generated by text model (%d chars)", len(narrative))
+                    return narrative
+        except Exception as exc:
+            logger.warning("Narrative generation failed: %s", exc)
+
+    # Fallback: deterministic rule-based narrative
+    logger.info("Using rule-based narrative (Ollama unavailable or model failed)")
+    return _rule_based_narrative(extraction, candidate_name, expected_amount, received_amount)
