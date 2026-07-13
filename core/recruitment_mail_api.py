@@ -15,7 +15,7 @@ def oauth_configured():
 def _require_oauth_config():
     if not oauth_configured():raise HTTPException(503,'Google OAuth is not configured. Ask an administrator to configure Gmail read-only access before connecting a mailbox.')
 def _guard():
-    if not enabled():raise HTTPException(404,'AI interview and offer tracking is disabled')
+    if not enabled():raise HTTPException(404,'AI selection and offer detection is disabled')
 def _state(data:dict)->str:
     raw=base64.urlsafe_b64encode(json.dumps({**data,'exp':int(time.time())+600}).encode()).decode().rstrip('=');key=(os.getenv('DASHBOARD_AUTH_SECRET') or os.getenv('DASHBOARD_PASSWORD') or '').encode()
     if not key:raise HTTPException(503,'OAuth state signing is not configured')
@@ -125,9 +125,30 @@ def install_recruitment_mail_routes(app):
         _guard();require_fleet_admin(request)
         from core.db.connection import get_connection
         with get_connection() as conn,conn.cursor() as cur:
-            cur.execute("""SELECT (SELECT count(*) FROM candidate_mailboxes WHERE connection_status='CONNECTED') connected_mailboxes,(SELECT count(*) FROM candidate_mailboxes WHERE monitoring_enabled) monitored_mailboxes,(SELECT count(*) FROM mailbox_sync_jobs WHERE status='COMPLETED' AND completed_at::date=current_date) successful_syncs_today,(SELECT count(*) FROM mailbox_sync_jobs WHERE status='FAILED' AND created_at::date=current_date) failed_syncs_today,(SELECT COALESCE(sum(messages_fetched),0) FROM mailbox_sync_jobs WHERE created_at::date=current_date) emails_scanned_today,(SELECT count(*) FROM ai_recruitment_events WHERE created_at::date=current_date) recruitment_emails_detected,(SELECT count(*) FROM ai_recruitment_events WHERE review_status='PENDING') pending_reviews,(SELECT count(*) FROM ai_recruitment_events WHERE primary_status LIKE 'INTERVIEW%%') interviews_detected,(SELECT count(*) FROM ai_recruitment_events WHERE primary_status='SELECTED') selections_detected,(SELECT count(*) FROM offer_verification_cases) offers_detected,(SELECT count(*) FROM ai_recruitment_events WHERE primary_status='OFFER_LETTER_RECEIVED') offer_letters_detected,(SELECT count(*) FROM ai_recruitment_events WHERE primary_status='JOINING_CONFIRMED') joining_confirmations,(SELECT count(*) FROM offer_verification_cases WHERE verification_status='VERIFIED') verified_offers,(SELECT count(*) FROM ai_recruitment_events WHERE review_status='FALSE_POSITIVE') false_positives,(SELECT count(*) FROM ai_recruitment_events WHERE primary_status='MANUAL_REVIEW_REQUIRED') ai_failures""");cols=[d.name for d in cur.description];metrics=dict(zip(cols,cur.fetchone()))
-            cur.execute("SELECT created_at::date AS event_day,count(*) AS event_count FROM ai_recruitment_events WHERE created_at>=current_date-30 GROUP BY 1 ORDER BY 1");events_by_day=[{'day':str(r[0]),'count':r[1]} for r in cur.fetchall()]
-            cur.execute("SELECT primary_status,count(*) count FROM ai_recruitment_events GROUP BY 1 ORDER BY 2 DESC");status_distribution=[{'status':r[0],'count':r[1]} for r in cur.fetchall()]
+            cur.execute("""WITH qualified AS (
+              SELECT * FROM ai_recruitment_events WHERE confidence>=0.8
+                AND review_status NOT IN('FALSE_POSITIVE','DUPLICATE')
+                AND primary_status IN('SELECTED','FINAL_SELECTION_CONFIRMED','OFFER_INDICATION','OFFER_IN_PROGRESS','OFFER_APPROVED','OFFER_LETTER_RECEIVED','APPOINTMENT_LETTER_RECEIVED','OFFER_ACCEPTED','JOINING_CONFIRMED','JOINED','POST_SELECTION_ONBOARDING','MANUAL_REVIEW_REQUIRED')
+                AND jsonb_array_length(COALESCE(structured_result->'evidence','[]'::jsonb))>0
+            ) SELECT
+              (SELECT count(*) FROM qualified WHERE primary_status IN('SELECTED','FINAL_SELECTION_CONFIRMED')) selections_detected,
+              (SELECT count(*) FROM qualified WHERE primary_status='OFFER_INDICATION') offer_indications,
+              (SELECT count(*) FROM qualified WHERE primary_status IN('OFFER_IN_PROGRESS','OFFER_APPROVED')) offers_in_progress,
+              (SELECT count(*) FROM qualified WHERE primary_status='OFFER_LETTER_RECEIVED') offer_letters_detected,
+              (SELECT count(*) FROM qualified WHERE primary_status='APPOINTMENT_LETTER_RECEIVED') appointment_letters_detected,
+              (SELECT count(*) FROM qualified WHERE primary_status='OFFER_ACCEPTED') offers_accepted,
+              (SELECT count(*) FROM qualified WHERE primary_status='JOINING_CONFIRMED') joining_confirmations,
+              (SELECT count(*) FROM qualified WHERE primary_status='JOINED') candidates_joined,
+              (SELECT count(*) FROM qualified WHERE review_status='PENDING') pending_reviews,
+              (SELECT count(*) FROM offer_verification_cases WHERE verification_status='VERIFIED') verified_offers""");cols=[d.name for d in cur.description];metrics=dict(zip(cols,cur.fetchone()))
+            cur.execute("""SELECT created_at::date AS event_day,count(*) AS event_count FROM ai_recruitment_events
+              WHERE created_at>=current_date-30 AND confidence>=0.8 AND review_status NOT IN('FALSE_POSITIVE','DUPLICATE')
+                AND primary_status IN('SELECTED','FINAL_SELECTION_CONFIRMED','OFFER_INDICATION','OFFER_IN_PROGRESS','OFFER_APPROVED','OFFER_LETTER_RECEIVED','APPOINTMENT_LETTER_RECEIVED','OFFER_ACCEPTED','JOINING_CONFIRMED','JOINED','POST_SELECTION_ONBOARDING','MANUAL_REVIEW_REQUIRED')
+              GROUP BY 1 ORDER BY 1""");events_by_day=[{'day':str(r[0]),'count':r[1]} for r in cur.fetchall()]
+            cur.execute("""SELECT primary_status,count(*) count FROM ai_recruitment_events
+              WHERE confidence>=0.8 AND review_status NOT IN('FALSE_POSITIVE','DUPLICATE')
+                AND primary_status IN('SELECTED','FINAL_SELECTION_CONFIRMED','OFFER_INDICATION','OFFER_IN_PROGRESS','OFFER_APPROVED','OFFER_LETTER_RECEIVED','APPOINTMENT_LETTER_RECEIVED','OFFER_ACCEPTED','JOINING_CONFIRMED','JOINED','POST_SELECTION_ONBOARDING','MANUAL_REVIEW_REQUIRED')
+              GROUP BY 1 ORDER BY 2 DESC""");status_distribution=[{'status':r[0],'count':r[1]} for r in cur.fetchall()]
         return {'status':'ok','metrics':metrics,'charts':{'events_by_day':events_by_day,'status_distribution':status_distribution},'flags':store.list_flags(status='PENDING')}
     @app.get('/api/offer-verification')
     async def offer_list(request:Request,status:str|None=None,limit:int=50,offset:int=0):
@@ -159,14 +180,16 @@ def install_recruitment_mail_routes(app):
               (SELECT count(*) FROM mailbox_sync_jobs WHERE status='COMPLETED') mailbox_sync_success_total,
               (SELECT count(*) FROM mailbox_sync_jobs WHERE status IN('FAILED','DEAD_LETTER')) mailbox_sync_failure_total,
               (SELECT COALESCE(sum(messages_fetched),0) FROM mailbox_sync_jobs) mailbox_messages_fetched_total,
-              (SELECT count(*) FROM ai_recruitment_events) ai_recruitment_request_total,
-              (SELECT count(*) FROM ai_recruitment_events WHERE primary_status<>'MANUAL_REVIEW_REQUIRED') ai_recruitment_success_total,
-              (SELECT count(*) FROM ai_recruitment_events WHERE primary_status='MANUAL_REVIEW_REQUIRED') ai_recruitment_failure_total,
+              (SELECT count(*) FROM ai_recruitment_events WHERE confidence>=0.8 AND review_status NOT IN('FALSE_POSITIVE','DUPLICATE')) ai_selection_offer_request_total,
+              (SELECT count(*) FROM ai_recruitment_events WHERE confidence>=0.9 AND review_status NOT IN('FALSE_POSITIVE','DUPLICATE')) ai_selection_offer_high_confidence_total,
+              (SELECT count(*) FROM ai_recruitment_events WHERE primary_status='MANUAL_REVIEW_REQUIRED' AND confidence>=0.8 AND review_status='PENDING') ai_manual_review_total,
               (SELECT COALESCE(avg(processing_duration_ms),0) FROM ai_recruitment_events) ai_processing_duration_ms_avg,
               (SELECT count(*) FROM mailbox_sync_jobs WHERE status='QUEUED') queue_depth,
-              (SELECT count(*) FROM ai_recruitment_events WHERE primary_status LIKE 'INTERVIEW%%') interview_detected_total,
+              (SELECT count(*) FROM ai_recruitment_events WHERE primary_status IN('SELECTED','FINAL_SELECTION_CONFIRMED') AND review_status NOT IN('FALSE_POSITIVE','DUPLICATE')) selection_detected_total,
               (SELECT count(*) FROM ai_recruitment_events WHERE primary_status='OFFER_INDICATION') offer_indication_total,
+              (SELECT count(*) FROM ai_recruitment_events WHERE primary_status IN('OFFER_IN_PROGRESS','OFFER_APPROVED')) offer_in_progress_total,
               (SELECT count(*) FROM ai_recruitment_events WHERE primary_status='OFFER_LETTER_RECEIVED') offer_letter_detected_total,
+              (SELECT count(*) FROM ai_recruitment_events WHERE primary_status='APPOINTMENT_LETTER_RECEIVED') appointment_letter_detected_total,
               (SELECT count(*) FROM offer_verification_cases WHERE verification_status='VERIFIED') verified_offer_total,
               (SELECT count(*) FROM ai_recruitment_events WHERE review_status='FALSE_POSITIVE') false_positive_total""");names=[d.name for d in cur.description];values=dict(zip(names,cur.fetchone()))
         return {'status':'ok','metrics':values}

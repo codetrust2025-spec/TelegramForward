@@ -15,6 +15,22 @@ const api = async (path, options = {}) => {
 };
 const human = (value) => String(value || "").replaceAll("_", " ");
 const when = (value) => (value ? new Date(value).toLocaleString() : "Never");
+const IMPORTANT_STATUSES = [
+  "SELECTED", "FINAL_SELECTION_CONFIRMED", "OFFER_INDICATION",
+  "OFFER_IN_PROGRESS", "OFFER_APPROVED", "OFFER_LETTER_RECEIVED",
+  "APPOINTMENT_LETTER_RECEIVED", "OFFER_ACCEPTED", "JOINING_CONFIRMED",
+  "JOINED", "POST_SELECTION_ONBOARDING", "MANUAL_REVIEW_REQUIRED",
+];
+const STATUS_FILTERS = {
+  selected: ["SELECTED", "FINAL_SELECTION_CONFIRMED"],
+  offer_indication: ["OFFER_INDICATION"],
+  offer_in_progress: ["OFFER_IN_PROGRESS", "OFFER_APPROVED"],
+  offer_letter: ["OFFER_LETTER_RECEIVED"],
+  appointment_letter: ["APPOINTMENT_LETTER_RECEIVED"],
+  offer_accepted: ["OFFER_ACCEPTED"],
+  joining_confirmed: ["JOINING_CONFIRMED"],
+  joined: ["JOINED"],
+};
 
 function EvidencePanel({ eventId, onClose, onChanged }) {
   const [event, setEvent] = useState(null),
@@ -79,7 +95,11 @@ function EvidencePanel({ eventId, onClose, onChanged }) {
           <h4>Edit extracted data</h4>
           <label>
             Status
-            <input value={status} onChange={(e) => setStatus(e.target.value)} />
+            <select value={status} onChange={(e) => setStatus(e.target.value)}>
+              {IMPORTANT_STATUSES.map((value) => (
+                <option value={value} key={value}>{human(value)}</option>
+              ))}
+            </select>
           </label>
           <label>
             Company
@@ -106,6 +126,7 @@ function EvidencePanel({ eventId, onClose, onChanged }) {
             {(event.structured_result?.evidence || []).map((item, i) => (
               <li key={i}>
                 <strong>{human(item.source)}</strong> {item.text}
+                {item.meaning && <small>{human(item.meaning)}</small>}
               </li>
             ))}
           </ul>
@@ -134,19 +155,21 @@ function ReviewTable({ rows, names, onReview, onEvidence }) {
       <table>
         <thead>
           <tr>
-            <th>Date</th>
+            <th>Detection Date</th>
             <th>Candidate</th>
-            <th>Status</th>
-            <th>Company / role</th>
+            <th>Important Status</th>
+            <th>Company</th>
+            <th>Job Role</th>
             <th>Confidence</th>
-            <th>Summary</th>
+            <th>Evidence</th>
+            <th>Offer Details</th>
             <th>Review</th>
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={7}>No detections match the filters.</td>
+              <td colSpan={9}>No important detections match the filters.</td>
             </tr>
           ) : (
             rows.map((event) => (
@@ -158,19 +181,24 @@ function ReviewTable({ rows, names, onReview, onEvidence }) {
                     {human(event.primary_status)}
                   </span>
                 </td>
-                <td>
-                  {event.company_name || "—"}
-                  <small>{event.job_title || ""}</small>
-                </td>
+                <td>{event.company_name || "—"}</td>
+                <td>{event.job_title || "—"}</td>
                 <td>{Math.round(Number(event.confidence) * 100)}%</td>
                 <td>
-                  {event.summary}
+                  <span>{event.structured_result?.evidence?.length || 0} source(s)</span>
                   <button
                     className="recruitment-mail-link"
                     onClick={() => onEvidence(event.id)}
                   >
                     View evidence
                   </button>
+                </td>
+                <td>
+                  {event.offered_ctc
+                    ? `${event.currency || ""} ${Number(event.offered_ctc).toLocaleString()}`
+                    : event.joining_date
+                      ? `Joining ${event.joining_date}`
+                      : event.summary || "—"}
                 </td>
                 <td>
                   {event.review_status === "PENDING" ? (
@@ -381,7 +409,10 @@ export function RecruitmentMailPanel() {
               String(e.company_name || "")
                 .toLowerCase()
                 .includes(filters.company.toLowerCase())) &&
-            (!filters.status || e.primary_status === filters.status) &&
+            (!filters.status ||
+              (STATUS_FILTERS[filters.status] || [filters.status]).includes(
+                e.primary_status,
+              )) &&
             (!filters.review || e.review_status === filters.review) &&
             (!filters.confidence ||
               Number(e.confidence) >= Number(filters.confidence)) &&
@@ -405,24 +436,22 @@ export function RecruitmentMailPanel() {
   );
   const pageRows = filtered.slice(page * 20, page * 20 + 20);
   const cards = [
-    ["Connected mailboxes", metrics.connected_mailboxes],
-    ["Monitored mailboxes", metrics.monitored_mailboxes],
-    ["Syncs today", metrics.successful_syncs_today],
-    ["Failed syncs", metrics.failed_syncs_today],
-    ["Emails scanned", metrics.emails_scanned_today],
-    ["Pending reviews", metrics.pending_reviews],
-    ["Selections", metrics.selections_detected],
-    ["Offers", metrics.offers_detected],
+    ["Candidates selected", metrics.selections_detected],
+    ["Offer indications", metrics.offer_indications],
+    ["Offers in progress", metrics.offers_in_progress],
     ["Offer letters", metrics.offer_letters_detected],
+    ["Appointment letters", metrics.appointment_letters_detected],
+    ["Offers accepted", metrics.offers_accepted],
     ["Joining confirmations", metrics.joining_confirmations],
+    ["Candidates joined", metrics.candidates_joined],
+    ["Pending important reviews", metrics.pending_reviews],
     ["Verified offers", metrics.verified_offers],
-    ["AI failures", metrics.ai_failures],
   ];
   return (
     <main className="recruitment-mail-page">
       <header className="recruitment-mail-header">
         <div>
-          <h2>AI Selection and Offer Review</h2>
+          <h2>Selection and Offer Review</h2>
           <p>Only job selections, offers, joining confirmations, and related verification mail.</p>
         </div>
         <button onClick={load}>Refresh</button>
@@ -487,10 +516,16 @@ export function RecruitmentMailPanel() {
                 setFilters({ ...filters, status: e.target.value })
               }
             >
-              <option value="">All statuses</option>
-              {[...new Set(events.map((e) => e.primary_status))].map((v) => (
-                <option key={v}>{human(v)}</option>
-              ))}
+              <option value="">All important detections</option>
+              <option value="selected">Selected</option>
+              <option value="offer_indication">Offer indication</option>
+              <option value="offer_in_progress">Offer in progress</option>
+              <option value="offer_letter">Offer letter</option>
+              <option value="appointment_letter">Appointment letter</option>
+              <option value="offer_accepted">Offer accepted</option>
+              <option value="joining_confirmed">Joining confirmed</option>
+              <option value="joined">Joined</option>
+              <option value="MANUAL_REVIEW_REQUIRED">Manual review required</option>
             </select>
             <select
               value={filters.review}
@@ -498,13 +533,11 @@ export function RecruitmentMailPanel() {
                 setFilters({ ...filters, review: e.target.value })
               }
             >
-              <option value="">All reviews</option>
+              <option value="">All review decisions</option>
               {[
                 "PENDING",
                 "APPROVED",
                 "REJECTED",
-                "FALSE_POSITIVE",
-                "DUPLICATE",
               ].map((v) => (
                 <option key={v}>{human(v)}</option>
               ))}
@@ -517,7 +550,7 @@ export function RecruitmentMailPanel() {
             >
               <option value="">Any confidence</option>
               <option value="0.9">90%+</option>
-              <option value="0.7">70%+</option>
+              <option value="0.8">80%+</option>
             </select>
             <input
               type="date"
@@ -766,7 +799,7 @@ export function RecruitmentMailPanel() {
       )}
       {tab === "timeline" && (
         <section className="recruitment-mail-card">
-          <h3>Candidate recruitment timeline</h3>
+          <h3>Candidate selection and offer timeline</h3>
           <select
             value={candidateId}
             onChange={(e) => setCandidateId(e.target.value)}

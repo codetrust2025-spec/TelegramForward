@@ -7,6 +7,9 @@ SET review_status='FALSE_POSITIVE',
 FROM mailbox_messages m
 WHERE e.mailbox_message_id=m.id
   AND e.review_status='PENDING'
+  -- This legacy cleanup is rerun by ensure_schema(). Never reclassify events
+  -- produced by the precision-first v3 pipeline on a later restart.
+  AND e.prompt_version IS DISTINCT FROM 'v3'
   AND (
     e.primary_status NOT IN (
       'SELECTED','OFFER_INDICATION','OFFER_LETTER_RECEIVED','OFFER_ACCEPTED',
