@@ -40,7 +40,7 @@ describe("RecruitmentMailPanel", () => {
       </ConfirmProvider>,
     );
     expect(
-      screen.getByRole("heading", { name: "AI Interview and Offer Review" }),
+      screen.getByRole("heading", { name: "AI Selection and Offer Review" }),
     ).toBeInTheDocument();
     await waitFor(() =>
       expect(

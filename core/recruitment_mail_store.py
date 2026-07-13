@@ -23,8 +23,9 @@ def ensure_schema() -> None:
     if not use_postgres():
         return
     with get_connection() as conn, conn.cursor() as cur:
-        migration = Path(__file__).with_name("migrations") / "001_recruitment_mail_tracking.sql"
-        cur.execute(migration.read_text(encoding="utf-8"))
+        migrations = Path(__file__).with_name("migrations")
+        for migration in sorted(migrations.glob("*_recruitment_mail_*.sql")):
+            cur.execute(migration.read_text(encoding="utf-8"))
 
 
 def _rows(cur) -> list[dict[str, Any]]:
@@ -173,7 +174,7 @@ def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, m
         cur.execute("""INSERT INTO ai_recruitment_events(id,candidate_id,mailbox_message_id,primary_status,confidence,company_name,company_domain,job_title,
           recruiter_name,recruiter_email,interview_date,interview_time,interview_mode,offered_ctc,currency,joining_date,offer_date,offer_expiry_date,
           structured_result,summary,requires_manual_review,review_status,ai_model,prompt_name,prompt_version,schema_version,processing_duration_ms,created_at,updated_at)
-          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,'PENDING',%s,'recruitment_email_status_extraction','v1','recruitment_event_v1',%s,now(),now()) RETURNING *""",
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,'PENDING',%s,'recruitment_email_status_extraction','v2','recruitment_event_v1',%s,now(),now()) RETURNING *""",
           (event_id,candidate_id,message_id,result['primary_status'],result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),interview.get('date'),interview.get('time'),interview.get('mode'),offer.get('offered_ctc'),offer.get('currency'),offer.get('joining_date'),offer.get('offer_date'),offer.get('offer_expiry_date'),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')),model,duration_ms))
         event=_rows(cur)[0]
         cur.execute("""INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,new_value,created_at)
