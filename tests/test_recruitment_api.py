@@ -24,3 +24,15 @@ def test_review_api_is_feature_guarded(monkeypatch):
     monkeypatch.setenv('AI_INTERVIEW_OFFER_TRACKING_ENABLED','false')
     response=app_client(monkeypatch).get('/api/ai-recruitment/review')
     assert response.status_code==404
+
+
+def test_mailbox_connect_reports_missing_oauth_configuration(monkeypatch):
+    monkeypatch.setenv('AI_INTERVIEW_OFFER_TRACKING_ENABLED','true')
+    for name in ('GOOGLE_OAUTH_CLIENT_ID','GOOGLE_OAUTH_CLIENT_SECRET','MAILBOX_CREDENTIAL_ENCRYPTION_KEY'):
+        monkeypatch.delenv(name,raising=False)
+    response=app_client(monkeypatch).post('/api/candidates/example/mailbox/connect',json={
+        'email_address':'candidate@example.com',
+        'redirect_uri':'https://teleautomation.online/api/candidate-mailboxes/oauth/google/callback',
+    })
+    assert response.status_code==503
+    assert 'Google OAuth is not configured' in response.json()['detail']
