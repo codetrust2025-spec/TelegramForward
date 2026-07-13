@@ -107,6 +107,10 @@ from core.demo_tools_api import install_demo_tools_routes
 
 install_demo_tools_routes(app)
 
+from core.recruitment_mail_api import install_recruitment_mail_routes
+
+install_recruitment_mail_routes(app)
+
 
 def _require_fleet_admin(request: Request) -> None:
     from core.dashboard_access import require_fleet_admin
@@ -401,6 +405,8 @@ async def _startup_background() -> None:
 
         asyncio.create_task(_inbox_periodic_sync())
         asyncio.create_task(_auto_stats_reset_loop())
+        from core.daily_briefing import scheduler_loop as daily_briefing_scheduler_loop
+        asyncio.create_task(daily_briefing_scheduler_loop(), name="daily_ai_briefing_scheduler")
 
         try:
             from core.karthik_inbox_sweep import start as start_karthik_inbox_sweep
@@ -442,6 +448,8 @@ async def startup():
     from core.config import warn_default_telegram_creds
 
     warn_default_telegram_creds()
+    from core.recruitment_mail_store import ensure_schema as ensure_recruitment_mail_schema
+    ensure_recruitment_mail_schema()
     _repair_inbox_conversation_keys()
     _sync_login_state_slots()
     telegram_client.sync_slots()
@@ -493,11 +501,17 @@ async def startup():
     _shutdown_monitor = AccountShutdownMonitor(manager)
     _shutdown_monitor.start()
 
+    from workers.recruitment_mail_worker import recruitment_mail_worker
+    recruitment_mail_worker.start()
+
 
 @app.on_event("shutdown")
 async def shutdown():
     """Graceful shutdown — persist workers, disconnect Telethon, resume after reload."""
     global _persist_running_task, _health_monitor, _membership_scheduler, _shutdown_monitor
+
+    from workers.recruitment_mail_worker import recruitment_mail_worker
+    await recruitment_mail_worker.stop()
 
     if _shutdown_monitor is not None:
         await _shutdown_monitor.stop()
@@ -2988,6 +3002,29 @@ async def login_status():
     return {"logged_in": False}
 
 
+@app.post("/ai/knowledge/query")
+async def knowledge_assistant_query(request: Request, body: dict):
+    """Read-only, allowlisted natural-language queries over operational data."""
+    question = str((body or {}).get("question") or "").strip()
+    if not question:
+        return {"status": "error", "message": "Question is required"}
+    if len(question) > 500:
+        return {"status": "error", "message": "Question is too long"}
+    from core.dashboard_access import handler_reference_scope
+    from core.knowledge_assistant import answer_question
+    reference = handler_reference_scope(request, None)
+    return await asyncio.to_thread(
+        answer_question, question, reference=reference,
+        session_id=str((body or {}).get("session_id") or "") or None,
+    )
+
+
+@app.delete("/ai/knowledge/session/{session_id}")
+async def knowledge_assistant_session_end(session_id: str):
+    from core.knowledge_assistant import end_session
+    return {"status": "ok", "ended": end_session(session_id)}
+
+
 # ── Candidates / Profiles tracker ───────────────────────────────────────────
 # Replaces the old "Profiles list update Form" Google Sheet. All CRUD happens
 # from the dashboard's Candidates tab and persists to data/candidates.json.
@@ -3002,6 +3039,7 @@ async def candidates_list(
     pending_only: bool = Query(default=False),
     reference: str | None = Query(default=None),
     service_type: str | None = Query(default=None),
+    ai_filter: str | None = Query(default=None),
 ):
     from core.dashboard_access import handler_reference_scope
     from features import candidate_store
@@ -3011,6 +3049,10 @@ async def candidates_list(
         stage=stage, task=task, search=search, month=month,
         pending_only=pending_only, reference=reference, service_type=service_type,
     )
+    if ai_filter and os.getenv("AI_INTERVIEW_OFFER_TRACKING_ENABLED", "false").lower() == "true":
+        from core.recruitment_mail_store import candidate_filter_ids
+        allowed = candidate_filter_ids(ai_filter)
+        rows = [row for row in rows if str(row.get("id")) in allowed]
     return {"status": "ok", "candidates": rows, "count": len(rows)}
 
 
@@ -3122,6 +3164,26 @@ async def candidates_pending_works(
     reference = handler_reference_scope(request, reference)
     payload = candidate_store.pending_works(month=month, reference=reference)
     return {"status": "ok", **payload}
+
+
+@app.get("/ai/daily-briefing")
+async def daily_ai_briefing_get(request: Request):
+    """Return today's cached, authorized, strictly read-only briefing."""
+    from core.daily_briefing import get_briefing
+
+    payload = await asyncio.to_thread(get_briefing, reference=_viewer_reference(request))
+    return {"status": "ok", "briefing": payload}
+
+
+@app.post("/ai/daily-briefing/refresh")
+async def daily_ai_briefing_refresh(request: Request):
+    """Recalculate today's briefing without modifying operational records."""
+    from core.daily_briefing import get_briefing
+
+    payload = await asyncio.to_thread(
+        get_briefing, reference=_viewer_reference(request), refresh=True,
+    )
+    return {"status": "ok", "message": "Briefing updated", "briefing": payload}
 
 
 @app.get("/candidates/interviews/daily")
@@ -3463,7 +3525,10 @@ async def candidates_create(request: Request, body: dict):
     body = prepare_candidate_body(request, body)
     if not (body.get("name") or "").strip():
         return {"status": "error", "message": "Name is required"}
-    row = candidate_store.create_candidate(body)
+    try:
+        row = candidate_store.create_candidate(body)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc), "duplicate_candidate": "already exists" in str(exc).lower()}
     return {"status": "ok", "candidate": row}
 
 
@@ -3476,7 +3541,10 @@ async def candidates_update(cid: str, request: Request, body: dict):
     if not existing:
         return {"status": "error", "message": "Candidate not found"}
     assert_candidate_row_access(request, existing)
-    row = candidate_store.update_candidate(cid, prepare_candidate_body(request, body or {}))
+    try:
+        row = candidate_store.update_candidate(cid, prepare_candidate_body(request, body or {}))
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc), "duplicate_phone": "already belongs" in str(exc).lower()}
     if not row:
         return {"status": "error", "message": "Candidate not found"}
     return {"status": "ok", "candidate": row}
@@ -3761,6 +3829,8 @@ async def candidates_upload_proof(
     if not existing:
         return {"status": "error", "message": "Candidate not found"}
     assert_candidate_row_access(request, existing)
+    ai_extraction = None
+    fraud_check = None
     try:
         raw = await file.read()
         # Validate: must look like a payment screenshot
@@ -3774,49 +3844,54 @@ async def candidates_upload_proof(
                 return {"status": "error", "message": reason}
         except Exception:
             pass
+        try:
+            from features.ollama_payment_extract import extract_payment_with_ollama, verify_payment_against_due
+            ai_result = await asyncio.to_thread(extract_payment_with_ollama, raw, file.content_type or "image/jpeg")
+            if ai_result and ai_result.get("is_payment_screenshot"):
+                expected = candidate_store.effective_expected_payment(existing)
+                paid = int(existing.get("payment") or 0)
+                ai_extraction = verify_payment_against_due(ai_result, max(0, expected - paid))
+        except Exception:
+            ai_extraction = None
+        from features.payment_fraud_detection import assess_payment_proof
+        fraud_check = assess_payment_proof(raw, ai_extraction, candidate_id=cid, candidate_name=existing.get("name") or "")
+        if fraud_check["decision"] == "rejected":
+            match = (fraud_check.get("duplicate_matches") or [{}])[0]
+            return {"status": "error", "message": " ".join(fraud_check["reasons"]), "fraud_check": fraud_check, "duplicate_candidate": match.get("candidate_name")}
+        metadata = {
+            "sha256": fraud_check["sha256"], "utr_number": fraud_check.get("utr_number") or "",
+            "transaction_id": (ai_extraction or {}).get("transaction_id") or "",
+            "payment_status": (ai_extraction or {}).get("status") or "",
+            "fraud_decision": fraud_check["decision"], "fraud_reasons": fraud_check["reasons"],
+            "fraud_warnings": fraud_check["warnings"], "fraud_checked_at": fraud_check["checked_at"],
+        }
         entry = candidate_store.add_proof(
             cid,
             data=raw,
             original_name=file.filename or "",
             mime_type=file.content_type or "",
             note=note or "",
+            metadata=metadata,
         )
     except ValueError as e:
         return {"status": "error", "message": str(e)}
     if entry is None:
         return {"status": "error", "message": "Candidate not found"}
     row = candidate_store.get_candidate(cid)
-    # AI-powered payment extraction (non-blocking enrichment)
-    ai_extraction = None
+    # Generate a plain-English confidence narrative for extracted payment data.
     try:
-        from features.ollama_payment_extract import (
-            extract_payment_with_ollama,
-            verify_payment_against_due,
-            generate_payment_narrative,
-        )
-        ai_result = await asyncio.to_thread(extract_payment_with_ollama, raw, file.content_type or "image/jpeg")
-        if ai_result and ai_result.get("is_payment_screenshot"):
+        from features.ollama_payment_extract import generate_payment_narrative
+        if ai_extraction:
             expected = candidate_store.effective_expected_payment(existing)
             paid = int(existing.get("payment") or 0)
-            due = max(0, expected - paid)
-            ai_extraction = verify_payment_against_due(ai_result, due)
-            # Generate plain-English confidence narrative
-            try:
-                narrative = await asyncio.to_thread(
-                    generate_payment_narrative,
-                    ai_extraction,
-                    candidate_name=(existing.get("name") or ""),
-                    expected_amount=expected,
-                    received_amount=paid,
-                )
-                ai_extraction["narrative"] = narrative
-            except Exception:
-                pass
+            ai_extraction["narrative"] = await asyncio.to_thread(generate_payment_narrative, ai_extraction, candidate_name=(existing.get("name") or ""), expected_amount=expected, received_amount=paid)
     except Exception:
         pass
     resp = {"status": "ok", "proof": entry, "candidate": row}
     if ai_extraction:
         resp["ai_extraction"] = ai_extraction
+    if fraud_check:
+        resp["fraud_check"] = fraud_check
     return resp
 
 
@@ -4403,7 +4478,7 @@ if os.path.exists(STATIC_DIR):
             "state", "health", "ws", "inbox", "crm", "stats", "admin", "ai", "voice",
             "candidates", "data-room", "public", "metrics", "alerts", "push", "analytics",
             "handler-expenses", "handler-salaries", "company-expenses",
-            "forward-message", "operator-tasks", "demo-tools", "slot-screenshot",
+            "forward-message", "operator-tasks", "demo-tools", "slot-screenshot", "api",
         }
         first = full_path.split("/")[0] if full_path else ""
         if first in api_roots:
