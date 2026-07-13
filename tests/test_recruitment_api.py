@@ -1,6 +1,14 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from core.recruitment_mail_api import install_recruitment_mail_routes
+
+
+def test_dashboard_query_does_not_use_reserved_day_alias():
+    source = Path("core/recruitment_mail_api.py").read_text(encoding="utf-8")
+    assert "created_at::date day" not in source
+    assert "created_at::date AS event_day" in source
 
 def app_client(monkeypatch):
     monkeypatch.delenv('DASHBOARD_PASSWORD',raising=False)
