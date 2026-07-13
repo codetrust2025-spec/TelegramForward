@@ -8,7 +8,7 @@ const payloadFor = (url) => {
   if (url.includes("/dashboard"))
     return {
       status: "ok",
-      metrics: { connected_mailboxes: 1 },
+      metrics: { selections_detected: 1 },
       charts: {},
       flags: [],
     };
@@ -40,15 +40,15 @@ describe("RecruitmentMailPanel", () => {
       </ConfirmProvider>,
     );
     expect(
-      screen.getByRole("heading", { name: "AI Selection and Offer Review" }),
+      screen.getByRole("heading", { name: "Selection and Offer Review" }),
     ).toBeInTheDocument();
     await waitFor(() =>
       expect(
-        screen.getByText("No detections match the filters."),
+        screen.getByText("No important detections match the filters."),
       ).toBeInTheDocument(),
     );
     expect(
-      screen.getByText("Connected mailboxes").parentElement,
+      screen.getByText("Candidates selected").parentElement,
     ).toHaveTextContent("1");
   });
 });
