@@ -10,6 +10,10 @@ from services.gmail_mailbox_provider import authorization_url, exchange_code, en
 
 def enabled():return os.getenv('AI_INTERVIEW_OFFER_TRACKING_ENABLED','false').lower()=='true'
 def offer_enabled():return os.getenv('AI_OFFER_VERIFICATION_ENABLED','false').lower()=='true'
+def oauth_configured():
+    return all((os.getenv(name) or '').strip() for name in ('GOOGLE_OAUTH_CLIENT_ID','GOOGLE_OAUTH_CLIENT_SECRET','MAILBOX_CREDENTIAL_ENCRYPTION_KEY'))
+def _require_oauth_config():
+    if not oauth_configured():raise HTTPException(503,'Google OAuth is not configured. Ask an administrator to configure Gmail read-only access before connecting a mailbox.')
 def _guard():
     if not enabled():raise HTTPException(404,'AI interview and offer tracking is disabled')
 def _state(data:dict)->str:
@@ -27,7 +31,7 @@ def install_recruitment_mail_routes(app):
     @app.get('/api/ai-recruitment/config')
     async def feature_config(request:Request):
         require_fleet_admin(request)
-        return {'status':'ok','enabled':enabled(),'mailbox_sync_enabled':os.getenv('AI_MAILBOX_SYNC_ENABLED','false').lower()=='true','offer_verification_enabled':offer_enabled()}
+        return {'status':'ok','enabled':enabled(),'mailbox_sync_enabled':os.getenv('AI_MAILBOX_SYNC_ENABLED','false').lower()=='true','offer_verification_enabled':offer_enabled(),'oauth_configured':oauth_configured()}
     @app.get('/api/candidates/{candidate_id}/mailbox')
     async def mailbox(candidate_id:str,request:Request):
         _guard(); row=candidate_store.get_candidate(candidate_id)
@@ -38,7 +42,7 @@ def install_recruitment_mail_routes(app):
         return {'status':'ok','mailbox':mb,'stats':stats,'events':store.list_events(candidate_id=candidate_id,limit=20)}
     @app.post('/api/candidates/{candidate_id}/mailbox/connect')
     async def connect(candidate_id:str,request:Request,body:dict):
-        _guard();profile=require_fleet_admin(request);row=candidate_store.get_candidate(candidate_id)
+        _guard();_require_oauth_config();profile=require_fleet_admin(request);row=candidate_store.get_candidate(candidate_id)
         if not row:raise HTTPException(404,'Candidate not found')
         email=str(body.get('email_address') or '').strip().lower()
         if '@' not in email:raise HTTPException(400,'Valid Gmail address required')
