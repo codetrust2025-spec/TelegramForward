@@ -1,55 +1,67 @@
-import React, { useCallback, useEffect, useState } from 'react'
-import { Spinner } from '../Loader.jsx'
-import { DesktopSidebar } from './DesktopSidebar.jsx'
-import { DesktopHeader } from './DesktopHeader.jsx'
-import { DesktopDashboardHome } from './DesktopDashboardHome.jsx'
-import { InboxPanel } from '../components/InboxPanel.jsx'
-import { CandidatesPanel } from '../components/CandidatesPanel.jsx'
-import { DataRoomPanel } from '../components/DataRoomPanel.jsx'
-import { AdminPanel } from '../components/AdminPanel.jsx'
-import { LogPanel } from '../components/LogPanel.jsx'
-import { ProgressHubPanel } from '../components/ProgressHubPanel.jsx'
-import { SetupMainPanel } from '../components/SetupMainPanel.jsx'
-import { AccountPanel } from '../components/AccountPanel.jsx'
-import { ForwarderConsole } from './ForwarderConsole.jsx'
-import { FleetDefaultsPanel } from '../components/FleetDefaultsPanel.jsx'
-import { ShutdownListPanel } from '../components/ShutdownListPanel.jsx'
-import { GroupsUpload } from '../components/GroupsUpload.jsx'
-import { SetupAccountPicker } from '../components/SetupAccountPicker.jsx'
-import { ResponsiveOptions } from '../components/ui/ResponsiveOptions.jsx'
-import { WORKSPACE_CAMPAIGN, WORKSPACE_FLEET, WORKSPACE_FORWARDING } from '../utils/workspaceMode.js'
-import { getDashboardModeFilter } from '../utils/workspaceDashboard.js'
-import { API } from '../config.js'
-import { statsResetConfirmOptions } from '../utils/statsResetConfirm.js'
-import { accountRowsForDashboard } from '../dashboard/dashboardStats.js'
-import { DailyOpsPanel } from '../dailyOps/DailyOpsPanel.jsx'
-import './desktopDashboard.css'
+import React, { useCallback, useEffect, useState } from "react";
+import { Spinner } from "../Loader.jsx";
+import { DesktopSidebar } from "./DesktopSidebar.jsx";
+import { DesktopHeader } from "./DesktopHeader.jsx";
+import { DesktopDashboardHome } from "./DesktopDashboardHome.jsx";
+import { InboxPanel } from "../components/InboxPanel.jsx";
+import { CandidatesPanel } from "../components/CandidatesPanel.jsx";
+import { DataRoomPanel } from "../components/DataRoomPanel.jsx";
+import { AdminPanel } from "../components/AdminPanel.jsx";
+import { KnowledgeAssistantPanel } from "../components/KnowledgeAssistantPanel.jsx";
+import { DailyBriefingCard } from "../components/DailyBriefingCard.jsx";
+import { RecruitmentMailPanel } from "../components/RecruitmentMailPanel.jsx";
+import { LogPanel } from "../components/LogPanel.jsx";
+import { ProgressHubPanel } from "../components/ProgressHubPanel.jsx";
+import { SetupMainPanel } from "../components/SetupMainPanel.jsx";
+import { AccountPanel } from "../components/AccountPanel.jsx";
+import { ForwarderConsole } from "./ForwarderConsole.jsx";
+import { FleetDefaultsPanel } from "../components/FleetDefaultsPanel.jsx";
+import { ShutdownListPanel } from "../components/ShutdownListPanel.jsx";
+import { GroupsUpload } from "../components/GroupsUpload.jsx";
+import { SetupAccountPicker } from "../components/SetupAccountPicker.jsx";
+import { ResponsiveOptions } from "../components/ui/ResponsiveOptions.jsx";
+import {
+  WORKSPACE_CAMPAIGN,
+  WORKSPACE_FLEET,
+  WORKSPACE_FORWARDING,
+} from "../utils/workspaceMode.js";
+import { getDashboardModeFilter } from "../utils/workspaceDashboard.js";
+import { API } from "../config.js";
+import { statsResetConfirmOptions } from "../utils/statsResetConfirm.js";
+import { accountRowsForDashboard } from "../dashboard/dashboardStats.js";
+import { DailyOpsPanel } from "../dailyOps/DailyOpsPanel.jsx";
+import "./desktopDashboard.css";
 
-const THEME_STORAGE_KEY = 'teleautomation-theme'
+const THEME_STORAGE_KEY = "teleautomation-theme";
 
 function initialTheme() {
   try {
-    return window.localStorage.getItem(THEME_STORAGE_KEY) === 'light' ? 'light' : 'dark'
+    return window.localStorage.getItem(THEME_STORAGE_KEY) === "light"
+      ? "light"
+      : "dark";
   } catch {
-    return 'dark'
+    return "dark";
   }
 }
 
 function sidebarActiveId(mainView, desktopPage, workspaceMode) {
-  if (mainView === 'inbox') return 'inbox'
-  if (mainView === 'logs') return 'logs'
-  if (mainView === 'admin') return 'admin'
-  if (mainView === 'candidates') return 'candidates'
-  if (mainView === 'daily-ops') return 'daily-ops'
-  if (mainView === 'data-room') return 'data'
-  if (desktopPage === 'setup' || desktopPage === 'login') return 'accounts'
-  if (desktopPage === 'fleet') return 'accounts'
-  if (desktopPage === 'shutdown') return 'settings'
-  if (desktopPage === 'progress') return 'dashboard'
-  if (workspaceMode === WORKSPACE_CAMPAIGN) return 'campaigns'
-  if (workspaceMode === WORKSPACE_FORWARDING) return 'forwarding'
-  if (workspaceMode === WORKSPACE_FLEET) return 'dashboard'
-  return 'dashboard'
+  if (mainView === "inbox") return "inbox";
+  if (mainView === "logs") return "logs";
+  if (mainView === "admin") return "admin";
+  if (mainView === "candidates") return "candidates";
+  if (mainView === "knowledge") return "knowledge";
+  if (mainView === "daily-briefing") return "daily-briefing";
+  if (mainView === "ai-recruitment") return "ai-recruitment";
+  if (mainView === "daily-ops") return "daily-ops";
+  if (mainView === "data-room") return "data";
+  if (desktopPage === "setup" || desktopPage === "login") return "accounts";
+  if (desktopPage === "fleet") return "accounts";
+  if (desktopPage === "shutdown") return "settings";
+  if (desktopPage === "progress") return "dashboard";
+  if (workspaceMode === WORKSPACE_CAMPAIGN) return "campaigns";
+  if (workspaceMode === WORKSPACE_FORWARDING) return "forwarding";
+  if (workspaceMode === WORKSPACE_FLEET) return "dashboard";
+  return "dashboard";
 }
 
 export function DesktopApp({
@@ -109,74 +121,83 @@ export function DesktopApp({
   groupsModal,
   incomingCallModal,
 }) {
-  const [theme, setTheme] = useState(initialTheme)
-  const activeId = sidebarActiveId(mainView, desktopPage, workspaceMode)
+  const [theme, setTheme] = useState(initialTheme);
+  const activeId = sidebarActiveId(mainView, desktopPage, workspaceMode);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme
-    document.documentElement.style.colorScheme = theme
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
     try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, theme)
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
     } catch {
       // Theme still works when storage is disabled.
     }
-  }, [theme])
+  }, [theme]);
 
   const toggleTheme = useCallback(() => {
-    setTheme(current => (current === 'dark' ? 'light' : 'dark'))
-  }, [])
+    setTheme((current) => (current === "dark" ? "light" : "dark"));
+  }, []);
 
   const handleSidebar = useCallback(
-    id => {
-      unlockNotificationSound?.()
+    (id) => {
+      unlockNotificationSound?.();
       switch (id) {
-        case 'dashboard':
-          setWorkspaceMode(WORKSPACE_FLEET)
-          onSelectAllAccounts?.()
-          setMainView('dashboard')
-          setDesktopPage('home')
-          break
-        case 'accounts':
-          setMainView('dashboard')
-          setDesktopPage('setup')
-          setSetupTab?.('login')
-          break
-        case 'forwarding':
-          setWorkspaceMode(WORKSPACE_FORWARDING)
-          setMainView('dashboard')
-          setDesktopPage('home')
-          break
-        case 'campaigns':
-          setWorkspaceMode(WORKSPACE_CAMPAIGN)
-          setMainView('dashboard')
-          setDesktopPage('home')
-          break
-        case 'inbox':
-          setMainView('inbox')
-          fetchInbox?.()
-          break
-        case 'candidates':
-          setMainView('candidates')
-          break
-        case 'daily-ops':
-          setMainView('daily-ops')
-          break
-        case 'data':
-          setMainView('data-room')
-          break
-        case 'logs':
-          setMainView('logs')
-          break
-        case 'admin':
-          setMainView('admin')
-          break
-        case 'settings':
-          setMainView('dashboard')
-          setDesktopPage('shutdown')
-          setSetupTab?.('shutdown')
-          break
+        case "dashboard":
+          setWorkspaceMode(WORKSPACE_FLEET);
+          onSelectAllAccounts?.();
+          setMainView("dashboard");
+          setDesktopPage("home");
+          break;
+        case "accounts":
+          setMainView("dashboard");
+          setDesktopPage("setup");
+          setSetupTab?.("login");
+          break;
+        case "forwarding":
+          setWorkspaceMode(WORKSPACE_FORWARDING);
+          setMainView("dashboard");
+          setDesktopPage("home");
+          break;
+        case "campaigns":
+          setWorkspaceMode(WORKSPACE_CAMPAIGN);
+          setMainView("dashboard");
+          setDesktopPage("home");
+          break;
+        case "inbox":
+          setMainView("inbox");
+          fetchInbox?.();
+          break;
+        case "candidates":
+          setMainView("candidates");
+          break;
+        case "knowledge":
+          setMainView("knowledge");
+          break;
+        case "daily-briefing":
+          setMainView("daily-briefing");
+          break;
+        case "ai-recruitment":
+          setMainView("ai-recruitment");
+          break;
+        case "daily-ops":
+          setMainView("daily-ops");
+          break;
+        case "data":
+          setMainView("data-room");
+          break;
+        case "logs":
+          setMainView("logs");
+          break;
+        case "admin":
+          setMainView("admin");
+          break;
+        case "settings":
+          setMainView("dashboard");
+          setDesktopPage("shutdown");
+          setSetupTab?.("shutdown");
+          break;
         default:
-          break
+          break;
       }
     },
     [
@@ -188,57 +209,75 @@ export function DesktopApp({
       fetchInbox,
       unlockNotificationSound,
     ],
-  )
+  );
 
   async function handleResetReach() {
     const ok = await confirm?.(
-      statsResetConfirmOptions({ scope: 'global', accountLabel: 'All accounts' }),
-    )
-    if (!ok) return
+      statsResetConfirmOptions({
+        scope: "global",
+        accountLabel: "All accounts",
+      }),
+    );
+    if (!ok) return;
     try {
       const res = await fetch(`${API}/stats/reset`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ scope: 'global' }),
-      })
-      const data = await res.json()
-      if (data.status === 'error') alert(data.message || 'Reset failed')
-      else refreshAccounts?.()
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ scope: "global" }),
+      });
+      const data = await res.json();
+      if (data.status === "error") alert(data.message || "Reset failed");
+      else refreshAccounts?.();
     } catch (e) {
-      alert(e.message || 'Reset failed')
+      alert(e.message || "Reset failed");
     }
   }
 
-  const modeFilter = getDashboardModeFilter(workspaceMode)
-  const accounts = accountRowsForDashboard(state, loggedInSlots, postingModes, modeFilter)
-  const activeRow = accounts.find(a => a.slot === state.active_account)
-  const activeRunning = !!activeRow?.running
+  const modeFilter = getDashboardModeFilter(workspaceMode);
+  const accounts = accountRowsForDashboard(
+    state,
+    loggedInSlots,
+    postingModes,
+    modeFilter,
+  );
+  const activeRow = accounts.find((a) => a.slot === state.active_account);
+  const activeRunning = !!activeRow?.running;
 
-  let bodyClass = 'desktop-body'
-  let content = null
+  let bodyClass = "desktop-body";
+  let content = null;
 
-  if (mainView === 'inbox') {
-    bodyClass += ' desktop-body--flush'
+  if (mainView === "inbox") {
+    bodyClass += " desktop-body--flush";
     content = (
       <InboxPanel
         {...inboxProps}
-        onBackToDashboard={() => handleSidebar('dashboard')}
+        onBackToDashboard={() => handleSidebar("dashboard")}
       />
-    )
-  } else if (mainView === 'logs') {
-    bodyClass += ' desktop-body--flush'
+    );
+  } else if (mainView === "logs") {
+    bodyClass += " desktop-body--flush";
     content = (
       <div className="logs-fullpage">
         <LogPanel {...logsProps} />
       </div>
-    )
-  } else if (mainView === 'admin') {
-    content = <AdminPanel />
-  } else if (mainView === 'candidates') {
-    content = <CandidatesPanel />
-  } else if (mainView === 'daily-ops') {
-    bodyClass += ' desktop-body--daily-ops'
+    );
+  } else if (mainView === "admin") {
+    content = <AdminPanel />;
+  } else if (mainView === "candidates") {
+    content = <CandidatesPanel />;
+  } else if (mainView === "knowledge") {
+    content = <KnowledgeAssistantPanel />;
+  } else if (mainView === "daily-briefing") {
+    content = (
+      <div className="daily-briefing-page">
+        <DailyBriefingCard />
+      </div>
+    );
+  } else if (mainView === "ai-recruitment") {
+    content = <RecruitmentMailPanel />;
+  } else if (mainView === "daily-ops") {
+    bodyClass += " desktop-body--daily-ops";
     content = (
       <DailyOpsPanel
         loggedInSlots={loggedInSlots}
@@ -246,16 +285,16 @@ export function DesktopApp({
         accountInfo={state.account_info}
         onSelectAccount={switchAccount}
         onStartAll={onStartAll}
-        startAllBusy={bulkActionLoading === 'start'}
+        startAllBusy={bulkActionLoading === "start"}
         showFleetControls
-        onNavCandidates={() => setMainView('candidates')}
+        onNavCandidates={() => setMainView("candidates")}
       />
-    )
-  } else if (mainView === 'data-room') {
-    content = <DataRoomPanel />
-  } else if (desktopPage === 'progress') {
-    content = <ProgressHubPanel {...progressHubProps} />
-  } else if (desktopPage === 'shutdown') {
+    );
+  } else if (mainView === "data-room") {
+    content = <DataRoomPanel />;
+  } else if (desktopPage === "progress") {
+    content = <ProgressHubPanel {...progressHubProps} />;
+  } else if (desktopPage === "shutdown") {
     content = (
       <div className="desk-setup-wrap">
         <ShutdownListPanel
@@ -266,8 +305,8 @@ export function DesktopApp({
           embedInTab
         />
       </div>
-    )
-  } else if (desktopPage === 'setup') {
+    );
+  } else if (desktopPage === "setup") {
     content = (
       <ForwarderConsole
         state={state}
@@ -289,7 +328,7 @@ export function DesktopApp({
         onTotalList={onTotalList}
         onSetSetupTab={setSetupTab}
       />
-    )
+    );
   } else {
     content = (
       <DesktopDashboardHome
@@ -305,31 +344,33 @@ export function DesktopApp({
         anyProcessRunning={anyRunning}
         onSelectAccount={switchAccount}
         onOpenSetup={() => {
-          setDesktopPage('setup')
-          setSetupTab?.('setup')
+          setDesktopPage("setup");
+          setSetupTab?.("setup");
         }}
-        onOpenProgress={() => setDesktopPage('progress')}
+        onOpenProgress={() => setDesktopPage("progress")}
         onResetReach={handleResetReach}
         onStartAccount={startAccount}
         onStopAccount={stopAccount}
         accountActionLoading={accountActionLoading}
         shutdownListCount={shutdownListCount}
         onNavBulk={() => {
-          setDesktopPage('setup')
-          setSetupTab?.(workspaceMode === WORKSPACE_CAMPAIGN ? 'setup' : 'fleet')
+          setDesktopPage("setup");
+          setSetupTab?.(
+            workspaceMode === WORKSPACE_CAMPAIGN ? "setup" : "fleet",
+          );
         }}
         onNavShutdown={() => {
-          setDesktopPage('shutdown')
-          setSetupTab?.('shutdown')
+          setDesktopPage("shutdown");
+          setSetupTab?.("shutdown");
         }}
-        onNavLogs={() => setMainView('logs')}
-        onNavData={() => setMainView('data-room')}
-        onNavCandidates={() => setMainView('candidates')}
+        onNavLogs={() => setMainView("logs")}
+        onNavData={() => setMainView("data-room")}
+        onNavCandidates={() => setMainView("candidates")}
         tickOverview={tickOverview}
         recentLogs={recentLogs}
         workspaceMode={workspaceMode}
       />
-    )
+    );
   }
 
   return (
@@ -374,7 +415,7 @@ export function DesktopApp({
             onSelectAllAccounts={onSelectAllAccounts}
             inboxUnreadTotal={inboxUnreadTotal}
             inboxUnreadBadge={inboxUnreadBadge}
-            onOpenInbox={() => handleSidebar('inbox')}
+            onOpenInbox={() => handleSidebar("inbox")}
             authUsername={authUsername}
             authEnabled={authEnabled}
             authLogout={authLogout}
@@ -388,5 +429,5 @@ export function DesktopApp({
       {groupsModal}
       {incomingCallModal}
     </>
-  )
+  );
 }

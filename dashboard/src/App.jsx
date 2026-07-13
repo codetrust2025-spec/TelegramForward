@@ -69,6 +69,8 @@ import { CandidatesPanel } from './components/CandidatesPanel.jsx'
 import { HandlerKitPanel } from './components/HandlerKitPanel.jsx'
 import { DataRoomPanel } from './components/DataRoomPanel.jsx'
 import { AdminPanel } from './components/AdminPanel.jsx'
+import { KnowledgeAssistantPanel } from './components/KnowledgeAssistantPanel.jsx'
+import { RecruitmentMailPanel } from './components/RecruitmentMailPanel.jsx'
 import {
   playNewMessageSound,
   unlockNotificationSound,
@@ -86,6 +88,7 @@ import { useMobileShell } from './utils/useMobileShell.js'
 import { MobileApp } from './mobile/MobileApp.jsx'
 import { DesktopApp } from './desktop/DesktopApp.jsx'
 import { PendingWorksProvider } from './dailyOps/PendingWorksProvider.jsx'
+import './recruitmentMail.css'
 
 
 function mergeInboxConversationList(convs, conversation, { clearUnread = false } = {}) {
@@ -207,6 +210,22 @@ export default function App() {
   const [workspaceMode, setWorkspaceMode] = useState(loadWorkspaceMode)
   const workspaceBootstrapDoneRef = useRef(false)
   const [mainView, setMainView] = useState('dashboard') // dashboard | inbox | candidates | handler-kit | ...
+  const [recruitmentEnabled, setRecruitmentEnabled] = useState(false)
+
+  useEffect(() => {
+    if (authRole !== 'admin') return
+    fetch(`${API}/api/ai-recruitment/config`, { credentials: 'include' }).then(r => r.ok ? r.json() : null).then(data => setRecruitmentEnabled(Boolean(data?.enabled))).catch(() => {})
+  }, [authRole])
+
+  useEffect(() => {
+    window.__TA_AI_RECRUITMENT_ENABLED__ = recruitmentEnabled
+  }, [recruitmentEnabled])
+
+  useEffect(() => {
+    const navigate = event => setMainView(event.detail?.view || 'dashboard')
+    window.addEventListener('teleautomation:navigate', navigate)
+    return () => window.removeEventListener('teleautomation:navigate', navigate)
+  }, [])
 
   useEffect(() => {
     // Handlers have a restricted Data Room (Opportunities only), so do not
@@ -2154,6 +2173,7 @@ export default function App() {
             inboxUnreadTotal={inboxUnreadTotal}
             inboxUnreadBadge={inboxUnreadBadge}
             handlerMode={authRole === 'handler'}
+            recruitmentEnabled={recruitmentEnabled}
             onNavigate={view => {
               if (view === 'dashboard') unlockNotificationSound()
               if (view === 'inbox') fetchInbox()
@@ -2181,6 +2201,10 @@ export default function App() {
         <HandlerKitPanel username={authUsername} reference={authReference} />
       ) : mainView === 'candidates' ? (
         <CandidatesPanel />
+      ) : mainView === 'knowledge' ? (
+        <KnowledgeAssistantPanel />
+      ) : mainView === 'ai-recruitment' ? (
+        <RecruitmentMailPanel />
       ) : mainView === 'data-room' ? (
         <DataRoomPanel />
       ) : mainView === 'admin' ? (
