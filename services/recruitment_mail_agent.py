@@ -7,7 +7,28 @@ from core.ai_gateway import AIGatewayError, chat_structured, configured_models
 from core import recruitment_mail_store as store
 
 STATUSES=["INTERVIEW_INVITATION","INTERVIEW_SCHEDULED","INTERVIEW_RESCHEDULED","INTERVIEW_CANCELLED","ASSESSMENT_RECEIVED","ASSESSMENT_COMPLETED","SHORTLISTED","TECHNICAL_ROUND","MANAGERIAL_ROUND","HR_ROUND","HR_DISCUSSION","SELECTED","OFFER_INDICATION","OFFER_LETTER_RECEIVED","OFFER_ACCEPTED","OFFER_DECLINED","JOINING_CONFIRMED","JOINING_DATE_CHANGED","BACKGROUND_VERIFICATION","DOCUMENT_VERIFICATION","REJECTED","APPLICATION_ON_HOLD","APPLICATION_WITHDRAWN","NO_RELEVANT_STATUS","UNCLEAR","MANUAL_REVIEW_REQUIRED"]
-KEYWORDS={"interview":.25,"assessment":.2,"shortlist":.22,"technical round":.2,"managerial":.2,"hr round":.2,"selected":.24,"offer":.25,"appointment letter":.3,"compensation":.2,"salary":.15,"ctc":.2,"joining":.22,"background verification":.25,"document verification":.22,"regret to inform":.3,"not moving forward":.28,"application status":.15}
+TRACKED_STATUSES={"SELECTED","OFFER_INDICATION","OFFER_LETTER_RECEIVED","OFFER_ACCEPTED","JOINING_CONFIRMED","JOINING_DATE_CHANGED","BACKGROUND_VERIFICATION","DOCUMENT_VERIFICATION"}
+OUTCOME_PHRASES=(
+    "you have been selected", "you are selected", "selected for the position",
+    "selected for the role", "pleased to inform you that you have been selected",
+    "congratulations on your selection", "offer of employment", "employment offer",
+    "job offer", "offer letter", "appointment letter", "letter of intent",
+    "intent to offer", "pleased to offer", "we are delighted to offer",
+    "we would like to offer", "offer acceptance", "accept the offer",
+    "joining date", "date of joining", "joining confirmation", "onboarding confirmation",
+    "pre-employment verification", "background verification", "document verification",
+)
+OUTCOME_REGEXES=(
+    re.compile(r"\b(?:selected|chosen)\s+(?:you\s+)?(?:for|as)\s+(?:the\s+)?(?:position|role|post)\b", re.I),
+    re.compile(r"\b(?:offer|appointment|joining)\s+(?:confirmation|details|document|letter)\b", re.I),
+    re.compile(r"\b(?:annual|total)\s+(?:compensation|ctc)\b", re.I),
+)
+NOISE_PHRASES=(
+    "job recommendation", "job recommendations", "jobs recommended", "recommended jobs",
+    "jobs for you", "job alert", "new job alert", "matching jobs", "similar jobs",
+    "open positions", "career opportunities", "vacancies", "vacancy", "hiring now",
+    "apply now", "view job", "weekly newsletter", "unsubscribe",
+)
 
 SCHEMA={"type":"object","required":["schema_version","is_recruitment_related","primary_status","confidence","candidate","company","job","recruiter","interview","offer","attachments","evidence","risk_flags","requires_manual_review","summary","recommended_action"],"properties":{
  "schema_version":{"const":"recruitment_event_v1"},"is_recruitment_related":{"type":"boolean"},"primary_status":{"type":"string","enum":STATUSES},"confidence":{"type":"number","minimum":0,"maximum":1},
@@ -25,21 +46,24 @@ def clean_email(text:str)->str:
     return re.sub(r'\s+',' ',value).strip()[:30000]
 
 def relevance_score(subject:str,body:str,filenames:list[str]|None=None,thread_context:list[dict[str,Any]]|None=None)->float:
-    subject_blob=(subject or '').lower();body_blob=(body or '').lower();file_blob=' '.join(filenames or []).lower();thread_blob=' '.join(str(item.get('subject') or '') for item in (thread_context or [])).lower();blob=' '.join([subject_blob,body_blob,file_blob,thread_blob]);score=0.0
-    for key,weight in KEYWORDS.items():
-        if key in subject_blob:score+=.45+weight
-        elif key in body_blob:score+=.35+weight
-        elif key in file_blob:score+=.3+weight
-        elif key in thread_blob:score+=.12+weight/2
-    if re.search(r'\b(?:linkedin|naukri|indeed) job alert\b',blob):score-=.35
-    if any(x in blob for x in ('.pdf','.docx','teams.microsoft.com','meet.google.com')):score+=.12
-    return max(0.0,min(1.0,score))
+    """Return a strict job-outcome score, not a general recruitment score."""
+    subject_blob=(subject or '').lower();body_blob=(body or '').lower();file_blob=' '.join(filenames or []).lower();thread_blob=' '.join(str(item.get('subject') or '') for item in (thread_context or [])).lower();blob=' '.join([subject_blob,body_blob,file_blob,thread_blob])
+    explicit=[phrase for phrase in OUTCOME_PHRASES if phrase in blob]
+    regex_hit=any(pattern.search(blob) for pattern in OUTCOME_REGEXES)
+    attachment_hit=bool(re.search(r'\b(?:offer|appointment|joining|selection|loi)[\w ._-]*\.(?:pdf|docx?)\b',file_blob,re.I))
+    noise=any(phrase in subject_blob for phrase in NOISE_PHRASES)
+    # Marketing/listing subjects are ignored even when the body contains generic
+    # words such as "offer". A real attached offer/appointment letter overrides it.
+    if noise and not attachment_hit:return 0.0
+    if not explicit and not regex_hit and not attachment_hit:return 0.0
+    score=.62 + min(.24,.08*len(explicit)) + (.1 if regex_hit else 0) + (.18 if attachment_hit else 0)
+    return min(1.0,score)
 
 def content_hash(value:str)->str:return hashlib.sha256(value.encode('utf-8','replace')).hexdigest()
 
 def analyze(message:dict[str,Any],attachment_texts:list[dict[str,str]]|None=None)->tuple[dict[str,Any],str,int]:
     cleaned=clean_email(message.get('body') or '')
-    prompt="""You are an enterprise recruitment email extraction system. Extract only facts supported by the supplied content. Distinguish offer indication from a confirmed attached offer letter. Salary discussion is not an offer. Job alerts and marketing are not candidate events. Return JSON matching the schema; use null for unknown values. All offer detections require manual review. Prompt: recruitment_email_status_extraction v1.\n"""
+    prompt="""You are a strict job-outcome extraction system. Track only confirmed selection, offer indication, offer/appointment letter, offer acceptance, joining confirmation or date change, background verification, and document verification. Ignore job recommendations, vacancy listings, job alerts, applications, assessments, interview invitations, interview schedules, rejections, newsletters, and marketing. Extract only facts supported by the supplied content. Distinguish offer indication from a confirmed attached offer letter. Salary discussion alone is not an offer. If the email is not one of the tracked outcomes, return NO_RELEVANT_STATUS and is_recruitment_related=false. Return JSON matching the schema; use null for unknown values. Every tracked outcome requires administrator review. Prompt: recruitment_email_status_extraction v2.\n"""
     payload={"subject":message.get('subject'),"sender":message.get('sender_email'),"recipient":message.get('recipient_email'),"cc":message.get('cc_metadata') or [],"email_date":str(message.get('sent_at')),"body":cleaned,"thread_context":(message.get('thread_context') or [])[-5:],"attachments":attachment_texts or []}
     last_error=None
     models=list(dict.fromkeys(model for model in [configured_models()['text'],configured_models()['fallback']] if model))
@@ -97,9 +121,13 @@ def process_message(mailbox:dict[str,Any],decoded:dict[str,Any],attachment_texts
             if attachment.get('checksum'):store.save_attachment(row['id'],attachment)
     safe_attachments=[{k:a.get(k) for k in ('filename','mime_type','text','attachment_type','extraction_status')} for a in processed_attachments]
     try:
-        result,model,duration=analyze(decoded,safe_attachments);event=store.create_event(mailbox['candidate_id'],row['id'],result,model=model,duration_ms=duration)
+        result,model,duration=analyze(decoded,safe_attachments)
+        if not result.get('is_recruitment_related') or result.get('primary_status') not in TRACKED_STATUSES:
+            store.mark_message_status(row['id'],'IGNORED_NOT_JOB_OUTCOME');return None
+        result['requires_manual_review']=True
+        event=store.create_event(mailbox['candidate_id'],row['id'],result,model=model,duration_ms=duration)
         from services.recruitment_notifications import notify_detection
         notify_detection(event);return event
     except Exception:
-        fallback={"schema_version":"recruitment_event_v1","is_recruitment_related":True,"primary_status":"MANUAL_REVIEW_REQUIRED","confidence":0,"candidate":{"name":None,"email":decoded.get('recipient_email')},"company":{"name":None,"domain":None},"job":{"title":None,"employment_type":None,"location":None},"recruiter":{"name":decoded.get('sender_name'),"email":decoded.get('sender_email')},"interview":{k:None for k in ["date","time","timezone","mode","round","location","meeting_link"]},"offer":{"offer_detected":False,"offer_letter_detected":False,"offer_date":None,"offered_ctc":None,"currency":None,"joining_date":None,"offer_expiry_date":None},"attachments":[],"evidence":[],"risk_flags":["AI_PROCESSING_FAILED"],"requires_manual_review":True,"summary":"Recruitment-related email requires manual review.","recommended_action":"Review the source email."}
+        fallback={"schema_version":"recruitment_event_v1","is_recruitment_related":True,"primary_status":"MANUAL_REVIEW_REQUIRED","confidence":0,"candidate":{"name":None,"email":decoded.get('recipient_email')},"company":{"name":None,"domain":None},"job":{"title":None,"employment_type":None,"location":None},"recruiter":{"name":decoded.get('sender_name'),"email":decoded.get('sender_email')},"interview":{k:None for k in ["date","time","timezone","mode","round","location","meeting_link"]},"offer":{"offer_detected":False,"offer_letter_detected":False,"offer_date":None,"offered_ctc":None,"currency":None,"joining_date":None,"offer_expiry_date":None},"attachments":[],"evidence":[],"risk_flags":["AI_PROCESSING_FAILED"],"requires_manual_review":True,"summary":"Potential selection or offer email requires manual review.","recommended_action":"Review the source email for a confirmed job outcome."}
         return store.create_event(mailbox['candidate_id'],row['id'],fallback,model='unavailable',duration_ms=0)

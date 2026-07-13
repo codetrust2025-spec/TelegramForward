@@ -28,6 +28,8 @@ def _read_state(value:str)->dict:
     return data
 
 def install_recruitment_mail_routes(app):
+    if enabled():
+        store.ensure_schema()
     @app.get('/api/ai-recruitment/config')
     async def feature_config(request:Request):
         require_fleet_admin(request)

@@ -411,10 +411,10 @@ export function RecruitmentMailPanel() {
     ["Failed syncs", metrics.failed_syncs_today],
     ["Emails scanned", metrics.emails_scanned_today],
     ["Pending reviews", metrics.pending_reviews],
-    ["Interviews", metrics.interviews_detected],
     ["Selections", metrics.selections_detected],
     ["Offers", metrics.offers_detected],
     ["Offer letters", metrics.offer_letters_detected],
+    ["Joining confirmations", metrics.joining_confirmations],
     ["Verified offers", metrics.verified_offers],
     ["AI failures", metrics.ai_failures],
   ];
@@ -422,8 +422,8 @@ export function RecruitmentMailPanel() {
     <main className="recruitment-mail-page">
       <header className="recruitment-mail-header">
         <div>
-          <h2>AI Interview and Offer Review</h2>
-          <p>Read-only Gmail monitoring with administrator verification.</p>
+          <h2>AI Selection and Offer Review</h2>
+          <p>Only job selections, offers, joining confirmations, and related verification mail.</p>
         </div>
         <button onClick={load}>Refresh</button>
       </header>
@@ -456,7 +456,7 @@ export function RecruitmentMailPanel() {
       {tab === "reviews" && (
         <section className="recruitment-mail-card">
           <div className="recruitment-mail-section-title">
-            <h3>AI detection review</h3>
+            <h3>Important job outcome review</h3>
             <span>{filtered.length} records</span>
           </div>
           <div className="recruitment-mail-filters">
