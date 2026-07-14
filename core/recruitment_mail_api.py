@@ -1,6 +1,7 @@
 """Authenticated API for candidate mailbox tracking and AI review."""
 from __future__ import annotations
 import base64, hashlib, hmac, json, os, time
+from datetime import date, timedelta
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from core import recruitment_mail_store as store
@@ -71,6 +72,18 @@ def install_recruitment_mail_routes(app):
         _guard();profile=require_fleet_admin(request);mb=store.mailbox_for_candidate(candidate_id)
         if not mb:raise HTTPException(404,'Mailbox not configured')
         job=store.enqueue_sync(mb['id'],requested_by=profile.get('username') or 'admin');store.audit(actor=profile.get('username') or 'admin',role='admin',action='MANUAL_SYNC_REQUESTED',candidate_id=candidate_id,source_id=job['id'],source_ip=request.client.host if request.client else None);return {'status':'ok','job':job}
+    @app.post('/api/candidates/{candidate_id}/mailbox/rescan')
+    async def historical_rescan(candidate_id:str,request:Request,body:dict):
+        _guard();profile=require_fleet_admin(request);mb=store.mailbox_for_candidate(candidate_id)
+        if not mb or not mb.get('credential_ciphertext'):raise HTTPException(400,'Mailbox is not connected')
+        try:
+            end=date.fromisoformat(str(body.get('range_end') or date.today().isoformat()))
+            start=date.fromisoformat(str(body.get('range_start') or (end-timedelta(days=29)).isoformat()))
+        except ValueError:raise HTTPException(400,'Dates must use YYYY-MM-DD')
+        if start>end or (end-start).days>365:raise HTTPException(400,'Choose a valid range of up to 365 days')
+        actor=profile.get('username') or 'admin';job=store.enqueue_historical_rescan(mb['id'],requested_by=actor,range_start=start,range_end=end)
+        store.audit(actor=actor,role='admin',action='HISTORICAL_EMAIL_RESCAN_REQUESTED',candidate_id=candidate_id,source_id=job['id'],new={'range_start':start.isoformat(),'range_end':end.isoformat(),'prompt_version':'v2'},source_ip=request.client.host if request.client else None)
+        return {'status':'ok','job':job}
     @app.patch('/api/candidates/{candidate_id}/mailbox/settings')
     async def settings(candidate_id:str,request:Request,body:dict):
         _guard();profile=require_fleet_admin(request);mb=store.mailbox_for_candidate(candidate_id)

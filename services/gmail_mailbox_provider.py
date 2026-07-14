@@ -76,6 +76,17 @@ class GmailMailboxProvider(MailboxProvider):
             return ([{"id":x} for x in dict.fromkeys(ids)],str(data.get("historyId") or cursor))
         data=self._request("messages?"+urllib.parse.urlencode({"maxResults":batch_size,"q":"newer_than:30d"}))
         profile=self.verify_connection(); return data.get("messages",[]),str(profile.get("historyId") or "")
+    def fetch_messages_by_date(self,range_start,range_end,*,limit:int=500)->list[dict[str,Any]]:
+        # Gmail's `before` boundary is exclusive; include the selected end day.
+        from datetime import timedelta
+        query=f"after:{range_start:%Y/%m/%d} before:{(range_end+timedelta(days=1)):%Y/%m/%d}"
+        messages=[];token=None
+        while len(messages)<limit:
+            params={"maxResults":min(100,limit-len(messages)),"q":query}
+            if token:params["pageToken"]=token
+            data=self._request("messages?"+urllib.parse.urlencode(params));messages.extend(data.get("messages",[]));token=data.get("nextPageToken")
+            if not token:break
+        return messages
     def fetch_message(self,message_id:str)->dict[str,Any]:return self._request(f"messages/{urllib.parse.quote(message_id)}?format=full")
     def fetch_thread(self,thread_id:str)->list[dict[str,Any]]:return self._request(f"threads/{urllib.parse.quote(thread_id)}?format=metadata").get("messages",[])
     def fetch_attachments(self,message:dict[str,Any])->list[dict[str,Any]]:
