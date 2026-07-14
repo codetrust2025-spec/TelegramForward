@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from core.db.connection import get_connection, use_postgres
@@ -93,6 +93,19 @@ def enqueue_sync(mailbox_id: str, *, requested_by: str, scheduled_for: datetime 
         return _rows(cur)[0]
 
 
+def enqueue_historical_rescan(mailbox_id: str, *, requested_by: str, range_start: date, range_end: date) -> dict[str, Any]:
+    job_id = _id()
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM mailbox_sync_jobs WHERE mailbox_id=%s AND status IN('QUEUED','RUNNING') ORDER BY created_at DESC LIMIT 1 FOR UPDATE", (mailbox_id,))
+        existing = _rows(cur) if cur.description else []
+        if existing:
+            return existing[0]
+        cur.execute("""INSERT INTO mailbox_sync_jobs(id,mailbox_id,status,scheduled_for,requested_by,job_type,range_start,range_end,created_at)
+          VALUES(%s,%s,'QUEUED',now(),%s,'HISTORICAL_RESCAN',%s,%s,now()) RETURNING *""",
+          (job_id, mailbox_id, requested_by, range_start, range_end))
+        return _rows(cur)[0]
+
+
 def claim_job() -> dict[str, Any] | None:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""SELECT j.id FROM mailbox_sync_jobs j WHERE j.status='QUEUED' AND j.scheduled_for<=now()
@@ -123,11 +136,31 @@ def insert_message(mailbox: dict[str,Any], message: dict[str,Any], score: float)
     mid=_id()
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""INSERT INTO mailbox_messages(id,mailbox_id,candidate_id,provider_message_id,provider_thread_id,sender_name,sender_email,
-          recipient_email,subject,sent_at,message_hash,body_hash,recruitment_relevance_score,processing_status,created_at,updated_at)
-          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'FILTERED',now(),now()) ON CONFLICT(mailbox_id,provider_message_id) DO NOTHING RETURNING *""",
-          (mid,mailbox['id'],mailbox['candidate_id'],message['provider_message_id'],message.get('provider_thread_id'),message.get('sender_name'),message.get('sender_email'),message.get('recipient_email'),message.get('subject'),message.get('sent_at'),message['message_hash'],message['body_hash'],score))
+          recipient_email,subject,sent_at,message_hash,body_hash,recruitment_relevance_score,processing_status,body_text,html_body_text,created_at,updated_at)
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'FILTERED',%s,%s,now(),now())
+          ON CONFLICT(mailbox_id,provider_message_id) DO UPDATE SET
+            body_text=COALESCE(mailbox_messages.body_text,EXCLUDED.body_text),
+            html_body_text=COALESCE(mailbox_messages.html_body_text,EXCLUDED.html_body_text),
+            recruitment_relevance_score=GREATEST(COALESCE(mailbox_messages.recruitment_relevance_score,0),EXCLUDED.recruitment_relevance_score),updated_at=now()
+          RETURNING *, (xmax = 0) AS was_created""",
+          (mid,mailbox['id'],mailbox['candidate_id'],message['provider_message_id'],message.get('provider_thread_id'),message.get('sender_name'),message.get('sender_email'),message.get('recipient_email'),message.get('subject'),message.get('sent_at'),message['message_hash'],message['body_hash'],score,message.get('body'),message.get('html_body')))
         rows=_rows(cur) if cur.description else []
-    return (rows[0],True) if rows else ({},False)
+    if not rows:return {},False
+    row=rows[0];created=bool(row.pop('was_created',False));return row,created
+
+
+def mark_reprocessed(message_id: str, previous_status: str | None, new_status: str, reason: str) -> None:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""UPDATE mailbox_messages SET previous_processing_status=%s,processing_status=%s,
+          reprocessed_at=now(),reprocessing_reason=%s,reprocessing_prompt_version='recruitment_email_status_extraction_v2',updated_at=now()
+          WHERE id=%s""", (previous_status,new_status,reason,message_id))
+
+
+def stored_message(mailbox_id: str, provider_message_id: str) -> dict[str, Any] | None:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM mailbox_messages WHERE mailbox_id=%s AND provider_message_id=%s", (mailbox_id,provider_message_id))
+        rows=_rows(cur)
+    return rows[0] if rows else None
 
 
 def is_duplicate_content(candidate_id:str,message_id:str,message_hash:str,body_hash:str)->bool:
@@ -214,7 +247,7 @@ def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, m
           structured_result,summary,requires_manual_review,review_status,visible_in_offer_review,original_primary_status,ignore_reason,ignored_at,
           ai_model,prompt_name,prompt_version,schema_version,processing_duration_ms,created_at,updated_at)
           VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,
-            CASE WHEN %s THEN NULL ELSE now() END,%s,'selection_offer_detection','v3','selection_offer_event_v1',%s,now(),now()) RETURNING *""",
+            CASE WHEN %s THEN NULL ELSE now() END,%s,'recruitment_email_status_extraction_v2','v2','selection_offer_event_v1',%s,now(),now()) RETURNING *""",
           (event_id,candidate_id,message_id,status,result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),interview.get('date'),interview.get('time'),interview.get('mode'),offer.get('offered_ctc'),offer.get('currency'),offer.get('joining_date'),offer.get('offer_date'),offer.get('offer_expiry_date'),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')) if visible else False,review_status,visible,original_status if not visible else None,ignore_reason,visible,model,duration_ms))
         event=_rows(cur)[0]
         cur.execute("""INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,new_value,created_at)
@@ -261,6 +294,37 @@ def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, m
         cur.execute("""UPDATE mailbox_messages SET processing_status=%s,ignore_reason=%s,
           ignored_at=CASE WHEN %s THEN ignored_at ELSE now() END,updated_at=now() WHERE id=%s""",
           ('EVENT_CREATED' if visible else status,ignore_reason,visible,message_id))
+    return event
+
+
+def create_or_reprocess_event(candidate_id: str, message_id: str, result: dict[str,Any], *, model: str, duration_ms: int, reason: str) -> dict[str,Any]:
+    """Update the existing event in place, preserving its prior classification in audit."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM ai_recruitment_events WHERE mailbox_message_id=%s", (message_id,))
+        existing_rows=_rows(cur)
+    if not existing_rows:
+        event=create_event(candidate_id,message_id,result,model=model,duration_ms=duration_ms)
+        audit(actor='system',role='system',action='HISTORICAL_EMAIL_REPROCESSED',candidate_id=candidate_id,source_id=event['id'],previous=None,new={'new_classification':result['primary_status'],'prompt_version':'v2','reason':reason})
+        return event
+    previous=existing_rows[0];company=result.get('company') or {};job=result.get('job') or {};offer=result.get('offer') or {};recruiter=result.get('recruiter') or {}
+    with get_connection() as conn,conn.cursor() as cur:
+        cur.execute("""UPDATE ai_recruitment_events SET original_primary_status=COALESCE(original_primary_status,primary_status),
+          primary_status=%s,confidence=%s,company_name=%s,company_domain=%s,job_title=%s,recruiter_name=%s,recruiter_email=%s,
+          joining_date=%s,structured_result=%s::jsonb,summary=%s,requires_manual_review=%s,review_status='PENDING',
+          visible_in_offer_review=true,ignore_reason=NULL,ignored_at=NULL,cleanup_version=NULL,ai_model=%s,
+          prompt_name='recruitment_email_status_extraction_v2',prompt_version='v2',processing_duration_ms=%s,updated_at=now()
+          WHERE id=%s RETURNING *""",
+          (result['primary_status'],result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),offer.get('joining_date'),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')),model,duration_ms,previous['id']))
+        event=_rows(cur)[0]
+        if result['primary_status'] in __import__('services.recruitment_mail_agent',fromlist=['OFFER_CASE_STATUSES']).OFFER_CASE_STATUSES:
+            cur.execute("""INSERT INTO offer_verification_cases(id,candidate_id,ai_recruitment_event_id,company_name,job_title,joining_date,verification_status,confidence,created_at,updated_at)
+              VALUES(%s,%s,%s,%s,%s,%s,'PENDING_REVIEW',%s,now(),now())
+              ON CONFLICT(ai_recruitment_event_id) DO UPDATE SET company_name=EXCLUDED.company_name,job_title=EXCLUDED.job_title,
+                joining_date=EXCLUDED.joining_date,verification_status='PENDING_REVIEW',confidence=EXCLUDED.confidence,updated_at=now()""",
+              (_id(),candidate_id,event['id'],company.get('name'),job.get('title'),offer.get('joining_date'),result['confidence']))
+        cur.execute("""INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,previous_value,new_value,created_at)
+          VALUES(%s,'system','system','HISTORICAL_EMAIL_RECLASSIFIED',%s,%s,%s::jsonb,%s::jsonb,now())""",
+          (_id(),candidate_id,event['id'],json.dumps({'classification':previous.get('primary_status'),'prompt_version':previous.get('prompt_version')},default=str),json.dumps({'classification':result['primary_status'],'prompt_version':'v2','reason':reason},default=str)))
     return event
 
 

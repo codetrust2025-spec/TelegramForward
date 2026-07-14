@@ -99,6 +99,33 @@ def test_selected_and_joining_confirmations_pass_the_strict_filter():
     assert agent.relevance_score("Job recommendations for you","This employer may offer a good opportunity.") == 0
 
 
+def test_shortlisted_with_explicit_joining_date_uses_strongest_full_message_evidence():
+    decision=agent.prefilter_decision(
+        "Congratulations and Next Steps – Data Engineer Role",
+        "Congratulations on being shortlisted for the role of Data Engineer. Your date of joining will be 15th July 2026. ONNI GLOBAL SERVICES INDIA PVT. LTD.",
+        sender_email="hr@onniglobal.in",
+    )
+    assert decision["qualified"] is True
+    assert decision["status"] == "JOINING_CONFIRMED"
+    assert decision["joining_date"] == "2026-07-15"
+    assert decision["job_title"] == "Data Engineer"
+    assert "ONNI GLOBAL SERVICES" in decision["company_name"]
+    assert decision["score"] >= .90
+    assert decision["requires_manual_review"] is True
+    assert "WORDING_STATUS_CONFLICT" in decision["risk_flags"]
+    assert {item["source"] for item in decision["evidence"]} >= {"EMAIL_BODY","EMAIL_SUBJECT"}
+
+
+def test_shortlist_only_stays_out_but_stronger_offer_evidence_wins():
+    generic=agent.prefilter_decision("Application update","You have been shortlisted for the technical interview.")
+    assert generic["qualified"] is False
+    assert generic["ignore_reason"] == "SHORTLIST_ONLY"
+    assert agent.prefilter_decision("Next steps","You have been shortlisted. We are planning to release your offer.")["status"] == "OFFER_INDICATION"
+    assert agent.prefilter_decision("Documents","You have been shortlisted. Please find your offer letter attached.")["status"] == "OFFER_LETTER_RECEIVED"
+    onboarding=agent.prefilter_decision("Next steps","You have been shortlisted. Please complete onboarding before joining on July 15.")
+    assert onboarding["status"] in {"POST_SELECTION_ONBOARDING","JOINING_CONFIRMED"}
+
+
 @pytest.mark.parametrize(("subject", "body", "expected"), [
     ("Congratulations! You have been selected", "You have been selected for the role.", "SELECTED"),
     ("Offer update", "Your offer is currently being processed.", "OFFER_IN_PROGRESS"),

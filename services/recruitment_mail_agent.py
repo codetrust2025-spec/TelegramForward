@@ -6,7 +6,7 @@ import html
 import json
 import os
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from core import recruitment_mail_store as store
@@ -27,18 +27,26 @@ OFFER_CASE_STATUSES = {
     "JOINING_CONFIRMED", "JOINED", "POST_SELECTION_ONBOARDING",
 }
 
+STATUS_PRIORITY = [
+    "JOINED", "JOINING_CONFIRMED", "POST_SELECTION_ONBOARDING",
+    "OFFER_ACCEPTED", "APPOINTMENT_LETTER_RECEIVED", "OFFER_LETTER_RECEIVED",
+    "OFFER_APPROVED", "OFFER_IN_PROGRESS", "FINAL_SELECTION_CONFIRMED",
+    "SELECTED", "OFFER_INDICATION", "SHORTLISTED",
+]
+
 STATUS_SIGNALS = [
+    ("JOINED", ("welcome aboard", "welcome to the organization", "reported for joining", "joined the company", "employment commenced")),
+    ("JOINING_CONFIRMED", ("your date of joining will be", "your joining date is", "date of joining", "expected joining date", "please join on", "report for joining on", "reporting date", "joining is confirmed", "joining confirmed")),
+    ("POST_SELECTION_ONBOARDING", ("employee onboarding", "post-selection onboarding", "complete onboarding formalities", "complete pre-joining formalities", "pre-joining formalities", "onboarding has started", "complete onboarding before joining")),
+    ("OFFER_ACCEPTED", ("offer acceptance", "accepted your offer", "accept the offer", "offer has been accepted")),
     ("APPOINTMENT_LETTER_RECEIVED", ("appointment letter attached", "letter of appointment", "appointment letter")),
     ("OFFER_LETTER_RECEIVED", ("offer letter attached", "find your offer letter", "offer letter has been released", "employment offer attached", "offer of employment")),
-    ("OFFER_ACCEPTED", ("offer acceptance", "accepted your offer", "accept the offer", "offer has been accepted")),
-    ("JOINED", ("welcome aboard", "welcome to the organization", "reported for joining", "joined the company", "employment commenced")),
-    ("JOINING_CONFIRMED", ("your joining date is", "date of joining is", "joining date confirmed", "report for joining")),
-    ("POST_SELECTION_ONBOARDING", ("employee onboarding", "post-selection onboarding", "complete onboarding formalities", "pre-joining formalities", "onboarding has started")),
     ("OFFER_APPROVED", ("offer has been approved", "offer is approved", "offer approved")),
     ("OFFER_IN_PROGRESS", ("offer is currently being processed", "processing your offer", "offer is being prepared", "offer under preparation")),
     ("FINAL_SELECTION_CONFIRMED", ("final selection confirmed", "selection has been confirmed", "finally selected")),
     ("SELECTED", ("you have been selected", "you are selected", "selected for the position", "selected for the role", "congratulations on your selection")),
     ("OFFER_INDICATION", ("we are pleased to offer you", "we are delighted to offer you", "we would like to offer you", "planning to release your offer", "intent to offer", "employment offer", "compensation offered", "annual ctc offered")),
+    ("SHORTLISTED", ("you have been shortlisted", "being shortlisted", "shortlisted for the role", "shortlisted for the position")),
 ]
 
 NOISE_RULES = [
@@ -114,13 +122,58 @@ def _source_texts(subject: str, body: str, attachments: list[dict[str, Any]] | N
     }
 
 
-def _match_status(text: str) -> tuple[str | None, str | None]:
+def _matching_statuses(text: str) -> list[tuple[str, str]]:
     lowered = text.lower()
+    matches = []
     for status, phrases in STATUS_SIGNALS:
         for phrase in phrases:
             if phrase in lowered:
-                return status, phrase
-    return None, None
+                matches.append((status, phrase))
+                break
+    return matches
+
+
+def _evidence_excerpt(text: str, phrase: str) -> str:
+    clean = clean_email(text)
+    start = clean.casefold().find(phrase.casefold())
+    if start < 0:
+        return phrase
+    left = max(clean.rfind(".", 0, start), clean.rfind("!", 0, start), clean.rfind("?", 0, start)) + 1
+    endings = [pos for mark in ".!?" if (pos := clean.find(mark, start)) >= 0]
+    right = min(endings) + 1 if endings else min(len(clean), start + 240)
+    return clean[left:right].strip()[:500]
+
+
+def _extract_joining_date(text: str) -> str | None:
+    month = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+    patterns = [rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+({month})\s*,?\s*(\d{{4}})\b", rf"\b({month})\s+(\d{{1,2}})(?:st|nd|rd|th)?\s*,?\s*(\d{{4}})\b"]
+    for index, pattern in enumerate(patterns):
+        match = re.search(pattern, text, re.I)
+        if not match:
+            continue
+        parts = match.groups()
+        candidate = " ".join(parts if index == 0 else (parts[1], parts[0], parts[2]))
+        for fmt in ("%d %B %Y", "%d %b %Y"):
+            try:
+                return datetime.strptime(candidate, fmt).date().isoformat()
+            except ValueError:
+                pass
+    return None
+
+
+def _extract_context(subject: str, body: str, sender_email: str) -> tuple[str | None, str | None, str | None]:
+    job = None
+    for pattern in (r"\brole of\s+([A-Za-z][A-Za-z0-9 /&+.#-]{1,80}?)(?=[.,;\n]|\byour date\b)", r"[-–—]\s*([A-Za-z][A-Za-z0-9 /&+.#-]{1,80}?)\s+Role\b"):
+        match = re.search(pattern, subject + "\n" + body, re.I)
+        if match:
+            job = match.group(1).strip(" -–—")
+            break
+    company = None
+    company_match = re.search(r"\b([A-Z][A-Z0-9 &.,'-]{2,100}?(?:PVT\.?\s*LTD\.?|PRIVATE LIMITED|SERVICES INDIA PVT\.?\s*LTD\.?|LIMITED))\b", body)
+    if company_match:
+        company = re.sub(r"\s+", " ", company_match.group(1)).strip()
+    domain = sender_email.rsplit("@", 1)[-1].lower() if "@" in sender_email else None
+    return company, job, domain
 
 
 def prefilter_decision(subject: str, body: str, sender_name: str = "", sender_email: str = "", attachments: list[dict[str, Any]] | None = None, thread_context: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -129,10 +182,9 @@ def prefilter_decision(subject: str, body: str, sender_name: str = "", sender_em
     detected = []
     for source, values in sources.items():
         for value in values:
-            status, phrase = _match_status(value)
-            if status and phrase:
+            for status, phrase in _matching_statuses(value):
                 detected.append(status)
-                evidence.append({"source": source, "meaning": status, "text": phrase})
+                evidence.append({"source": source, "meaning": status, "text": _evidence_excerpt(value, phrase)})
     for attachment in attachments or []:
         filename = str(attachment.get("filename") or "").lower()
         attachment_text = clean_email(str(attachment.get("text") or ""))
@@ -143,6 +195,10 @@ def prefilter_decision(subject: str, body: str, sender_name: str = "", sender_em
         elif "offer" in filename and any(token in lowered_text for token in ("employment offer", "offered employment", "offer of employment")):
             detected.append("OFFER_LETTER_RECEIVED")
             evidence.append({"source": "ATTACHMENT", "meaning": "OFFER_LETTER_RECEIVED", "text": next(token for token in ("employment offer", "offered employment", "offer of employment") if token in lowered_text)})
+    direct_text = " ".join(sources["EMAIL_SUBJECT"] + sources["EMAIL_BODY"])
+    if "JOINING_CONFIRMED" in detected and not _extract_joining_date(direct_text) and "please confirm your date of joining" in direct_text.lower():
+        detected=[value for value in detected if value!="JOINING_CONFIRMED"]
+        evidence=[item for item in evidence if item.get("meaning")!="JOINING_CONFIRMED"]
     combined_context = " ".join(sources["EMAIL_BODY"] + sources["ATTACHMENT"] + sources["THREAD_CONTEXT"]).lower()
     has_confirmed_context = any(token in combined_context for token in ("selected", "selection confirmed", "offer letter", "employment offer", "offer approved", "onboarding"))
     for source, values in sources.items():
@@ -161,9 +217,24 @@ def prefilter_decision(subject: str, body: str, sender_name: str = "", sender_em
                 phrase = next(p for p in SPECIAL_CONTEXT["JOINING_REQUEST"] if p in lowered)
                 evidence.append({"source": source, "meaning": "JOINING_CONFIRMED", "text": phrase})
     if detected:
-        priority = [status for status, _ in STATUS_SIGNALS]
-        status = next((candidate for candidate in priority if candidate in detected), detected[0])
-        return {"qualified": True, "score": min(0.99, 0.9 + 0.02 * len(evidence)), "status": status, "evidence": evidence[:8], "ignore_reason": None}
+        status = next((candidate for candidate in STATUS_PRIORITY if candidate in detected), detected[0])
+        # A shortlist by itself remains ordinary recruitment noise. Stronger
+        # evidence later in the complete message always wins.
+        if status == "SHORTLISTED":
+            return {"qualified": False, "score": 0.0, "status": "IGNORED_NOT_OFFER_RELATED", "evidence": [], "ignore_reason": "SHORTLIST_ONLY"}
+        combined = " ".join(sources["EMAIL_SUBJECT"] + sources["EMAIL_BODY"])
+        company, job, domain = _extract_context(subject, body, sender_email)
+        conflict = "SHORTLISTED" in detected and status != "SHORTLISTED"
+        if subject and any(token in subject.casefold() for token in ("congratulations", "next steps")):
+            evidence.append({"source":"EMAIL_SUBJECT","meaning":status,"text":clean_email(subject)[:500]})
+        return {
+            "qualified": True, "score": max(0.94 if status == "JOINING_CONFIRMED" else 0.92, min(0.99, 0.9 + 0.02 * len(evidence))),
+            "status": status, "evidence": evidence[:8], "ignore_reason": None,
+            "joining_date": _extract_joining_date(combined) if status in {"JOINING_CONFIRMED", "POST_SELECTION_ONBOARDING", "JOINED"} else None,
+            "company_name": company, "company_domain": domain, "job_title": job,
+            "risk_flags": ["WORDING_STATUS_CONFLICT"] if conflict else [],
+            "requires_manual_review": conflict,
+        }
     haystack = " ".join([subject, sender_name, sender_email, body]).lower()
     for reason, phrases in NOISE_RULES:
         if any(phrase in haystack for phrase in phrases):
@@ -230,7 +301,7 @@ def parse_model_json(raw: str) -> dict[str, Any]:
 
 
 def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | None = None) -> tuple[dict[str, Any], str, int]:
-    prompt = """You are TeleAutomation AI Selection and Offer Detection. First decide whether the email contains credible evidence that the candidate was selected, received or accepted an offer, received a joining confirmation, joined, or entered post-selection onboarding. Recruitment-related alone is not enough. Ignore job recommendations, alerts, listings, applications, assessments, interviews, rejections, newsletters, and marketing. Background verification, joining requests, and salary discussion qualify only with confirmed selection/offer/onboarding context. Evidence must be a short verbatim excerpt from EMAIL_SUBJECT, EMAIL_BODY, ATTACHMENT, or THREAD_CONTEXT and include its supported meaning. Never create MANUAL_REVIEW_REQUIRED below 0.80 confidence. Return only JSON matching selection_offer_event_v1. Prompt: selection_offer_detection v3."""
+    prompt = """You are TeleAutomation recruitment_email_status_extraction_v2. Analyze the complete message before choosing a status; never stop at the first keyword. Choose the furthest confirmed recruitment stage. Priority: JOINED, JOINING_CONFIRMED, OFFER_ACCEPTED, APPOINTMENT_LETTER_RECEIVED, OFFER_LETTER_RECEIVED, OFFER_APPROVED, OFFER_IN_PROGRESS, FINAL_SELECTION_CONFIRMED, SELECTED, OFFER_INDICATION. An explicit joining date overrides SHORTLISTED, INTERVIEW, HR_DISCUSSION, and SELECTED unless clearly tentative or conditional. Shortlist-only and job recommendations are not offer-review events. When wording says shortlisted but stronger joining/offer/onboarding evidence exists, keep the stronger status, add WORDING_STATUS_CONFLICT, and require manual review. Evidence must be verbatim from the full EMAIL_SUBJECT, EMAIL_BODY, ATTACHMENT, or THREAD_CONTEXT. Return only JSON matching selection_offer_event_v1."""
     payload = {"subject": message.get("subject"), "sender": message.get("sender_email"), "recipient": message.get("recipient_email"), "email_date": str(message.get("sent_at")), "body": clean_email(message.get("body") or ""), "thread_context": (message.get("thread_context") or [])[-5:], "attachments": attachment_texts or []}
     last_error = None
     models = list(dict.fromkeys(model for model in [configured_models()["text"], configured_models()["fallback"]] if model))
@@ -240,6 +311,21 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
             try:
                 response = chat_structured(messages=[{"role": "system", "content": prompt}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}], schema=SCHEMA, model=model)
                 parsed = parse_model_json(response.content)
+                decision = prefilter_decision(message.get("subject", ""), message.get("body", ""), message.get("sender_name", ""), message.get("sender_email", ""), attachment_texts, message.get("thread_context"))
+                parsed_rank = STATUS_PRIORITY.index(parsed["status"]) if parsed.get("status") in STATUS_PRIORITY else len(STATUS_PRIORITY)
+                if decision.get("qualified") and STATUS_PRIORITY.index(decision["status"]) < parsed_rank:
+                    parsed["status"] = decision["status"]
+                    parsed["confidence"] = max(float(parsed.get("confidence") or 0), float(decision["score"]))
+                    parsed["evidence"] = decision["evidence"]
+                if decision.get("qualified"):
+                    parsed["is_recruitment_related"] = True
+                    parsed["is_selection_or_offer_related"] = True
+                    parsed["should_create_review_record"] = True
+                    parsed["company"] = {"name": decision.get("company_name") or (parsed.get("company") or {}).get("name"), "domain": decision.get("company_domain") or (parsed.get("company") or {}).get("domain")}
+                    parsed["job"] = {**(parsed.get("job") or {}), "title": decision.get("job_title") or (parsed.get("job") or {}).get("title")}
+                    parsed["offer"] = {**(parsed.get("offer") or {}), "joining_date": decision.get("joining_date") or (parsed.get("offer") or {}).get("joining_date")}
+                    parsed["risk_flags"] = list(dict.fromkeys((parsed.get("risk_flags") or []) + (decision.get("risk_flags") or [])))
+                    parsed["requires_manual_review"] = bool(parsed.get("requires_manual_review") or decision.get("requires_manual_review"))
                 validate_result(parsed, message, attachment_texts)
                 parsed["primary_status"] = parsed["status"]
                 return parsed, response.model, response.duration_ms
@@ -249,23 +335,25 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
 
 
 def _fallback_result(decoded: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+    status = decision.get("status") or "MANUAL_REVIEW_REQUIRED"
+    conflict = bool(decision.get("requires_manual_review"))
     return {
         "schema_version": "selection_offer_event_v1", "is_recruitment_related": True,
         "is_selection_or_offer_related": True, "should_create_review_record": True,
-        "status": "MANUAL_REVIEW_REQUIRED", "primary_status": "MANUAL_REVIEW_REQUIRED",
-        "confidence": 0.8, "ignore_reason": None,
+        "status": status, "primary_status": status,
+        "confidence": float(decision.get("score") or 0.8), "ignore_reason": None,
         "candidate": {"name": None, "email": decoded.get("recipient_email")},
-        "company": {"name": None, "domain": None}, "job": {"title": None, "employment_type": None, "location": None},
+        "company": {"name": decision.get("company_name"), "domain": decision.get("company_domain")}, "job": {"title": decision.get("job_title"), "employment_type": None, "location": None},
         "recruiter": {"name": decoded.get("sender_name"), "email": decoded.get("sender_email")},
         "interview": {key: None for key in ["date", "time", "timezone", "mode", "round", "location", "meeting_link"]},
-        "offer": {"offer_detected": True, "offer_letter_detected": False, "appointment_letter_detected": False, "offer_date": None, "offered_ctc": None, "currency": None, "joining_date": None, "offer_expiry_date": None},
-        "attachments": [], "evidence": decision["evidence"], "risk_flags": ["AI_PROCESSING_FAILED"],
-        "requires_manual_review": True, "summary": "Strong selection or offer evidence requires administrator review.",
-        "recommended_action": "Review the source evidence and confirm the exact status.",
+        "offer": {"offer_detected": True, "offer_letter_detected": status == "OFFER_LETTER_RECEIVED", "appointment_letter_detected": status == "APPOINTMENT_LETTER_RECEIVED", "offer_date": None, "offered_ctc": None, "currency": None, "joining_date": decision.get("joining_date"), "offer_expiry_date": None},
+        "attachments": [], "evidence": decision["evidence"], "risk_flags": list(dict.fromkeys(["AI_PROCESSING_FAILED"] + decision.get("risk_flags", []))),
+        "requires_manual_review": True if conflict or status in TRACKED_STATUSES else False, "summary": (f"A joining date was communicated for the {decision.get('job_title') or 'candidate'} role." if status == "JOINING_CONFIRMED" else "Strong selection or offer evidence requires administrator review."),
+        "recommended_action": ("Verify the joining confirmation." if status == "JOINING_CONFIRMED" else "Review the source evidence and confirm the exact status."),
     }
 
 
-def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment_texts: list[dict[str, str]] | None = None) -> dict[str, Any] | None:
+def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment_texts: list[dict[str, str]] | None = None, *, reprocess: bool = False) -> dict[str, Any] | None:
     from services.mail_attachment_processor import extract_attachment
     decoded["body"] = clean_email(decoded.get("body") or "")
     decoded["message_hash"] = content_hash("|".join([decoded.get("sender_email") or "", decoded.get("subject") or "", str(decoded.get("sent_at"))]))
@@ -274,9 +362,10 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
     safe = [{key: item.get(key) for key in ("filename", "mime_type", "text", "attachment_type", "extraction_status", "checksum")} for item in processed]
     decision = prefilter_decision(decoded.get("subject", ""), decoded["body"], decoded.get("sender_name", ""), decoded.get("sender_email", ""), safe, decoded.get("thread_context"))
     row, created = store.insert_message(mailbox, decoded, float(decision["score"]))
-    if not created:
+    if not created and not reprocess:
         return None
-    if store.is_duplicate_content(mailbox["candidate_id"], row["id"], decoded["message_hash"], decoded["body_hash"]):
+    previous_status=row.get("processing_status")
+    if not reprocess and store.is_duplicate_content(mailbox["candidate_id"], row["id"], decoded["message_hash"], decoded["body_hash"]):
         store.mark_message_status(row["id"], "DUPLICATE_CONTENT", reason="DUPLICATE_MESSAGE")
         return None
     for attachment in processed:
@@ -284,8 +373,9 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
             store.save_attachment(row["id"], attachment)
     if not decision["qualified"]:
         store.mark_message_status(row["id"], "IGNORED_NOT_OFFER_RELATED", reason=decision["ignore_reason"])
+        if reprocess: store.mark_reprocessed(row["id"],previous_status,"IGNORED_NOT_OFFER_RELATED","HISTORICAL_RULE_RESCAN")
         return None
-    if store.is_duplicate_offer_attachment(mailbox["candidate_id"], row["id"]):
+    if not reprocess and store.is_duplicate_offer_attachment(mailbox["candidate_id"], row["id"]):
         store.mark_message_status(row["id"], "DUPLICATE_OFFER_ATTACHMENT", reason="DUPLICATE_OFFER_ATTACHMENT")
         return None
     try:
@@ -299,10 +389,11 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
     if float(result.get("confidence") or 0) < 0.8 or not result.get("evidence"):
         store.mark_message_status(row["id"], "IGNORED_LOW_CONFIDENCE", reason="LOW_CONFIDENCE_OR_NO_EVIDENCE")
         return None
-    if store.is_duplicate_thread_status(mailbox["candidate_id"], row["id"], result["primary_status"]):
+    if not reprocess and store.is_duplicate_thread_status(mailbox["candidate_id"], row["id"], result["primary_status"]):
         store.mark_message_status(row["id"], "DUPLICATE_OFFER_EVENT", reason="DUPLICATE_THREAD_STATUS")
         return None
-    event = store.create_event(mailbox["candidate_id"], row["id"], result, model=model, duration_ms=duration)
+    event = (store.create_or_reprocess_event(mailbox["candidate_id"],row["id"],result,model=model,duration_ms=duration,reason="HISTORICAL_RULE_RESCAN") if reprocess else store.create_event(mailbox["candidate_id"], row["id"], result, model=model, duration_ms=duration))
+    if reprocess: store.mark_reprocessed(row["id"],previous_status,"EVENT_CREATED","HISTORICAL_RULE_RESCAN")
     from services.recruitment_notifications import notify_detection
     notify_detection(event)
     return event

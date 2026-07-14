@@ -256,6 +256,10 @@ function ReviewTable({ rows, names, onReview, onEvidence }) {
 }
 
 export function RecruitmentMailPanel() {
+  const today = new Date().toISOString().slice(0, 10);
+  const thirtyDaysAgo = new Date(Date.now() - 29 * 86400000)
+    .toISOString()
+    .slice(0, 10);
   const { confirm } = useConfirm();
   const [metrics, setMetrics] = useState(
       /** @type {Record<string, any>} */ ({}),
@@ -286,6 +290,10 @@ export function RecruitmentMailPanel() {
     }),
     [page, setPage] = useState(0),
     [bulkText, setBulkText] = useState("");
+  const [rescanRange, setRescanRange] = useState({
+    range_start: thirtyDaysAgo,
+    range_end: today,
+  });
   useEffect(() => {
     const selected = sessionStorage.getItem("ai-mail-candidate-id");
     if (selected) {
@@ -742,6 +750,65 @@ export function RecruitmentMailPanel() {
                     </span>
                   ))}
                 </div>
+                {mailbox.connection_status === "CONNECTED" && (
+                  <div className="recruitment-mail-rescan">
+                    <div>
+                      <strong>Historical detection repair</strong>
+                      <p>
+                        Reprocess stored mail first, then fetch only missing
+                        Gmail content. Existing events and offer cases are
+                        updated without duplicates.
+                      </p>
+                    </div>
+                    <label>
+                      From
+                      <input
+                        type="date"
+                        value={rescanRange.range_start}
+                        max={rescanRange.range_end}
+                        onChange={(e) =>
+                          setRescanRange((value) => ({
+                            ...value,
+                            range_start: e.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      To
+                      <input
+                        type="date"
+                        value={rescanRange.range_end}
+                        min={rescanRange.range_start}
+                        onChange={(e) =>
+                          setRescanRange((value) => ({
+                            ...value,
+                            range_end: e.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          await api(
+                            `/api/candidates/${candidateId}/mailbox/rescan`,
+                            {
+                              method: "POST",
+                              body: JSON.stringify(rescanRange),
+                            },
+                          );
+                          setMessage(
+                            "Historical rescan queued. Important joining and offer emails will appear in Review queue automatically.",
+                          );
+                        })
+                      }
+                    >
+                      Rescan Important Historical Emails
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </section>

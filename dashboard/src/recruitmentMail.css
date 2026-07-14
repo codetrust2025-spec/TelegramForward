@@ -82,6 +82,21 @@
 .recruitment-mail-details dd {
   margin: 4px 0;
 }
+.recruitment-mail-rescan {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid #31425e;
+  border-radius: 10px;
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+  background: #0a1220;
+}
+.recruitment-mail-rescan > div { flex: 1 1 300px; }
+.recruitment-mail-rescan p { margin: 4px 0 0; color: #8fa1bd; font-size: 12px; }
+.recruitment-mail-rescan label { display: grid; gap: 5px; color: #90a4c2; font-size: 12px; }
+.recruitment-mail-rescan input { background: #0f1828; border: 1px solid #31425e; color: #fff; border-radius: 8px; padding: 9px; }
 .recruitment-mail-table-wrap {
   overflow: auto;
 }

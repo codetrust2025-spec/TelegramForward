@@ -49,17 +49,26 @@ class RecruitmentMailWorker:
         try:
             store.update_mailbox(mailbox['id'],{'last_sync_attempt_at':store.now()})
             provider=GmailMailboxProvider(mailbox['credential_ciphertext']); batch=max(1,min(100,int(os.getenv('AI_MAIL_SYNC_BATCH_SIZE','50'))))
-            refs,cursor=provider.fetch_new_messages(mailbox.get('provider_history_id') or mailbox.get('sync_cursor'),batch_size=batch);counts['fetched']=len(refs)
+            historical=job.get('job_type')=='HISTORICAL_RESCAN'
+            if historical:
+                refs=provider.fetch_messages_by_date(job['range_start'],job['range_end']);cursor=mailbox.get('provider_history_id') or mailbox.get('sync_cursor')
+            else:
+                refs,cursor=provider.fetch_new_messages(mailbox.get('provider_history_id') or mailbox.get('sync_cursor'),batch_size=batch)
+            counts['fetched']=len(refs)
             for ref in refs:
-                raw=provider.fetch_message(ref['id']);decoded=decode_gmail_message(raw,mailbox['email_address'])
+                stored=store.stored_message(mailbox['id'],ref['id']) if historical else None
+                if stored and stored.get('body_text'):
+                    raw=None;decoded={"provider_message_id":stored['provider_message_id'],"provider_thread_id":stored.get('provider_thread_id'),"sender_name":stored.get('sender_name'),"sender_email":stored.get('sender_email'),"recipient_email":stored.get('recipient_email'),"subject":stored.get('subject'),"sent_at":stored.get('sent_at'),"body":stored.get('body_text'),"html_body":stored.get('html_body_text') or ''}
+                else:
+                    raw=provider.fetch_message(ref['id']);decoded=decode_gmail_message(raw,mailbox['email_address'])
                 if decoded.get('provider_thread_id'):
                     try:
                         thread=provider.fetch_thread(decoded['provider_thread_id'])[-5:]
                         decoded['thread_context']=[{k:v for k,v in decode_gmail_message(item,mailbox['email_address']).items() if k in ('subject','sender_name','sender_email','sent_at')} for item in thread]
                     except Exception:
                         logger.info('Thread context unavailable mailbox=%s message=%s',mailbox['id'],ref['id'])
-                attachments=provider.fetch_attachments(raw)
-                event=process_message(mailbox,decoded,attachments);counts['processed']+=1;counts['events']+=1 if event else 0
+                attachments=([{**item,'text':item.get('extracted_text')} for item in store.attachments_for_message(stored['id'],include_text=True)] if stored and stored.get('body_text') else provider.fetch_attachments(raw))
+                event=(process_message(mailbox,decoded,attachments,reprocess=True) if historical else process_message(mailbox,decoded,attachments));counts['processed']+=1;counts['events']+=1 if event else 0
             store.update_mailbox(mailbox['id'],{'provider_history_id':cursor,'sync_cursor':cursor,'connection_status':'CONNECTED','last_successful_sync_at':store.now(),'failed_sync_count':0,'last_error_code':None,'last_error_message':None})
             store.finish_job(job['id'],status='COMPLETED',counts=counts)
         except Exception as exc:
