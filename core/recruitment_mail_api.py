@@ -60,7 +60,9 @@ def install_recruitment_mail_routes(app):
         cipher=encrypt_credentials({'refresh_token':tokens.get('refresh_token'),'access_token':tokens.get('access_token')})
         gmail_profile=GmailMailboxProvider(cipher).verify_connection();authorized=str(gmail_profile.get('emailAddress') or '').strip().lower()
         if authorized!=str(data['email']).strip().lower():raise HTTPException(400,'The authorized Gmail account does not match the selected mailbox address')
-        mb=store.upsert_mailbox(data['candidate_id'],data['email'],connection_status='CONNECTED',credential_ciphertext=cipher);store.audit(actor=data.get('actor') or 'admin',role='admin',action='MAILBOX_CONNECTED',candidate_id=data['candidate_id'],source_id=mb['id'],new={'email_address':data['email']})
+        mb=store.upsert_mailbox(data['candidate_id'],data['email'],connection_status='CONNECTED',credential_ciphertext=cipher);actor=data.get('actor') or 'admin';store.audit(actor=actor,role='admin',action='MAILBOX_CONNECTED',candidate_id=data['candidate_id'],source_id=mb['id'],new={'email_address':data['email']})
+        end=date.today();start=end-timedelta(days=29);job=store.enqueue_historical_rescan(mb['id'],requested_by=actor,range_start=start,range_end=end)
+        store.audit(actor=actor,role='admin',action='POST_CONNECT_HISTORICAL_RESCAN_QUEUED',candidate_id=data['candidate_id'],source_id=job['id'],new={'range_start':start.isoformat(),'range_end':end.isoformat(),'prompt_version':'v2'})
         return RedirectResponse('/?view=ai-recruitment&mailbox=connected')
     @app.post('/api/candidates/{candidate_id}/mailbox/verify')
     async def verify(candidate_id:str,request:Request):
