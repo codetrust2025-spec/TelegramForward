@@ -660,7 +660,7 @@ export function RecruitmentMailPanel() {
                 />
               </label>
               {!mailbox?.connection_status ||
-              ["PENDING", "DISCONNECTED"].includes(
+              ["PENDING", "DISCONNECTED", "ERROR"].includes(
                 mailbox.connection_status,
               ) ? (
                 <button
