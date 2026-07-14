@@ -96,7 +96,7 @@ def enqueue_sync(mailbox_id: str, *, requested_by: str, scheduled_for: datetime 
 def enqueue_historical_rescan(mailbox_id: str, *, requested_by: str, range_start: date, range_end: date) -> dict[str, Any]:
     job_id = _id()
     with get_connection() as conn, conn.cursor() as cur:
-        cur.execute("SELECT * FROM mailbox_sync_jobs WHERE mailbox_id=%s AND status IN('QUEUED','RUNNING') ORDER BY created_at DESC LIMIT 1 FOR UPDATE", (mailbox_id,))
+        cur.execute("SELECT * FROM mailbox_sync_jobs WHERE mailbox_id=%s AND job_type='HISTORICAL_RESCAN' AND status IN('QUEUED','RUNNING') ORDER BY created_at DESC LIMIT 1 FOR UPDATE", (mailbox_id,))
         existing = _rows(cur) if cur.description else []
         if existing:
             return existing[0]

@@ -41,7 +41,13 @@ class GmailMailboxProvider(MailboxProvider):
         refresh=self.credentials.get("refresh_token")
         if not refresh: raise RuntimeError("Gmail authorization has expired; reconnect the mailbox")
         data=urllib.parse.urlencode({"client_id":os.environ["GOOGLE_OAUTH_CLIENT_ID"],"client_secret":os.environ["GOOGLE_OAUTH_CLIENT_SECRET"],"refresh_token":refresh,"grant_type":"refresh_token"}).encode()
-        with urllib.request.urlopen(urllib.request.Request("https://oauth2.googleapis.com/token",data=data,method="POST"),timeout=20) as r:self.credentials.update(json.loads(r.read()))
+        try:
+            with urllib.request.urlopen(urllib.request.Request("https://oauth2.googleapis.com/token",data=data,method="POST"),timeout=20) as r:self.credentials.update(json.loads(r.read()))
+        except urllib.error.HTTPError as exc:
+            detail=exc.read().decode("utf-8","replace")
+            if exc.code==400 and "invalid_grant" in detail:
+                raise RuntimeError("Gmail authorization expired or was revoked. Reconnect Gmail to resume automatic monitoring and historical rescans.") from exc
+            raise
     def _request(self,path:str)->dict[str,Any]:
         if not self.credentials.get("access_token"):self.refresh_connection()
         url="https://gmail.googleapis.com/gmail/v1/users/me/"+path
