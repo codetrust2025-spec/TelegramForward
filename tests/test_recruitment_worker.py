@@ -1,4 +1,5 @@
 from workers.recruitment_mail_worker import RecruitmentMailWorker
+import urllib.error
 
 class FakeProvider:
     def __init__(self,_):pass
@@ -38,3 +39,18 @@ def test_worker_reprocesses_historical_messages_without_duplicate_download(monke
     assert calls == [{'reprocess':True}]
     assert finished[-1]['status']=='COMPLETED'
     assert finished[-1]['counts']=={'fetched':1,'processed':1,'events':1}
+
+
+def test_worker_skips_deleted_gmail_message_instead_of_failing_batch(monkeypatch):
+    import workers.recruitment_mail_worker as module
+    class DeletedProvider(FakeProvider):
+        def fetch_message(self,message_id):raise urllib.error.HTTPError('gmail',404,'deleted',{},None)
+    mailbox={'id':'mb1','candidate_id':'c1','email_address':'candidate@test.invalid','credential_ciphertext':'encrypted','provider_history_id':'history-1','failed_sync_count':0}
+    finished=[]
+    monkeypatch.setattr(module.store,'mailbox_by_id',lambda _:mailbox)
+    monkeypatch.setattr(module.store,'update_mailbox',lambda mid,values:mailbox)
+    monkeypatch.setattr(module.store,'finish_job',lambda jid,**values:finished.append(values))
+    monkeypatch.setattr(module,'GmailMailboxProvider',DeletedProvider)
+    RecruitmentMailWorker().process_job({'id':'j3','mailbox_id':'mb1','attempts':1})
+    assert finished[-1]['status']=='COMPLETED'
+    assert finished[-1]['counts']=={'fetched':1,'processed':0,'events':0}

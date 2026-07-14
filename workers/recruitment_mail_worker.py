@@ -1,6 +1,6 @@
 """Durable mailbox scheduler and worker."""
 from __future__ import annotations
-import asyncio, logging, os
+import asyncio, logging, os, urllib.error
 from datetime import timedelta
 from core import recruitment_mail_store as store
 from services.gmail_mailbox_provider import GmailMailboxProvider, decode_gmail_message
@@ -60,7 +60,13 @@ class RecruitmentMailWorker:
                 if stored and stored.get('body_text'):
                     raw=None;decoded={"provider_message_id":stored['provider_message_id'],"provider_thread_id":stored.get('provider_thread_id'),"sender_name":stored.get('sender_name'),"sender_email":stored.get('sender_email'),"recipient_email":stored.get('recipient_email'),"subject":stored.get('subject'),"sent_at":stored.get('sent_at'),"body":stored.get('body_text'),"html_body":stored.get('html_body_text') or ''}
                 else:
-                    raw=provider.fetch_message(ref['id']);decoded=decode_gmail_message(raw,mailbox['email_address'])
+                    try:
+                        raw=provider.fetch_message(ref['id'])
+                    except urllib.error.HTTPError as exc:
+                        if exc.code==404:
+                            logger.info('Skipping deleted Gmail message mailbox=%s message=%s',mailbox['id'],ref['id']);continue
+                        raise
+                    decoded=decode_gmail_message(raw,mailbox['email_address'])
                 if decoded.get('provider_thread_id'):
                     try:
                         thread=provider.fetch_thread(decoded['provider_thread_id'])[-5:]
