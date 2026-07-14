@@ -1,7 +1,7 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { RecruitmentMailPanel } from "./RecruitmentMailPanel.jsx";
+import { RecruitmentMailPanel, shouldShowInSelectionOfferReview } from "./RecruitmentMailPanel.jsx";
 import { ConfirmProvider } from "../context/ConfirmContext.jsx";
 
 const payloadFor = (url) => {
@@ -50,5 +50,22 @@ describe("RecruitmentMailPanel", () => {
     expect(
       screen.getByText("Candidates selected").parentElement,
     ).toHaveTextContent("1");
+  });
+  it("defensively hides historical zero-percent recommendations", () => {
+    expect(shouldShowInSelectionOfferReview({
+      primary_status: "MANUAL_REVIEW_REQUIRED", confidence: 0,
+      review_status: "PENDING", visible_in_offer_review: true,
+      subject: "Job recommendations for you | foundit (Monster)",
+      structured_result: { is_selection_or_offer_related: false, evidence: [] },
+    })).toBe(false);
+  });
+  it("keeps strong manual offer evidence at 80 percent or more", () => {
+    expect(shouldShowInSelectionOfferReview({
+      primary_status: "MANUAL_REVIEW_REQUIRED", confidence: .85,
+      review_status: "PENDING", visible_in_offer_review: true,
+      structured_result: { is_selection_or_offer_related: true, evidence: [
+        { meaning: "OFFER_INDICATION", text: "we are pleased to offer" },
+      ] },
+    })).toBe(true);
   });
 });

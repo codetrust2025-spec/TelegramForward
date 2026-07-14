@@ -3,8 +3,12 @@ import { API } from "../config.js";
 import { useConfirm } from "../context/ConfirmContext.jsx";
 
 const api = async (path, options = {}) => {
-  const response = await fetch(`${API}${path}`, {
+  const isGet = !options.method || options.method === "GET";
+  const separator = path.includes("?") ? "&" : "?";
+  const requestPath = isGet ? `${path}${separator}_offerReview=offer_review_cleanup_v1` : path;
+  const response = await fetch(`${API}${requestPath}`, {
     credentials: "include",
+    cache: isGet ? "no-store" : undefined,
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
   });
@@ -21,6 +25,26 @@ const IMPORTANT_STATUSES = [
   "APPOINTMENT_LETTER_RECEIVED", "OFFER_ACCEPTED", "JOINING_CONFIRMED",
   "JOINED", "POST_SELECTION_ONBOARDING", "MANUAL_REVIEW_REQUIRED",
 ];
+const HIDDEN_STATUSES = new Set([
+  "IGNORED_NOT_OFFER_RELATED", "IGNORED_LOW_CONFIDENCE", "NO_RELEVANT_STATUS",
+]);
+const HIDDEN_REVIEWS = new Set(["IGNORED", "FALSE_POSITIVE", "DUPLICATE"]);
+const IMPORTANT_EVIDENCE_MEANINGS = new Set(
+  IMPORTANT_STATUSES.filter((status) => status !== "MANUAL_REVIEW_REQUIRED"),
+);
+export function shouldShowInSelectionOfferReview(event) {
+  const status = String(event?.primary_status || "").toUpperCase();
+  const review = String(event?.review_status || "").toUpperCase();
+  const evidence = event?.structured_result?.evidence || [];
+  if (!IMPORTANT_STATUSES.includes(status) || HIDDEN_STATUSES.has(status)) return false;
+  if (HIDDEN_REVIEWS.has(review) || event?.visible_in_offer_review === false) return false;
+  if (Number(event?.confidence || 0) < 0.8 || evidence.length === 0) return false;
+  if (status === "MANUAL_REVIEW_REQUIRED") {
+    if (event?.structured_result?.is_selection_or_offer_related !== true) return false;
+    if (!evidence.some((item) => IMPORTANT_EVIDENCE_MEANINGS.has(String(item?.meaning || "").toUpperCase()))) return false;
+  }
+  return true;
+}
 const STATUS_FILTERS = {
   selected: ["SELECTED", "FINAL_SELECTION_CONFIRMED"],
   offer_indication: ["OFFER_INDICATION"],
@@ -281,7 +305,7 @@ export function RecruitmentMailPanel() {
       setMetrics(dash.metrics || {});
       setCharts(dash.charts || {});
       setFlags(dash.flags || []);
-      setEvents(review.events || []);
+      setEvents((review.events || []).filter(shouldShowInSelectionOfferReview));
       setOffers(cases.cases || []);
       setCandidates(people.candidates || []);
     } catch (e) {
@@ -402,6 +426,7 @@ export function RecruitmentMailPanel() {
   const filtered = useMemo(
     () =>
       events
+        .filter(shouldShowInSelectionOfferReview)
         .filter(
           (e) =>
             (!filters.candidate || e.candidate_id === filters.candidate) &&

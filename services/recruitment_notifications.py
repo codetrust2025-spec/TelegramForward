@@ -2,16 +2,9 @@
 from __future__ import annotations
 import asyncio
 
-NOTIFIABLE={
-    'SELECTED','FINAL_SELECTION_CONFIRMED','OFFER_INDICATION','OFFER_IN_PROGRESS',
-    'OFFER_APPROVED','OFFER_LETTER_RECEIVED','APPOINTMENT_LETTER_RECEIVED',
-    'OFFER_ACCEPTED','JOINING_CONFIRMED','JOINED','POST_SELECTION_ONBOARDING',
-    'MANUAL_REVIEW_REQUIRED',
-}
-
 def notify_detection(event:dict)->None:
-    if event.get('primary_status') not in NOTIFIABLE:return
-    if float(event.get('confidence') or 0)<.8:return
+    from core.recruitment_offer_visibility import should_show_in_selection_offer_review
+    if not should_show_in_selection_offer_review(event):return
     try:
         from features.web_push import admin_usernames_with_subscriptions,send_to_user
         title=event['primary_status'].replace('_',' ').title();body=' · '.join(x for x in [event.get('company_name'),event.get('job_title'),f"{round(float(event.get('confidence') or 0)*100)}% confidence"] if x)

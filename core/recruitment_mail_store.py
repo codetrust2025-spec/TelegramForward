@@ -9,6 +9,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core.db.connection import get_connection, use_postgres
+from core.recruitment_offer_visibility import (
+    qualified_event_sql,
+    should_show_in_selection_offer_review,
+)
 
 
 def _id() -> str:
@@ -198,20 +202,28 @@ def attachments_for_message(message_id: str, *, include_text: bool=False) -> lis
 
 def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, model: str, duration_ms: int) -> dict[str,Any]:
     event_id=_id(); interview=result.get('interview') or {}; offer=result.get('offer') or {}; company=result.get('company') or {}; job=result.get('job') or {}; recruiter=result.get('recruiter') or {}
+    candidate_event={"primary_status":result.get("primary_status"),"confidence":result.get("confidence"),"structured_result":result,"review_status":"PENDING","visible_in_offer_review":True}
+    visible=should_show_in_selection_offer_review(candidate_event)
+    original_status=result.get('primary_status')
+    status=original_status if visible else ('IGNORED_LOW_CONFIDENCE' if float(result.get('confidence') or 0)<.8 else 'IGNORED_NOT_OFFER_RELATED')
+    review_status='PENDING' if visible else 'IGNORED'
+    ignore_reason=None if visible else (result.get('ignore_reason') or 'LOW_CONFIDENCE_OR_NO_STRONG_OFFER_EVIDENCE')
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""INSERT INTO ai_recruitment_events(id,candidate_id,mailbox_message_id,primary_status,confidence,company_name,company_domain,job_title,
           recruiter_name,recruiter_email,interview_date,interview_time,interview_mode,offered_ctc,currency,joining_date,offer_date,offer_expiry_date,
-          structured_result,summary,requires_manual_review,review_status,ai_model,prompt_name,prompt_version,schema_version,processing_duration_ms,created_at,updated_at)
-          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,'PENDING',%s,'selection_offer_detection','v3','selection_offer_event_v1',%s,now(),now()) RETURNING *""",
-          (event_id,candidate_id,message_id,result['primary_status'],result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),interview.get('date'),interview.get('time'),interview.get('mode'),offer.get('offered_ctc'),offer.get('currency'),offer.get('joining_date'),offer.get('offer_date'),offer.get('offer_expiry_date'),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')),model,duration_ms))
+          structured_result,summary,requires_manual_review,review_status,visible_in_offer_review,original_primary_status,ignore_reason,ignored_at,
+          ai_model,prompt_name,prompt_version,schema_version,processing_duration_ms,created_at,updated_at)
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,
+            CASE WHEN %s THEN NULL ELSE now() END,%s,'selection_offer_detection','v3','selection_offer_event_v1',%s,now(),now()) RETURNING *""",
+          (event_id,candidate_id,message_id,status,result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),interview.get('date'),interview.get('time'),interview.get('mode'),offer.get('offered_ctc'),offer.get('currency'),offer.get('joining_date'),offer.get('offer_date'),offer.get('offer_expiry_date'),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')) if visible else False,review_status,visible,original_status if not visible else None,ignore_reason,visible,model,duration_ms))
         event=_rows(cur)[0]
         cur.execute("""INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,new_value,created_at)
           VALUES(%s,'system','system','AI_RECRUITMENT_EVENT_CREATED',%s,%s,%s::jsonb,now())""",(_id(),candidate_id,event_id,json.dumps({'primary_status':result['primary_status'],'confidence':result['confidence'],'model':model})))
-        if result['confidence'] >= .8 and result['primary_status'] != 'MANUAL_REVIEW_REQUIRED':
+        if visible and result['confidence'] >= .8 and result['primary_status'] != 'MANUAL_REVIEW_REQUIRED':
             cur.execute("""INSERT INTO candidate_status_history(id,candidate_id,new_detected_status,source_type,source_id,confidence,created_at)
               VALUES(%s,%s,%s,'AI_RECRUITMENT_EVENT',%s,%s,now())""",(_id(),candidate_id,result['primary_status'],event_id,result['confidence']))
         from services.recruitment_mail_agent import OFFER_CASE_STATUSES
-        if result['primary_status'] in OFFER_CASE_STATUSES:
+        if visible and result['primary_status'] in OFFER_CASE_STATUSES:
             cur.execute("""SELECT m.provider_thread_id,a.checksum FROM mailbox_messages m
               LEFT JOIN mailbox_attachments a ON a.mailbox_message_id=m.id WHERE m.id=%s
               ORDER BY CASE WHEN lower(COALESCE(a.filename,'')) ~ '(offer|appointment|joining)' THEN 0 ELSE 1 END LIMIT 1""",(message_id,))
@@ -246,7 +258,9 @@ def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, m
             if previous_offer and float(previous_offer[0])!=float(offer['offered_ctc']):
                 cur.execute("""INSERT INTO recruitment_review_flags(id,candidate_id,event_id,flag_type,severity,details,created_at)
                   VALUES(%s,%s,%s,'POTENTIAL_OFFER_CONFLICT','HIGH',%s::jsonb,now()) ON CONFLICT(candidate_id,event_id,flag_type) DO NOTHING""",(_id(),candidate_id,event_id,json.dumps({'previous_ctc':float(previous_offer[0]),'detected_ctc':offer['offered_ctc']})))
-        cur.execute("UPDATE mailbox_messages SET processing_status='EVENT_CREATED',updated_at=now() WHERE id=%s",(message_id,))
+        cur.execute("""UPDATE mailbox_messages SET processing_status=%s,ignore_reason=%s,
+          ignored_at=CASE WHEN %s THEN ignored_at ELSE now() END,updated_at=now() WHERE id=%s""",
+          ('EVENT_CREATED' if visible else status,ignore_reason,visible,message_id))
     return event
 
 
@@ -267,7 +281,8 @@ def candidate_filter_ids(value:str)->set[str]:
         if key=='MAILBOX_CONNECTED':cur.execute("SELECT candidate_id FROM candidate_mailboxes WHERE connection_status='CONNECTED'")
         elif key=='MAILBOX_MONITORING_ENABLED':cur.execute("SELECT candidate_id FROM candidate_mailboxes WHERE monitoring_enabled=true")
         elif key=='MAILBOX_SYNC_FAILED':cur.execute("SELECT candidate_id FROM candidate_mailboxes WHERE connection_status='ERROR'")
-        elif key=='PENDING_AI_REVIEW':cur.execute("SELECT DISTINCT candidate_id FROM ai_recruitment_events WHERE review_status='PENDING'")
+        elif key=='PENDING_AI_REVIEW':
+            predicate,params=qualified_event_sql('e');cur.execute(f"SELECT DISTINCT candidate_id FROM ai_recruitment_events e WHERE e.review_status='PENDING' AND {predicate}",params)
         elif key=='POTENTIAL_STATUS_CONFLICT':cur.execute("SELECT DISTINCT candidate_id FROM recruitment_review_flags WHERE flag_type LIKE 'POTENTIAL%%' AND review_status='PENDING'")
         elif key=='OFFER_VERIFIED':cur.execute("SELECT DISTINCT candidate_id FROM offer_verification_cases WHERE verification_status='VERIFIED'")
         else:cur.execute("SELECT DISTINCT candidate_id FROM ai_recruitment_events WHERE primary_status=%s",(key,))
@@ -277,15 +292,14 @@ def candidate_filter_ids(value:str)->set[str]:
 def list_events(*, candidate_id: str|None=None, review_status: str|None=None, limit:int=50, offset:int=0, active_only:bool=True) -> list[dict[str,Any]]:
     where=[]; params=[]
     if active_only:
-        from services.recruitment_mail_agent import VISIBLE_STATUSES
-        where.append('primary_status=ANY(%s)');params.append(VISIBLE_STATUSES)
-        where.append("confidence>=0.8")
-        where.append("jsonb_array_length(COALESCE(structured_result->'evidence','[]'::jsonb))>0")
-        where.append("review_status NOT IN('FALSE_POSITIVE','DUPLICATE')")
-    if candidate_id:where.append('candidate_id=%s');params.append(candidate_id)
-    if review_status:where.append('review_status=%s');params.append(review_status)
-    sql='SELECT * FROM ai_recruitment_events'+((' WHERE '+' AND '.join(where)) if where else '')+' ORDER BY created_at DESC LIMIT %s OFFSET %s';params.extend([limit,offset])
-    with get_connection() as conn, conn.cursor() as cur:cur.execute(sql,params);return _rows(cur)
+        predicate,predicate_params=qualified_event_sql('e');where.append(predicate);params.extend(predicate_params)
+    if candidate_id:where.append('e.candidate_id=%s');params.append(candidate_id)
+    if review_status:where.append('e.review_status=%s');params.append(review_status)
+    sql='''SELECT e.*,m.subject,m.sender_name,m.sender_email,m.sent_at AS email_sent_at
+      FROM ai_recruitment_events e LEFT JOIN mailbox_messages m ON m.id=e.mailbox_message_id'''+((' WHERE '+' AND '.join(where)) if where else '')+' ORDER BY e.created_at DESC LIMIT %s OFFSET %s';params.extend([limit,offset])
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(sql,params);rows=_rows(cur)
+    return [row for row in rows if not active_only or should_show_in_selection_offer_review(row)]
 
 
 def event_detail(event_id:str,*,include_evidence:bool=False)->dict[str,Any]|None:
@@ -314,12 +328,13 @@ def edit_event(event_id:str,changes:dict[str,Any],*,reviewer:str,notes:str='')->
 
 def mailbox_stats(mailbox_id:str)->dict[str,int]:
     with get_connection() as conn,conn.cursor() as cur:
-        cur.execute("""SELECT count(*) FILTER(WHERE m.processing_status='EVENT_CREATED') important_emails,
-          count(*) FILTER(WHERE e.primary_status IN('SELECTED','FINAL_SELECTION_CONFIRMED')) selection_events,
-          count(*) FILTER(WHERE e.primary_status IN('OFFER_INDICATION','OFFER_IN_PROGRESS','OFFER_APPROVED','OFFER_LETTER_RECEIVED','APPOINTMENT_LETTER_RECEIVED','OFFER_ACCEPTED')) offer_events,
-          count(*) FILTER(WHERE e.primary_status='OFFER_LETTER_RECEIVED') offer_letters,
-          count(*) FILTER(WHERE e.review_status='PENDING') pending_reviews
-          FROM mailbox_messages m LEFT JOIN ai_recruitment_events e ON e.mailbox_message_id=m.id WHERE m.mailbox_id=%s""",(mailbox_id,));names=[d.name for d in cur.description];return dict(zip(names,cur.fetchone()))
+        predicate,params=qualified_event_sql('e')
+        cur.execute(f"""SELECT count(*) FILTER(WHERE {predicate}) important_emails,
+          count(*) FILTER(WHERE e.primary_status IN('SELECTED','FINAL_SELECTION_CONFIRMED') AND {predicate}) selection_events,
+          count(*) FILTER(WHERE e.primary_status IN('OFFER_INDICATION','OFFER_IN_PROGRESS','OFFER_APPROVED','OFFER_LETTER_RECEIVED','APPOINTMENT_LETTER_RECEIVED','OFFER_ACCEPTED') AND {predicate}) offer_events,
+          count(*) FILTER(WHERE e.primary_status='OFFER_LETTER_RECEIVED' AND {predicate}) offer_letters,
+          count(*) FILTER(WHERE e.review_status='PENDING' AND {predicate}) pending_reviews
+          FROM mailbox_messages m LEFT JOIN ai_recruitment_events e ON e.mailbox_message_id=m.id WHERE m.mailbox_id=%s""",params*5+[mailbox_id]);names=[d.name for d in cur.description];return dict(zip(names,cur.fetchone()))
 
 
 def review_event(event_id:str, action:str, reviewer:str, notes:str='', changes:dict[str,Any]|None=None)->dict[str,Any]:
@@ -335,9 +350,11 @@ def review_event(event_id:str, action:str, reviewer:str, notes:str='', changes:d
 
 
 def list_offer_cases(*, status:str|None=None, limit:int=50, offset:int=0)->list[dict[str,Any]]:
-    where=' WHERE verification_status=%s' if status else " WHERE verification_status<>'IGNORED'";params=([status] if status else [])+[limit,offset]
+    predicate,predicate_params=qualified_event_sql('e')
+    where=('c.verification_status=%s AND ' if status else "c.verification_status<>'IGNORED' AND ")+predicate
+    params=([status] if status else [])+predicate_params+[limit,offset]
     with get_connection() as conn,conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM offer_verification_cases{where} ORDER BY created_at DESC LIMIT %s OFFSET %s",params);return _rows(cur)
+        cur.execute(f"SELECT c.* FROM offer_verification_cases c JOIN ai_recruitment_events e ON e.id=c.ai_recruitment_event_id WHERE {where} ORDER BY c.created_at DESC LIMIT %s OFFSET %s",params);return _rows(cur)
 
 
 def review_offer(case_id:str, action:str, reviewer:str, notes:str='')->dict[str,Any]:
