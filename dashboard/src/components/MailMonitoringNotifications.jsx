@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API } from "../config.js";
 
-const CLASSIFICATIONS = [
-  "job_selection_confirmed", "offer_received", "offer_accepted", "offer_declined",
-  "offer_revoked", "joining_confirmed", "joining_date_updated", "onboarding_started",
-  "background_verification", "document_verification", "compensation_confirmation",
-  "interview_confirmed", "interview_rescheduled", "interview_cancelled",
-  "interview_update", "interview_shortlisted", "candidate_rejected", "needs_review",
+// Mail Monitoring Notifications track only auto interview slot booking and
+// job confirmed monitoring mails.
+const TRACKED_CLASSIFICATIONS = [
+  "job_selection_confirmed", "offer_received", "offer_accepted",
+  "joining_confirmed", "interview_confirmed", "interview_rescheduled",
+  "interview_cancelled",
 ];
-const CANDIDATE_STATUSES = ["Profile Active","Interview In Progress","Interview Shortlisted","Interview Confirmed","Interview Rescheduled","Interview Cancelled","Selected","Offer Received","Offer Accepted","Joining Confirmed","Onboarding Started","Joined","Rejected","Offer Declined","Offer Revoked","Needs Review"];
+const TRACKED_CANDIDATE_STATUSES = ["Selected", "Offer Received", "Offer Accepted", "Joining Confirmed", "Interview Confirmed", "Interview Rescheduled", "Interview Cancelled"];
+// Tracked categories for quick-filter buttons
+const JOB_CONFIRMED_CLASSIFICATIONS = ["offer_received", "offer_accepted", "job_selection_confirmed"];
+const AUTO_BOOKING_CLASSIFICATIONS = ["interview_confirmed", "interview_rescheduled", "interview_cancelled"];
 const human = (value) => String(value || "").replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const when = (value) => value ? new Date(value).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }) : "—";
 const confidence = (value) => `${Math.round(Number(value || 0) * 100)}%`;
@@ -156,7 +159,7 @@ function NotificationDetail({ item, onClose, onChanged }) {
       <dl><div><dt>Email</dt><dd>{item.email_subject || "No subject"}</dd></div><div><dt>From</dt><dd>{item.sender_name || item.sender_email || "Unknown"}</dd></div><div><dt>Received</dt><dd>{when(item.email_received_at)}</dd></div><div><dt>AI confidence</dt><dd>{confidence(item.ai_confidence)}</dd></div>{item.booking_status && <div><dt>Booking</dt><dd>{item.booking_status}</dd></div>}{item.interview_date && <div><dt>Interview</dt><dd>{item.interview_date} Â· {item.interview_time || "Time unavailable"} {item.interview_timezone || ""}</dd></div>}{item.interview_round && <div><dt>Round</dt><dd>{item.interview_round}</dd></div>}</dl>
       <div className="mail-detail__copy"><strong>Summary</strong><p>{item.ai_summary || "No summary available."}</p><strong>Detection reason</strong><p>{item.ai_reason || "Contextual classification"}</p><strong>Recommended action</strong><p>{item.recommended_action || "Review the candidate and email before taking action."}</p></div>
       <label>Review note<textarea value={note} onChange={(event) => setNote(event.target.value)} maxLength={2000} /></label>
-      <div className="mail-detail__correction"><select value={classification} onChange={(event) => setClassification(event.target.value)}>{CLASSIFICATIONS.map((value) => <option value={value} key={value}>{human(value)}</option>)}</select><input value={candidateStatus} onChange={(event) => setCandidateStatus(event.target.value)} maxLength={80} /></div>
+      <div className="mail-detail__correction"><select value={classification} onChange={(event) => setClassification(event.target.value)}>{TRACKED_CLASSIFICATIONS.map((value) => <option value={value} key={value}>{human(value)}</option>)}</select><input value={candidateStatus} onChange={(event) => setCandidateStatus(event.target.value)} maxLength={80} /></div>
       <footer>
         {item.booking_id && <button type="button" onClick={() => { onClose(); navigate("daily-ops", { bookingId: item.booking_id, candidateId: item.candidate_id }); }}>View booking</button>}
         <button type="button" onClick={() => { sessionStorage.setItem("cand-open-pending", JSON.stringify({ candidate_id:item.candidate_id, candidate_name:item.candidate_name, action:"contact" })); navigate("candidates", { candidateId: item.candidate_id }); }}>View / contact candidate</button>
@@ -208,8 +211,8 @@ export function MailMonitoringNotifications() {
       <input aria-label="Search notifications" placeholder="Search candidate, email, company or subject" value={filters.search} onChange={set("search")} />
       <input aria-label="Candidate filter" placeholder="Candidate ID" value={filters.candidate} onChange={set("candidate")} />
       <input aria-label="Company filter" placeholder="Company" value={filters.company} onChange={set("company")} />
-      <select aria-label="Classification filter" value={filters.classification} onChange={set("classification")}><option value="">All classifications</option>{CLASSIFICATIONS.map((value) => <option value={value} key={value}>{human(value)}</option>)}</select>
-      <select aria-label="Candidate status filter" value={filters.candidateStatus} onChange={set("candidateStatus")}><option value="">All candidate statuses</option>{CANDIDATE_STATUSES.map((value) => <option value={value} key={value}>{value}</option>)}</select>
+      <select aria-label="Classification filter" value={filters.classification} onChange={set("classification")}><option value="">All tracked classifications</option>{TRACKED_CLASSIFICATIONS.map((value) => <option value={value} key={value}>{human(value)}</option>)}</select>
+      <select aria-label="Candidate status filter" value={filters.candidateStatus} onChange={set("candidateStatus")}><option value="">All candidate statuses</option>{TRACKED_CANDIDATE_STATUSES.map((value) => <option value={value} key={value}>{value}</option>)}</select>
       <select aria-label="Priority filter" value={filters.priority} onChange={set("priority")}><option value="">All priorities</option><option value="high">High</option><option value="medium">Medium</option><option value="review_required">Review required</option><option value="informational">Informational</option></select>
       <select aria-label="Read filter" value={filters.read} onChange={set("read")}><option value="">Read & unread</option><option value="false">Unread</option><option value="true">Read</option></select>
       <select aria-label="Review filter" value={filters.reviewed} onChange={set("reviewed")}><option value="">All review states</option><option value="false">Pending review</option><option value="true">Reviewed</option></select>

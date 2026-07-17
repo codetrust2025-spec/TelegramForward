@@ -116,7 +116,7 @@ def install_recruitment_mail_routes(app):
         except AIGatewayError as exc:
             return {'status':'error','error_code':exc.code,'error_message':str(exc),'ollama':ollama_status_snapshot()}
     @app.get('/api/candidates/{candidate_id}/mailbox')
-    async def mailbox(candidate_id:str,request:Request):
+    async def mailbox(candidate_id:str,request:Request,response:Response):
         _guard(); row=candidate_store.get_candidate(candidate_id)
         if not row:raise HTTPException(404,'Candidate not found')
         assert_candidate_row_access(request,row)
@@ -130,7 +130,10 @@ def install_recruitment_mail_routes(app):
             result.append({'mailbox':safe,'stats':stats})
         # Backward compat: also expose single .mailbox field (first/best)
         best=result[0] if result else None
-        return {'status':'ok','mailbox':best['mailbox'] if best else None,'stats':best['stats'] if best else {},'mailboxes':result,'events':_identity_events(candidate_id,limit=20)}
+        response.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma']='no-cache'
+        response.headers['Expires']='0'
+        return {'status':'ok','mailbox':best['mailbox'] if best else None,'stats':best['stats'] if best else {},'mailboxes':result,'events':_identity_events(candidate_id,limit=20),'_timestamp':int(time.time())}
     @app.post('/api/candidates/{candidate_id}/mailbox/connect')
     async def connect(candidate_id:str,request:Request,body:dict):
         _guard();_require_oauth_config();profile=require_fleet_admin(request);row=candidate_store.get_candidate(candidate_id)
@@ -240,7 +243,12 @@ def install_recruitment_mail_routes(app):
         assert_candidate_row_access(request,row);return {'status':'ok','events':_identity_events(candidate_id,limit=min(max(limit,1),100),offset=max(offset,0))}
     @app.get('/api/ai-recruitment/review')
     async def review_list(request:Request,response:Response,status:str|None=None,limit:int=50,offset:int=0):
-        _guard();require_fleet_admin(request);response.headers['Cache-Control']='no-store, max-age=0';response.headers['X-Offer-Review-Version']='offer_review_cleanup_v1';return {'status':'ok','events':store.list_events(review_status=status,limit=min(limit,100),offset=max(offset,0))}
+        _guard();require_fleet_admin(request)
+        response.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma']='no-cache'
+        response.headers['Expires']='0'
+        response.headers['X-Offer-Review-Version']='offer_review_cleanup_v1'
+        return {'status':'ok','events':store.list_events(review_status=status,limit=min(limit,100),offset=max(offset,0)),'_timestamp':int(time.time())}
     @app.get('/api/ai-recruitment/events/{event_id}')
     async def event_get(event_id:str,request:Request):
         _guard();require_fleet_admin(request);row=store.event_detail(event_id,include_evidence=True)
@@ -284,8 +292,11 @@ def install_recruitment_mail_routes(app):
               WHERE e.created_at>=current_date-30 AND {predicate} GROUP BY 1 ORDER BY 1""",params);events_by_day=[{'day':str(r[0]),'count':r[1]} for r in cur.fetchall()]
             cur.execute(f"""SELECT e.primary_status,count(*) count FROM ai_recruitment_events e
               WHERE {predicate} GROUP BY 1 ORDER BY 2 DESC""",params);status_distribution=[{'status':r[0],'count':r[1]} for r in cur.fetchall()]
-        response.headers['Cache-Control']='no-store, max-age=0';response.headers['X-Offer-Review-Version']='offer_review_cleanup_v1'
-        return {'status':'ok','metrics':metrics,'charts':{'events_by_day':events_by_day,'status_distribution':status_distribution},'flags':store.list_flags(status='PENDING')}
+        response.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma']='no-cache'
+        response.headers['Expires']='0'
+        response.headers['X-Offer-Review-Version']='offer_review_cleanup_v1'
+        return {'status':'ok','metrics':metrics,'charts':{'events_by_day':events_by_day,'status_distribution':status_distribution},'flags':store.list_flags(status='PENDING'),'_timestamp':int(time.time())}
     @app.get('/api/offer-verification')
     async def offer_list(request:Request,status:str|None=None,limit:int=50,offset:int=0):
         _guard();require_fleet_admin(request)

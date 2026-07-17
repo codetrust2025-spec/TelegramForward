@@ -26,6 +26,16 @@ CANONICAL_CLASSIFICATIONS = {
     "not_relevant",
 }
 
+# Mail Monitoring Notifications track only auto interview slot booking and
+# job confirmed monitoring mails. Other classifications are still processed
+# for candidate status and offer tracking but do not produce user-facing
+# notifications.
+TRACKED_NOTIFICATION_CLASSIFICATIONS = {
+    "job_selection_confirmed", "offer_received", "offer_accepted",
+    "joining_confirmed", "interview_confirmed", "interview_rescheduled",
+    "interview_cancelled",
+}
+
 _STATUS_CLASSIFICATION = {
     "SELECTED": "job_selection_confirmed",
     "FINAL_SELECTION_CONFIRMED": "job_selection_confirmed",
@@ -738,13 +748,36 @@ def apply_candidate_job_status(event: dict[str, Any], classification: str, candi
     return previous_status != candidate_status
 
 
+def notification_is_tracked(classification: str) -> bool:
+    """Return True if the classification belongs to a tracked notification category.
+    
+    Mail Monitoring Notifications track only:
+    - Auto interview slot booking (interview_confirmed, interview_rescheduled, interview_cancelled)
+    - Job confirmed monitoring mails (job_selection_confirmed, offer_received, offer_accepted, joining_confirmed)
+    """
+    return classification in TRACKED_NOTIFICATION_CLASSIFICATIONS
+
+
 def create_monitoring_notification(event: dict[str, Any], analysis: dict[str, Any]) -> dict[str, Any]:
+    """Create a user-facing notification only for tracked classifications.
+    
+    Only auto interview slot booking and job confirmed monitoring mails produce
+    notifications. Other classifications are still processed for candidate status
+    updates and offer tracking but do not generate notifications.
+    """
     message_id = event.get("mailbox_message_id")
     structured = event.get("structured_result") or {}
     if isinstance(structured, str):
         structured = json.loads(structured)
     classification = str(analysis["classification"])
     candidate_status = str(analysis.get("candidate_status") or _CLASSIFICATION_STATUS[classification])
+    
+    # Skip notification creation for non-tracked classifications.
+    # Candidate status, offer verification, and analysis are still persisted
+    # but no user-facing notification is created.
+    if not notification_is_tracked(classification):
+        return {}
+    
     name, email = _candidate_snapshot(str(event["candidate_id"]), structured)
     notification_id = _id()
     with get_connection() as conn, conn.cursor() as cur:
@@ -836,11 +869,17 @@ def list_notifications(*, filters: dict[str, Any] | None = None, limit: int = 50
     filters = filters or {}
     where: list[str] = ["dismissed_at IS NULL"]
     params: list[Any] = []
-    exact = {"candidate_id", "classification", "candidate_status", "priority"}
-    for field in exact:
-        if filters.get(field):
-            where.append(f"{field}=%s")
-            params.append(filters[field])
+    exact = {"candidate_id", "candidate_status", "priority"}
+    # When no specific classification filter is provided, default to tracked
+    # notification classifications (auto interview booking + job confirmed).
+    # This ensures non-tracked classifications are excluded by default.
+    if filters.get("classification"):
+        where.append("classification=%s")
+        params.append(filters["classification"])
+    else:
+        placeholders = ", ".join("%s" for _ in TRACKED_NOTIFICATION_CLASSIFICATIONS)
+        where.append(f"classification IN ({placeholders})")
+        params.extend(TRACKED_NOTIFICATION_CLASSIFICATIONS)
     for field in ("is_read", "is_reviewed"):
         if filters.get(field) is not None:
             where.append(f"{field}=%s")
@@ -876,7 +915,9 @@ def notification_summary() -> dict[str, Any]:
           count(*) FILTER(WHERE classification='joining_confirmed' AND dismissed_at IS NULL) joining_confirmations,
           count(*) FILTER(WHERE classification='interview_confirmed' AND booking_status='Auto Booked' AND dismissed_at IS NULL) auto_booked_interviews,
           count(*) FILTER(WHERE booking_status IN('Blocked','Processing Failed') AND dismissed_at IS NULL) booking_blocked,
-          count(*) FILTER(WHERE priority='review_required' AND NOT is_reviewed AND dismissed_at IS NULL) needs_review
+          count(*) FILTER(WHERE priority='review_required' AND NOT is_reviewed AND dismissed_at IS NULL) needs_review,
+          count(*) FILTER(WHERE classification IN ('offer_received','offer_accepted','job_selection_confirmed') AND dismissed_at IS NULL) job_confirmed_count,
+          count(*) FILTER(WHERE classification IN ('interview_confirmed','interview_rescheduled','interview_cancelled') AND dismissed_at IS NULL) interview_booking_count
           FROM mail_monitoring_notifications""")
         names = [d.name for d in cur.description]
         return dict(zip(names, cur.fetchone()))
