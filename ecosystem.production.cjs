@@ -14,7 +14,7 @@ module.exports = {
       name: "telegram-backend",
       cwd: ROOT,
       script: path.join("scripts", "uvicorn_reload.py"),
-      interpreter: "python3",
+      interpreter: path.join(ROOT, "venv", "bin", "python3"),
       watch: false,
       autorestart: true,
       max_restarts: 30,
