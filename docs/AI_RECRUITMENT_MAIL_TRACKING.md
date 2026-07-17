@@ -100,3 +100,59 @@ prevents subsequent syncs.
 - The dashboard currently depends on `xlsx@0.18.5`; npm reports high-severity
   issues and no patched version on that package line. Replace it before
   accepting untrusted spreadsheet uploads.
+## Mail monitoring notifications and real-time delivery (v4)
+
+The mailbox scheduler remains the Gmail ingestion mechanism. It polls only due
+connected mailboxes, uses Gmail `historyId`/History API pagination for incremental
+changes, and falls back to a bounded 30-day scan only when Gmail expires a cursor.
+WebSocket is used only for backend-to-dashboard delivery after data is committed.
+
+- Notification API: `GET /api/mail-monitoring/notifications`
+- Unread/dashboard summary: `GET /api/mail-monitoring/summary`
+- Missed-event replay: `GET /api/mail-monitoring/events?after_event_id=...`
+- Review actions: `POST /api/mail-monitoring/notifications/{id}/{action}`
+- Authenticated WebSocket: `/ws/mail-monitoring`
+- Additive migration: `core/migrations/007_recruitment_mail_notifications.sql`
+
+The WebSocket sends metadata only and never sends a complete email body. The UI
+uses exponential reconnect, heartbeat, event-ID deduplication, local last-event
+tracking, BroadcastChannel coordination, and a 30-second API fallback.
+
+Required production settings are documented in `.env.example`. The canonical
+mail model variable is `OLLAMA_MAIL_MODEL`; `AI_RECRUITMENT_MODEL` remains a
+backward-compatible fallback. Enable the feature only after PostgreSQL migration,
+Google OAuth, credential encryption, and Ollama health checks pass.
+
+## Gmail push and automatic interview booking (v5)
+
+Gmail push is an accelerator over the durable scheduler. Configure a Google
+Cloud Pub/Sub topic that grants Gmail publish permission and a push subscription
+to `GMAIL_PUSH_WEBHOOK_URL?token=<GMAIL_PUBSUB_VERIFICATION_TOKEN>`. The webhook
+stores/deduplicates the Pub/Sub message ID and queues the existing History API
+worker; it never fetches or analyzes email inline. Gmail watches are registered
+when monitoring is enabled and renewed within 24 hours of expiry. Scheduled
+incremental sync remains the outage fallback.
+
+Validated Ollama outcomes now support `interview_confirmed`,
+`interview_rescheduled`, and `interview_cancelled`. Only an `OLLAMA` result with
+`VALIDATED` schema status can mutate a slot. Confirmed/rescheduled interviews
+require an explicit ISO date, 12-hour AM/PM time, valid IANA timezone, candidate
+mailbox match, configured confidence, existing payment/ownership rules, Gmail
+and booking deduplication, and the existing overlap check. Non-IST schedules are
+converted to the existing Asia/Kolkata roster calendar. Payment amounts and
+proof states are never changed.
+
+The additive `008_recruitment_mail_auto_booking.sql` migration stores Pub/Sub
+deliveries, interview analyses, booking audit/history, and booking metadata on
+notifications. Candidate slot rows remain in the existing candidate store.
+Administrators can inspect audit history at
+`GET /api/mail-monitoring/booking-audit`. The dashboard responds to
+`slot_auto_booked`, `interview_rescheduled`, and `interview_cancelled` events by
+refreshing the live roster; API polling and missed-event replay remain active.
+
+For staged activation, deploy with `AI_INTERVIEW_AUTO_BOOKING_ENABLED=false`,
+apply all migrations, verify Pub/Sub delivery and Ollama extraction with a test
+mailbox, then set the flag to `true` and restart the API/worker processes. A
+rollback sets that flag and `AI_MAILBOX_SYNC_ENABLED` to `false`; existing
+bookings and audit rows are retained and the additive migration need not be
+reversed.

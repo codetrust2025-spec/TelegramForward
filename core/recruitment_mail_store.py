@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import date, datetime, timezone
 from typing import Any
@@ -15,12 +16,98 @@ from core.recruitment_offer_visibility import (
 )
 
 
+CANONICAL_CLASSIFICATIONS = {
+    "job_selection_confirmed", "offer_received", "offer_accepted",
+    "offer_declined", "offer_revoked", "joining_confirmed",
+    "joining_date_updated", "onboarding_started", "background_verification",
+    "document_verification", "compensation_confirmation", "interview_update",
+    "interview_shortlisted", "interview_confirmed", "interview_rescheduled",
+    "interview_cancelled", "candidate_rejected", "needs_review",
+    "not_relevant",
+}
+
+_STATUS_CLASSIFICATION = {
+    "SELECTED": "job_selection_confirmed",
+    "FINAL_SELECTION_CONFIRMED": "job_selection_confirmed",
+    "OFFER_INDICATION": "offer_received",
+    "OFFER_IN_PROGRESS": "offer_received",
+    "OFFER_APPROVED": "offer_received",
+    "OFFER_LETTER_RECEIVED": "offer_received",
+    "APPOINTMENT_LETTER_RECEIVED": "offer_received",
+    "OFFER_ACCEPTED": "offer_accepted",
+    "OFFER_DECLINED": "offer_declined",
+    "OFFER_REVOKED": "offer_revoked",
+    "JOINING_CONFIRMED": "joining_confirmed",
+    "JOINING_DATE_UPDATED": "joining_date_updated",
+    "POST_SELECTION_ONBOARDING": "onboarding_started",
+    "JOINED": "onboarding_started",
+    "BACKGROUND_VERIFICATION": "background_verification",
+    "DOCUMENT_VERIFICATION": "document_verification",
+    "COMPENSATION_CONFIRMATION": "compensation_confirmation",
+    "INTERVIEW_UPDATE": "interview_update",
+    "INTERVIEW_SHORTLISTED": "interview_shortlisted",
+    "INTERVIEW_CONFIRMED": "interview_confirmed",
+    "INTERVIEW_RESCHEDULED": "interview_rescheduled",
+    "INTERVIEW_CANCELLED": "interview_cancelled",
+    "CANDIDATE_REJECTED": "candidate_rejected",
+    "MANUAL_REVIEW_REQUIRED": "needs_review",
+    "IGNORED_LOW_CONFIDENCE": "needs_review",
+    "IGNORED_NOT_OFFER_RELATED": "not_relevant",
+}
+
+_CLASSIFICATION_STATUS = {
+    "job_selection_confirmed": "Selected",
+    "offer_received": "Offer Received",
+    "offer_accepted": "Offer Accepted",
+    "offer_declined": "Offer Declined",
+    "offer_revoked": "Offer Revoked",
+    "joining_confirmed": "Joining Confirmed",
+    "joining_date_updated": "Joining Confirmed",
+    "onboarding_started": "Onboarding Started",
+    "background_verification": "Selected",
+    "document_verification": "Selected",
+    "compensation_confirmation": "Offer Received",
+    "interview_update": "Interview In Progress",
+    "interview_shortlisted": "Interview Shortlisted",
+    "interview_confirmed": "Interview Confirmed",
+    "interview_rescheduled": "Interview Rescheduled",
+    "interview_cancelled": "Interview Cancelled",
+    "candidate_rejected": "Rejected",
+    "needs_review": "Needs Review",
+    "not_relevant": "Profile Active",
+}
+
+_STATUS_RANK = {
+    "Profile Active": 10, "Interview In Progress": 20,
+    "Interview Confirmed": 25, "Interview Rescheduled": 25,
+    "Interview Cancelled": 20,
+    "Interview Shortlisted": 30, "Rejected": 35, "Selected": 40,
+    "Offer Received": 50, "Offer Accepted": 60, "Offer Declined": 65,
+    "Offer Revoked": 65, "Joining Confirmed": 70,
+    "Onboarding Started": 80, "Joined": 90, "Needs Review": 0,
+}
+
+
 def _id() -> str:
     return str(uuid.uuid4())
 
 
 def now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+@contextmanager
+def candidate_booking_lock(candidate_id: str):
+    """Cross-process PostgreSQL lock for one candidate's booking transaction."""
+    if not use_postgres():
+        yield
+        return
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_lock(hashtext(%s))", (f"ai-mail-booking:{candidate_id}",))
+        try:
+            yield
+        finally:
+            cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (f"ai-mail-booking:{candidate_id}",))
 
 
 def ensure_schema() -> None:
@@ -44,9 +131,39 @@ def mailbox_for_candidate(candidate_id: str) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
+def mailbox_for_candidates(candidate_ids: list[str]) -> dict[str, Any] | None:
+    """Find the best mailbox across legacy rows for one phone identity."""
+    ids = [str(value) for value in candidate_ids if value]
+    if not ids:
+        return None
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT * FROM candidate_mailboxes WHERE candidate_id=ANY(%s)
+               ORDER BY (credential_ciphertext IS NOT NULL) DESC,
+                        (connection_status='CONNECTED') DESC,
+                        updated_at DESC LIMIT 1""",
+            (ids,),
+        )
+        rows = _rows(cur)
+    return rows[0] if rows else None
+
+
 def mailbox_by_id(mailbox_id: str) -> dict[str, Any] | None:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM candidate_mailboxes WHERE id=%s", (mailbox_id,))
+        rows = _rows(cur)
+    return rows[0] if rows else None
+
+
+def mailbox_by_email(email_address: str) -> dict[str, Any] | None:
+    """Resolve a connected mailbox for a Gmail Pub/Sub emailAddress."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT * FROM candidate_mailboxes
+               WHERE lower(email_address)=lower(%s) AND monitoring_enabled=true
+               ORDER BY (connection_status='CONNECTED') DESC, updated_at DESC LIMIT 1""",
+            (str(email_address or "").strip(),),
+        )
         rows = _rows(cur)
     return rows[0] if rows else None
 
@@ -71,7 +188,7 @@ def upsert_mailbox(candidate_id: str, email: str, **fields: Any) -> dict[str, An
 
 
 def update_mailbox(mailbox_id: str, values: dict[str, Any]) -> dict[str, Any]:
-    allowed={"monitoring_enabled","connection_status","credential_ciphertext","sync_cursor","provider_history_id","last_sync_attempt_at","last_successful_sync_at","next_sync_at","failed_sync_count","last_error_code","last_error_message"}
+    allowed={"monitoring_enabled","connection_status","credential_ciphertext","sync_cursor","provider_history_id","last_sync_attempt_at","last_successful_sync_at","next_sync_at","failed_sync_count","last_error_code","last_error_message","gmail_watch_expiration","gmail_watch_topic","last_push_history_id"}
     clean={k:v for k,v in values.items() if k in allowed}
     if not clean:
         return mailbox_by_id(mailbox_id) or {}
@@ -80,6 +197,23 @@ def update_mailbox(mailbox_id: str, values: dict[str, Any]) -> dict[str, Any]:
         cur.execute(f"UPDATE candidate_mailboxes SET {assignments},updated_at=now() WHERE id=%s RETURNING *", (*clean.values(),mailbox_id))
         rows=_rows(cur)
     return rows[0] if rows else {}
+
+
+def record_pubsub_delivery(
+    pubsub_message_id: str, *, subscription: str, email_address: str,
+    history_id: str, mailbox_id: str | None, status: str,
+    error_code: str | None = None,
+) -> bool:
+    """Persist the push envelope; False means Google retried an existing ID."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO gmail_pubsub_deliveries(pubsub_message_id,subscription,email_address,
+                 history_id,mailbox_id,delivery_status,error_code,received_at,processed_at)
+               VALUES(%s,%s,%s,%s,%s,%s,%s,now(),CASE WHEN %s='QUEUED' THEN now() ELSE NULL END)
+               ON CONFLICT(pubsub_message_id) DO NOTHING RETURNING pubsub_message_id""",
+            (pubsub_message_id, subscription, email_address, history_id, mailbox_id, status, error_code, status),
+        )
+        return cur.fetchone() is not None
 
 
 def enqueue_sync(mailbox_id: str, *, requested_by: str, scheduled_for: datetime | None=None) -> dict[str, Any]:
@@ -117,6 +251,15 @@ def claim_job() -> dict[str, Any] | None:
         return _rows(cur)[0]
 
 
+def recover_interrupted_jobs() -> int:
+    """Requeue jobs that belonged to a previous backend process."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""UPDATE mailbox_sync_jobs SET status='QUEUED',scheduled_for=now(),
+          started_at=NULL,completed_at=NULL,error_message='Backend restarted; job resumed automatically'
+          WHERE status='RUNNING'""")
+        return int(cur.rowcount or 0)
+
+
 def finish_job(job_id: str, *, status: str, counts: dict[str,int]|None=None, error: str|None=None) -> None:
     c=counts or {}
     with get_connection() as conn, conn.cursor() as cur:
@@ -152,7 +295,8 @@ def insert_message(mailbox: dict[str,Any], message: dict[str,Any], score: float)
 def mark_reprocessed(message_id: str, previous_status: str | None, new_status: str, reason: str) -> None:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""UPDATE mailbox_messages SET previous_processing_status=%s,processing_status=%s,
-          reprocessed_at=now(),reprocessing_reason=%s,reprocessing_prompt_version='recruitment_email_status_extraction_v2',updated_at=now()
+          reprocessed_at=now(),reprocessing_reason=%s,reprocessing_prompt_version='recruitment_email_status_extraction_v3',
+          semantic_classifier_version='v3',updated_at=now()
           WHERE id=%s""", (previous_status,new_status,reason,message_id))
 
 
@@ -179,7 +323,7 @@ def mark_message_status(message_id:str,status:str,*,reason:str|None=None,cleanup
     with get_connection() as conn,conn.cursor() as cur:
         cur.execute("""UPDATE mailbox_messages SET processing_status=%s,ignore_reason=%s,
           ignored_at=CASE WHEN %s LIKE 'IGNORED%%' THEN now() ELSE ignored_at END,
-          cleanup_version=COALESCE(%s,cleanup_version),updated_at=now() WHERE id=%s""",
+          cleanup_version=COALESCE(%s,cleanup_version),semantic_classifier_version='v3',updated_at=now() WHERE id=%s""",
           (status,reason,status,cleanup_version,message_id))
 
 
@@ -247,14 +391,14 @@ def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, m
           structured_result,summary,requires_manual_review,review_status,visible_in_offer_review,original_primary_status,ignore_reason,ignored_at,
           ai_model,prompt_name,prompt_version,schema_version,processing_duration_ms,created_at,updated_at)
           VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,
-            CASE WHEN %s THEN NULL ELSE now() END,%s,'recruitment_email_status_extraction_v2','v2','selection_offer_event_v1',%s,now(),now()) RETURNING *""",
+            CASE WHEN %s THEN NULL ELSE now() END,%s,'recruitment_email_status_extraction_v3','v3','selection_offer_event_v1',%s,now(),now()) RETURNING *""",
           (event_id,candidate_id,message_id,status,result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),interview.get('date'),interview.get('time'),interview.get('mode'),offer.get('offered_ctc'),offer.get('currency'),offer.get('joining_date'),offer.get('offer_date'),offer.get('offer_expiry_date'),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')) if visible else False,review_status,visible,original_status if not visible else None,ignore_reason,visible,model,duration_ms))
         event=_rows(cur)[0]
         cur.execute("""INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,new_value,created_at)
           VALUES(%s,'system','system','AI_RECRUITMENT_EVENT_CREATED',%s,%s,%s::jsonb,now())""",(_id(),candidate_id,event_id,json.dumps({'primary_status':result['primary_status'],'confidence':result['confidence'],'model':model})))
-        if visible and result['confidence'] >= .8 and result['primary_status'] != 'MANUAL_REVIEW_REQUIRED':
-            cur.execute("""INSERT INTO candidate_status_history(id,candidate_id,new_detected_status,source_type,source_id,confidence,created_at)
-              VALUES(%s,%s,%s,'AI_RECRUITMENT_EVENT',%s,%s,now())""",(_id(),candidate_id,result['primary_status'],event_id,result['confidence']))
+        # Canonical candidate status and history are applied after the event is
+        # committed by finalize_detection(), which enforces confidence and
+        # monotonic transition rules in one place.
         from services.recruitment_mail_agent import OFFER_CASE_STATUSES
         if visible and result['primary_status'] in OFFER_CASE_STATUSES:
             cur.execute("""SELECT m.provider_thread_id,a.checksum FROM mailbox_messages m
@@ -292,9 +436,9 @@ def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, m
                 cur.execute("""INSERT INTO recruitment_review_flags(id,candidate_id,event_id,flag_type,severity,details,created_at)
                   VALUES(%s,%s,%s,'POTENTIAL_OFFER_CONFLICT','HIGH',%s::jsonb,now()) ON CONFLICT(candidate_id,event_id,flag_type) DO NOTHING""",(_id(),candidate_id,event_id,json.dumps({'previous_ctc':float(previous_offer[0]),'detected_ctc':offer['offered_ctc']})))
         cur.execute("""UPDATE mailbox_messages SET processing_status=%s,ignore_reason=%s,
-          ignored_at=CASE WHEN %s THEN ignored_at ELSE now() END,updated_at=now() WHERE id=%s""",
+          ignored_at=CASE WHEN %s THEN ignored_at ELSE now() END,semantic_classifier_version='v3',updated_at=now() WHERE id=%s""",
           ('EVENT_CREATED' if visible else status,ignore_reason,visible,message_id))
-    return event
+    return finalize_detection(event, result=result, model=model, duration_ms=duration_ms)
 
 
 def create_or_reprocess_event(candidate_id: str, message_id: str, result: dict[str,Any], *, model: str, duration_ms: int, reason: str) -> dict[str,Any]:
@@ -304,7 +448,7 @@ def create_or_reprocess_event(candidate_id: str, message_id: str, result: dict[s
         existing_rows=_rows(cur)
     if not existing_rows:
         event=create_event(candidate_id,message_id,result,model=model,duration_ms=duration_ms)
-        audit(actor='system',role='system',action='HISTORICAL_EMAIL_REPROCESSED',candidate_id=candidate_id,source_id=event['id'],previous=None,new={'new_classification':result['primary_status'],'prompt_version':'v2','reason':reason})
+        audit(actor='system',role='system',action='HISTORICAL_EMAIL_REPROCESSED',candidate_id=candidate_id,source_id=event['id'],previous=None,new={'new_classification':result['primary_status'],'prompt_version':'v3','reason':reason})
         return event
     previous=existing_rows[0];company=result.get('company') or {};job=result.get('job') or {};offer=result.get('offer') or {};recruiter=result.get('recruiter') or {}
     with get_connection() as conn,conn.cursor() as cur:
@@ -312,7 +456,7 @@ def create_or_reprocess_event(candidate_id: str, message_id: str, result: dict[s
           primary_status=%s,confidence=%s,company_name=%s,company_domain=%s,job_title=%s,recruiter_name=%s,recruiter_email=%s,
           joining_date=%s,structured_result=%s::jsonb,summary=%s,requires_manual_review=%s,review_status='PENDING',
           visible_in_offer_review=true,ignore_reason=NULL,ignored_at=NULL,cleanup_version=NULL,ai_model=%s,
-          prompt_name='recruitment_email_status_extraction_v2',prompt_version='v2',processing_duration_ms=%s,updated_at=now()
+          prompt_name='recruitment_email_status_extraction_v3',prompt_version='v3',processing_duration_ms=%s,updated_at=now()
           WHERE id=%s RETURNING *""",
           (result['primary_status'],result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),offer.get('joining_date'),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')),model,duration_ms,previous['id']))
         event=_rows(cur)[0]
@@ -324,8 +468,36 @@ def create_or_reprocess_event(candidate_id: str, message_id: str, result: dict[s
               (_id(),candidate_id,event['id'],company.get('name'),job.get('title'),offer.get('joining_date'),result['confidence']))
         cur.execute("""INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,previous_value,new_value,created_at)
           VALUES(%s,'system','system','HISTORICAL_EMAIL_RECLASSIFIED',%s,%s,%s::jsonb,%s::jsonb,now())""",
-          (_id(),candidate_id,event['id'],json.dumps({'classification':previous.get('primary_status'),'prompt_version':previous.get('prompt_version')},default=str),json.dumps({'classification':result['primary_status'],'prompt_version':'v2','reason':reason},default=str)))
-    return event
+          (_id(),candidate_id,event['id'],json.dumps({'classification':previous.get('primary_status'),'prompt_version':previous.get('prompt_version')},default=str),json.dumps({'classification':result['primary_status'],'prompt_version':'v3','reason':reason},default=str)))
+    return finalize_detection(event, result=result, model=model, duration_ms=duration_ms)
+
+
+def archive_event_for_message(message_id: str, *, status: str, reason: str, result: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Audit-safely remove a historical false positive from every consumer."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM ai_recruitment_events WHERE mailbox_message_id=%s FOR UPDATE", (message_id,))
+        rows = _rows(cur)
+        if not rows:
+            return None
+        previous = rows[0]
+        structured = json.dumps(result) if result is not None else json.dumps(previous.get("structured_result") or {})
+        cur.execute("""UPDATE ai_recruitment_events SET
+          original_primary_status=COALESCE(original_primary_status,primary_status),primary_status=%s,
+          structured_result=%s::jsonb,visible_in_offer_review=false,review_status='IGNORED',
+          requires_manual_review=false,ignore_reason=%s,ignored_at=now(),cleanup_version='semantic_v3',
+          prompt_name='recruitment_email_status_extraction_v3',prompt_version='v3',updated_at=now()
+          WHERE id=%s RETURNING *""", (status, structured, reason, previous["id"]))
+        archived = _rows(cur)[0]
+        cur.execute("UPDATE offer_verification_cases SET verification_status='IGNORED',updated_at=now() WHERE ai_recruitment_event_id=%s", (previous["id"],))
+        # Preserve administrator-confirmed history; remove only unconfirmed AI
+        # history that was generated by the now-archived false positive.
+        cur.execute("DELETE FROM candidate_status_history WHERE source_id=%s AND confirmed_status IS NULL", (previous["id"],))
+        cur.execute("""INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,previous_value,new_value,created_at)
+          VALUES(%s,'system','system','HISTORICAL_EVENT_ARCHIVED',%s,%s,%s::jsonb,%s::jsonb,now())""",
+          (_id(), previous["candidate_id"], previous["id"],
+           json.dumps({"classification": previous.get("primary_status"), "visible": previous.get("visible_in_offer_review")}, default=str),
+           json.dumps({"classification": status, "visible": False, "reason": reason}, default=str)))
+        return archived
 
 
 def audit(*,actor:str,role:str,action:str,candidate_id:str|None=None,source_id:str|None=None,previous:Any=None,new:Any=None,source_ip:str|None=None)->None:
@@ -376,21 +548,22 @@ def event_detail(event_id:str,*,include_evidence:bool=False)->dict[str,Any]|None
 
 
 def edit_event(event_id:str,changes:dict[str,Any],*,reviewer:str,notes:str='')->dict[str,Any]:
-    allowed={'primary_status','confidence','company_name','company_domain','job_title','recruiter_name','recruiter_email','interview_date','interview_time','interview_mode','offered_ctc','currency','joining_date','offer_date','offer_expiry_date','summary','requires_manual_review'}
+    allowed={'primary_status','classification','candidate_status','confidence','company_name','company_domain','job_title','recruiter_name','recruiter_email','interview_date','interview_time','interview_mode','offered_ctc','currency','joining_date','offer_date','offer_expiry_date','summary','requires_manual_review'}
     clean={k:v for k,v in changes.items() if k in allowed}
     if 'primary_status' in clean:
         from services.recruitment_mail_agent import STATUSES
         if clean['primary_status'] not in STATUSES:raise ValueError('Invalid recruitment status')
     if 'confidence' in clean and not 0<=float(clean['confidence'])<=1:raise ValueError('Confidence must be between 0 and 1')
+    if 'classification' in clean and clean['classification'] not in CANONICAL_CLASSIFICATIONS:raise ValueError('Unsupported classification')
     if not clean:return event_detail(event_id) or {}
     before=event_detail(event_id) or {};assignments=', '.join(f'{k}=%s' for k in clean)
     with get_connection() as conn,conn.cursor() as cur:
-        cur.execute(f"UPDATE ai_recruitment_events SET {assignments},review_notes=%s,updated_at=now() WHERE id=%s RETURNING *",(*clean.values(),notes,event_id));rows=_rows(cur)
+        cur.execute(f"UPDATE ai_recruitment_events SET {assignments},corrected_result=%s::jsonb,review_notes=%s,updated_at=now() WHERE id=%s RETURNING *",(*clean.values(),json.dumps(clean,default=str),notes,event_id));rows=_rows(cur)
         if rows:cur.execute("INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,previous_value,new_value,created_at) VALUES(%s,%s,'admin','EVENT_EDITED',%s,%s,%s::jsonb,%s::jsonb,now())",(_id(),reviewer,rows[0]['candidate_id'],event_id,json.dumps({k:before.get(k) for k in clean},default=str),json.dumps(clean,default=str)))
     return rows[0] if rows else {}
 
 
-def mailbox_stats(mailbox_id:str)->dict[str,int]:
+def mailbox_stats(mailbox_id:str)->dict[str,Any]:
     with get_connection() as conn,conn.cursor() as cur:
         predicate,params=qualified_event_sql('e')
         cur.execute(f"""SELECT count(*) FILTER(WHERE {predicate}) important_emails,
@@ -398,7 +571,26 @@ def mailbox_stats(mailbox_id:str)->dict[str,int]:
           count(*) FILTER(WHERE e.primary_status IN('OFFER_INDICATION','OFFER_IN_PROGRESS','OFFER_APPROVED','OFFER_LETTER_RECEIVED','APPOINTMENT_LETTER_RECEIVED','OFFER_ACCEPTED') AND {predicate}) offer_events,
           count(*) FILTER(WHERE e.primary_status='OFFER_LETTER_RECEIVED' AND {predicate}) offer_letters,
           count(*) FILTER(WHERE e.review_status='PENDING' AND {predicate}) pending_reviews
-          FROM mailbox_messages m LEFT JOIN ai_recruitment_events e ON e.mailbox_message_id=m.id WHERE m.mailbox_id=%s""",params*5+[mailbox_id]);names=[d.name for d in cur.description];return dict(zip(names,cur.fetchone()))
+          FROM mailbox_messages m LEFT JOIN ai_recruitment_events e ON e.mailbox_message_id=m.id WHERE m.mailbox_id=%s""",params*5+[mailbox_id]);names=[d.name for d in cur.description];stats=dict(zip(names,cur.fetchone()))
+        cur.execute("""SELECT id,status,job_type,created_at,started_at,completed_at,
+          messages_fetched,messages_processed,events_detected,error_message
+          FROM mailbox_sync_jobs WHERE mailbox_id=%s ORDER BY created_at DESC LIMIT 1""",(mailbox_id,))
+        job_rows=_rows(cur)
+        if job_rows:
+            job=job_rows[0]
+            stats.update({
+                'latest_sync_job_id':job.get('id'),
+                'latest_sync_status':job.get('status'),
+                'latest_sync_job_type':job.get('job_type') or 'INCREMENTAL_SYNC',
+                'latest_sync_created_at':job.get('created_at'),
+                'latest_sync_started_at':job.get('started_at'),
+                'latest_sync_completed_at':job.get('completed_at'),
+                'latest_sync_messages_fetched':job.get('messages_fetched') or 0,
+                'latest_sync_messages_processed':job.get('messages_processed') or 0,
+                'latest_sync_events_detected':job.get('events_detected') or 0,
+                'latest_sync_error':job.get('error_message'),
+            })
+        return stats
 
 
 def review_event(event_id:str, action:str, reviewer:str, notes:str='', changes:dict[str,Any]|None=None)->dict[str,Any]:
@@ -407,10 +599,12 @@ def review_event(event_id:str, action:str, reviewer:str, notes:str='', changes:d
         cur.execute("UPDATE ai_recruitment_events SET review_status=%s,reviewed_by=%s,reviewed_at=now(),review_notes=%s,updated_at=now() WHERE id=%s RETURNING *",(status,reviewer,notes,event_id)); rows=_rows(cur)
         if rows:
             cur.execute("INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,new_value,created_at) VALUES(%s,%s,'admin',%s,%s,%s,%s::jsonb,now())",(_id(),reviewer,'EVENT_'+status,rows[0]['candidate_id'],event_id,json.dumps({'notes':notes,'changes':changes or {}})))
-            if status=='APPROVED':
-                cur.execute("""UPDATE candidate_status_history SET confirmed_status=%s,reviewed_by=%s,reviewed_at=now(),review_notes=%s
-                  WHERE id=(SELECT id FROM candidate_status_history WHERE source_id=%s ORDER BY created_at DESC LIMIT 1)""",(rows[0]['primary_status'],reviewer,notes,event_id))
-    return rows[0] if rows else {}
+    row=rows[0] if rows else {}
+    if row and status=='APPROVED':
+        classification=canonical_classification(row.get('structured_result') or {},row.get('primary_status'))
+        candidate_status=str(row.get('candidate_status') or _CLASSIFICATION_STATUS[classification])
+        apply_candidate_job_status(row,classification,candidate_status,force=True,updated_by=reviewer,review_notes=notes)
+    return row
 
 
 def list_offer_cases(*, status:str|None=None, limit:int=50, offset:int=0)->list[dict[str,Any]]:
@@ -428,3 +622,436 @@ def review_offer(case_id:str, action:str, reviewer:str, notes:str='')->dict[str,
         cur.execute("UPDATE offer_verification_cases SET verification_status=%s,reviewed_by=%s,reviewed_at=now(),notes=%s,updated_at=now() WHERE id=%s RETURNING *",(status,reviewer,notes,case_id));rows=_rows(cur)
         if rows:cur.execute("INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,new_value,created_at) VALUES(%s,%s,'admin',%s,%s,%s,%s::jsonb,now())",(_id(),reviewer,'OFFER_'+status,rows[0]['candidate_id'],case_id,json.dumps({'notes':notes})))
     return rows[0] if rows else {}
+
+
+def canonical_classification(result: dict[str, Any] | None = None, status: str | None = None) -> str:
+    result = result or {}
+    explicit = str(result.get("classification") or "").strip().lower()
+    if explicit in CANONICAL_CLASSIFICATIONS:
+        return explicit
+    return _STATUS_CLASSIFICATION.get(str(status or result.get("primary_status") or result.get("status") or "").upper(), "needs_review")
+
+
+def notification_priority(classification: str, *, confidence: float, requires_review: bool = False) -> str:
+    if requires_review or confidence < float(__import__('os').getenv('OLLAMA_CONFIDENCE_THRESHOLD', '0.75')):
+        return "review_required"
+    if classification in {"job_selection_confirmed", "offer_received", "joining_confirmed", "offer_accepted", "onboarding_started", "interview_confirmed", "interview_rescheduled", "interview_cancelled"}:
+        return "high"
+    if classification in {"background_verification", "document_verification", "compensation_confirmation", "joining_date_updated"}:
+        return "medium"
+    return "informational"
+
+
+def record_analysis(
+    message_id: str,
+    candidate_id: str,
+    result: dict[str, Any] | None,
+    *,
+    model: str | None,
+    processing_status: str,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> dict[str, Any]:
+    value = dict(result or {})
+    classification = canonical_classification(value)
+    confidence = max(0.0, min(1.0, float(value.get("confidence") or 0)))
+    candidate_status = str(value.get("candidate_status") or _CLASSIFICATION_STATUS[classification])
+    analysis_id = _id()
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""INSERT INTO mail_ai_analyses(
+          id,mailbox_message_id,candidate_id,model_name,model_version,classification,candidate_status,
+          confidence,summary,reason,recommended_action,raw_ai_response,validated_response,
+          processing_status,error_code,error_message,created_at,updated_at)
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,now(),now())
+          ON CONFLICT(mailbox_message_id) DO UPDATE SET model_name=EXCLUDED.model_name,
+            model_version=EXCLUDED.model_version,classification=EXCLUDED.classification,
+            candidate_status=EXCLUDED.candidate_status,confidence=EXCLUDED.confidence,
+            summary=EXCLUDED.summary,reason=EXCLUDED.reason,recommended_action=EXCLUDED.recommended_action,
+            raw_ai_response=EXCLUDED.raw_ai_response,validated_response=EXCLUDED.validated_response,
+            processing_status=EXCLUDED.processing_status,error_code=EXCLUDED.error_code,
+            error_message=EXCLUDED.error_message,updated_at=now() RETURNING *""",
+          (analysis_id,message_id,candidate_id,model,(value.get('schema_version') or 'selection_offer_event_v1'),classification,
+           candidate_status,confidence,str(value.get('summary') or '')[:1000],str(value.get('reason') or value.get('ignore_reason') or '')[:1000],
+           str(value.get('recommended_action') or '')[:1000],json.dumps(value,default=str),json.dumps(value,default=str),
+           processing_status,error_code,str(error_message or '')[:400] or None))
+        return _rows(cur)[0]
+
+
+def _candidate_snapshot(candidate_id: str, structured: dict[str, Any]) -> tuple[str | None, str | None]:
+    try:
+        from features import candidate_store
+        row = candidate_store.get_candidate(candidate_id) or {}
+    except Exception:
+        row = {}
+    candidate = structured.get("candidate") or {}
+    return (row.get("name") or candidate.get("name"), candidate.get("email"))
+
+
+def apply_candidate_job_status(event: dict[str, Any], classification: str, candidate_status: str, *, force: bool = False, updated_by: str = "system", review_notes: str = "") -> bool:
+    """Apply only high-confidence, monotonic candidate status transitions."""
+    confidence = float(event.get("confidence") or 0)
+    threshold = max(0.0, min(1.0, float(__import__('os').getenv('OLLAMA_CONFIDENCE_THRESHOLD', __import__('os').getenv('AI_RECRUITMENT_AUTO_ACCEPT_THRESHOLD', '0.90')))))
+    if not force and (confidence < threshold or classification in {"needs_review", "not_relevant", "interview_update"}):
+        return False
+    candidate_id = str(event["candidate_id"])
+    new_rank = _STATUS_RANK.get(candidate_status, 0)
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM candidate_job_status WHERE candidate_id=%s FOR UPDATE", (candidate_id,))
+        previous_rows = _rows(cur) if cur.description else []
+        previous = previous_rows[0] if previous_rows else None
+        previous_status = previous.get("status") if previous else None
+        previous_rank = int(previous.get("status_rank") or 0) if previous else -1
+        valid_terminal = (
+            classification in {"offer_declined","offer_revoked"} and previous_status in {"Offer Received","Offer Accepted"}
+        ) or (classification == "candidate_rejected" and previous_rank < _STATUS_RANK["Selected"])
+        if previous and new_rank < previous_rank and not valid_terminal and not force:
+            return False
+        cur.execute("SELECT provider_message_id FROM mailbox_messages WHERE id=%s", (event.get("mailbox_message_id"),))
+        provider_row = cur.fetchone()
+        gmail_message_id = provider_row[0] if provider_row else None
+        cur.execute("""INSERT INTO candidate_job_status(candidate_id,status,status_rank,source,source_id,gmail_message_id,classification,confidence,updated_at)
+          VALUES(%s,%s,%s,'AI Mail Monitoring',%s,%s,%s,%s,now())
+          ON CONFLICT(candidate_id) DO UPDATE SET status=EXCLUDED.status,status_rank=EXCLUDED.status_rank,
+            source=EXCLUDED.source,source_id=EXCLUDED.source_id,gmail_message_id=EXCLUDED.gmail_message_id,
+            classification=EXCLUDED.classification,confidence=EXCLUDED.confidence,updated_at=now()""",
+          (candidate_id,candidate_status,new_rank,event.get('id'),gmail_message_id,classification,confidence))
+        cur.execute("""INSERT INTO candidate_status_history(id,candidate_id,previous_detected_status,new_detected_status,
+          confirmed_status,source_type,source_id,gmail_message_id,ai_classification,confidence,updated_by,
+          reviewed_by,reviewed_at,review_notes,created_at)
+          VALUES(%s,%s,%s,%s,%s,'AI Mail Monitoring',%s,%s,%s,%s,%s,%s,CASE WHEN %s THEN now() ELSE NULL END,%s,now())""",
+          (_id(),candidate_id,previous_status,candidate_status,candidate_status if force else None,event.get('id'),gmail_message_id,
+           classification,confidence,updated_by,updated_by if force else None,force,review_notes if force else None))
+    return previous_status != candidate_status
+
+
+def create_monitoring_notification(event: dict[str, Any], analysis: dict[str, Any]) -> dict[str, Any]:
+    message_id = event.get("mailbox_message_id")
+    structured = event.get("structured_result") or {}
+    if isinstance(structured, str):
+        structured = json.loads(structured)
+    classification = str(analysis["classification"])
+    candidate_status = str(analysis.get("candidate_status") or _CLASSIFICATION_STATUS[classification])
+    name, email = _candidate_snapshot(str(event["candidate_id"]), structured)
+    notification_id = _id()
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""SELECT m.provider_message_id,m.provider_thread_id,m.subject,m.sender_name,m.sender_email,m.sent_at,m.mailbox_id,m.recipient_email
+          FROM mailbox_messages m WHERE m.id=%s""", (message_id,))
+        source = cur.fetchone()
+        if not source:
+            raise ValueError("Mailbox message not found for notification")
+        provider_id,thread_id,subject,sender_name,sender_email,sent_at,mailbox_id,recipient_email = source
+        company = structured.get("company") or {}
+        job = structured.get("job") or {}
+        confidence = float(event.get("confidence") or analysis.get("confidence") or 0)
+        priority = notification_priority(classification, confidence=confidence, requires_review=bool(event.get("requires_manual_review")))
+        reason = str(structured.get("reason") or structured.get("ignore_reason") or '')[:1000]
+        action = str(structured.get("recommended_action") or '')[:1000]
+        cur.execute("""INSERT INTO mail_monitoring_notifications(id,candidate_id,candidate_name,candidate_email,
+          gmail_account_id,gmail_message_id,gmail_thread_id,email_analysis_id,ai_recruitment_event_id,
+          classification,candidate_status,company_name,job_role,email_subject,sender_name,sender_email,
+          email_received_at,ai_confidence,ai_summary,ai_reason,recommended_action,priority,created_at,updated_at)
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),now())
+          ON CONFLICT(gmail_message_id,classification) DO UPDATE SET updated_at=now() RETURNING *""",
+          (notification_id,event['candidate_id'],name,email or recipient_email,mailbox_id,provider_id,thread_id,analysis['id'],event['id'],
+           classification,candidate_status,company.get('name') or event.get('company_name'),job.get('title') or event.get('job_title'),
+           subject,sender_name,sender_email,sent_at,confidence,str(event.get('summary') or structured.get('summary') or '')[:1000],
+           reason,action,priority))
+        return _rows(cur)[0]
+
+
+def finalize_detection(event: dict[str, Any], *, result: dict[str, Any], model: str, duration_ms: int) -> dict[str, Any]:
+    """Persist analysis, safe candidate state and notification after the event."""
+    classification = canonical_classification(result)
+    candidate_status = str(result.get("candidate_status") or _CLASSIFICATION_STATUS[classification])
+    result["classification"] = classification
+    result["candidate_status"] = candidate_status
+    try:
+        from features import candidate_store
+        mapping_confirmed = candidate_store.get_candidate(str(event["candidate_id"])) is not None
+    except Exception:
+        mapping_confirmed = False
+    if not mapping_confirmed:
+        classification="needs_review";candidate_status="Needs Review"
+        result.update(classification=classification,candidate_status=candidate_status,requires_manual_review=True,
+                      reason="Candidate mapping could not be confirmed",risk_flags=list(dict.fromkeys((result.get('risk_flags') or [])+['CANDIDATE_MAPPING_ISSUE'])))
+    analysis = record_analysis(event["mailbox_message_id"], event["candidate_id"], result, model=model, processing_status="CLASSIFIED")
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""UPDATE ai_recruitment_events SET classification=%s,candidate_status=%s,ai_reason=%s,
+          recommended_action=%s,original_ai_result=COALESCE(original_ai_result,%s::jsonb),updated_at=now()
+          WHERE id=%s RETURNING *""", (classification,candidate_status,str(result.get('reason') or result.get('ignore_reason') or '')[:1000],
+          str(result.get('recommended_action') or '')[:1000],json.dumps(result,default=str),event['id']))
+        event = _rows(cur)[0]
+    status_updated = apply_candidate_job_status(event, classification, candidate_status)
+    if not status_updated and classification not in {"needs_review","not_relevant","interview_update"}:
+        with get_connection() as conn,conn.cursor() as cur:
+            cur.execute("SELECT status,status_rank FROM candidate_job_status WHERE candidate_id=%s",(event['candidate_id'],));current=cur.fetchone()
+        if current and current[0] != candidate_status and int(current[1] or 0) > _STATUS_RANK.get(candidate_status,0):
+            event['requires_manual_review']=True
+            event['status_conflict']=True
+    notification = create_monitoring_notification(event, analysis)
+    event["classification"] = classification
+    event["candidate_status"] = candidate_status
+    event["notification"] = notification
+    event["candidate_status_updated"] = status_updated
+    return event
+
+
+def record_realtime_event(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    event_id = _id()
+    safe = dict(payload)
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""INSERT INTO mail_realtime_events(id,event_type,notification_id,candidate_id,payload,created_at)
+          VALUES(%s,%s,%s,%s,%s::jsonb,now()) RETURNING *""",
+          (event_id,event_type,safe.get('notification_id'),safe.get('candidate_id'),json.dumps(safe,default=str)))
+        return _rows(cur)[0]
+
+
+def list_realtime_events(*, after_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    params: list[Any] = []
+    where = ""
+    if after_id:
+        where = "WHERE created_at>(SELECT created_at FROM mail_realtime_events WHERE id=%s)"
+        params.append(after_id)
+    params.append(max(1, min(limit, 500)))
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT * FROM mail_realtime_events {where} ORDER BY created_at ASC LIMIT %s", params)
+        return _rows(cur)
+
+
+def list_notifications(*, filters: dict[str, Any] | None = None, limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+    filters = filters or {}
+    where: list[str] = ["dismissed_at IS NULL"]
+    params: list[Any] = []
+    exact = {"candidate_id", "classification", "candidate_status", "priority"}
+    for field in exact:
+        if filters.get(field):
+            where.append(f"{field}=%s")
+            params.append(filters[field])
+    for field in ("is_read", "is_reviewed"):
+        if filters.get(field) is not None:
+            where.append(f"{field}=%s")
+            params.append(bool(filters[field]))
+    if filters.get("company"):
+        where.append("company_name ILIKE %s"); params.append(f"%{filters['company']}%")
+    if filters.get("search"):
+        where.append("concat_ws(' ',candidate_name,candidate_email,company_name,job_role,email_subject,sender_email,ai_summary) ILIKE %s")
+        params.append(f"%{filters['search']}%")
+    if filters.get("confidence_min") is not None:
+        where.append("ai_confidence>=%s"); params.append(float(filters['confidence_min']))
+    if filters.get("confidence_max") is not None:
+        where.append("ai_confidence<=%s"); params.append(float(filters['confidence_max']))
+    if filters.get("date_from"):
+        where.append("created_at::date>=%s"); params.append(filters['date_from'])
+    if filters.get("date_to"):
+        where.append("created_at::date<=%s"); params.append(filters['date_to'])
+    clause = " AND ".join(where)
+    order = "ASC" if str(filters.get("sort") or "").lower() == "oldest" else "DESC"
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT count(*) FROM mail_monitoring_notifications WHERE {clause}", params)
+        total = int(cur.fetchone()[0])
+        cur.execute(f"SELECT * FROM mail_monitoring_notifications WHERE {clause} ORDER BY created_at {order} LIMIT %s OFFSET %s", params + [max(1,min(limit,100)),max(0,offset)])
+        rows = _rows(cur)
+    return rows, total
+
+
+def notification_summary() -> dict[str, Any]:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""SELECT count(*) FILTER(WHERE NOT is_read AND dismissed_at IS NULL) unread,
+          count(*) FILTER(WHERE classification='offer_received' AND dismissed_at IS NULL) new_offers,
+          count(*) FILTER(WHERE classification='job_selection_confirmed' AND dismissed_at IS NULL) selections,
+          count(*) FILTER(WHERE classification='joining_confirmed' AND dismissed_at IS NULL) joining_confirmations,
+          count(*) FILTER(WHERE classification='interview_confirmed' AND booking_status='Auto Booked' AND dismissed_at IS NULL) auto_booked_interviews,
+          count(*) FILTER(WHERE booking_status IN('Blocked','Processing Failed') AND dismissed_at IS NULL) booking_blocked,
+          count(*) FILTER(WHERE priority='review_required' AND NOT is_reviewed AND dismissed_at IS NULL) needs_review
+          FROM mail_monitoring_notifications""")
+        names = [d.name for d in cur.description]
+        return dict(zip(names, cur.fetchone()))
+
+
+def update_notification(notification_id: str, action: str, *, reviewer: str, notes: str = "", changes: dict[str, Any] | None = None) -> dict[str, Any]:
+    changes = dict(changes or {})
+    corrected_event: dict[str, Any] | None = None
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM mail_monitoring_notifications WHERE id=%s FOR UPDATE", (notification_id,))
+        rows = _rows(cur)
+        if not rows:
+            return {}
+        before = rows[0]
+        assignments: dict[str, Any] = {}
+        if action == "read": assignments.update(is_read=True, read_at=now())
+        elif action == "unread": assignments.update(is_read=False, read_at=None)
+        elif action == "reviewed": assignments.update(is_reviewed=True, reviewed_at=now(), reviewed_by=reviewer, review_notes=notes)
+        elif action == "dismiss": assignments.update(dismissed_at=now())
+        elif action == "false-detection": assignments.update(is_false_detection=True,is_reviewed=True,reviewed_at=now(),reviewed_by=reviewer,review_notes=notes)
+        elif action == "correct":
+            classification = str(changes.get('classification') or '').lower()
+            if classification not in CANONICAL_CLASSIFICATIONS: raise ValueError('Unsupported classification')
+            assignments.update(classification=classification,candidate_status=str(changes.get('candidate_status') or _CLASSIFICATION_STATUS[classification]),is_reviewed=True,reviewed_at=now(),reviewed_by=reviewer,review_notes=notes)
+        else: raise ValueError('Unsupported notification action')
+        sql = ",".join(f"{key}=%s" for key in assignments)
+        cur.execute(f"UPDATE mail_monitoring_notifications SET {sql},updated_at=now() WHERE id=%s RETURNING *", (*assignments.values(),notification_id))
+        updated = _rows(cur)[0]
+        if action in {'reviewed','false-detection','correct'}:
+            cur.execute("""INSERT INTO mail_review_evaluations(id,notification_id,email_analysis_id,original_classification,
+              corrected_classification,original_candidate_status,corrected_candidate_status,original_confidence,
+              is_false_detection,review_notes,reviewed_by,created_at)
+              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())""",
+              (_id(),notification_id,before.get('email_analysis_id'),before.get('classification'),updated.get('classification'),
+               before.get('candidate_status'),updated.get('candidate_status'),before.get('ai_confidence'),action=='false-detection',notes,reviewer))
+        if action=='correct' and before.get('ai_recruitment_event_id'):
+            correction={'classification':updated.get('classification'),'candidate_status':updated.get('candidate_status'),'review_notes':notes,'reviewed_by':reviewer}
+            cur.execute("""UPDATE ai_recruitment_events SET classification=%s,candidate_status=%s,
+              corrected_result=%s::jsonb,review_status='APPROVED',reviewed_by=%s,reviewed_at=now(),review_notes=%s,updated_at=now()
+              WHERE id=%s RETURNING *""",(updated.get('classification'),updated.get('candidate_status'),json.dumps(correction),reviewer,notes,before.get('ai_recruitment_event_id')))
+            event_rows=_rows(cur)
+            corrected_event=event_rows[0] if event_rows else None
+    if corrected_event:
+        apply_candidate_job_status(corrected_event,str(updated['classification']),str(updated['candidate_status']),force=True,updated_by=reviewer,review_notes=notes)
+    return updated
+
+
+def notification_reprocess_context(notification_id: str) -> dict[str, Any] | None:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""SELECT n.*,m.id AS mailbox_message_id,m.provider_message_id,m.provider_thread_id,
+          m.sender_name,m.sender_email,m.recipient_email,m.subject,m.sent_at,m.body_text,m.html_body_text,
+          b.* FROM mail_monitoring_notifications n
+          JOIN mailbox_messages m ON m.provider_message_id=n.gmail_message_id AND m.mailbox_id=n.gmail_account_id
+          JOIN candidate_mailboxes b ON b.id=m.mailbox_id WHERE n.id=%s""",(notification_id,))
+        rows=_rows(cur)
+    if not rows:return None
+    row=rows[0]
+    row['attachments']=[{**item,'text':item.get('extracted_text') or ''} for item in attachments_for_message(row['mailbox_message_id'],include_text=True)]
+    return row
+
+
+def record_interview_analysis(
+    *, mailbox_message_id: str, email_analysis_id: str | None,
+    mailbox_id: str, gmail_message_id: str, gmail_thread_id: str | None,
+    candidate_id: str, result: dict[str, Any], validation_status: str,
+    processing_status: str,
+) -> dict[str, Any]:
+    interview = dict(result.get("interview") or {})
+    classification = canonical_classification(result)
+    analysis_id = _id()
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO interview_mail_analyses(id,mailbox_message_id,email_analysis_id,
+              gmail_account_id,gmail_message_id,gmail_thread_id,candidate_id,classification,
+              is_interview_email,company_name,job_role,interview_round,interview_date,
+              interview_time,timezone,meeting_link,interview_mode,location,ai_confidence,
+              ai_summary,ai_reason,validation_status,processing_status,structured_result,
+              created_at,updated_at)
+              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,now(),now())
+              ON CONFLICT(mailbox_message_id) DO UPDATE SET
+                email_analysis_id=EXCLUDED.email_analysis_id,classification=EXCLUDED.classification,
+                is_interview_email=EXCLUDED.is_interview_email,company_name=EXCLUDED.company_name,
+                job_role=EXCLUDED.job_role,interview_round=EXCLUDED.interview_round,
+                interview_date=EXCLUDED.interview_date,interview_time=EXCLUDED.interview_time,
+                timezone=EXCLUDED.timezone,meeting_link=EXCLUDED.meeting_link,
+                interview_mode=EXCLUDED.interview_mode,location=EXCLUDED.location,
+                ai_confidence=EXCLUDED.ai_confidence,ai_summary=EXCLUDED.ai_summary,
+                ai_reason=EXCLUDED.ai_reason,validation_status=EXCLUDED.validation_status,
+                processing_status=EXCLUDED.processing_status,structured_result=EXCLUDED.structured_result,
+                updated_at=now() RETURNING *""",
+            (
+                analysis_id, mailbox_message_id, email_analysis_id, mailbox_id, gmail_message_id,
+                gmail_thread_id, candidate_id, classification,
+                classification.startswith("interview_"),
+                (result.get("company") or {}).get("name"), (result.get("job") or {}).get("title"),
+                interview.get("round"), interview.get("date") or None, interview.get("time"),
+                interview.get("timezone"), interview.get("meeting_link"), interview.get("mode"),
+                interview.get("location"), float(result.get("confidence") or 0),
+                result.get("summary"), result.get("reason"), validation_status,
+                processing_status, json.dumps(result, default=str),
+            ),
+        )
+        return _rows(cur)[0]
+
+
+def record_booking_audit(
+    *, analysis_id: str | None, candidate_id: str, gmail_message_id: str,
+    gmail_thread_id: str | None, classification: str, booking_id: str | None,
+    auto_booked: bool, validation_status: str, payment_status: str,
+    duplicate_status: str, conflict_status: str, booking_status: str,
+    previous_booking: dict[str, Any] | None = None,
+    new_booking: dict[str, Any] | None = None, failure_code: str | None = None,
+    failure_message: str | None = None, correlation_id: str | None = None,
+) -> dict[str, Any]:
+    audit_id = _id()
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO interview_auto_booking_audit(id,booking_id,source,gmail_message_id,
+              gmail_thread_id,email_analysis_id,candidate_id,classification,auto_booked,
+              validation_status,payment_validation_status,duplicate_check_status,
+              conflict_check_status,booking_status,previous_booking,new_booking,failure_code,
+              failure_message,correlation_id,created_at,updated_at)
+              VALUES(%s,%s,'AI Mail Monitoring',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                     %s::jsonb,%s::jsonb,%s,%s,%s,now(),now())
+              ON CONFLICT(gmail_message_id,classification) DO UPDATE SET
+                booking_id=EXCLUDED.booking_id,email_analysis_id=EXCLUDED.email_analysis_id,
+                auto_booked=EXCLUDED.auto_booked,validation_status=EXCLUDED.validation_status,
+                payment_validation_status=EXCLUDED.payment_validation_status,
+                duplicate_check_status=EXCLUDED.duplicate_check_status,
+                conflict_check_status=EXCLUDED.conflict_check_status,
+                booking_status=EXCLUDED.booking_status,previous_booking=EXCLUDED.previous_booking,
+                new_booking=EXCLUDED.new_booking,failure_code=EXCLUDED.failure_code,
+                failure_message=EXCLUDED.failure_message,correlation_id=EXCLUDED.correlation_id,
+                updated_at=now()
+              RETURNING *""",
+            (audit_id, booking_id, gmail_message_id, gmail_thread_id, analysis_id,
+             candidate_id, classification, auto_booked, validation_status, payment_status,
+             duplicate_status, conflict_status, booking_status,
+             json.dumps(previous_booking or {}, default=str), json.dumps(new_booking or {}, default=str),
+             failure_code, str(failure_message or "")[:1000] or None, correlation_id),
+        )
+        return _rows(cur)[0]
+
+
+def booking_audit_for_message(gmail_message_id: str, classification: str) -> dict[str, Any] | None:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM interview_auto_booking_audit WHERE gmail_message_id=%s AND classification=%s LIMIT 1",
+            (gmail_message_id, classification),
+        )
+        rows = _rows(cur)
+    return rows[0] if rows else None
+
+
+def attach_booking_to_notification(
+    notification_id: str, *, audit_id: str, booking_id: str | None,
+    booking_status: str, result: dict[str, Any], priority: str | None = None,
+    display_status: str | None = None, detail: str | None = None,
+) -> dict[str, Any]:
+    interview = result.get("interview") or {}
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE mail_monitoring_notifications SET notification_type='interview_booking',
+              booking_id=%s,booking_audit_id=%s,booking_status=%s,interview_round=%s,
+              interview_date=%s,interview_time=%s,interview_timezone=%s,interview_mode=%s,
+              meeting_link=%s,priority=COALESCE(%s,priority),
+              candidate_status=COALESCE(%s,candidate_status),
+              recommended_action=COALESCE(%s,recommended_action),updated_at=now()
+              WHERE id=%s RETURNING *""",
+            (booking_id, audit_id, booking_status, interview.get("round"),
+             interview.get("date") or None, interview.get("time"), interview.get("timezone"),
+             interview.get("mode"), interview.get("meeting_link"), priority,
+             display_status, detail, notification_id),
+        )
+        rows = _rows(cur)
+    return rows[0] if rows else {}
+
+
+def list_booking_audit(*, candidate_id: str | None = None, booking_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    where: list[str] = []
+    params: list[Any] = []
+    if candidate_id:
+        where.append("candidate_id=%s"); params.append(candidate_id)
+    if booking_id:
+        where.append("booking_id=%s"); params.append(booking_id)
+    clause = " WHERE " + " AND ".join(where) if where else ""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT * FROM interview_auto_booking_audit{clause} ORDER BY created_at DESC LIMIT %s",
+            params + [max(1, min(limit, 200))],
+        )
+        return _rows(cur)

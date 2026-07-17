@@ -278,6 +278,35 @@ def _pdf_first_page_to_image(pdf_data: bytes) -> str | None:
     return None
 
 
+def _ocr_text_from_image_base64(image_base64: str) -> str:
+    """Read a rendered resume page locally before using the slow vision model."""
+    try:
+        import base64
+        import io
+
+        import pytesseract
+        from PIL import Image, ImageOps
+
+        image = Image.open(io.BytesIO(base64.b64decode(image_base64)))
+        full_text = pytesseract.image_to_string(image).strip()
+
+        # Contact details are commonly printed in a small font in the upper-right
+        # corner.  Whole-page OCR can merge or drop characters there (especially
+        # the dot in ``gmail.com``), so read that area again with a layout mode
+        # intended for a compact block of text.  Put this result first so a clean
+        # contact-area email wins over a noisier whole-page interpretation.
+        width, height = image.size
+        contact_area = image.crop((int(width * 0.48), 0, width, int(height * 0.18)))
+        contact_text = pytesseract.image_to_string(
+            ImageOps.grayscale(contact_area), config="--psm 6"
+        ).strip()
+
+        return "\n".join(part for part in (contact_text, full_text) if part)
+    except Exception as exc:
+        logger.warning("Resume page OCR failed: %s", exc)
+        return ""
+
+
 # ── Regex fallback extraction ───────────────────────────────────────────────
 def _extract_name_from_text(text: str) -> str:
     """Heuristic: candidate name is typically the first prominent non-address line.
@@ -296,6 +325,15 @@ def _extract_name_from_text(text: str) -> str:
     lines = text.splitlines()
     for line in lines[:20]:  # Only look in first 20 lines
         stripped = line.strip()
+        if not stripped:
+            continue
+        # OCR often joins the name and contact label onto the same line.
+        stripped = re.split(
+            r'\b(?:email|mobile|phone|linkedin)\s*:',
+            stripped,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip()
         if not stripped:
             continue
         if skip_patterns.search(stripped):
@@ -341,6 +379,8 @@ def _regex_extract_from_text(text: str) -> dict[str, Any]:
 
     # Common technologies — extended with QA/Automation stack
     tech_keywords = [
+        # Role-level technologies should win over individual tools below.
+        "Java Full Stack", "MERN Stack", "MEAN Stack", "Full Stack",
         # Automation / QA
         "Selenium", "Playwright", "Cypress", "Appium", "TestNG", "JUnit",
         "Cucumber BDD", "Rest Assured", "REST Assured", "Postman",
@@ -480,6 +520,17 @@ def extract_resume_with_ollama(
         result["extraction_source"] = "failed"
         result["extraction_method"] = "pdf_to_image_failed"
         return result
+
+    # Fast scanned-PDF path: local OCR is normally enough for the profile
+    # fields and avoids waiting several minutes for a remote vision model.
+    ocr_text = _ocr_text_from_image_base64(img_b64)
+    if len(ocr_text) > 50:
+        ocr_result = _regex_extract_from_text(ocr_text)
+        if ocr_result.get("is_resume"):
+            ocr_result["extraction_source"] = "pdf_image_ocr"
+            ocr_result["extraction_method"] = "tesseract_regex"
+            ocr_result["primary_model"] = "tesseract"
+            return ocr_result
 
     # Call vision model
     vision_prompt = RESUME_EXTRACTION_PROMPT.format(resume_text="[Image of resume page attached]")

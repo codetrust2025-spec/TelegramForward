@@ -69,6 +69,27 @@ function AttendanceSelect({ value, disabled, onChange, ariaLabel }) {
   )
 }
 
+function SlotScreenshotModal({ row, onClose }) {
+  const proof = row?.slot_screenshot_proof
+  useEffect(() => {
+    const closeOnEscape = event => event.key === 'Escape' && onClose()
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [onClose])
+  if (!proof) return null
+  const imageUrl = `${API}${proof.url}`
+  return createPortal(
+    <div className="ops-slot-shot-modal" role="presentation" onMouseDown={event => event.target === event.currentTarget && onClose()}>
+      <section className="ops-slot-shot-modal__panel" role="dialog" aria-modal="true" aria-label={`Booking screenshot for ${row.name}`}>
+        <header><div><h2>{row.name}</h2><p>{formatDayLabel(row.date)} · {[row.time, row.time_end].filter(Boolean).map(formatClockTime).join(' – ')}{row.interview_round ? ` · ${row.interview_round}` : ''}</p></div><button type="button" onClick={onClose} aria-label="Close screenshot">&#10005;</button></header>
+        <div className="ops-slot-shot-modal__image"><img src={imageUrl} alt={`Interview booking screenshot for ${row.name}`} /></div>
+        <footer><span>{proof.original_name || 'Interview invite screenshot'}</span><a href={imageUrl} target="_blank" rel="noopener noreferrer">Open original</a></footer>
+      </section>
+    </div>,
+    document.body,
+  )
+}
+
 function RowActions({ row, busy, canEditAttendee, onEditAttendee, onEditSlot, onRemove }) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState(null)
@@ -189,6 +210,7 @@ export function InterviewRoster({
   const [error, setError] = useState('')
   const [busyId, setBusyId] = useState(null)
   const [editing, setEditing] = useState(null)
+  const [screenshotRow, setScreenshotRow] = useState(null)
   const [attendeeFilter, setAttendeeFilter] = useState('')
   const [candidateFilter, setCandidateFilter] = useState('')
   const [channelFilter, setChannelFilter] = useState('')
@@ -281,6 +303,11 @@ export function InterviewRoster({
   }, [day, attendeeFilter, channelFilter, hasRange])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => {
+    const refresh = () => load({ silent: true })
+    window.addEventListener('teleautomation:slot-booking-updated', refresh)
+    return () => window.removeEventListener('teleautomation:slot-booking-updated', refresh)
+  }, [load])
   useEffect(() => {
     const timer = setInterval(() => load({ silent: true }), 5000)
     return () => clearInterval(timer)
@@ -450,6 +477,7 @@ export function InterviewRoster({
                   <th>Round</th>
                   {!handlerView && !effectiveAttendee && <th>Attendee</th>}
                   <th>Attendance</th>
+                  <th>Screenshot</th>
                   <th>Notes</th>
                   {canManage && <th aria-label="Actions" />}
                 </tr>
@@ -497,6 +525,11 @@ export function InterviewRoster({
                           </span>
                         </div>
                       </td>
+                      <td data-label="Screenshot" className="ops-slot-shot-cell">
+                        {row.slot_screenshot_proof
+                          ? <button type="button" className="ops-slot-shot-thumb" onClick={() => setScreenshotRow(row)} title={`View booking screenshot for ${row.name}`}><img src={`${API}${row.slot_screenshot_proof.url}`} alt="" loading="lazy" /><span>View</span></button>
+                          : <span className="ops-slot-shot-empty">Not available</span>}
+                      </td>
                       <td data-label="Notes" className="ops-interview-notes-cell">
                         {row.interview_attendance_remark
                           ? <span className="ops-interview-notes-text" title={row.interview_attendance_remark}>{row.interview_attendance_remark}</span>
@@ -512,6 +545,7 @@ export function InterviewRoster({
         </div>
       )}
       {editing && <SlotEditModal row={editing.row} mode={editing.mode} targetStatus={editing.targetStatus} targetLabel={editing.targetLabel} busy={busyId === editing.row.id} onClose={() => setEditing(null)} onSave={values => editing.mode === 'attendee' ? saveAttendee(editing.row, values.attendee) : editing.mode === 'attendee-with-status' ? saveAttendance(editing.row, values.status, values.attendee, values.remark) : saveSlot(editing.row, values)} />}
+      {screenshotRow && <SlotScreenshotModal row={screenshotRow} onClose={() => setScreenshotRow(null)} />}
     </section>
   )
 }

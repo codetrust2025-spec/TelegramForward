@@ -10,6 +10,7 @@ import { AdminPanel } from "../components/AdminPanel.jsx";
 import { KnowledgeAssistantPanel } from "../components/KnowledgeAssistantPanel.jsx";
 import { DailyBriefingCard } from "../components/DailyBriefingCard.jsx";
 import { RecruitmentMailPanel } from "../components/RecruitmentMailPanel.jsx";
+import { MailMonitoringNotifications } from "../components/MailMonitoringNotifications.jsx";
 import { LogPanel } from "../components/LogPanel.jsx";
 import { ProgressHubPanel } from "../components/ProgressHubPanel.jsx";
 import { SetupMainPanel } from "../components/SetupMainPanel.jsx";
@@ -52,6 +53,7 @@ function sidebarActiveId(mainView, desktopPage, workspaceMode) {
   if (mainView === "knowledge") return "knowledge";
   if (mainView === "daily-briefing") return "daily-briefing";
   if (mainView === "ai-recruitment") return "ai-recruitment";
+  if (mainView === "mail-notifications") return "mail-notifications";
   if (mainView === "daily-ops") return "daily-ops";
   if (mainView === "data-room") return "data";
   if (desktopPage === "setup" || desktopPage === "login") return "accounts";
@@ -179,6 +181,9 @@ export function DesktopApp({
         case "ai-recruitment":
           setMainView("ai-recruitment");
           break;
+        case "mail-notifications":
+          setMainView("mail-notifications");
+          break;
         case "daily-ops":
           setMainView("daily-ops");
           break;
@@ -276,6 +281,8 @@ export function DesktopApp({
     );
   } else if (mainView === "ai-recruitment") {
     content = <RecruitmentMailPanel />;
+  } else if (mainView === "mail-notifications") {
+    content = <MailMonitoringNotifications />;
   } else if (mainView === "daily-ops") {
     bodyClass += " desktop-body--daily-ops";
     content = (

@@ -48,11 +48,14 @@ class GmailMailboxProvider(MailboxProvider):
             if exc.code==400 and "invalid_grant" in detail:
                 raise RuntimeError("Gmail authorization expired or was revoked. Reconnect Gmail to resume automatic monitoring and historical rescans.") from exc
             raise
-    def _request(self,path:str)->dict[str,Any]:
+    def _request(self,path:str,*,method:str="GET",payload:dict[str,Any]|None=None)->dict[str,Any]:
         if not self.credentials.get("access_token"):self.refresh_connection()
         url="https://gmail.googleapis.com/gmail/v1/users/me/"+path
         for attempt in range(2):
-            req=urllib.request.Request(url,headers={"Authorization":"Bearer "+self.credentials["access_token"]})
+            data=json.dumps(payload).encode() if payload is not None else None
+            headers={"Authorization":"Bearer "+self.credentials["access_token"]}
+            if data is not None:headers["Content-Type"]="application/json"
+            req=urllib.request.Request(url,headers=headers,data=data,method=method)
             try:
                 with urllib.request.urlopen(req,timeout=30) as r:return json.loads(r.read())
             except urllib.error.HTTPError as exc:
@@ -63,11 +66,27 @@ class GmailMailboxProvider(MailboxProvider):
                 self._status="ERROR";raise
         raise RuntimeError('Gmail request failed')
     def verify_connection(self)->dict[str,Any]: return self._request("profile")
+    def start_watch(self,topic_name:str)->dict[str,Any]:
+        """Register/renew Gmail push delivery; Gmail returns historyId + expiration."""
+        topic=str(topic_name or "").strip()
+        if not topic:raise ValueError("Gmail Pub/Sub topic is required")
+        return self._request("watch",method="POST",payload={"topicName":topic,"labelIds":["INBOX"],"labelFilterBehavior":"include"})
+    def stop_watch(self)->None:
+        self._request("stop",method="POST",payload={})
     def get_connection_status(self)->str:return self._status
     def fetch_new_messages(self,cursor:str|None,*,batch_size:int)->tuple[list[dict[str,Any]],str|None]:
         if cursor:
             try:
-                data=self._request("history?"+urllib.parse.urlencode({"startHistoryId":cursor,"historyTypes":"messageAdded","maxResults":batch_size}))
+                ids=[];page_token=None;latest=str(cursor)
+                while len(ids)<batch_size:
+                    params={"startHistoryId":cursor,"historyTypes":"messageAdded","maxResults":min(100,batch_size-len(ids))}
+                    if page_token:params["pageToken"]=page_token
+                    data=self._request("history?"+urllib.parse.urlencode(params))
+                    latest=str(data.get("historyId") or latest)
+                    for h in data.get("history",[]):
+                        ids.extend(x.get("message",{}).get("id") for x in h.get("messagesAdded",[]) if x.get("message",{}).get("id"))
+                    page_token=data.get("nextPageToken")
+                    if not page_token:break
             except urllib.error.HTTPError as exc:
                 # Gmail returns 404 when a history cursor has expired. Recover
                 # with the same bounded recent-message scan used on first sync.
@@ -76,10 +95,7 @@ class GmailMailboxProvider(MailboxProvider):
                 profile=self.verify_connection()
                 self._status="CONNECTED"
                 return data.get("messages",[]),str(profile.get("historyId") or "")
-            ids=[]
-            for h in data.get("history",[]):
-                ids.extend(x.get("message",{}).get("id") for x in h.get("messagesAdded",[]) if x.get("message",{}).get("id"))
-            return ([{"id":x} for x in dict.fromkeys(ids)],str(data.get("historyId") or cursor))
+            return ([{"id":x} for x in dict.fromkeys(ids)][:batch_size],latest)
         data=self._request("messages?"+urllib.parse.urlencode({"maxResults":batch_size,"q":"newer_than:30d"}))
         profile=self.verify_connection(); return data.get("messages",[]),str(profile.get("historyId") or "")
     def fetch_messages_by_date(self,range_start,range_end,*,limit:int=500)->list[dict[str,Any]]:
@@ -94,7 +110,10 @@ class GmailMailboxProvider(MailboxProvider):
             if not token:break
         return messages
     def fetch_message(self,message_id:str)->dict[str,Any]:return self._request(f"messages/{urllib.parse.quote(message_id)}?format=full")
-    def fetch_thread(self,thread_id:str)->list[dict[str,Any]]:return self._request(f"threads/{urllib.parse.quote(thread_id)}?format=metadata").get("messages",[])
+    def fetch_thread(self,thread_id:str)->list[dict[str,Any]]:
+        # Full bodies are required for semantic stage progression across a
+        # conversation; the read-only Gmail scope still applies.
+        return self._request(f"threads/{urllib.parse.quote(thread_id)}?format=full").get("messages",[])
     def fetch_attachments(self,message:dict[str,Any])->list[dict[str,Any]]:
         out=[]
         def walk(part):

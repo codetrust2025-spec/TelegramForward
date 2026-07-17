@@ -3510,7 +3510,7 @@ async def candidates_get(cid: str, request: Request):
     from core.dashboard_access import assert_candidate_row_access
     from features import candidate_store
 
-    row = candidate_store.get_candidate(cid)
+    row = candidate_store.get_candidate_detail(cid)
     if not row:
         return {"status": "error", "message": "Candidate not found"}
     assert_candidate_row_access(request, row)
@@ -3836,10 +3836,13 @@ async def candidates_upload_proof(
         # Validate: must look like a payment screenshot
         try:
             from features.payment_proof_validator import validate_payment_proof
-            expected = candidate_store.effective_expected_payment(existing)
-            paid = int(existing.get("payment") or 0)
-            due = max(0, expected - paid)
-            is_valid, reason = validate_payment_proof(raw, file.content_type or "", expected_amount=due)
+            # Admin candidate records support instalments and proofs uploaded
+            # after a received amount was already recorded. Validate that this
+            # is a payment receipt, but do not require one proof to equal the
+            # candidate's entire remaining balance.
+            is_valid, reason = validate_payment_proof(
+                raw, file.content_type or "", expected_amount=0
+            )
             if not is_valid:
                 return {"status": "error", "message": reason}
         except Exception:

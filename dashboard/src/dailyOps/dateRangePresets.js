@@ -1,7 +1,6 @@
 const PRESETS = [
   { id: 'today', label: 'Today' },
   { id: 'upcoming', label: 'Upcoming' },
-  { id: 'currentMonth', label: new Date().toLocaleDateString('en-IN', { month: 'long', timeZone: 'Asia/Kolkata' }) },
   { id: 'thisWeek', label: 'This week' },
   { id: 'last7', label: 'Last 7 days' },
 ]
@@ -45,8 +44,6 @@ export function resolvePresetRange(presetId) {
   switch (presetId) {
     case 'today':
       return { from: today, to: today }
-    case 'currentMonth':
-      return currentMonthRangeIso(today)
     case 'upcoming':
       return { from: today, to: addDaysIso(today, 30) }
     case 'thisWeek':

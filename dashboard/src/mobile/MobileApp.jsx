@@ -7,6 +7,7 @@ import { AdminPanel } from "../components/AdminPanel.jsx";
 import { KnowledgeAssistantPanel } from "../components/KnowledgeAssistantPanel.jsx";
 import { DailyBriefingCard } from "../components/DailyBriefingCard.jsx";
 import { RecruitmentMailPanel } from "../components/RecruitmentMailPanel.jsx";
+import { MailMonitoringNotifications, MailNotificationBell } from "../components/MailMonitoringNotifications.jsx";
 import {
   LogPanel,
   LogsToolbarTabs,
@@ -41,6 +42,7 @@ const MORE_NAV_ITEMS = [
   { id: "knowledge", label: "Ask AI", icon: "AI" },
   { id: "daily-briefing", label: "Daily briefing", icon: "☀" },
   { id: "ai-recruitment", label: "AI Mail Review", icon: "AI" },
+  { id: "mail-notifications", label: "Mail alerts", icon: "🔔" },
   { id: "dashboard", label: "Dashboard", icon: "▣" },
   { id: "accounts", label: "Accounts", icon: "👤" },
   { id: "forwarding", label: "Forwarding", icon: "↻" },
@@ -71,6 +73,7 @@ function mainViewToNav(mainView, mobilePage) {
     mainView === "knowledge" ||
     mainView === "daily-briefing" ||
     mainView === "ai-recruitment" ||
+    mainView === "mail-notifications" ||
     mainView === "daily-ops" ||
     mainView === "data-room"
   ) {
@@ -202,6 +205,9 @@ export function MobileApp({
         case "ai-recruitment":
           setMainView("ai-recruitment");
           break;
+        case "mail-notifications":
+          setMainView("mail-notifications");
+          break;
         case "daily-ops":
           setMainView("daily-ops");
           break;
@@ -286,6 +292,8 @@ export function MobileApp({
     );
   } else if (mainView === "ai-recruitment") {
     mainContent = <RecruitmentMailPanel />;
+  } else if (mainView === "mail-notifications") {
+    mainContent = <MailMonitoringNotifications />;
   } else if (mainView === "data-room") {
     mainContent = <DataRoomPanel />;
   } else if (mainView === "daily-ops") {
@@ -517,6 +525,7 @@ export function MobileApp({
                 <span aria-hidden>{totalListLoading ? "…" : "📋"}</span>
               </button>
             )}
+            <MailNotificationBell compact />
             <button
               type="button"
               className="mobile-header__bell"

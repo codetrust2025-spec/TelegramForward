@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import { accountRowsForDashboard, activeFleetSlots } from '../dashboard/dashboardStats.js'
 import { getDashboardModeConfig } from '../utils/workspaceDashboard.js'
 import { SABHI, SABHI_ACCOUNTS } from '../utils/sabAccountsUi.js'
+import { MailNotificationBell } from '../components/MailMonitoringNotifications.jsx'
 
 export function DesktopHeader({
   activeAccount,
@@ -236,6 +237,8 @@ export function DesktopHeader({
             <span className="desktop-header__icon-badge">{inboxUnreadBadge}</span>
           )}
         </button>
+
+        <MailNotificationBell />
 
         <button
           type="button"

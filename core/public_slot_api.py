@@ -73,11 +73,24 @@ def install_public_slot_routes(app) -> None:
                 from features.ollama_payment_extract import (
                     extract_payment_with_ollama,
                     verify_payment_against_due,
+                    generate_payment_narrative,
                 )
                 ai_result = await asyncio.to_thread(extract_payment_with_ollama, raw, file.content_type or "image/jpeg")
                 if ai_result and ai_result.get("is_payment_screenshot"):
                     due = cs.merged_balance_due_for_name(name) if name else 0
                     ai_extraction = verify_payment_against_due(ai_result, due)
+                    # Generate plain-English narrative for the UI
+                    try:
+                        received = cs.merged_received_for_name(name) if name else 0
+                    except Exception:
+                        received = 0
+                    ai_extraction["narrative"] = await asyncio.to_thread(
+                        generate_payment_narrative,
+                        ai_extraction,
+                        candidate_name=name,
+                        expected_amount=due,
+                        received_amount=0,
+                    )
             except Exception as ai_exc:
                 logger.debug("AI payment extraction skipped: %s", ai_exc)
         except ValueError as e:
@@ -170,6 +183,15 @@ def install_public_slot_routes(app) -> None:
                 try:
                     amount_due = cs.merged_balance_due_for_name(candidate_name.strip())
                     result = verify_payment_against_due(result, amount_due)
+                    # Generate narrative
+                    from features.ollama_payment_extract import generate_payment_narrative
+                    result["narrative"] = await asyncio.to_thread(
+                        generate_payment_narrative,
+                        result,
+                        candidate_name=candidate_name.strip(),
+                        expected_amount=amount_due,
+                        received_amount=0,
+                    )
                 except Exception as vex:
                     logger.warning("Payment verification failed: %s", vex)
                     result["warnings"] = list(result.get("warnings") or [])

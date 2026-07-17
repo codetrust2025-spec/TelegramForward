@@ -8,6 +8,13 @@ from core import recruitment_mail_store as store
 
 SUPPORTED={'.pdf','.doc','.docx','.txt','.png','.jpg','.jpeg','.webp'}
 
+def _usable_text(text:str)->bool:
+    """Reject empty or OCR-garbage text before semantic document analysis."""
+    normalized=re.sub(r'\s+',' ',text or '').strip()
+    alphanumeric=sum(char.isalnum() for char in normalized)
+    letters=sum(char.isalpha() for char in normalized)
+    return alphanumeric>=24 and letters/max(1,len(normalized))>=.35
+
 def classify_attachment(filename:str,text:str='')->str:
     blob=re.sub(r'[_-]+',' ',f'{filename} {text[:2000]}'.lower())
     rules=[('OFFER_LETTER',r'offer[ _-]?letter|employment offer'),('APPOINTMENT_LETTER',r'appointment[ _-]?letter'),('COMPENSATION_BREAKUP',r'compensation|salary structure|ctc breakup'),('INTERVIEW_INVITATION',r'interview|meeting invite'),('ASSESSMENT_INSTRUCTIONS',r'assessment|coding test'),('JOINING_LETTER',r'joining|onboarding'),('BACKGROUND_VERIFICATION_FORM',r'background verification|bgv'),('DOCUMENT_VERIFICATION_REQUEST',r'document verification'),('JOB_DESCRIPTION',r'job description|\bjd\b')]
@@ -67,13 +74,13 @@ def extract_attachment(raw:dict[str,Any])->dict[str,Any]:
         if suffix=='.txt':text=data.decode('utf-8','replace');method='text'
         elif suffix=='.pdf':
             text=_pdf_text(data);method='pdfplumber'
-            if not text.strip():
+            if not _usable_text(text):
                 page_image=_pdf_first_page_image(data)
                 if page_image:text=_vision_summary(page_image,'image/png');method='ollama_vision'
         elif suffix=='.docx':text=_docx_text(data);method='docx_xml'
         elif suffix in ('.png','.jpg','.jpeg','.webp'):
             text=_image_text(data);method='tesseract'
-            if not text.strip():text=_vision_summary(data,raw.get('mime_type') or 'image/jpeg');method='ollama_vision'
+            if not _usable_text(text):text=_vision_summary(data,raw.get('mime_type') or 'image/jpeg');method='ollama_vision'
         elif suffix=='.doc':text,method=_legacy_doc_text(data)
         status='EXTRACTED' if text.strip() else 'MANUAL_REVIEW_REQUIRED'
     except Exception:status='FAILED'
