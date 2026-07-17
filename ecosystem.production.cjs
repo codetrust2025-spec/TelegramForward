@@ -24,6 +24,7 @@ module.exports = {
       listen_timeout: 15000,
       env: {
         PYTHONUNBUFFERED: "1",
+        PYTHONPATH: "/opt/telegramforward",
         HOST: "0.0.0.0",
         PORT: "8000",
         NO_RELOAD: "1",
