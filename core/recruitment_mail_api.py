@@ -119,11 +119,18 @@ def install_recruitment_mail_routes(app):
     async def mailbox(candidate_id:str,request:Request):
         _guard(); row=candidate_store.get_candidate(candidate_id)
         if not row:raise HTTPException(404,'Candidate not found')
-        assert_candidate_row_access(request,row); mb=_identity_mailbox(candidate_id)
-        if mb and not mb.get('credential_ciphertext'):mb=None
-        if mb:mb={k:v for k,v in mb.items() if k!='credential_ciphertext'}
-        stats=store.mailbox_stats(mb['id']) if mb else {}
-        return {'status':'ok','mailbox':mb,'stats':stats,'events':_identity_events(candidate_id,limit=20)}
+        assert_candidate_row_access(request,row)
+        all_mbs=store.mailboxes_for_candidates(_identity_ids(candidate_id))
+        # Strip credentials, attach stats
+        result=[]
+        for mb in all_mbs:
+            if not mb.get('credential_ciphertext'):continue
+            safe={k:v for k,v in mb.items() if k!='credential_ciphertext'}
+            stats=store.mailbox_stats(mb['id'])
+            result.append({'mailbox':safe,'stats':stats})
+        # Backward compat: also expose single .mailbox field (first/best)
+        best=result[0] if result else None
+        return {'status':'ok','mailbox':best['mailbox'] if best else None,'stats':best['stats'] if best else {},'mailboxes':result,'events':_identity_events(candidate_id,limit=20)}
     @app.post('/api/candidates/{candidate_id}/mailbox/connect')
     async def connect(candidate_id:str,request:Request,body:dict):
         _guard();_require_oauth_config();profile=require_fleet_admin(request);row=candidate_store.get_candidate(candidate_id)
@@ -150,19 +157,28 @@ def install_recruitment_mail_routes(app):
         end=date.today();start=end-timedelta(days=29);job=store.enqueue_historical_rescan(mb['id'],requested_by=actor,range_start=start,range_end=end)
         store.audit(actor=actor,role='admin',action='POST_CONNECT_HISTORICAL_RESCAN_QUEUED',candidate_id=data['candidate_id'],source_id=job['id'],new={'range_start':start.isoformat(),'range_end':end.isoformat(),'prompt_version':'v3'})
         return RedirectResponse('/?view=ai-recruitment&mailbox=connected')
+    def _resolve_mailbox(candidate_id:str,body:dict|None=None)->dict|None:
+        """Pick a specific mailbox by mailbox_id from body, else fall back to best."""
+        mid=str((body or {}).get('mailbox_id') or '').strip()
+        if mid:
+            mb=store.mailbox_by_id(mid)
+            return mb if mb and mb.get('candidate_id') in _identity_ids(candidate_id) else None
+        return _identity_mailbox(candidate_id)
     @app.post('/api/candidates/{candidate_id}/mailbox/verify')
     async def verify(candidate_id:str,request:Request):
-        _guard();require_fleet_admin(request);mb=_identity_mailbox(candidate_id)
+        _guard();require_fleet_admin(request);body=await request.json() if request.headers.get('content-length','0')!='0' else {}
+        mb=_resolve_mailbox(candidate_id,body)
         if not mb or not mb.get('credential_ciphertext'):raise HTTPException(400,'Mailbox is not connected')
         gmail_profile=await __import__('asyncio').to_thread(GmailMailboxProvider(mb['credential_ciphertext']).verify_connection);store.update_mailbox(mb['id'],{'connection_status':'CONNECTED','last_error_message':None});profile=operator_profile(request);store.audit(actor=profile.get('username') or 'admin',role='admin',action='MAILBOX_VERIFIED',candidate_id=candidate_id,source_id=mb['id']);return {'status':'ok','email_address':gmail_profile.get('emailAddress')}
     @app.post('/api/candidates/{candidate_id}/mailbox/sync')
     async def sync(candidate_id:str,request:Request):
-        _guard();profile=require_fleet_admin(request);mb=_identity_mailbox(candidate_id)
+        _guard();profile=require_fleet_admin(request);body=await request.json() if request.headers.get('content-length','0')!='0' else {}
+        mb=_resolve_mailbox(candidate_id,body)
         if not mb:raise HTTPException(404,'Mailbox not configured')
         job=store.enqueue_sync(mb['id'],requested_by=profile.get('username') or 'admin');store.audit(actor=profile.get('username') or 'admin',role='admin',action='MANUAL_SYNC_REQUESTED',candidate_id=candidate_id,source_id=job['id'],source_ip=request.client.host if request.client else None);return {'status':'ok','job':job}
     @app.post('/api/candidates/{candidate_id}/mailbox/rescan')
     async def historical_rescan(candidate_id:str,request:Request,body:dict):
-        _guard();profile=require_fleet_admin(request);mb=_identity_mailbox(candidate_id)
+        _guard();profile=require_fleet_admin(request);mb=_resolve_mailbox(candidate_id,body)
         if not mb or not mb.get('credential_ciphertext'):raise HTTPException(400,'Mailbox is not connected')
         try:
             end=date.fromisoformat(str(body.get('range_end') or date.today().isoformat()))
@@ -174,7 +190,8 @@ def install_recruitment_mail_routes(app):
         return {'status':'ok','job':job}
     @app.patch('/api/candidates/{candidate_id}/mailbox/settings')
     async def settings(candidate_id:str,request:Request,body:dict):
-        _guard();profile=require_fleet_admin(request);mb=_identity_mailbox(candidate_id)
+        _guard();profile=require_fleet_admin(request)
+        mb=_resolve_mailbox(candidate_id,body)
         if not mb:raise HTTPException(404,'Mailbox not configured')
         value=bool(body.get('monitoring_enabled'));updated=store.update_mailbox(mb['id'],{'monitoring_enabled':value})
         if value and os.getenv('GMAIL_PUBSUB_TOPIC'):
@@ -183,7 +200,8 @@ def install_recruitment_mail_routes(app):
         updated.pop('credential_ciphertext',None);store.audit(actor=profile.get('username') or 'admin',role='admin',action='MONITORING_ENABLED' if value else 'MONITORING_DISABLED',candidate_id=candidate_id,source_id=mb['id'],previous={'monitoring_enabled':mb.get('monitoring_enabled')},new={'monitoring_enabled':value});return {'status':'ok','mailbox':updated}
     @app.post('/api/candidates/{candidate_id}/mailbox/renew-watch')
     async def renew_watch(candidate_id:str,request:Request):
-        _guard();profile=require_fleet_admin(request);mb=_identity_mailbox(candidate_id)
+        _guard();profile=require_fleet_admin(request);body=await request.json() if request.headers.get('content-length','0')!='0' else {}
+        mb=_resolve_mailbox(candidate_id,body)
         if not mb or not mb.get('credential_ciphertext'):raise HTTPException(400,'Mailbox is not connected')
         if not os.getenv('GMAIL_PUBSUB_TOPIC'):raise HTTPException(503,'GMAIL_PUBSUB_TOPIC is not configured')
         try:updated=await asyncio.to_thread(_renew_gmail_watch,mb)
@@ -193,7 +211,14 @@ def install_recruitment_mail_routes(app):
         return {'status':'ok','mailbox':safe}
     @app.delete('/api/candidates/{candidate_id}/mailbox')
     async def disconnect(candidate_id:str,request:Request):
-        _guard();profile=require_fleet_admin(request);mb=_identity_mailbox(candidate_id)
+        _guard();profile=require_fleet_admin(request)
+        # Support mailbox_id in query param for multi-mailbox DELETE
+        mailbox_id=request.query_params.get('mailbox_id','').strip()
+        if mailbox_id:
+            mb=store.mailbox_by_id(mailbox_id)
+            if not mb or mb.get('candidate_id') not in _identity_ids(candidate_id):return {'status':'ok'}
+        else:
+            mb=_identity_mailbox(candidate_id)
         if not mb:return {'status':'ok'}
         store.update_mailbox(mb['id'],{'credential_ciphertext':None,'monitoring_enabled':False,'connection_status':'DISCONNECTED','sync_cursor':None,'provider_history_id':None});store.audit(actor=profile.get('username') or 'admin',role='admin',action='MAILBOX_DISCONNECTED',candidate_id=candidate_id,source_id=mb['id']);return {'status':'ok'}
     @app.post('/api/candidate-mailboxes/bulk-import')

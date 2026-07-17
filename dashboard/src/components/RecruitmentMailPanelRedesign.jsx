@@ -789,19 +789,23 @@ export default function RecruitmentMailPanelRedesign() {
               const result = await request(
                 `/api/candidates/${candidate.id}/mailbox`,
               );
-              return result.mailbox
-                ? {
-                    candidate,
-                    mailbox: result.mailbox,
-                    stats: result.stats || {},
-                  }
-                : null;
+              // Multi-mailbox: expand one row per mailbox
+              const list = result.mailboxes && result.mailboxes.length
+                ? result.mailboxes
+                : result.mailbox
+                  ? [{ mailbox: result.mailbox, stats: result.stats || {} }]
+                  : [];
+              return list.map((entry) => ({
+                candidate,
+                mailbox: entry.mailbox,
+                stats: entry.stats || {},
+              }));
             } catch {
-              return null;
+              return [];
             }
           }),
         )
-      ).filter(Boolean);
+      ).flat().filter(Boolean);
       setMetrics(dashboard.metrics || {});
       setCharts(dashboard.charts || {});
       setFlags(dashboard.flags || []);
@@ -905,17 +909,26 @@ export default function RecruitmentMailPanelRedesign() {
     const candidate = candidates.find(
       (row) => String(row.id) === String(candidateId),
     );
-    setNewMailboxEmail(
-      String(
-        candidate?.email ||
-          candidate?.email_address ||
-          candidate?.gmail_address ||
-          candidate?.candidate_email ||
-          "",
-      )
-        .trim()
-        .toLowerCase(),
+    // Check if this candidate already has mailboxes — if so, clear the field
+    // so the user must type the new address rather than accidentally re-adding the same one
+    const alreadyHasMailbox = mailboxes.some(
+      (row) => String(row.candidate.id) === String(candidateId),
     );
+    if (alreadyHasMailbox) {
+      setNewMailboxEmail("");
+    } else {
+      setNewMailboxEmail(
+        String(
+          candidate?.email ||
+            candidate?.email_address ||
+            candidate?.gmail_address ||
+            candidate?.candidate_email ||
+            "",
+        )
+          .trim()
+          .toLowerCase(),
+      );
+    }
   };
   const disconnect = async (row) => {
     const ok = await confirm({
@@ -928,12 +941,12 @@ export default function RecruitmentMailPanelRedesign() {
     if (ok)
       run(
         () =>
-          request(`/api/candidates/${row.candidate.id}/mailbox`, {
+          request(`/api/candidates/${row.candidate.id}/mailbox?mailbox_id=${encodeURIComponent(row.mailbox.id)}`, {
             method: "DELETE",
           }),
         {
-          started: `Disconnecting ${row.candidate.name}'s Gmail…`,
-          success: `${row.candidate.name}'s Gmail was disconnected.`,
+          started: `Disconnecting ${row.candidate.name}'s Gmail (${row.mailbox.email_address})…`,
+          success: `${row.candidate.name}'s Gmail (${row.mailbox.email_address}) was disconnected.`,
         },
       );
   };
@@ -945,7 +958,7 @@ export default function RecruitmentMailPanelRedesign() {
         () =>
           request(`/api/candidates/${row.candidate.id}/mailbox/verify`, {
             method: "POST",
-            body: "{}",
+            body: JSON.stringify({ mailbox_id: row.mailbox.id }),
           }),
         {
           started: `Verifying ${row.candidate.name}'s Gmail connection…`,
@@ -957,7 +970,7 @@ export default function RecruitmentMailPanelRedesign() {
         () =>
           request(`/api/candidates/${row.candidate.id}/mailbox/sync`, {
             method: "POST",
-            body: "{}",
+            body: JSON.stringify({ mailbox_id: row.mailbox.id }),
           }),
         {
           started: `Requesting a mailbox sync for ${row.candidate.name}…`,
@@ -968,7 +981,7 @@ export default function RecruitmentMailPanelRedesign() {
       () =>
         request(`/api/candidates/${row.candidate.id}/mailbox/settings`, {
           method: "PATCH",
-          body: JSON.stringify({ monitoring_enabled: action === "resume" }),
+          body: JSON.stringify({ mailbox_id: row.mailbox.id, monitoring_enabled: action === "resume" }),
         }),
       {
         started:
@@ -1055,12 +1068,7 @@ export default function RecruitmentMailPanelRedesign() {
         Number(row.stats.pending_reviews || 0) > 0);
     return matchesSearch && matchesFilter;
   });
-  const connectedCandidateIds = new Set(
-    mailboxes.map((row) => String(row.candidate.id)),
-  );
-  const availableMailboxCandidates = candidates.filter(
-    (candidate) => !connectedCandidateIds.has(String(candidate.id)),
-  );
+  const availableMailboxCandidates = candidates;
   const names = Object.fromEntries(
     candidates.map((candidate) => [candidate.id, candidate.name]),
   );
@@ -1231,7 +1239,7 @@ export default function RecruitmentMailPanelRedesign() {
                   <h3>Connect a candidate Gmail</h3>
                   <span>
                     Select a candidate and authorize their Gmail securely with
-                    Google.
+                    Google. You can add multiple Gmail accounts for the same candidate.
                   </span>
                 </div>
                 <label>
@@ -1257,7 +1265,7 @@ export default function RecruitmentMailPanelRedesign() {
                     type="email"
                     value={newMailboxEmail}
                     onChange={(event) => setNewMailboxEmail(event.target.value)}
-                    placeholder="candidate@gmail.com"
+                    placeholder="candidate@gmail.com (or 2nd Gmail)"
                     autoComplete="email"
                     required
                   />
@@ -1271,11 +1279,6 @@ export default function RecruitmentMailPanelRedesign() {
                 >
                   {busy ? "Starting…" : "Connect Gmail"}
                 </button>
-                {!availableMailboxCandidates.length && (
-                  <p className="sot-add-mailbox-empty">
-                    Every candidate already has a connected Gmail mailbox.
-                  </p>
-                )}
               </form>
             )}
             <section className="sot-mailbox-metrics">
