@@ -180,6 +180,49 @@ function SlotCandidatePicker({ candidates, value, onChange, disabled }) {
   )
 }
 
+/** Payment AI extraction result card — shown in the public slot booking form after proof upload */
+function PaymentAiResultCard({ ai }) {
+  if (!ai) return null
+  const verified = ai.verified
+  const amount = ai.amount ? `₹${Number(ai.amount).toLocaleString('en-IN')}` : null
+  const utr = ai.utr_number || ai.reference_number || null
+  const app = ai.payment_app || null
+  const status = ai.status || 'unknown'
+  const narrative = ai.narrative || ai.verification_result || null
+  const confidence = ai.confidence_score || 0
+
+  const borderColor = verified ? 'rgba(34,197,94,0.35)' : status === 'failed' ? 'rgba(239,68,68,0.35)' : 'rgba(251,191,36,0.35)'
+  const bgColor = verified ? 'rgba(34,197,94,0.07)' : status === 'failed' ? 'rgba(239,68,68,0.06)' : 'rgba(251,191,36,0.06)'
+  const icon = verified ? '✓' : status === 'failed' ? '✗' : '⚠'
+  const iconColor = verified ? '#22c55e' : status === 'failed' ? '#ef4444' : '#fbbf24'
+
+  return (
+    <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: '8px', background: bgColor, border: `1px solid ${borderColor}`, fontSize: '12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: narrative ? '6px' : 0 }}>
+        <span style={{ fontWeight: 700, color: iconColor, fontSize: '14px' }}>{icon}</span>
+        <span style={{ fontWeight: 600, color: 'rgba(226,232,240,0.9)' }}>
+          {verified ? 'Payment verified' : status === 'failed' ? 'Payment failed' : 'Payment needs review'}
+        </span>
+        {confidence > 0 && (
+          <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'rgba(148,163,184,0.7)' }}>
+            {ai.detected_by || ai.primary_model || 'AI'} · {confidence}%
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', color: 'rgba(226,232,240,0.8)', marginBottom: narrative ? '6px' : 0 }}>
+        {amount && <span>💰 {amount}</span>}
+        {utr && <span>🔖 UTR {utr}</span>}
+        {app && <span>📱 {app}</span>}
+        {ai.payment_date && <span>📅 {ai.payment_date}</span>}
+        {ai.sender_name && <span>👤 {ai.sender_name}</span>}
+      </div>
+      {narrative && (
+        <p style={{ margin: 0, color: 'rgba(203,213,225,0.85)', fontStyle: 'italic', lineHeight: 1.45 }}>{narrative}</p>
+      )}
+    </div>
+  )
+}
+
 export function SubmitSlotPage() {
   const [tab, setTab] = useState('book')
   const [candidates, setCandidates] = useState([])
@@ -206,6 +249,8 @@ export function SubmitSlotPage() {
   const [aiExtraction, setAiExtraction] = useState(null)
   const [aiBlocked, setAiBlocked] = useState('')
   const [userEditedFields, setUserEditedFields] = useState({})
+  const [paymentAiResult, setPaymentAiResult] = useState(null)
+  const [paymentAnalysing, setPaymentAnalysing] = useState(false)
 
   const effectiveName = name.trim()
   const selected = useMemo(() => {
@@ -332,7 +377,7 @@ export function SubmitSlotPage() {
 
   async function uploadPaymentProof() {
     if (!effectiveName || !paymentFile) { setError('Enter your name and attach a payment screenshot first.'); return }
-    setBusy(true); setError(''); setSuccess('')
+    setBusy(true); setError(''); setSuccess(''); setPaymentAiResult(null); setPaymentAnalysing(true)
     try {
       const fd = new FormData(); fd.append('name', effectiveName); fd.append('file', paymentFile)
       const res = await fetch(`${API_BASE}/public/slots/payment-proof`, { method: 'POST', body: fd })
@@ -340,8 +385,12 @@ export function SubmitSlotPage() {
       if (!res.ok) { setError(data.message || 'Payment upload failed'); return }
       setPaymentProofId(data.proof_id || ''); setPaymentFile(null)
       setSuccess('Payment proof saved — you can confirm your slot.')
+      // Capture AI extraction result that backend already ran during upload
+      if (data.ai_extraction && data.ai_extraction.is_payment_screenshot) {
+        setPaymentAiResult(data.ai_extraction)
+      }
     } catch { setError('Network error — try again') }
-    finally { setBusy(false) }
+    finally { setBusy(false); setPaymentAnalysing(false) }
   }
 
   const effectiveBookingDate = manualDate || parsedSlot?.date || ''
@@ -551,10 +600,19 @@ export function SubmitSlotPage() {
               {selected?.needs_payment_proof && (
                 <div className="sbs-pay-card">
                   <div className="sbs-pay-head"><span>Payment due</span><strong>₹{(selected.balance_due || 0).toLocaleString('en-IN')}</strong></div>
-                  {paymentProofId ? <p className="sbs-pay-ok">Payment proof on file ✓</p> : (
+                  {paymentProofId ? (
                     <>
-                      <SubmitSlotFileDrop compact label="Payment screenshot" file={paymentFile} disabled={busy || parsing} busy={busy} onFile={setPaymentFile} />
-                      <button type="button" className="sbs-secondary-btn" disabled={busy || parsing || !paymentFile} onClick={uploadPaymentProof}>Save payment proof</button>
+                      <p className="sbs-pay-ok">Payment proof on file ✓</p>
+                      {paymentAiResult && (
+                        <PaymentAiResultCard ai={paymentAiResult} />
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <SubmitSlotFileDrop compact label="Payment screenshot" file={paymentFile} disabled={busy || parsing} busy={busy || paymentAnalysing} onFile={f => { setPaymentFile(f); setPaymentAiResult(null) }} />
+                      <button type="button" className="sbs-secondary-btn" disabled={busy || parsing || paymentAnalysing || !paymentFile} onClick={uploadPaymentProof}>
+                        {paymentAnalysing ? <><Spinner size={14} />&nbsp;Analysing…</> : 'Save payment proof'}
+                      </button>
                       {triedSubmit && needsPaymentProof && <span className="sbs-hint sbs-hint--warn">Upload and save payment proof to confirm.</span>}
                     </>
                   )}

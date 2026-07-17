@@ -8,9 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "lint:recruitment": "eslint src/components/RecruitmentMailPanel.jsx",
-    "typecheck:recruitment": "tsc --noEmit --allowJs --checkJs --jsx react-jsx --target ES2022 --module ESNext --moduleResolution Bundler --types vite/client --skipLibCheck src/components/RecruitmentMailPanel.jsx",
-    "format:check:recruitment": "prettier --check src/components/RecruitmentMailPanel.jsx src/components/RecruitmentMailPanel.test.jsx"
+    "lint:recruitment": "eslint src/components/RecruitmentMailPanel.jsx src/components/RecruitmentMailPanelRedesign.jsx",
+    "typecheck:recruitment": "tsc --noEmit --allowJs --checkJs --jsx react-jsx --target ES2022 --module ESNext --moduleResolution Bundler --types vite/client --skipLibCheck src/components/RecruitmentMailPanel.jsx src/components/RecruitmentMailPanelRedesign.jsx",
+    "format:check:recruitment": "prettier --check src/components/RecruitmentMailPanel.jsx src/components/RecruitmentMailPanelRedesign.jsx src/components/RecruitmentMailPanel.test.jsx src/recruitmentMail.css"
   },
   "dependencies": {
     "pdfjs-dist": "^4.10.38",

@@ -22,6 +22,75 @@ function KpiCard({ label, value, tone = 'default', loading = false, active = fal
   )
 }
 
+const PIE_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#a855f7', '#06b6d4', '#f43f5e', '#84cc16']
+const candidateColor = (index, count) => count <= PIE_COLORS.length ? PIE_COLORS[index] : `hsl(${Math.round((index * 360) / count)} 78% 55%)`
+
+function BookingPie({ overview = {}, selectedTechnology = '', onTechnologySelect }) {
+  const [open, setOpen] = useState(false)
+  const [hovered, setHovered] = useState(null)
+  const [selected, setSelected] = useState(null)
+  useEffect(() => {
+    if (!open) return undefined
+    const closeOnEscape = event => event.key === 'Escape' && setOpen(false)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [open])
+  const total = Number(overview.total || 0)
+  const rawCandidates = overview.by_candidate || []
+  const candidates = rawCandidates
+  let cursor = 0
+  const stops = candidates.map((item, index) => {
+    const start = cursor
+    cursor += total ? (Number(item.count || 0) / total) * 100 : 0
+    return `${candidateColor(index, candidates.length)} ${start}% ${cursor}%`
+  })
+  const background = total && stops.length ? `conic-gradient(${stops.join(', ')})` : 'conic-gradient(#273244 0 100%)'
+  let segmentCursor = 0
+  const segments = candidates.map((item, index) => {
+    const percent = total ? (Number(item.count || 0) / total) * 100 : 0
+    const segment = { ...item, percent, offset: segmentCursor, color: candidateColor(index, candidates.length) }
+    segmentCursor += percent
+    return segment
+  })
+  const activeCandidate = hovered || selected
+  const displayedLevels = selected?.levels || overview.by_level || []
+  const displayedTechnologies = selected?.technologies || overview.by_technology || []
+  const selectCandidate = segment => setSelected(current => current?.name === segment.name ? null : segment)
+
+  return (
+    <><section className="ops-booking-pie" aria-label={`${total} interviews booked across all candidates`}>
+      <div className="ops-booking-pie__chart" style={{ background }}>
+        <span><strong>{total}</strong><small>booked</small></span>
+      </div>
+      <div className="ops-booking-pie__details">
+        <strong className="ops-booking-pie__title">Bookings by candidate</strong>
+        <div className="ops-booking-pie__legend">
+          {candidates.map((item, index) => <span key={item.name}><i style={{ background: candidateColor(index, candidates.length) }} /><b>{item.name}</b><em>{item.count}</em></span>)}
+        </div>
+        <div className="ops-booking-pie__levels"><small>Levels</small>{(overview.by_level || []).map(item => <span key={item.name}><b>{item.name}</b>{item.count}</span>)}</div>
+      </div>
+      <button type="button" className="ops-booking-pie__open" onClick={() => setOpen(true)}>Open analytics</button>
+    </section>
+    {open && <div className="ops-booking-modal" role="presentation" onMouseDown={event => event.target === event.currentTarget && setOpen(false)}>
+      <section className="ops-booking-modal__panel" role="dialog" aria-modal="true" aria-label="Interview booking analytics">
+        <header><div><h2>Interview booking analytics</h2><p>Candidate distribution and interview levels for the selected period</p></div><button type="button" onClick={() => setOpen(false)} aria-label="Close analytics">&#10005;</button></header>
+        <div className="ops-booking-modal__body">
+          <div className="ops-booking-modal__donut-wrap">
+            <svg className="ops-booking-modal__donut" viewBox="0 0 120 120" role="img" aria-label="Bookings by candidate">
+              <circle cx="60" cy="60" r="46" pathLength="100" className="ops-booking-modal__track" />
+              {segments.map(segment => <circle key={segment.name} cx="60" cy="60" r="46" pathLength="100" fill="none" stroke={segment.color} strokeWidth={activeCandidate?.name === segment.name ? 19 : 16} strokeDasharray={`${segment.percent} ${100 - segment.percent}`} strokeDashoffset={-segment.offset} transform="rotate(-90 60 60)" className="ops-booking-modal__segment" onMouseEnter={() => setHovered(segment)} onMouseLeave={() => setHovered(null)} onClick={() => selectCandidate(segment)}><title>{segment.name}: {segment.count} bookings ({segment.percent.toFixed(1)}%)</title></circle>)}
+            </svg>
+            <div className="ops-booking-modal__center">{activeCandidate ? <><strong>{activeCandidate.count}</strong><span>{activeCandidate.name}</span><small>{activeCandidate.percent.toFixed(1)}%</small></> : <><strong>{total}</strong><span>Total bookings</span><small>Click a candidate</small></>}</div>
+          </div>
+          <div className="ops-booking-modal__legend">{segments.map(segment => <button type="button" key={segment.name} onMouseEnter={() => setHovered(segment)} onMouseLeave={() => setHovered(null)} onClick={() => selectCandidate(segment)} className={activeCandidate?.name === segment.name ? 'is-active' : ''} aria-pressed={selected?.name === segment.name}><i style={{ background: segment.color }} /><span>{segment.name}</span><strong>{segment.count}</strong><em>{segment.percent.toFixed(1)}%</em></button>)}</div>
+        </div>
+        <footer className="ops-booking-modal__levels"><h3>Interview levels {selected ? `· ${selected.name}` : '· All candidates'}</h3><div>{displayedLevels.map(item => <span key={item.name}><b>{item.name}</b><strong>{item.count}</strong></span>)}</div></footer>
+        <footer className="ops-booking-modal__levels ops-booking-modal__technologies"><h3>Tech stack {selected ? `· ${selected.name}` : '· All candidates'} <small>Click to filter the table</small></h3><div>{displayedTechnologies.map(item => <button type="button" key={item.name} className={selectedTechnology === item.name ? 'is-active' : ''} onClick={() => onTechnologySelect?.(selectedTechnology === item.name ? '' : item.name)}><b>{item.name}</b><strong>{item.count}</strong></button>)}</div></footer>
+      </section>
+    </div>}</>
+  )
+}
+
 export function DailyOpsPanel({
   loggedInSlots = [],
   activeAccount,
@@ -46,33 +115,26 @@ export function DailyOpsPanel({
   const [roundFilter, setRoundFilter] = useState('')
   const [technologyFilter, setTechnologyFilter] = useState('')
   const [candidateSearch, setCandidateSearch] = useState('')
+  const [candidateFilter, setCandidateFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [globalStats, setGlobalStats] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [rosterCounts, setRosterCounts] = useState(null)
 
-  // Generate month options for the dropdown (last 6 months + current)
-  const monthOptions = React.useMemo(() => {
-    const opts = []
-    const now = new Date()
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-      const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-      const label = d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })
-      opts.push({ value, label })
-    }
-    return opts
-  }, [])
-
   function applyMonth(monthValue) {
-    if (!monthValue) return
+    if (monthValue === 'all') {
+      setFromDate('2000-01-01')
+      setToDate('2100-12-31')
+      setRangePreset('allTime')
+      return
+    }
     const [year, month] = monthValue.split('-').map(Number)
-    const from = new Date(year, month - 1, 1)
-    const to = new Date(year, month, 0)
+    const from = new Date(year, month - 1, 1, 12)
+    const to = new Date(year, month, 0, 12)
     setFromDate(from.toISOString().slice(0, 10))
     setToDate(to.toISOString().slice(0, 10))
-    setRangePreset('custom')
+    setRangePreset(`month:${monthValue}`)
   }
 
   const upcomingOnly = rangePreset === 'upcoming'
@@ -105,7 +167,7 @@ export function DailyOpsPanel({
       if (attendeeFilter) params.set('attendee', attendeeFilter)
       if (roundFilter) params.set('round', roundFilter)
       if (technologyFilter) params.set('technology', technologyFilter)
-      const search = candidateSearch.trim()
+      const search = candidateFilter || candidateSearch.trim()
       if (search) params.set('search', search)
       if (effectiveUpcomingOnly) params.set('upcoming_only', 'true')
       const res = await fetch(`${API}/candidates/interviews/global?${params}`, { credentials: 'include' })
@@ -121,12 +183,28 @@ export function DailyOpsPanel({
     } finally {
       setLoading(false)
     }
-  }, [fromDate, toDate, attendeeFilter, roundFilter, technologyFilter, candidateSearch, effectiveUpcomingOnly])
+  }, [fromDate, toDate, attendeeFilter, roundFilter, technologyFilter, candidateSearch, candidateFilter, effectiveUpcomingOnly])
 
   useEffect(() => { loadGlobal() }, [loadGlobal])
 
   const interviews = globalStats?.interviews || rosterCounts || {}
-  const technologyOptions = Object.keys(globalStats?.by_technology || {}).sort()
+  const technologyOptions = (interviews.by_technology || []).map(item => item.name).sort()
+  const candidateOptions = interviews.by_candidate || []
+  const monthOptions = React.useMemo(() => {
+    const options = [{ value: 'all', label: 'All time' }, ...(globalStats?.available_months || [])]
+    const selected = rangePreset.startsWith('month:') ? rangePreset.slice(6) : ''
+    if (selected && !options.some(option => option.value === selected)) options.push({ value: selected, label: selected })
+    return options
+  }, [globalStats?.available_months, rangePreset])
+  const activeFilterCount = [attendeeFilter, roundFilter, technologyFilter, candidateSearch.trim(), candidateFilter].filter(Boolean).length
+
+  function clearFilters() {
+    setAttendeeFilter('')
+    setRoundFilter('')
+    setTechnologyFilter('')
+    setCandidateSearch('')
+    setCandidateFilter('')
+  }
 
   return (
     <div className="daily-ops-page daily-ops-page--dashboard">
@@ -146,12 +224,16 @@ export function DailyOpsPanel({
         </div>
 
         <div className="ops-topbar__right">
+          <BookingPie overview={globalStats?.booking_overview} selectedTechnology={technologyFilter} onTechnologySelect={setTechnologyFilter} />
           <PendingWorksStrip compact onOpenCandidates={onNavCandidates} />
         </div>
       </div>
 
       {/* ── Controls row: all filters in one line ───────────────────── */}
-      <div className="ops-dash-controls-row">
+      <div className="ops-roster-controls" aria-label="Roster controls">
+        <div className="ops-roster-controls__range">
+        <div className="ops-roster-control-group ops-roster-control-group--period">
+        <span className="ops-roster-control-group__label">Period</span>
         <div className="ops-date-range__presets" role="tablist" aria-label="Date range">
           {PRESETS.map(preset => (
             <button
@@ -166,45 +248,44 @@ export function DailyOpsPanel({
             </button>
           ))}
         </div>
+        </div>
 
-        <div className="ops-date-range__inputs">
+        <label className="ops-roster-control ops-roster-control--month"><span>Month</span><select className="cand-input ops-ctrl-select" value={rangePreset === 'allTime' ? 'all' : rangePreset.startsWith('month:') ? rangePreset.slice(6) : ''} onChange={e => applyMonth(e.target.value)} aria-label="Filter interviews by month"><option value="" disabled>Select month</option>{monthOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+
+        <div className="ops-date-range__inputs ops-date-range__inputs--redesigned ops-date-range__inputs--removed" aria-hidden="true">
           <span className="ops-date-range__label">Range</span>
           <input className="cand-input ops-ctrl-date" type="date" value={fromDate} onChange={e => applyManualFrom(e.target.value)} aria-label="From date" />
           <span className="ops-date-range__sep">—</span>
           <input className="cand-input ops-ctrl-date" type="date" value={toDate}   onChange={e => applyManualTo(e.target.value)}   aria-label="To date" />
         </div>
 
-        <select
-          className="cand-input ops-ctrl-select"
-          value=""
-          onChange={e => applyMonth(e.target.value)}
-          aria-label="Select month"
-        >
-          <option value="">Select month</option>
-          {monthOptions.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-        </select>
+        </div>
+
+        <div className="ops-roster-controls__filters">
+        <label className="ops-roster-search"><span className="ops-roster-search__icon" aria-hidden="true">&#8981;</span><input placeholder="Search candidate or phone..." value={candidateSearch} onChange={e => setCandidateSearch(e.target.value)} aria-label="Candidate search" /></label>
+        <label className="ops-roster-control ops-roster-control--candidate"><span>Candidate</span><select className="cand-input ops-ctrl-select" value={candidateFilter} onChange={e => { setCandidateFilter(e.target.value); setCandidateSearch('') }} aria-label="Candidate filter"><option value="">All candidates</option>{candidateOptions.map(item => <option key={item.name} value={item.name}>{item.name} ({item.scheduled})</option>)}</select></label>
 
         {!handlerScoped && (
-          <select
+          <label className="ops-roster-control"><span>Attendee</span><select
             className="cand-input ops-ctrl-select"
             value={attendeeFilter}
             onChange={e => setAttendeeFilter(e.target.value)}
             aria-label="Attendee filter"
           >
-            <option value="">All attendees</option>
+            <option value="">Everyone</option>
             {ATTENDEES.map(name => <option key={name} value={name}>{name}</option>)}
-          </select>
+          </select></label>
         )}
-        <select
+        <label className="ops-roster-control ops-roster-control--level"><span>Level</span><select
           className="cand-input ops-ctrl-select"
           value={roundFilter}
           onChange={e => setRoundFilter(e.target.value)}
-          aria-label="Round filter"
+          aria-label="Candidate interview level filter"
         >
-          <option value="">All rounds</option>
+          <option value="">All levels</option>
           {ROUNDS.map(r => <option key={r} value={r}>{r}</option>)}
-        </select>
-        <select
+        </select></label>
+        <label className="ops-roster-control"><span>Profile</span><select
           className="cand-input ops-ctrl-select"
           value={technologyFilter}
           onChange={e => setTechnologyFilter(e.target.value)}
@@ -212,17 +293,12 @@ export function DailyOpsPanel({
         >
           <option value="">All profiles</option>
           {technologyOptions.map(t => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <input
-          className="cand-input ops-ctrl-search"
-          placeholder="Search candidate"
-          value={candidateSearch}
-          onChange={e => setCandidateSearch(e.target.value)}
-          aria-label="Candidate search"
-        />
-        <button type="button" className="btn btn--ghost btn--sm ops-ctrl-refresh" onClick={loadGlobal}>
-          Refresh
-        </button>
+        </select></label>
+        <div className="ops-roster-controls__actions">
+          {activeFilterCount > 0 && <button type="button" className="ops-roster-clear" onClick={clearFilters}>Clear <span>{activeFilterCount}</span></button>}
+          <button type="button" className="ops-roster-refresh" onClick={loadGlobal} disabled={loading}><span aria-hidden="true">&#8635;</span>{loading ? 'Updating' : 'Refresh'}</button>
+        </div>
+        </div>
       </div>
 
       {error && <p className="admin-error ops-dash-error" role="alert">{error}</p>}
@@ -237,7 +313,7 @@ export function DailyOpsPanel({
           dashboardAttendeeFilter={attendeeFilter}
           dashboardRoundFilter={roundFilter}
           dashboardTechnologyFilter={technologyFilter}
-          dashboardCandidateSearch={candidateSearch}
+          dashboardCandidateSearch={candidateFilter || candidateSearch}
           dashboardStatusFilter={statusFilter}
           upcomingOnly={upcomingOnly}
           onRosterCountsChange={setRosterCounts}

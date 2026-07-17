@@ -67,6 +67,28 @@ def _parse_labeled_interview_block(blob: str) -> tuple[str, str, str]:
     time_start = ""
     time_end = ""
 
+    # Combined labels are common in email invites:
+    # "Interview Date & Time: 12.07.2026 (Sunday) at 1: 00 PM".
+    # OCR often inserts a line break/space around the time colon. Parse this
+    # before the generic "Time:" rule so the date's leading 12 is never
+    # mistaken for 12:00 PM.
+    combined = re.search(
+        r"\bdate\s*(?:&|and)\s*time\s*:\s*"
+        r"(\d{1,2})[/.-](\d{1,2})[/.-](20\d{2})"
+        r"[^\n]{0,80}?\bat\s*(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if combined:
+        d, m, y = int(combined.group(1)), int(combined.group(2)), int(combined.group(3))
+        if m > 12 and d <= 12:
+            d, m = m, d
+        date = f"{y:04d}-{_pad2(m)}-{_pad2(d)}"
+        sh, sm = _to_24h(int(combined.group(4)), int(combined.group(5)), combined.group(6))
+        time_start = _fmt_hhmm(sh, sm)
+        end_total = sh * 60 + sm + 30
+        time_end = _fmt_hhmm(end_total // 60, end_total % 60)
+
     dm = re.search(
         r"\bdate\s*:\s*(\d{1,2})[/.-](\d{1,2})[/.-](20\d{2})\b",
         text,
@@ -81,7 +103,7 @@ def _parse_labeled_interview_block(blob: str) -> tuple[str, str, str]:
     # Match the "Time:" label with 12h (5:00 pm) OR 24h (13:00:00) start,
     # optional seconds, and an optional end time after -, to, until, till.
     # Reliable label — must win over the phone status-bar clock elsewhere.
-    tm = re.search(
+    tm = None if time_start else re.search(
         r"\btime\s*:\s*"
         r"(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(am|pm)?"
         r"(?:\s*(?:-|to|\u2013|\u2014|until|untill|till)\s*"

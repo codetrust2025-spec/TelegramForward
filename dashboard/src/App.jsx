@@ -71,6 +71,7 @@ import { DataRoomPanel } from './components/DataRoomPanel.jsx'
 import { AdminPanel } from './components/AdminPanel.jsx'
 import { KnowledgeAssistantPanel } from './components/KnowledgeAssistantPanel.jsx'
 import { RecruitmentMailPanel } from './components/RecruitmentMailPanel.jsx'
+import { MailMonitoringNotifications } from './components/MailMonitoringNotifications.jsx'
 import {
   playNewMessageSound,
   unlockNotificationSound,
@@ -2205,6 +2206,8 @@ export default function App() {
         <KnowledgeAssistantPanel />
       ) : mainView === 'ai-recruitment' ? (
         <RecruitmentMailPanel />
+      ) : mainView === 'mail-notifications' ? (
+        <MailMonitoringNotifications />
       ) : mainView === 'data-room' ? (
         <DataRoomPanel />
       ) : mainView === 'admin' ? (

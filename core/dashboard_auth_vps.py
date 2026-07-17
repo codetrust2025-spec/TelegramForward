@@ -53,7 +53,7 @@ _API_ROOTS = frozenset({
     "state", "health", "ws", "inbox", "crm", "stats", "admin", "ai", "candidates",
     "data-room", "public",
     "metrics", "alerts", "handler-expenses", "handler-salaries", "voice",
-    "webhooks", "whatsapp", "push", "devices", "demo-tools", "workspace", "fleet",
+    "webhooks", "whatsapp", "push", "devices", "demo-tools", "workspace", "fleet", "api",
 })
 
 

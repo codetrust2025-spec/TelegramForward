@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { API } from "../config.js";
 import { useConfirm } from "../context/ConfirmContext.jsx";
+export { default as RecruitmentMailPanel } from "./RecruitmentMailPanelRedesign.jsx";
 
 const api = async (path, options = {}) => {
   const isGet = !options.method || options.method === "GET";
   const separator = path.includes("?") ? "&" : "?";
-  const requestPath = isGet ? `${path}${separator}_offerReview=offer_review_cleanup_v1` : path;
+  const requestPath = isGet
+    ? `${path}${separator}_offerReview=offer_review_cleanup_v1`
+    : path;
   const response = await fetch(`${API}${requestPath}`, {
     credentials: "include",
     cache: isGet ? "no-store" : undefined,
@@ -20,13 +23,23 @@ const api = async (path, options = {}) => {
 const human = (value) => String(value || "").replaceAll("_", " ");
 const when = (value) => (value ? new Date(value).toLocaleString() : "Never");
 const IMPORTANT_STATUSES = [
-  "SELECTED", "FINAL_SELECTION_CONFIRMED", "OFFER_INDICATION",
-  "OFFER_IN_PROGRESS", "OFFER_APPROVED", "OFFER_LETTER_RECEIVED",
-  "APPOINTMENT_LETTER_RECEIVED", "OFFER_ACCEPTED", "JOINING_CONFIRMED",
-  "JOINED", "POST_SELECTION_ONBOARDING", "MANUAL_REVIEW_REQUIRED",
+  "SELECTED",
+  "FINAL_SELECTION_CONFIRMED",
+  "OFFER_INDICATION",
+  "OFFER_IN_PROGRESS",
+  "OFFER_APPROVED",
+  "OFFER_LETTER_RECEIVED",
+  "APPOINTMENT_LETTER_RECEIVED",
+  "OFFER_ACCEPTED",
+  "JOINING_CONFIRMED",
+  "JOINED",
+  "POST_SELECTION_ONBOARDING",
+  "MANUAL_REVIEW_REQUIRED",
 ];
 const HIDDEN_STATUSES = new Set([
-  "IGNORED_NOT_OFFER_RELATED", "IGNORED_LOW_CONFIDENCE", "NO_RELEVANT_STATUS",
+  "IGNORED_NOT_OFFER_RELATED",
+  "IGNORED_LOW_CONFIDENCE",
+  "NO_RELEVANT_STATUS",
 ]);
 const HIDDEN_REVIEWS = new Set(["IGNORED", "FALSE_POSITIVE", "DUPLICATE"]);
 const IMPORTANT_EVIDENCE_MEANINGS = new Set(
@@ -36,12 +49,23 @@ export function shouldShowInSelectionOfferReview(event) {
   const status = String(event?.primary_status || "").toUpperCase();
   const review = String(event?.review_status || "").toUpperCase();
   const evidence = event?.structured_result?.evidence || [];
-  if (!IMPORTANT_STATUSES.includes(status) || HIDDEN_STATUSES.has(status)) return false;
-  if (HIDDEN_REVIEWS.has(review) || event?.visible_in_offer_review === false) return false;
-  if (Number(event?.confidence || 0) < 0.8 || evidence.length === 0) return false;
+  if (!IMPORTANT_STATUSES.includes(status) || HIDDEN_STATUSES.has(status))
+    return false;
+  if (HIDDEN_REVIEWS.has(review) || event?.visible_in_offer_review === false)
+    return false;
+  if (Number(event?.confidence || 0) < 0.8 || evidence.length === 0)
+    return false;
   if (status === "MANUAL_REVIEW_REQUIRED") {
-    if (event?.structured_result?.is_selection_or_offer_related !== true) return false;
-    if (!evidence.some((item) => IMPORTANT_EVIDENCE_MEANINGS.has(String(item?.meaning || "").toUpperCase()))) return false;
+    if (event?.structured_result?.is_selection_or_offer_related !== true)
+      return false;
+    if (
+      !evidence.some((item) =>
+        IMPORTANT_EVIDENCE_MEANINGS.has(
+          String(item?.meaning || "").toUpperCase(),
+        ),
+      )
+    )
+      return false;
   }
   return true;
 }
@@ -121,7 +145,9 @@ function EvidencePanel({ eventId, onClose, onChanged }) {
             Status
             <select value={status} onChange={(e) => setStatus(e.target.value)}>
               {IMPORTANT_STATUSES.map((value) => (
-                <option value={value} key={value}>{human(value)}</option>
+                <option value={value} key={value}>
+                  {human(value)}
+                </option>
               ))}
             </select>
           </label>
@@ -209,7 +235,9 @@ function ReviewTable({ rows, names, onReview, onEvidence }) {
                 <td>{event.job_title || "—"}</td>
                 <td>{Math.round(Number(event.confidence) * 100)}%</td>
                 <td>
-                  <span>{event.structured_result?.evidence?.length || 0} source(s)</span>
+                  <span>
+                    {event.structured_result?.evidence?.length || 0} source(s)
+                  </span>
                   <button
                     className="recruitment-mail-link"
                     onClick={() => onEvidence(event.id)}
@@ -255,7 +283,7 @@ function ReviewTable({ rows, names, onReview, onEvidence }) {
   );
 }
 
-export function RecruitmentMailPanel() {
+export function RecruitmentMailPanelLegacy() {
   const today = new Date().toISOString().slice(0, 10);
   const thirtyDaysAgo = new Date(Date.now() - 29 * 86400000)
     .toISOString()
@@ -485,7 +513,10 @@ export function RecruitmentMailPanel() {
       <header className="recruitment-mail-header">
         <div>
           <h2>Selection and Offer Review</h2>
-          <p>Only job selections, offers, joining confirmations, and related verification mail.</p>
+          <p>
+            Only job selections, offers, joining confirmations, and related
+            verification mail.
+          </p>
         </div>
         <button onClick={load}>Refresh</button>
       </header>
@@ -558,7 +589,9 @@ export function RecruitmentMailPanel() {
               <option value="offer_accepted">Offer accepted</option>
               <option value="joining_confirmed">Joining confirmed</option>
               <option value="joined">Joined</option>
-              <option value="MANUAL_REVIEW_REQUIRED">Manual review required</option>
+              <option value="MANUAL_REVIEW_REQUIRED">
+                Manual review required
+              </option>
             </select>
             <select
               value={filters.review}
@@ -567,11 +600,7 @@ export function RecruitmentMailPanel() {
               }
             >
               <option value="">All review decisions</option>
-              {[
-                "PENDING",
-                "APPROVED",
-                "REJECTED",
-              ].map((v) => (
+              {["PENDING", "APPROVED", "REJECTED"].map((v) => (
                 <option key={v}>{human(v)}</option>
               ))}
             </select>

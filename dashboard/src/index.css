@@ -16998,6 +16998,24 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 .cand-table td { padding: 5px 8px; font-size: 11px; }
 .cand-table .cand-badge { font-size: 9px; padding: 1px 6px; }
 
+/* Candidates uses document scrolling. Keeping both the filter bar and table
+   columns sticky creates competing viewport layers and lets rows slide between
+   them. Keep this page's controls in normal flow; other cand-table consumers
+   (Data Room, roster modals) retain their own sticky behavior. */
+.cand-page > .cand-toolbar {
+  position: relative;
+  top: auto;
+  z-index: 3;
+}
+.cand-page > .cand-table-wrap .cand-table thead,
+.cand-page > .cand-table-wrap .cand-table thead th {
+  position: static;
+  top: auto;
+}
+.cand-page > .cand-table-wrap .cand-table thead th {
+  background: #171d2b;
+}
+
 /* ── Responsive: tablet stats scroll horizontally ────────────────────── */
 @media (max-width: 1199px) {
   .cand-page .cand-stats {

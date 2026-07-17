@@ -60,27 +60,27 @@ def test_irrelevant_and_duplicate_messages_do_not_reach_ai(monkeypatch):
     assert statuses == ["DUPLICATE_CONTENT"] and not analyzed
 
 
-def test_job_recommendations_and_interviews_are_not_tracked(monkeypatch):
+def test_job_recommendations_are_ignored_and_interviews_are_tracked(monkeypatch):
     analyzed=[]; created=[]; notified=[]
     monkeypatch.setattr(agent.store, "insert_message", lambda mailbox, decoded, score: ({"id": "stored-message"}, True))
     monkeypatch.setattr(agent.store, "is_duplicate_content", lambda *args: False)
     monkeypatch.setattr(agent.store, "mark_message_status", lambda *args, **kwargs: None)
-    monkeypatch.setattr(agent.store, "create_event", lambda *args, **kwargs: created.append(True))
-    monkeypatch.setattr(agent, "analyze", lambda *args: analyzed.append(True))
+    monkeypatch.setattr(agent.store, "is_duplicate_thread_status", lambda *args: False)
+    monkeypatch.setattr(agent.store, "create_event", lambda *args, **kwargs: created.append(True) or {"id":"event-1","candidate_id":"candidate-1","classification":"interview_update"})
+    interview={**structured("INTERVIEW_UPDATE"),"primary_status":"INTERVIEW_UPDATE","classification":"interview_update","candidate_status":"Interview In Progress"}
+    monkeypatch.setattr(agent, "analyze", lambda *args: analyzed.append(True) or (interview,"test-model",1))
     monkeypatch.setattr("services.recruitment_notifications.notify_detection", lambda event: notified.append(event))
     mailbox={"id":"mailbox-1","candidate_id":"candidate-1"}
     assert agent.process_message(mailbox,message("Job recommendations for you | foundit","Apply now to matching jobs."),[]) is None
-    assert agent.process_message(mailbox,message("Technical interview confirmed","Your interview is scheduled tomorrow."),[]) is None
-    assert not analyzed and not created and not notified
+    assert agent.process_message(mailbox,message("Technical interview confirmed","Your interview is scheduled tomorrow."),[])["classification"] == "interview_update"
+    assert len(analyzed) == len(created) == len(notified) == 1
 
 
 @pytest.mark.parametrize(("subject", "body", "reason"), [
     ("Recommended jobs based on your profile", "New roles are waiting for you.", "JOB_RECOMMENDATION"),
-    ("Your interview has been scheduled", "Join the interview tomorrow.", "INTERVIEW"),
     ("Coding test invitation", "Complete the assessment.", "ASSESSMENT"),
     ("Thank you for applying", "Your application is under review.", "APPLICATION_UPDATE"),
     ("Weekly career newsletter", "Upgrade account and apply now.", "JOB_PORTAL_MARKETING"),
-    ("Regret to inform", "You were not selected.", "REJECTION"),
 ])
 def test_ordinary_recruitment_mail_is_deterministically_ignored(subject, body, reason):
     decision = agent.prefilter_decision(subject, body, sender_email="alerts@foundit.in")
@@ -91,6 +91,35 @@ def test_ordinary_recruitment_mail_is_deterministically_ignored(subject, body, r
         "evidence": [],
         "ignore_reason": reason,
     }
+
+
+@pytest.mark.parametrize(("subject","body","status"),[
+    ("Your interview has been scheduled","Join the interview tomorrow.","INTERVIEW_UPDATE"),
+    ("Regret to inform","You were not selected for the role.","CANDIDATE_REJECTED"),
+])
+def test_interview_and_rejection_are_informational_status_updates(subject,body,status):
+    decision=agent.prefilter_decision(subject,body)
+    assert decision["qualified"] is True
+    assert decision["status"] == status
+
+
+def test_negated_offer_disclaimer_is_not_offer_evidence():
+    disclaimer = (
+        "Unless there is a formal offer of employment from Accenture, any communication "
+        "about the selection process shall not be assumed or treated as a commitment or "
+        "an offer of employment or guarantee of employment."
+    )
+    scheduling = agent.prefilter_decision(
+        "Your Interview has been successfully Scheduled.",
+        f"Your technical interview has been scheduled for tomorrow. {disclaimer}",
+    )
+    availability = agent.prefilter_decision(
+        "Reminder: Your Availability Required to Proceed for an Interview",
+        f"Please share your availability so that we can schedule the interview. {disclaimer}",
+    )
+    assert scheduling["status"] == "INTERVIEW_UPDATE"
+    assert all(item["meaning"] != "OFFER_LETTER_RECEIVED" for item in scheduling["evidence"])
+    assert availability["status"] != "OFFER_LETTER_RECEIVED"
 
 
 def test_selected_and_joining_confirmations_pass_the_strict_filter():
@@ -116,10 +145,10 @@ def test_shortlisted_with_explicit_joining_date_uses_strongest_full_message_evid
     assert {item["source"] for item in decision["evidence"]} >= {"EMAIL_BODY","EMAIL_SUBJECT"}
 
 
-def test_shortlist_only_stays_out_but_stronger_offer_evidence_wins():
+def test_interview_shortlist_is_distinct_and_stronger_offer_evidence_wins():
     generic=agent.prefilter_decision("Application update","You have been shortlisted for the technical interview.")
-    assert generic["qualified"] is False
-    assert generic["ignore_reason"] == "SHORTLIST_ONLY"
+    assert generic["qualified"] is True
+    assert generic["status"] == "INTERVIEW_SHORTLISTED"
     assert agent.prefilter_decision("Next steps","You have been shortlisted. We are planning to release your offer.")["status"] == "OFFER_INDICATION"
     assert agent.prefilter_decision("Documents","You have been shortlisted. Please find your offer letter attached.")["status"] == "OFFER_LETTER_RECEIVED"
     onboarding=agent.prefilter_decision("Next steps","You have been shortlisted. Please complete onboarding before joining on July 15.")
@@ -151,7 +180,7 @@ def test_context_dependent_joining_background_and_salary_rules():
     assert agent.prefilter_decision("Joining","Please confirm your date of joining.")["qualified"] is False
     thread=[{"subject":"Offer letter","body":"You have been selected for the role."}]
     assert agent.prefilter_decision("Joining","Please confirm your date of joining.",thread_context=thread)["status"] == "JOINING_CONFIRMED"
-    assert agent.prefilter_decision("Background verification initiated","Please provide documents.")["qualified"] is False
+    assert agent.prefilter_decision("Background verification initiated","Please provide documents.")["status"] == "BACKGROUND_VERIFICATION"
     assert agent.prefilter_decision("Salary discussion","Let us discuss compensation.")["qualified"] is False
     background=agent.prefilter_decision("Background verification initiated","Your offer is approved. Complete background verification.")
     salary=agent.prefilter_decision("Salary discussion","You have been selected. Let us continue the salary discussion.")
@@ -169,6 +198,119 @@ def test_portal_mail_with_explicit_selection_is_not_blocked_by_sender():
     assert decision["status"] == "SELECTED"
 
 
+def test_application_stage_shortlist_is_semantically_checked_then_excluded(monkeypatch):
+    analyzed=[]; statuses=[]; created=[]
+    monkeypatch.setattr(agent.store,"insert_message",lambda *args:({"id":"stored-message","processing_status":"FILTERED"},True))
+    monkeypatch.setattr(agent.store,"is_duplicate_content",lambda *args:False)
+    monkeypatch.setattr(agent.store,"is_duplicate_offer_attachment",lambda *args:False)
+    monkeypatch.setattr(agent.store,"mark_message_status",lambda mid,status,**kwargs:statuses.append((status,kwargs.get("reason"))))
+    monkeypatch.setattr(agent.store,"create_event",lambda *args,**kwargs:created.append(True))
+    ignored={**structured("IGNORED_NOT_OFFER_RELATED",.98,"complete your application"),
+        "primary_status":"IGNORED_NOT_OFFER_RELATED","is_selection_or_offer_related":False,
+        "should_create_review_record":False,"evidence":[],"ignore_reason":"INCOMPLETE_APPLICATION"}
+    monkeypatch.setattr(agent,"analyze",lambda *args:analyzed.append(True) or (ignored,"qwen3.6",5))
+    result=agent.process_message(
+        {"id":"mailbox-1","candidate_id":"candidate-1"},
+        message("Your profile has been shortlisted", "To move forward, please complete your application by answering a few short questions."),
+        [],
+    )
+    assert result is None
+    assert analyzed == [True]
+    assert statuses == [("IGNORED_NOT_OFFER_RELATED","INCOMPLETE_APPLICATION")]
+    assert not created
+
+
+def test_historical_false_positive_is_archived_from_all_consumers(monkeypatch):
+    archived=[]; reprocessed=[]
+    monkeypatch.setattr(agent.store,"insert_message",lambda *args:({"id":"stored-message","processing_status":"EVENT_CREATED"},False))
+    monkeypatch.setattr(agent.store,"is_duplicate_content",lambda *args:False)
+    monkeypatch.setattr(agent.store,"is_duplicate_offer_attachment",lambda *args:False)
+    monkeypatch.setattr(agent.store,"archive_event_for_message",lambda mid,**kwargs:archived.append((mid,kwargs)))
+    monkeypatch.setattr(agent.store,"mark_message_status",lambda *args,**kwargs:None)
+    monkeypatch.setattr(agent.store,"mark_reprocessed",lambda *args:reprocessed.append(args))
+    ignored={**structured("IGNORED_NOT_OFFER_RELATED",.98,"complete your application"),
+        "primary_status":"IGNORED_NOT_OFFER_RELATED","is_selection_or_offer_related":False,
+        "should_create_review_record":False,"evidence":[],"ignore_reason":"INCOMPLETE_APPLICATION"}
+    monkeypatch.setattr(agent,"analyze",lambda *args:(ignored,"qwen3.6",5))
+    result=agent.process_message(
+        {"id":"mailbox-1","candidate_id":"candidate-1"},
+        message("Your profile has been shortlisted", "Complete your application to move forward."),
+        [],reprocess=True,
+    )
+    assert result is None
+    assert archived[0][0] == "stored-message"
+    assert archived[0][1]["status"] == "IGNORED_NOT_OFFER_RELATED"
+
+
+def test_ai_failure_preserves_strong_joining_evidence_for_manual_review(monkeypatch):
+    statuses=[]; created=[]
+    monkeypatch.setattr(agent.store,"insert_message",lambda *args:({"id":"stored-message","processing_status":"FILTERED"},True))
+    monkeypatch.setattr(agent.store,"is_duplicate_content",lambda *args:False)
+    monkeypatch.setattr(agent.store,"is_duplicate_offer_attachment",lambda *args:False)
+    monkeypatch.setattr(agent.store,"is_duplicate_thread_status",lambda *args:False)
+    monkeypatch.setattr(agent.store,"mark_message_status",lambda mid,status,**kwargs:statuses.append(status))
+    monkeypatch.setattr(agent.store,"create_event",lambda *args,**kwargs:created.append((args,kwargs)) or {"id":"event-1","primary_status":args[2]["primary_status"]})
+    monkeypatch.setattr(agent,"analyze",lambda *args:(_ for _ in ()).throw(RuntimeError("offline")))
+    monkeypatch.setattr("services.recruitment_notifications.notify_detection",lambda event:None)
+    result=agent.process_message(
+        {"id":"mailbox-1","candidate_id":"candidate-1"},
+        message("Congratulations and Next Steps", "Your date of joining will be 15th July 2026."),
+        [],
+    )
+    assert result["primary_status"] == "JOINING_CONFIRMED"
+    assert statuses == []
+    assert created[0][0][2]["requires_manual_review"] is True
+    assert "AI_UNAVAILABLE_MANUAL_REVIEW" in created[0][0][2]["risk_flags"]
+    assert created[0][1]["model"] == "semantic-router-v3|fallback:ollama_internal_error"
+    assert created[0][0][2]["classification_source"] == "FALLBACK"
+    assert created[0][0][2]["ai_validation_status"] == "UNAVAILABLE"
+
+
+def test_high_impact_joining_result_uses_independent_validator(monkeypatch):
+    source=message(
+        "Congratulations and Next Steps - Data Engineer Role",
+        "Congratulations on being shortlisted for the role of Data Engineer. Your date of joining will be 15th July 2026.",
+    )
+    outcome=structured("JOINING_CONFIRMED",.96,"Your date of joining will be 15th July 2026")
+    outcome["evidence"]=[{"source":"EMAIL_BODY","meaning":"JOINING_CONFIRMED","text":"Your date of joining will be 15th July 2026"}]
+    outcome["offer"]["joining_date"]="2026-07-15"
+    calls=[]
+    class Response:
+        def __init__(self,model):
+            self.content=__import__("json").dumps(outcome);self.model=model;self.duration_ms=7
+    monkeypatch.setattr(agent,"configured_models",lambda:{"primary":"qwen3.6","validator":"gemma4"})
+    monkeypatch.setattr(agent,"chat_structured",lambda **kwargs:calls.append(kwargs["model"]) or Response(kwargs["model"]))
+    result,model,duration=agent.analyze(source,[])
+    assert calls == ["qwen3.6","gemma4"]
+    assert result["primary_status"] == "JOINING_CONFIRMED"
+    assert result["model_validation"]["agreed"] is True
+    assert model == "qwen3.6|validator:gemma4"
+    assert duration == 14
+
+
+def test_validator_recovers_primary_false_negative_for_joining_confirmation(monkeypatch):
+    source=message(
+        "Congratulations and Next Steps - Data Engineer Role",
+        "Congratulations on being shortlisted for the role of Data Engineer. Your date of joining will be 15th July 2026.",
+    )
+    ignored={**structured("IGNORED_NOT_OFFER_RELATED",.91,"shortlisted"),
+        "is_selection_or_offer_related":False,"should_create_review_record":False,
+        "evidence":[],"ignore_reason":"SHORTLIST_ONLY"}
+    joining=structured("JOINING_CONFIRMED",.96,"Your date of joining will be 15th July 2026")
+    joining["evidence"]=[{"source":"EMAIL_BODY","meaning":"JOINING_CONFIRMED","text":"Your date of joining will be 15th July 2026"}]
+    joining["offer"]["joining_date"]="2026-07-15"
+    outputs=iter([ignored,joining])
+    class Response:
+        def __init__(self,value,model):
+            self.content=__import__("json").dumps(value);self.model=model;self.duration_ms=3
+    monkeypatch.setattr(agent,"configured_models",lambda:{"primary":"qwen3.6","validator":"gemma4"})
+    monkeypatch.setattr(agent,"chat_structured",lambda **kwargs:Response(next(outputs),kwargs["model"]))
+    result,_,_=agent.analyze(source,[])
+    assert result["primary_status"] == "JOINING_CONFIRMED"
+    assert result["requires_manual_review"] is True
+    assert "MODEL_DISAGREEMENT" in result["risk_flags"]
+
+
 def test_validation_enforces_evidence_and_manual_review_confidence():
     medium=structured("OFFER_INDICATION",.85,"we are pleased to offer you")
     source=message("We are pleased to offer you","Details follow.")
@@ -180,11 +322,13 @@ def test_validation_enforces_evidence_and_manual_review_confidence():
         agent.validate_result(unsupported,message("Congratulations","You have been selected."),[])
 
 
-def test_low_confidence_result_is_not_visible():
+def test_low_confidence_result_requires_review_without_status_overwrite():
     low=structured("SELECTED",.79,"you have been selected")
     agent.validate_result(low,message("You have been selected","Details."),[])
-    assert low["status"] == "IGNORED_LOW_CONFIDENCE"
-    assert low["should_create_review_record"] is False
+    assert low["status"] == "MANUAL_REVIEW_REQUIRED"
+    assert low["classification"] == "job_selection_confirmed"
+    assert low["requires_manual_review"] is True
+    assert low["should_create_review_record"] is True
 
 
 def test_non_outcome_ai_status_is_discarded(monkeypatch):

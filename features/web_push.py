@@ -201,6 +201,11 @@ def all_usernames_with_subscriptions() -> list[str]:
     return sorted(users)
 
 
+def admin_usernames_with_subscriptions() -> list[str]:
+    data = _load_subs()
+    return sorted({r.get("username") for r in (data.get("subscriptions") or []) if r.get("username") and (r.get("role") or "admin").lower() == "admin"})
+
+
 def status() -> dict[str, Any]:
     keys = vapid_keys()
     data = _load_subs()

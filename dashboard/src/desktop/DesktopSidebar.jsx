@@ -5,6 +5,7 @@ const NAV = [
   { id: "knowledge", label: "Ask AI", icon: "AI" },
   { id: "daily-briefing", label: "Daily briefing", icon: "☀" },
   { id: "ai-recruitment", label: "AI Mail Review", icon: "AI" },
+  { id: "mail-notifications", label: "Mail alerts", icon: "🔔" },
   { id: "dashboard", label: "Dashboard", icon: "▣" },
   { id: "accounts", label: "Accounts", icon: "👤" },
   { id: "forwarding", label: "Forwarding", icon: "↻" },

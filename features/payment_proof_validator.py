@@ -136,8 +136,8 @@ def _extract_max_amount(text: str) -> float:
     """
     prefixed_amounts = []
     
-    # Match ₹X,XXX patterns
-    for match in re.finditer(r'₹\s*([\d,]+(?:\.\d{1,2})?)', text):
+    # Match ₹X,XXX patterns. Tesseract commonly reads the rupee glyph as "~".
+    for match in re.finditer(r'[₹~]\s*([\d,]+(?:\.\d{1,2})?)', text):
         try:
             prefixed_amounts.append(float(match.group(1).replace(',', '')))
         except ValueError:
@@ -185,9 +185,12 @@ def _extract_max_amount(text: str) -> float:
             return float(mc[0])
         return max(prefixed_amounts)
     
-    # Fallback: match standalone comma-formatted numbers (₹500 to ₹10L)
+    # Fallback: comma-formatted values are much stronger amount candidates than
+    # dates, times, masked account numbers, or advertisement prices.
     fallback = []
-    for match in re.finditer(r'(\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?)', text):
+    for match in re.finditer(
+        r'(?<![\d*])([\d]{1,3}(?:,[\d]{2,3})+(?:\.[\d]{1,2})?)(?!\d)', text
+    ):
         try:
             val = float(match.group(1).replace(',', ''))
             if 500 <= val <= 1000000:
@@ -195,12 +198,19 @@ def _extract_max_amount(text: str) -> float:
         except ValueError:
             pass
     if fallback:
-        from collections import Counter as C3
-        c3 = C3(fallback)
-        mc = c3.most_common(1)[0]
-        if mc[1] >= 2:
-            return float(mc[0])
-        return min(v for v in fallback if v >= 500)
+        return max(fallback)
+
+    # Last resort for receipts that print an unformatted amount such as 10000.
+    # Do not start inside a longer or masked number (e.g. ******5810).
+    for match in re.finditer(r'(?<![\d*$])(\d{3,7})(?!\d)', text):
+        try:
+            val = float(match.group(1))
+            if 500 <= val <= 1000000:
+                fallback.append(val)
+        except ValueError:
+            pass
+    if fallback:
+        return max(fallback)
     
     return 0
 

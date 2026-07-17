@@ -1,17 +1,26 @@
 """Durable mailbox scheduler and worker."""
 from __future__ import annotations
-import asyncio, logging, os, urllib.error
-from datetime import timedelta
+import asyncio, logging, os, time, urllib.error
+from datetime import datetime, timedelta, timezone
 from core import recruitment_mail_store as store
 from services.gmail_mailbox_provider import GmailMailboxProvider, decode_gmail_message
 from services.recruitment_mail_agent import process_message
 
 logger=logging.getLogger('teleautomation.recruitment_mail_worker')
 
+def _publish(event_type:str,**payload):
+    try:
+        from core.recruitment_realtime import publish
+        publish(event_type,**payload)
+    except Exception:
+        logger.debug('Mail real-time event unavailable type=%s',event_type,exc_info=True)
+
 class RecruitmentMailWorker:
-    def __init__(self):self._task=None;self._stopping=False;self._jobs=set()
+    def __init__(self):self._task=None;self._stopping=False;self._jobs=set();self._last_watch_renewal=0.0
     def start(self):
-        if self._task is None or self._task.done():self._stopping=False;self._task=asyncio.create_task(self._run(),name='recruitment-mail-worker')
+        if self._task is None or self._task.done():
+            store.recover_interrupted_jobs()
+            self._stopping=False;self._task=asyncio.create_task(self._run(),name='recruitment-mail-worker')
     async def stop(self):
         self._stopping=True
         if self._task:self._task.cancel();await asyncio.gather(self._task,return_exceptions=True);self._task=None
@@ -23,6 +32,8 @@ class RecruitmentMailWorker:
             try:
                 if os.getenv('AI_INTERVIEW_OFFER_TRACKING_ENABLED','false').lower()=='true' and os.getenv('AI_MAILBOX_SYNC_ENABLED','false').lower()=='true':
                     await asyncio.to_thread(self.schedule_due)
+                    if time.monotonic()-self._last_watch_renewal>=900:
+                        await asyncio.to_thread(self.renew_due_watches);self._last_watch_renewal=time.monotonic()
                     self._jobs={task for task in self._jobs if not task.done()}
                     maximum=max(1,min(20,int(os.getenv('AI_MAIL_SYNC_MAX_CONCURRENCY','5'))))
                     while len(self._jobs)<maximum:
@@ -43,10 +54,34 @@ class RecruitmentMailWorker:
               AND NOT EXISTS(SELECT 1 FROM mailbox_sync_jobs j WHERE j.mailbox_id=m.id AND j.status IN('QUEUED','RUNNING'))""")
             mins=max(1,int(os.getenv('AI_MAIL_SYNC_INTERVAL_MINUTES','15')))
             cur.execute("UPDATE candidate_mailboxes SET next_sync_at=now()+(%s||' minutes')::interval WHERE monitoring_enabled=true AND COALESCE(next_sync_at,now())<=now()",(mins,))
+    def renew_due_watches(self):
+        topic=(os.getenv('GMAIL_PUBSUB_TOPIC') or '').strip()
+        if not topic:return
+        from core.db.connection import get_connection
+        with get_connection() as conn,conn.cursor() as cur:
+            cur.execute("""SELECT id,credential_ciphertext,provider_history_id FROM candidate_mailboxes
+              WHERE monitoring_enabled=true AND connection_status='CONNECTED'
+              AND credential_ciphertext IS NOT NULL
+              AND (gmail_watch_expiration IS NULL OR gmail_watch_expiration<now()+interval '24 hours')
+              ORDER BY gmail_watch_expiration NULLS FIRST LIMIT 20""")
+            rows=cur.fetchall()
+        for mailbox_id,cipher,history_id in rows:
+            try:
+                result=GmailMailboxProvider(cipher).start_watch(topic)
+                expiration=None
+                try:expiration=datetime.fromtimestamp(int(result.get('expiration'))/1000,tz=timezone.utc)
+                except (TypeError,ValueError,OverflowError):pass
+                store.update_mailbox(mailbox_id,{'gmail_watch_expiration':expiration,'gmail_watch_topic':topic,
+                    'provider_history_id':str(history_id or result.get('historyId') or ''),
+                    'sync_cursor':str(history_id or result.get('historyId') or '')})
+                logger.info('Gmail watch renewed mailbox_id=%s',mailbox_id)
+            except Exception:
+                logger.exception('Gmail watch renewal failed mailbox_id=%s; polling fallback remains active',mailbox_id)
     def process_job(self,job):
         mailbox=store.mailbox_by_id(job['mailbox_id']);counts={'fetched':0,'processed':0,'events':0}
         if not mailbox:store.finish_job(job['id'],status='FAILED',error='Mailbox not found');return
         try:
+            _publish('mail_processing_started',candidate_id=mailbox.get('candidate_id'),mailbox_id=mailbox.get('id'),processing_status='Processing')
             store.update_mailbox(mailbox['id'],{'last_sync_attempt_at':store.now()})
             provider=GmailMailboxProvider(mailbox['credential_ciphertext']); batch=max(1,min(100,int(os.getenv('AI_MAIL_SYNC_BATCH_SIZE','50'))))
             historical=job.get('job_type')=='HISTORICAL_RESCAN'
@@ -70,7 +105,7 @@ class RecruitmentMailWorker:
                 if decoded.get('provider_thread_id'):
                     try:
                         thread=provider.fetch_thread(decoded['provider_thread_id'])[-5:]
-                        decoded['thread_context']=[{k:v for k,v in decode_gmail_message(item,mailbox['email_address']).items() if k in ('subject','sender_name','sender_email','sent_at')} for item in thread]
+                        decoded['thread_context']=[{k:v for k,v in decode_gmail_message(item,mailbox['email_address']).items() if k in ('subject','body','sender_name','sender_email','sent_at')} for item in thread]
                     except Exception:
                         logger.info('Thread context unavailable mailbox=%s message=%s',mailbox['id'],ref['id'])
                 attachments=([{**item,'text':item.get('extracted_text')} for item in store.attachments_for_message(stored['id'],include_text=True)] if stored and stored.get('body_text') else provider.fetch_attachments(raw))
@@ -81,6 +116,7 @@ class RecruitmentMailWorker:
             failures=int(mailbox.get('failed_sync_count') or 0)+1;delay=min(240,2**min(failures,8))
             store.update_mailbox(mailbox['id'],{'connection_status':'ERROR','failed_sync_count':failures,'last_error_code':type(exc).__name__,'last_error_message':str(exc)[:400],'next_sync_at':store.now()+timedelta(minutes=delay)})
             store.finish_job(job['id'],status='FAILED',counts=counts,error=str(exc)[:400]);final=store.retry_job(job['id'],delay_minutes=delay,error=str(exc)[:400],max_attempts=max(1,int(os.getenv('AI_MAIL_SYNC_MAX_RETRIES','5'))));logger.warning('Mailbox sync failed mailbox=%s code=%s',mailbox['id'],type(exc).__name__)
+            _publish('mail_processing_failed',candidate_id=mailbox.get('candidate_id'),mailbox_id=mailbox.get('id'),processing_status='Processing Failed',error_code=type(exc).__name__)
             if failures>=3 or final=='DEAD_LETTER':
                 from services.recruitment_notifications import notify_system
                 notify_system('Mailbox synchronization failed',f"Mailbox {mailbox['id']} requires administrator attention.",f"mailbox-failure:{mailbox['id']}")

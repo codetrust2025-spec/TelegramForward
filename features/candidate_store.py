@@ -13,6 +13,7 @@ Schema (one row):
         "technology":    "SAP BASIS | React JS | AWS Admin | ..." (free text),
         "task":          "not_started | in_progress | decision_need | completed",
         "phone":         "10-digit Indian phone or international",
+        "email":         "candidate email address (stored lowercase)",
         "reference":     "who referred the lead (free text)",
         "payment":       <int> rupees (0 if blank),
         "date":          "YYYY-MM-DD" (interview slot day when slot_confirmed; else lead logged date),
@@ -346,6 +347,16 @@ TOOL_PROFILE_CANDIDATE_TECHNOLOGY = "Data Analyst"
 
 def _normalise_candidate_name_key(name: str) -> str:
     return " ".join((name or "").strip().lower().split())
+
+
+def candidate_phone_identity(phone: str | None) -> str:
+    """Stable identity; +91, leading zero, spaces and punctuation normalize alike."""
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]
+    elif len(digits) == 11 and digits.startswith("0"):
+        digits = digits[1:]
+    return digits if len(digits) >= 8 else ""
 
 
 _CANDIDATE_NAME_ALIASES: dict[str, str] = {
@@ -759,7 +770,7 @@ def _coerce_bool(value) -> bool:
 # ── Schema normalisation ────────────────────────────────────────────────────
 
 _ALLOWED_FIELDS = {
-    "name", "stage", "technology", "task", "phone", "reference",
+    "name", "stage", "technology", "task", "phone", "email", "reference",
     "consultancy", "bgv_certificates", "ctc_percentage",
     "payment", "expected_payment", "follow_up",
     "date", "logged_date", "time", "time_end", "expenses", "notes",
@@ -919,6 +930,7 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         ),
         "task":             _clean_str(record.get("task", base.get("task", "not_started"))).lower().replace(" ", "_"),
         "phone":            _clean_str(record.get("phone", base.get("phone"))),
+        "email":            _clean_str(record.get("email", base.get("email"))).lower(),
         "reference":        _canonical_reference_name(
             _clean_str(record.get("reference", base.get("reference")))
         ),
@@ -1310,6 +1322,11 @@ def _collapse_profile_candidates(rows: list[dict], *, month: str | None = None) 
                 pid = item.get("id")
                 if not pid or pid in all_proofs or pid in slot_proofs:
                     continue
+                item = dict(item)
+                # Keep the physical owner of a proof that came from a legacy
+                # same-name slot clone. The edit form can then update/delete it
+                # through the correct candidate endpoint.
+                item.setdefault("candidate_id", r.get("id"))
                 # Identify slot screenshots by their note or by matching the slot_screenshot_proof_id
                 is_slot_ss = (
                     pid == slot_ss_id
@@ -1569,7 +1586,8 @@ def _collect_pending_works_for_row(row: dict) -> list[dict]:
     ref = (row.get("reference") or "").strip()
     if not ref or ref.lower() == "unknown":
         works.append(_pending_work_item(kind="missing_reference", row=row))
-    if int(row.get("resume_count") or len(row.get("resumes") or [])) == 0:
+    service_type = _normalise_service_type(row.get("service_type"), row)
+    if service_type != "round_wise" and int(row.get("resume_count") or len(row.get("resumes") or [])) == 0:
         works.append(_pending_work_item(kind="missing_resume", row=row))
     # Payment balance is enforced at slot booking — do not surface as pending work.
     if not (row.get("phone") or "").strip():
@@ -2126,13 +2144,6 @@ def slot_booking_payment_block_reason(
     canon = canonical_candidate_name(_clean_str(name))
     # If candidate already has payment proofs on file, allow booking
     cid = candidate_id_for_slot_name(name)
-    if cid:
-        data = _load()
-        for row in data.get("candidates") or []:
-            if row.get("id") == cid:
-                if row.get("proofs") and len(row.get("proofs", [])) > 0:
-                    return None  # Has proofs on file — allow
-                break
     if not payment_proof_id:
         return (
             f"₹{due:,} payment is pending for {canon or name}. "
@@ -2144,6 +2155,8 @@ def slot_booking_payment_block_reason(
     if not hit:
         return "Payment screenshot not found — upload it again before booking."
     _path, entry = hit
+    if _is_slot_screenshot_proof(entry):
+        return "Upload a payment screenshot — an interview invite cannot be used as payment proof."
     if not _proof_uploaded_recently(entry):
         return (
             "Your payment screenshot has expired — upload a fresh payment screenshot, "
@@ -2176,12 +2189,25 @@ def public_add_payment_proof_for_name(
     caption = _clean_str(note)[:200]
     if not caption:
         caption = f"Payment proof · ₹{due:,} due · submit-slot"
+    from features.payment_fraud_detection import assess_payment_proof
+    fraud_check = assess_payment_proof(data, None, candidate_id=cid, candidate_name=canon)
+    if fraud_check["decision"] == "rejected":
+        match = (fraud_check.get("duplicate_matches") or [{}])[0]
+        duplicate_name = match.get("candidate_name") or "another candidate"
+        raise ValueError(f"Duplicate payment proof already used for {duplicate_name}.")
     entry = add_proof(
         cid,
         data=data,
         original_name=original_name,
         mime_type=mime_type,
         note=caption,
+        metadata={
+            "sha256": fraud_check["sha256"],
+            "fraud_decision": fraud_check["decision"],
+            "fraud_reasons": fraud_check["reasons"],
+            "fraud_warnings": fraud_check["warnings"],
+            "fraud_checked_at": fraud_check["checked_at"],
+        },
     )
     if entry is None:
         raise ValueError("Could not save payment screenshot — try again")
@@ -2197,6 +2223,7 @@ def public_add_payment_proof_for_name(
         "proof_id": entry["id"],
         "proof": entry,
         "balance_due": new_due,
+        "fraud_check": fraud_check,
         "name": canon,
     }
 
@@ -2529,11 +2556,18 @@ def interview_global_summary(
     if start > end:
         start, end = end, start
 
+    all_rows = _interview_rows_for_range(
+        "2000-01-01",
+        "2100-12-31",
+        include_unconfirmed=include_unconfirmed,
+    )
+    all_rows = _filter_interview_rows(all_rows, viewer_reference=viewer_reference)
     rows = _interview_rows_for_range(
         start,
         end,
         include_unconfirmed=include_unconfirmed,
     )
+    overview_rows = _filter_interview_rows(list(rows), viewer_reference=viewer_reference)
     rows = _filter_interview_rows(
         rows,
         viewer_reference=viewer_reference,
@@ -2546,6 +2580,42 @@ def interview_global_summary(
     if upcoming_only:
         rows = _filter_upcoming_only_rows(rows)
     interview_counts = _interview_attendance_counts(rows)
+
+    overview_candidates: dict[str, dict] = {}
+    overview_levels: dict[str, int] = {}
+    overview_technologies: dict[str, int] = {}
+    for overview_row in overview_rows:
+        candidate_label = canonical_candidate_name((overview_row.get("name") or "").strip()) or "Unknown"
+        level_label = normalise_interview_round(overview_row.get("interview_round")) or "Unspecified"
+        technology_label = row_candidate_technology(overview_row) or "Unspecified"
+        candidate_bucket = overview_candidates.setdefault(candidate_label, {"count": 0, "levels": {}, "technologies": {}})
+        candidate_bucket["count"] += 1
+        candidate_bucket["levels"][level_label] = candidate_bucket["levels"].get(level_label, 0) + 1
+        candidate_bucket["technologies"][technology_label] = candidate_bucket["technologies"].get(technology_label, 0) + 1
+        overview_levels[level_label] = overview_levels.get(level_label, 0) + 1
+        overview_technologies[technology_label] = overview_technologies.get(technology_label, 0) + 1
+
+    month_counts: dict[str, int] = {}
+    for row in all_rows:
+        month_key = (row.get("date") or "").strip()[:7]
+        if len(month_key) == 7 and month_key[4] == "-":
+            month_counts[month_key] = month_counts.get(month_key, 0) + 1
+    current_dt = datetime.now(timezone.utc)
+    current_month = current_dt.strftime("%Y-%m")
+    previous_year = current_dt.year if current_dt.month > 1 else current_dt.year - 1
+    previous_month = current_dt.month - 1 if current_dt.month > 1 else 12
+    month_counts.setdefault(current_month, 0)
+    month_counts.setdefault(f"{previous_year:04d}-{previous_month:02d}", 0)
+    month_names = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    interview_months = []
+    for month_key in sorted(month_counts, reverse=True):
+        year, month = month_key.split("-")
+        interview_months.append({
+            "value": month_key,
+            "label": f"{month_names[int(month) - 1]} {year}",
+            "count": month_counts[month_key],
+            "is_current": month_key == current_month,
+        })
 
     def _empty_bucket() -> dict[str, int]:
         return {
@@ -2618,6 +2688,33 @@ def interview_global_summary(
     return {
         "from": start,
         "to": end,
+        "available_months": interview_months,
+        "booking_overview": {
+            "total": len(overview_rows),
+            "by_candidate": [
+                {
+                    "name": name,
+                    "count": stats["count"],
+                    "levels": [
+                        {"name": level, "count": count}
+                        for level, count in sorted(stats["levels"].items(), key=lambda item: (-item[1], item[0].lower()))
+                    ],
+                    "technologies": [
+                        {"name": technology, "count": count}
+                        for technology, count in sorted(stats["technologies"].items(), key=lambda item: (-item[1], item[0].lower()))
+                    ],
+                }
+                for name, stats in sorted(overview_candidates.items(), key=lambda item: (-item[1]["count"], item[0].lower()))
+            ],
+            "by_level": [
+                {"name": name, "count": count}
+                for name, count in sorted(overview_levels.items(), key=lambda item: (-item[1], item[0].lower()))
+            ],
+            "by_technology": [
+                {"name": name, "count": count}
+                for name, count in sorted(overview_technologies.items(), key=lambda item: (-item[1], item[0].lower()))
+            ],
+        },
         "interviews": {
             "count": len(rows),
             **interview_counts,
@@ -2753,6 +2850,59 @@ def get_candidate(cid: str) -> dict | None:
     return None
 
 
+def get_candidate_detail(cid: str) -> dict | None:
+    """Return the Candidates-page representation, including legacy clone proofs.
+
+    Profile candidates can have older interview-slot rows with resumes or payment
+    proofs attached. The list view collapses those rows, so the edit/detail API
+    must use the same collapse or its proof count will disagree with the table.
+    """
+    source = get_candidate(cid)
+    if not source:
+        return None
+    if _normalise_service_type(source.get("service_type"), source) == "round_wise":
+        return source
+    key = _normalise_candidate_name_key(source.get("name") or "")
+    if not key:
+        return source
+    rows = [
+        _with_computed(row)
+        for row in (_load().get("candidates") or [])
+        if _normalise_service_type(row.get("service_type"), row) != "round_wise"
+        and _normalise_candidate_name_key(row.get("name") or "") == key
+    ]
+    collapsed = _collapse_profile_candidates(rows)
+    return collapsed[0] if collapsed else source
+
+
+def candidate_identity_ids(cid: str) -> list[str]:
+    """Return every legacy row id that represents the same phone identity."""
+    rows = _load().get("candidates") or []
+    source = next((row for row in rows if str(row.get("id")) == str(cid)), None)
+    if not source:
+        return [str(cid)]
+    phone_key = candidate_phone_identity(source.get("phone"))
+    if not phone_key:
+        return [str(cid)]
+    aliases = [
+        str(row.get("id"))
+        for row in rows
+        if row.get("id")
+        and candidate_phone_identity(row.get("phone")) == phone_key
+    ]
+    return aliases or [str(cid)]
+
+
+def canonical_candidate_identity_id(cid: str) -> str:
+    """Resolve a legacy slot/profile id to the candidate currently shown in lists."""
+    aliases = set(candidate_identity_ids(cid))
+    current = next(
+        (row for row in list_candidates() if str(row.get("id")) in aliases),
+        None,
+    )
+    return str(current.get("id")) if current else str(cid)
+
+
 def find_by_telegram(slot: str, user_id: int) -> dict | None:
     """Find a candidate row linked to a Telegram DM thread."""
     slot = (slot or "").strip()
@@ -2777,6 +2927,26 @@ def find_by_telegram(slot: str, user_id: int) -> dict | None:
 def create_candidate(record: dict, *, allow_slot_without_rules: bool = False) -> dict:
     data = _load()
     row = _normalise(record)
+    if not allow_slot_without_rules and _normalise_service_type(row.get("service_type"), row) != "round_wise":
+        key = _normalise_candidate_name_key(row.get("name") or "")
+        phone_key = candidate_phone_identity(row.get("phone"))
+        duplicate = next(
+            (
+                existing for existing in (data.get("candidates") or [])
+                if existing.get("stage") == "in_progress"
+                and _normalise_service_type(existing.get("service_type"), existing) != "round_wise"
+                and (
+                    candidate_phone_identity(existing.get("phone")) == phone_key
+                    if phone_key else _normalise_candidate_name_key(existing.get("name") or "") == key
+                )
+            ),
+            None,
+        )
+        if (phone_key or key) and duplicate:
+            raise ValueError(
+                f"An active profile already exists for phone {row.get('phone') or row.get('name')}. "
+                f"Open and update {duplicate.get('name') or 'the existing candidate'} instead."
+            )
     if row.get("slot_confirmed") and not allow_slot_without_rules:
         reason = slot_confirm_block_reason(row)
         if reason:
@@ -3714,8 +3884,6 @@ def interview_slot_picker_rows(
     for r in rows:
         canon = canonical_candidate_name((r.get("name") or "").strip())
         due = merged_balance_due_for_name(canon)
-        # If candidate already has payment proofs on file, don't block slot booking
-        has_proofs = bool(r.get("proofs")) and len(r.get("proofs", [])) > 0
         out.append({
             "id": r.get("id"),
             "name": canon,
@@ -3725,7 +3893,7 @@ def interview_slot_picker_rows(
             "time": r.get("time") or "",
             "service_type": r.get("service_type") or "",
             "balance_due": due,
-            "needs_payment_proof": due > 0 and not has_proofs,
+            "needs_payment_proof": due > 0,
             "payment_blocked": False,
         })
     out.sort(key=lambda r: (r.get("name") or "").lower())
@@ -3790,14 +3958,72 @@ def update_candidate(
     rows = data.get("candidates") or []
     for i, r in enumerate(rows):
         if r.get("id") == cid:
+            original_phone_key = candidate_phone_identity(r.get("phone"))
+            original_name_key = _normalise_candidate_name_key(r.get("name") or "")
+            profile_identity_ids = {
+                str(other.get("id"))
+                for other in rows
+                if other.get("id")
+                and _normalise_service_type(other.get("service_type"), other) != "round_wise"
+                and (
+                    (
+                        original_phone_key
+                        and candidate_phone_identity(other.get("phone")) == original_phone_key
+                    )
+                    or (
+                        original_name_key
+                        and _normalise_candidate_name_key(other.get("name") or "")
+                        == original_name_key
+                    )
+                )
+            }
             allowed_patch = {k: v for k, v in patch.items() if k in _ALLOWED_FIELDS}
             preview = _normalise(allowed_patch, existing=r)
+            phone_key = candidate_phone_identity(preview.get("phone"))
+            name_key = _normalise_candidate_name_key(preview.get("name") or "")
+            if phone_key and _normalise_service_type(preview.get("service_type"), preview) != "round_wise":
+                conflict = next(
+                    (
+                        other for other in rows
+                        if other.get("id") != cid
+                        and other.get("stage") == "in_progress"
+                        and _normalise_service_type(other.get("service_type"), other) != "round_wise"
+                        and candidate_phone_identity(other.get("phone")) == phone_key
+                        and _normalise_candidate_name_key(other.get("name") or "") != name_key
+                    ),
+                    None,
+                )
+                # Renaming an existing profile must not conflict with its own
+                # legacy slot clones, which intentionally share the same phone.
+                same_existing_identity = bool(
+                    original_phone_key and phone_key == original_phone_key
+                )
+                if conflict and not same_existing_identity:
+                    raise ValueError(
+                        f"Phone {preview.get('phone')} already belongs to active candidate {conflict.get('name')}."
+                    )
             if preview.get("slot_confirmed") and not _coerce_bool(r.get("slot_confirmed")):
                 if not allow_slot_without_rules:
                     reason = slot_confirm_block_reason(_with_computed(preview))
                     if reason:
                         raise ValueError(reason)
             rows[i] = _normalise(allowed_patch, existing=r)
+            # Profile-service slot clones represent one commercial agreement.
+            # Keep shared financial fields identical so list-page consolidation
+            # cannot resurrect an older, higher value after an edit.
+            shared_keys = {
+                "name", "phone", "email", "technology",
+                "payment", "expected_payment", "follow_up", "reference",
+                "consultancy", "bgv_certificates", "ctc_percentage",
+            }
+            shared_patch = {k: rows[i].get(k) for k in shared_keys if k in allowed_patch}
+            if shared_patch and _normalise_service_type(rows[i].get("service_type"), rows[i]) != "round_wise":
+                for j, clone in enumerate(rows):
+                    if j == i or _normalise_service_type(clone.get("service_type"), clone) == "round_wise":
+                        continue
+                    if str(clone.get("id")) not in profile_identity_ids:
+                        continue
+                    rows[j] = _normalise(shared_patch, existing=clone)
             data["candidates"] = rows
             _save(data)
             return _with_computed(rows[i])
@@ -4545,7 +4771,7 @@ def _ext_from_mime(mime: str, fallback_name: str = "") -> str:
 
 
 def add_proof(cid: str, *, data: bytes, original_name: str, mime_type: str,
-              note: str = "") -> dict | None:
+              note: str = "", metadata: dict | None = None) -> dict | None:
     """Persist a payment screenshot for `cid`. Returns the new proof entry
     (with its computed url path) or None when the candidate doesn't exist
     or the upload is rejected (wrong mime, too big, empty)."""
@@ -4584,6 +4810,10 @@ def add_proof(cid: str, *, data: bytes, original_name: str, mime_type: str,
         "uploaded_at":   _now_iso(),
         "url":           f"/candidates/{cid}/proofs/{pid}",
     }
+    if metadata:
+        for key in ("sha256", "utr_number", "transaction_id", "payment_status", "fraud_decision", "fraud_reasons", "fraud_warnings", "fraud_checked_at"):
+            if key in metadata:
+                entry[key] = metadata[key]
     proofs = list(rows[idx].get("proofs") or [])
     proofs.append(entry)
     rows[idx]["proofs"] = proofs
