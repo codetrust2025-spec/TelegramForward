@@ -132,7 +132,7 @@ def mailbox_for_candidate(candidate_id: str) -> dict[str, Any] | None:
 
 
 def mailbox_for_candidates(candidate_ids: list[str]) -> dict[str, Any] | None:
-    """Find the best mailbox across legacy rows for one phone identity."""
+    """Find the best single mailbox across legacy rows for one phone identity (backward-compat)."""
     ids = [str(value) for value in candidate_ids if value]
     if not ids:
         return None
@@ -146,6 +146,20 @@ def mailbox_for_candidates(candidate_ids: list[str]) -> dict[str, Any] | None:
         )
         rows = _rows(cur)
     return rows[0] if rows else None
+
+
+def mailboxes_for_candidates(candidate_ids: list[str]) -> list[dict[str, Any]]:
+    """Return ALL mailboxes across identity rows — supports multiple emails per candidate."""
+    ids = [str(value) for value in candidate_ids if value]
+    if not ids:
+        return []
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT * FROM candidate_mailboxes WHERE candidate_id=ANY(%s)
+               ORDER BY (connection_status='CONNECTED') DESC, updated_at DESC""",
+            (ids,),
+        )
+        return _rows(cur)
 
 
 def mailbox_by_id(mailbox_id: str) -> dict[str, Any] | None:
@@ -174,7 +188,7 @@ def upsert_mailbox(candidate_id: str, email: str, **fields: Any) -> dict[str, An
         cur.execute("""
             INSERT INTO candidate_mailboxes(id,candidate_id,provider,email_address,connection_type,monitoring_enabled,connection_status,credential_ciphertext,created_at,updated_at)
             VALUES(%s,%s,'gmail',%s,'oauth2',%s,%s,%s,now(),now())
-            ON CONFLICT(candidate_id,provider) DO UPDATE SET email_address=EXCLUDED.email_address,
+            ON CONFLICT(candidate_id, lower(email_address)) DO UPDATE SET
               monitoring_enabled=EXCLUDED.monitoring_enabled, connection_status=EXCLUDED.connection_status,
               credential_ciphertext=COALESCE(EXCLUDED.credential_ciphertext,candidate_mailboxes.credential_ciphertext), updated_at=now()
             RETURNING *
