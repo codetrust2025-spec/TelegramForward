@@ -434,14 +434,29 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
                 raise ValueError(f"invalid ISO date: offer.{field}") from exc
     if value.get("classification") in {"interview_confirmed", "interview_rescheduled"}:
         interview = value.get("interview") or {}
+        date_valid = True
+        time_valid = True
+        tz_valid = True
         try:
             date.fromisoformat(str(interview.get("date") or ""))
-        except ValueError as exc:
-            raise ValueError("invalid ISO date: interview.date") from exc
+        except ValueError:
+            date_valid = False
         if not re.fullmatch(r"(?:0?[1-9]|1[0-2]):[0-5]\d\s*(?:AM|PM)", str(interview.get("time") or ""), re.I):
-            raise ValueError("invalid 12-hour time: interview.time")
+            time_valid = False
         if not str(interview.get("timezone") or "").strip():
-            raise ValueError("missing timezone: interview.timezone")
+            tz_valid = False
+        if not (date_valid and time_valid and tz_valid):
+            missing = []
+            if not date_valid: missing.append("date")
+            if not time_valid: missing.append("time")
+            if not tz_valid: missing.append("timezone")
+            logger.warning(
+                "Interview classification has invalid/missing schedule fields=%s; flagging for manual review",
+                ",".join(missing),
+            )
+            value["requires_manual_review"] = True
+            value["risk_flags"] = list(dict.fromkeys((value.get("risk_flags") or []) + ["INTERVIEW_SCHEDULE_INCOMPLETE"]))
+            value["reason"] = f"Interview schedule incomplete (missing/invalid: {', '.join(missing)}); manual review required"
 
 
 def parse_model_json(raw: str) -> dict[str, Any]:
@@ -735,6 +750,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
     except AIGatewayError:
         raise
     except Exception as exc:
+        logger.exception("Recruitment AI analysis failed with unexpected error type=%s message=%s", type(exc).__name__, str(exc))
         raise AIGatewayError("AI semantic analysis failed.", code="OLLAMA_INTERNAL_ERROR") from exc
 
 
