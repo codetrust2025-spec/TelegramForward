@@ -6,10 +6,11 @@ from typing import Any
 
 
 ALLOWED_STATUSES = (
-    "SELECTED", "FINAL_SELECTION_CONFIRMED", "OFFER_INDICATION",
-    "OFFER_IN_PROGRESS", "OFFER_APPROVED", "OFFER_LETTER_RECEIVED",
-    "APPOINTMENT_LETTER_RECEIVED", "OFFER_ACCEPTED", "JOINING_CONFIRMED",
-    "JOINED", "POST_SELECTION_ONBOARDING", "MANUAL_REVIEW_REQUIRED",
+    "SELECTED", "FINAL_SELECTION_CONFIRMED",
+    "OFFER_LETTER_RECEIVED", "APPOINTMENT_LETTER_RECEIVED",
+    "OFFER_ACCEPTED", "JOINING_CONFIRMED",
+    "JOINED", "POST_SELECTION_ONBOARDING",
+    "INTERVIEW_CONFIRMED", "INTERVIEW_SHORTLISTED",
 )
 IGNORED_STATUSES = {
     "IGNORED_NOT_OFFER_RELATED", "IGNORED_LOW_CONFIDENCE", "NO_RELEVANT_STATUS",
@@ -45,15 +46,26 @@ def has_strong_selection_or_offer_signal(event: dict[str, Any]) -> bool:
 def should_show_in_selection_offer_review(event: dict[str, Any]) -> bool:
     status = str(event.get("primary_status") or event.get("status") or "").upper()
     review_status = str(event.get("review_status") or "").upper()
+    
+    # Only show specific high-value statuses
     if status not in ALLOWED_STATUSES or status in IGNORED_STATUSES:
         return False
     if review_status in IGNORED_REVIEW_STATUSES or event.get("visible_in_offer_review") is False:
         return False
+    
+    # Require evidence and high confidence
     evidence = _evidence(event)
     if not evidence or float(event.get("confidence") or 0) < 0.8:
         return False
-    if status == "MANUAL_REVIEW_REQUIRED" and not has_strong_selection_or_offer_signal(event):
-        return False
+    
+    # For interview statuses, require explicit date/time details
+    if status in ("INTERVIEW_CONFIRMED", "INTERVIEW_SHORTLISTED"):
+        structured = event.get("structured_result") or {}
+        interview = structured.get("interview") or {} if isinstance(structured, dict) else {}
+        has_date = bool(str(interview.get("date") or "").strip())
+        if not has_date:
+            return False  # Don't show generic "we'll contact you" messages
+    
     return True
 
 
@@ -61,13 +73,47 @@ def cleanup_reason(event: dict[str, Any]) -> str | None:
     """Return an audit reason for a historical row that must be archived."""
     if should_show_in_selection_offer_review(event):
         return None
+    
+    status = str(event.get("primary_status") or "").upper()
     subject = str(event.get("subject") or "").casefold()
     sender = " ".join(str(event.get(key) or "") for key in ("sender_name", "sender_email")).casefold()
-    if any(term in subject for term in ("job recommendation", "recommended jobs", "jobs for you", "job alert", "similar jobs", "featured jobs")):
-        return "JOB_RECOMMENDATION"
-    if any(term in subject for term in ("interview", "assessment", "coding test")):
+    summary = str(event.get("summary") or "").casefold()
+    
+    # Filter out noise - profile views, recommendations, generic updates
+    noise_patterns = [
+        ("profile viewed", "PROFILE_VIEW_NOTIFICATION"),
+        ("resume viewed", "PROFILE_VIEW_NOTIFICATION"),
+        ("recruiter", "GENERIC_RECRUITER_MESSAGE"),  # "recruiters are noticing"
+        ("job recommendation", "JOB_RECOMMENDATION"),
+        ("recommended jobs", "JOB_RECOMMENDATION"),
+        ("jobs for you", "JOB_RECOMMENDATION"),
+        ("job alert", "JOB_RECOMMENDATION"),
+        ("similar jobs", "JOB_RECOMMENDATION"),
+        ("featured jobs", "JOB_RECOMMENDATION"),
+        ("credit score", "NON_RECRUITMENT_NOTIFICATION"),
+        ("consumer credit", "NON_RECRUITMENT_NOTIFICATION"),
+        ("application status", "APPLICATION_UPDATE"),
+        ("status of your", "APPLICATION_UPDATE"),
+        ("appeared in", "SEARCH_APPEARANCE_NOTIFICATION"),
+        ("searches", "SEARCH_APPEARANCE_NOTIFICATION"),
+    ]
+    
+    for pattern, reason in noise_patterns:
+        if pattern in subject or pattern in summary:
+            return reason
+    
+    # Filter out interview notifications without actual slots
+    if status in ("INTERVIEW_CONFIRMED", "INTERVIEW_SHORTLISTED", "INTERVIEW_UPDATE"):
+        structured = event.get("structured_result") or {}
+        interview = structured.get("interview") or {} if isinstance(structured, dict) else {}
+        has_date = bool(str(interview.get("date") or "").strip())
+        if not has_date:
+            return "INTERVIEW_WITHOUT_SLOT"
+    
+    # Original filters
+    if any(term in subject for term in ("assessment", "coding test")):
         return "INTERVIEW_OR_ASSESSMENT"
-    if any(term in subject for term in ("application", "resume viewed", "profile viewed", "rejection", "regret to inform")):
+    if any(term in subject for term in ("rejection", "regret to inform")):
         return "NON_OFFER_RECRUITMENT_MAIL"
     if any(portal in subject + " " + sender for portal in ("foundit", "monster", "naukri", "linkedin jobs", "indeed", "shine", "timesjobs")):
         return "JOB_PORTAL_PROMOTION"
@@ -75,6 +121,11 @@ def cleanup_reason(event: dict[str, Any]) -> str | None:
         return "LOW_CONFIDENCE"
     if not _evidence(event):
         return "NO_EVIDENCE"
+    
+    # Not in allowed statuses
+    if status not in ALLOWED_STATUSES:
+        return "NOT_ACTIONABLE_STATUS"
+    
     return "NO_QUALIFIED_SELECTION_OR_OFFER_EVIDENCE"
 
 
@@ -90,12 +141,7 @@ def qualified_event_sql(alias: str = "e") -> tuple[str, list[Any]]:
       AND COALESCE({alias}.visible_in_offer_review,true)=true
       AND {alias}.confidence>=0.8
       AND jsonb_array_length(COALESCE({alias}.structured_result->'evidence','[]'::jsonb))>0
-      AND ({alias}.primary_status<>'MANUAL_REVIEW_REQUIRED' OR (
-        COALESCE(({alias}.structured_result->>'is_selection_or_offer_related')::boolean,false)=true
-        AND EXISTS (
-          SELECT 1 FROM jsonb_array_elements(COALESCE({alias}.structured_result->'evidence','[]'::jsonb)) item
-          WHERE upper(COALESCE(item->>'meaning',''))=ANY(%s)
-        )
+      AND ({alias}.primary_status NOT IN('INTERVIEW_CONFIRMED','INTERVIEW_SHORTLISTED') OR (
+        COALESCE(({alias}.structured_result->'interview'->>'date'),'') <> ''
       ))"""
-    important = [status for status in ALLOWED_STATUSES if status != "MANUAL_REVIEW_REQUIRED"]
-    return predicate, [list(ALLOWED_STATUSES), important]
+    return predicate, [list(ALLOWED_STATUSES)]
