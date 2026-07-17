@@ -17,21 +17,22 @@ def main():
     print("=== Cleaning Up 'Needs Review' Noise ===\n")
     
     with get_connection() as conn, conn.cursor() as cur:
-        # Get all PENDING events
+        # Get all PENDING events with message details
         cur.execute("""
             SELECT 
                 e.id,
                 e.candidate_id,
                 e.primary_status,
                 e.confidence,
-                e.subject,
-                e.sender_name,
-                e.sender_email,
+                m.subject,
+                m.sender_name,
+                m.sender_email,
                 e.summary,
                 e.structured_result,
                 e.review_status,
                 e.visible_in_offer_review
             FROM ai_recruitment_events e
+            JOIN mailbox_messages m ON m.id = e.mailbox_message_id
             WHERE e.review_status = 'PENDING'
             ORDER BY e.created_at DESC
         """)
