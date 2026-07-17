@@ -11,7 +11,7 @@ from pathlib import Path
 VPS_HOST = "187.127.169.159"
 VPS_USER = "root"
 VPS_PASSWORD = os.environ.get("VPS_PASSWORD", "REMOVED_VPS_PASSWORD")
-VPS_STATIC_DIR = "/opt/telegramforward.old/static"
+VPS_STATIC_DIR = "/opt/telegramforward/static"
 LOCAL_STATIC_DIR = Path(__file__).parent.parent / "static"
 
 def connect():
