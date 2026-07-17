@@ -1,9 +1,9 @@
 {
   "version": 2,
   "description": "Pinned production assets \u2014 live site must match these hashes.",
-  "git_commit": "d37126f4466cb96c621c2af7150ec145d5e97389",
-  "git_commit_short": "d37126f",
-  "deployed_at": "2026-07-17T16:48:15Z",
+  "git_commit": "e288af67402c48d4de573b91fa8966d1fe120a65",
+  "git_commit_short": "e288af6",
+  "deployed_at": "2026-07-17T16:49:25Z",
   "js": "assets/app-B31XRH1R.js",
   "css": "assets/index-BwN9O96F.css",
   "js_sha256": "6f8a6cad092eb31e11e71294e8bd4e9a0030aa63bde0286fba359437b8cf1387",
