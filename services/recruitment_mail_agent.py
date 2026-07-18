@@ -815,6 +815,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
         primary_response = request_model(
             messages=[{"role": "system", "content": CLASSIFIER_PROMPT}, {"role": "user", "content": _prompt_json(payload)}],
             model=models["primary"],
+            max_retries=0,
         )
         try:
             primary = parse_model_json(primary_response.content)
@@ -838,13 +839,14 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
             validator_response = request_model(
                 messages=[{"role": "system", "content": VALIDATOR_PROMPT}, {"role": "user", "content": _prompt_json({"source": payload, "primary_result": primary})}],
                 model=models["validator"],
+                max_retries=0,
             )
             try:
                 validator = parse_model_json(validator_response.content)
             except (ValueError, json.JSONDecodeError):
                 validator_response = request_model(
                     messages=[{"role": "system", "content": VALIDATOR_PROMPT + " Return valid JSON only; no markdown or commentary."},
-                              {"role": "user", "content": json.dumps({"source": payload, "primary_result": primary}, ensure_ascii=False)}],
+                              {"role": "user", "content": _prompt_json({"source": payload, "primary_result": primary})}],
                     model=validator_response.model, max_retries=0,
                 )
                 try:
