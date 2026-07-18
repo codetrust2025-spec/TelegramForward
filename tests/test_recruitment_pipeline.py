@@ -289,6 +289,25 @@ def test_high_impact_joining_result_uses_independent_validator(monkeypatch):
     assert duration == 14
 
 
+def test_critical_validator_never_falls_back_to_lightweight_model(monkeypatch):
+    source=message("Selection confirmed", "You have been selected for the role.")
+    outcome=structured("SELECTED",.96,"You have been selected")
+    outcome["evidence"]=[{"source":"EMAIL_BODY","meaning":"SELECTED","text":"You have been selected"}]
+    calls=[]
+    class Response:
+        content=__import__("json").dumps(outcome);model="qwen2.5:7b";duration_ms=7
+    monkeypatch.setattr(agent,"configured_models",lambda:{"primary":"qwen2.5:7b","validator":"validator-model","fallback":"gemma2:2b"})
+    def fake_chat(**kwargs):
+        calls.append(kwargs["model"])
+        if kwargs["model"] == "validator-model":
+            raise agent.AIGatewayError("validator unavailable",code="OLLAMA_REQUEST_TIMEOUT")
+        return Response()
+    monkeypatch.setattr(agent,"chat_structured",fake_chat)
+    with pytest.raises(agent.AIGatewayError):
+        agent.analyze(source,[])
+    assert calls == ["qwen2.5:7b","validator-model"]
+
+
 def test_validator_recovers_primary_false_negative_for_joining_confirmation(monkeypatch):
     source=message(
         "Congratulations and Next Steps - Data Engineer Role",

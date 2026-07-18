@@ -780,6 +780,8 @@ _ALLOWED_FIELDS = {
     "slots_group_posted",
     "interview_attendee",
     "interview_round",
+    "interview_company", "interview_role", "interview_source_thread_id",
+    "interview_source_message_id", "interview_source_timezone",
     "purpose",
 }
 
@@ -954,6 +956,11 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         "interview_round":  normalise_interview_round(
             record.get("interview_round", base.get("interview_round", ""))
         ),
+        "interview_company": _clean_str(record.get("interview_company", base.get("interview_company"))),
+        "interview_role": _clean_str(record.get("interview_role", base.get("interview_role"))),
+        "interview_source_thread_id": _clean_str(record.get("interview_source_thread_id", base.get("interview_source_thread_id"))),
+        "interview_source_message_id": _clean_str(record.get("interview_source_message_id", base.get("interview_source_message_id"))),
+        "interview_source_timezone": _clean_str(record.get("interview_source_timezone", base.get("interview_source_timezone"))),
         "telegram_slot":    _clean_str(record.get("telegram_slot", base.get("telegram_slot"))),
         "telegram_user_id": int(record.get("telegram_user_id") or base.get("telegram_user_id") or 0) or None,
         "proofs":           list(base.get("proofs") or []),
@@ -3052,6 +3059,11 @@ def _duplicate_candidate_slot(
     notes: str = "",
     interview_round: str = "",
     interview_attendee: str | None = None,
+    interview_company: str = "",
+    interview_role: str = "",
+    interview_source_thread_id: str = "",
+    interview_source_message_id: str = "",
+    interview_source_timezone: str = "",
 ) -> dict:
     """Clone an in-progress candidate so a second interview slot keeps prior rows."""
     existing_service = _normalise_service_type(source.get("service_type"), source)
@@ -3082,6 +3094,11 @@ def _duplicate_candidate_slot(
         "notes": _clean_str(notes),
         "interview_attendee": attendee,
         "interview_round": normalise_interview_round(interview_round) or normalise_interview_round(source.get("interview_round")),
+        "interview_company": _clean_str(interview_company),
+        "interview_role": _clean_str(interview_role),
+        "interview_source_thread_id": _clean_str(interview_source_thread_id),
+        "interview_source_message_id": _clean_str(interview_source_message_id),
+        "interview_source_timezone": _clean_str(interview_source_timezone),
         "slot_confirmed": True,
         "slots_group_posted": True,
         "interview_attendance_status": "",
@@ -3104,6 +3121,11 @@ def assign_interview_slot(
     notes: str = "",
     interview_round: str = "",
     interview_attendee: str | None = None,
+    interview_company: str = "",
+    interview_role: str = "",
+    interview_source_thread_id: str = "",
+    interview_source_message_id: str = "",
+    interview_source_timezone: str = "",
 ) -> dict:
     """Schedule an existing candidate — first slot updates the record; later slots clone."""
     cid = _clean_str(candidate_id)
@@ -3127,6 +3149,11 @@ def assign_interview_slot(
             notes=notes,
             interview_round=interview_round,
             interview_attendee=interview_attendee,
+            interview_company=interview_company,
+            interview_role=interview_role,
+            interview_source_thread_id=interview_source_thread_id,
+            interview_source_message_id=interview_source_message_id,
+            interview_source_timezone=interview_source_timezone,
         )
 
     existing_service = _normalise_service_type(existing.get("service_type"), existing)
@@ -3163,6 +3190,13 @@ def assign_interview_slot(
     rnd = normalise_interview_round(interview_round)
     if rnd:
         patch["interview_round"] = rnd
+    patch.update({
+        "interview_company": _clean_str(interview_company),
+        "interview_role": _clean_str(interview_role),
+        "interview_source_thread_id": _clean_str(interview_source_thread_id),
+        "interview_source_message_id": _clean_str(interview_source_message_id),
+        "interview_source_timezone": _clean_str(interview_source_timezone),
+    })
     return update_candidate(cid, patch, allow_slot_without_rules=True)
 
 
@@ -3175,6 +3209,11 @@ def update_interview_slot(
     notes: str = "",
     interview_round: str = "",
     interview_attendee: str | None = None,
+    interview_company: str | None = None,
+    interview_role: str | None = None,
+    interview_source_thread_id: str | None = None,
+    interview_source_message_id: str | None = None,
+    interview_source_timezone: str | None = None,
 ) -> dict:
     """Reschedule an existing confirmed slot — updates date/time and optional notes."""
     cid = _clean_str(candidate_id)
@@ -3206,6 +3245,15 @@ def update_interview_slot(
     rnd = normalise_interview_round(interview_round)
     if rnd:
         patch["interview_round"] = rnd
+    for key, value in (
+        ("interview_company", interview_company),
+        ("interview_role", interview_role),
+        ("interview_source_thread_id", interview_source_thread_id),
+        ("interview_source_message_id", interview_source_message_id),
+        ("interview_source_timezone", interview_source_timezone),
+    ):
+        if value is not None:
+            patch[key] = _clean_str(value)
     return update_candidate(cid, patch, allow_slot_without_rules=True)
 
 

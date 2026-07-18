@@ -17,6 +17,7 @@ from services.recruitment_semantics import (
     EMAIL_INTENTS,
     classify_context,
     redact_sensitive_text,
+    validate_interview_event,
     validate_lifecycle_event,
 )
 
@@ -167,6 +168,7 @@ SCHEMA = {
         "email_intent", "document_type", "is_candidate_specific", "is_job_outcome",
         "is_current_event", "is_questionnaire", "is_promotional_or_job_ad",
         "is_historical_information", "lifecycle_event", "evidence_summary",
+        "business_domain", "interview_event",
     ],
     "properties": {
         "schema_version": {"const": "selection_offer_event_v1"},
@@ -186,6 +188,8 @@ SCHEMA = {
         "is_historical_information": {"type": "boolean"},
         "historical_employment_evidence": {"type": "boolean"},
         "lifecycle_event": {"type": "string"},
+        "business_domain": {"type": "string", "enum": ["SELECTION_TRACKING", "INTERVIEW_TRACKING", "NONE"]},
+        "interview_event": {"type": "string", "enum": ["NONE", "INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED"]},
         "evidence_summary": {"type": "string", "maxLength": 1000},
         "validation_status": {"type": "string"},
         "ai_status": {"type": "string"},
@@ -195,7 +199,10 @@ SCHEMA = {
         "company": {"type": "object", "properties": {"name": {"type": ["string", "null"]}, "domain": {"type": ["string", "null"]}}, "required": ["name", "domain"]},
         "job": {"type": "object", "properties": {"title": {"type": ["string", "null"]}, "employment_type": {"type": ["string", "null"]}, "location": {"type": ["string", "null"]}}, "required": ["title", "employment_type", "location"]},
         "recruiter": {"type": "object", "properties": {"name": {"type": ["string", "null"]}, "email": {"type": ["string", "null"]}}, "required": ["name", "email"]},
-        "interview": {"type": "object", "properties": {key: {"type": ["string", "null"]} for key in ["date", "time", "timezone", "mode", "round", "location", "meeting_link"]}, "required": ["date", "time", "timezone", "mode", "round", "location", "meeting_link"]},
+        "interview": {"type": "object", "properties": {key: {"type": ["string", "null"]} for key in [
+            "date", "time", "timezone", "mode", "round", "location", "meeting_link",
+            "original_date", "original_time", "original_timezone",
+        ]}, "required": ["date", "time", "timezone", "mode", "round", "location", "meeting_link"]},
         "offer": {"type": "object", "properties": {
             "offer_detected": {"type": "boolean"}, "offer_letter_detected": {"type": "boolean"},
             "appointment_letter_detected": {"type": "boolean"}, "offer_date": {"type": ["string", "null"]},
@@ -464,6 +471,7 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         "is_current_event", "is_questionnaire", "is_promotional_or_job_ad",
         "is_historical_information", "historical_employment_evidence",
         "lifecycle_event", "evidence_summary",
+        "business_domain", "interview_event",
     ):
         value.setdefault(key, context[key])
     value.setdefault("ai_status", "ANALYZED")
@@ -484,7 +492,11 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         value["validation_status"] = "REJECTED"
         value["lifecycle_event"] = "NONE"
         return
-    safe_status, rejection_reason = validate_lifecycle_event(value["status"], context)
+    interview_statuses = {"INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED"}
+    if value["status"] in interview_statuses:
+        safe_status, rejection_reason = validate_interview_event(value["status"], context)
+    else:
+        safe_status, rejection_reason = validate_lifecycle_event(value["status"], context)
     if safe_status == "NONE":
         value.update(
             status="IGNORED_NOT_OFFER_RELATED",
@@ -501,7 +513,10 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
             summary=context["evidence_summary"],
         )
         return
-    value["lifecycle_event"] = safe_status
+    is_interview_event = safe_status in interview_statuses
+    value["lifecycle_event"] = "NONE" if is_interview_event else safe_status
+    value["interview_event"] = safe_status if is_interview_event else "NONE"
+    value["business_domain"] = "INTERVIEW_TRACKING" if is_interview_event else "SELECTION_TRACKING"
     value["email_intent"] = context["email_intent"]
     value["document_type"] = context["document_type"]
     value["is_job_outcome"] = True
@@ -598,8 +613,11 @@ date, 12-hour AM/PM time, and timezone. Use INTERVIEW_RESCHEDULED only when the
 message clearly changes an existing interview and includes the new schedule. Use
 INTERVIEW_CANCELLED only for an explicit cancellation. A shortlist without a
 schedule is INTERVIEW_SHORTLISTED or INTERVIEW_UPDATE and must never be confirmed.
+For a reschedule or cancellation, preserve any stated prior schedule in
+interview.original_date, interview.original_time, and interview.original_timezone.
 Return IST as Asia/Kolkata. Never invent schedule, round, company, or meeting link.
-First classify email_intent and document_type. Questions, requested fields,
+First classify email_intent, document_type, business_domain, lifecycle_event, and
+interview_event. Questions, requested fields,
 questionnaires, job advertisements, payslips, and historical employment documents
 must return lifecycle_event NONE and is_job_outcome false. JOINING_CONFIRMED means
 a confirmed joining arrangement; JOINED requires an explicit statement that work
@@ -789,7 +807,10 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
     ).get("context") or {}
     models = configured_models()
 
-    def request_model(*, messages: list[dict[str, Any]], model: str, max_retries: int | None = None):
+    def request_model(
+        *, messages: list[dict[str, Any]], model: str,
+        max_retries: int | None = None, allow_fallback: bool = True,
+    ):
         """Use the lightweight fallback when the configured runner cannot serve."""
         try:
             return chat_structured(
@@ -801,7 +822,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
                 "OLLAMA_INTERNAL_ERROR", "OLLAMA_MODEL_LOAD_FAILED",
                 "OLLAMA_REQUEST_TIMEOUT",
             }
-            if not fallback or fallback == model or exc.code not in eligible:
+            if not allow_fallback or not fallback or fallback == model or exc.code not in eligible:
                 raise
             logger.warning(
                 "Recruitment model failed; retrying fallback primary=%s fallback=%s code=%s",
@@ -840,6 +861,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
                 messages=[{"role": "system", "content": VALIDATOR_PROMPT}, {"role": "user", "content": _prompt_json({"source": payload, "primary_result": primary})}],
                 model=models["validator"],
                 max_retries=0,
+                allow_fallback=False,
             )
             try:
                 validator = parse_model_json(validator_response.content)
@@ -847,7 +869,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
                 validator_response = request_model(
                     messages=[{"role": "system", "content": VALIDATOR_PROMPT + " Return valid JSON only; no markdown or commentary."},
                               {"role": "user", "content": _prompt_json({"source": payload, "primary_result": primary})}],
-                    model=validator_response.model, max_retries=0,
+                    model=validator_response.model, max_retries=0, allow_fallback=False,
                 )
                 try:
                     validator = parse_model_json(validator_response.content)

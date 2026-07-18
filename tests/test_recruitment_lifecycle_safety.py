@@ -71,6 +71,32 @@ def test_naukri_job_ad_keywords_do_not_create_outcome():
     assert result["lifecycle_event"] == "NONE"
 
 
+def test_interview_confirmation_routes_to_interview_domain_only():
+    result = classify_context(
+        "L1 interview confirmed",
+        "Your L1 technical interview is confirmed for 20 July 2026 at 3:00 PM IST.",
+    )
+    assert result["email_intent"] == "INTERVIEW_CONFIRMATION"
+    assert result["business_domain"] == "INTERVIEW_TRACKING"
+    assert result["interview_event"] == "INTERVIEW_CONFIRMED"
+    assert result["lifecycle_event"] == "NONE"
+
+
+def test_interview_reschedule_and_cancellation_are_distinct_events():
+    moved = classify_context("Interview update", "Your interview has been moved to 21 July at 11:00 AM IST.")
+    cancelled = classify_context("Interview cancelled", "Your interview scheduled for July 20 has been cancelled.")
+    assert moved["interview_event"] == "INTERVIEW_RESCHEDULED"
+    assert cancelled["interview_event"] == "INTERVIEW_CANCELLED"
+
+
+def test_interview_invitation_document_has_specific_document_type():
+    result = classify_context(
+        "Interview details", "See attachment",
+        attachments=[{"filename": "Interview Invitation.pdf", "text": "Interview schedule"}],
+    )
+    assert result["document_type"] == "INTERVIEW_INVITATION_DOCUMENT"
+
+
 def _event(event_id, candidate_id, status, *, canonical=None, validation="AUTO_VALIDATED", review="AUTO_VALIDATED"):
     return {
         "id": event_id,
