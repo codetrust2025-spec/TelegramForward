@@ -10,15 +10,26 @@ from typing import Any
 _lock = threading.Lock()
 _last_request_succeeded: bool | None = None
 _state: dict[str, Any] = {
+    "provider": "ollama",
     "status": "unavailable",
     "diagnostic_status": "NOT_CHECKED",
     "endpoint_reachable": False,
+    "service_reachable": False,
+    "serviceReachable": False,
     "configured_model": None,
+    "primary_model": None,
+    "primaryModel": None,
     "model_available": False,
+    "primary_model_available": False,
+    "primaryModelAvailable": False,
     "required_models": {},
+    "fallback_models": {},
+    "fallbackModels": {},
+    "installed_models": [],
     "missing_models": [],
     "response_time_ms": None,
     "last_checked_at": None,
+    "checkedAt": None,
     "last_successful_request_at": None,
     "last_failed_request_at": None,
     "average_response_time_ms": None,
@@ -43,7 +54,9 @@ def record_health(**values: Any) -> dict[str, Any]:
             values["error_code"] = _state.get("error_code")
             values["error_message"] = _state.get("error_message")
         _state.update(values)
-        _state["last_checked_at"] = _now()
+        checked_at = _now()
+        _state["last_checked_at"] = checked_at
+        _state["checkedAt"] = checked_at
         return deepcopy(_state)
 
 

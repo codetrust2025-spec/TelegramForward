@@ -15,6 +15,9 @@ def test_health_reports_model_availability(monkeypatch):
     assert result["endpoint_reachable"] is True
     assert result["model_available"] is True
     assert result["status"] == "healthy"
+    assert result["diagnostic_status"] == "AVAILABLE"
+    assert result["serviceReachable"] is True
+    assert result["primaryModel"] == "qwen3.6"
 
 
 def test_health_classifies_reverse_tunnel_failure(monkeypatch):
@@ -32,6 +35,26 @@ def test_health_classifies_reverse_tunnel_failure(monkeypatch):
     result = ai_gateway.health(model="qwen3.6")
     assert result["endpoint_reachable"] is False
     assert result["error_code"] == "REVERSE_SSH_TUNNEL_UNAVAILABLE"
+    assert result["diagnostic_status"] == "TUNNEL_UNREACHABLE"
+
+
+def test_health_separates_missing_primary_from_reachable_service(monkeypatch):
+    monkeypatch.setattr(
+        ai_gateway,
+        "_request_json",
+        lambda *args, **kwargs: {"models": [{"name": "qwen2.5:7b"}]},
+    )
+    result = ai_gateway.health(model="gemma4:12b")
+    assert result["serviceReachable"] is True
+    assert result["primaryModelAvailable"] is False
+    assert result["diagnostic_status"] == "PRIMARY_MODEL_MISSING"
+
+
+def test_invalid_base_url_is_configuration_error(monkeypatch):
+    monkeypatch.setenv("OLLAMA_BASE_URL", "not-a-url")
+    result = ai_gateway.health(model="gemma4:12b")
+    assert result["diagnostic_status"] == "CONFIGURATION_ERROR"
+    assert result["serviceReachable"] is False
 
 
 def test_missing_model_stops_before_chat(monkeypatch):

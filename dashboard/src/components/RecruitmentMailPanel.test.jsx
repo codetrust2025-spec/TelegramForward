@@ -14,6 +14,15 @@ import {
 import { ConfirmProvider } from "../context/ConfirmContext.jsx";
 
 const payloadFor = (url) => {
+  if (url.includes("/ollama/status"))
+    return {
+      status: "ok",
+      ollama: {
+        status: "healthy",
+        diagnostic_status: "AVAILABLE",
+        last_checked_at: "2026-07-18T10:15:31Z",
+      },
+    };
   if (url.includes("/dashboard"))
     return {
       status: "ok",
@@ -108,6 +117,23 @@ describe("RecruitmentMailPanel", () => {
       ).toBeInTheDocument(),
     );
     expect(screen.queryByText("Request failed")).not.toBeInTheDocument();
+  });
+  it("refreshes Ollama health without reloading the page", async () => {
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+    expect(await screen.findByText("Ollama Available")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Refresh/ }));
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.some(([url]) =>
+          String(url).includes("/ollama/status?refresh=true&_="),
+        ),
+      ).toBe(true),
+    );
+    expect(screen.getByText(/Last updated:/)).not.toHaveTextContent("Loading");
   });
   it("offers an add candidate Gmail form for candidates without a mailbox", async () => {
     render(
