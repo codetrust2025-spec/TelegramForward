@@ -771,6 +771,15 @@ def _reconcile_model_results(primary: dict[str, Any], validator: dict[str, Any])
     return chosen
 
 
+def _prompt_json(value: Any) -> str:
+    """Serialize provider timestamps and other scalar metadata for model prompts."""
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        default=lambda item: item.isoformat() if hasattr(item, "isoformat") else str(item),
+    )
+
+
 def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | None = None) -> tuple[dict[str, Any], str, int]:
     payload = _analysis_payload(message, attachment_texts)
     routing_context = routing_decision(
@@ -804,7 +813,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
 
     try:
         primary_response = request_model(
-            messages=[{"role": "system", "content": CLASSIFIER_PROMPT}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+            messages=[{"role": "system", "content": CLASSIFIER_PROMPT}, {"role": "user", "content": _prompt_json(payload)}],
             model=models["primary"],
         )
         try:
@@ -813,7 +822,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
             # One bounded repair retry with an explicit JSON-only instruction.
             repair_response = request_model(
                 messages=[{"role": "system", "content": CLASSIFIER_PROMPT + " Return valid JSON only; no markdown or commentary."},
-                          {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+                          {"role": "user", "content": _prompt_json(payload)}],
                 model=primary_response.model, max_retries=0,
             )
             try:
@@ -827,7 +836,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
         duration = primary_response.duration_ms
         if _requires_independent_validation(primary, routing_context):
             validator_response = request_model(
-                messages=[{"role": "system", "content": VALIDATOR_PROMPT}, {"role": "user", "content": json.dumps({"source": payload, "primary_result": primary}, ensure_ascii=False)}],
+                messages=[{"role": "system", "content": VALIDATOR_PROMPT}, {"role": "user", "content": _prompt_json({"source": payload, "primary_result": primary})}],
                 model=models["validator"],
             )
             try:
