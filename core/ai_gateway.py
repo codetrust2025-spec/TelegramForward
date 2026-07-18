@@ -75,6 +75,8 @@ def _safe_message(code: str) -> str:
         "OLLAMA_CONNECTION_FAILED": "The Ollama endpoint could not be reached.",
         "OLLAMA_REQUEST_TIMEOUT": "The Ollama model response timed out.",
         "OLLAMA_MODEL_NOT_FOUND": "The configured Ollama model is not installed.",
+        "OLLAMA_OPTIONAL_MODEL_MISSING": "Ollama is reachable, but one or more fallback models are not installed.",
+        "OLLAMA_CONFIGURATION_ERROR": "The Ollama endpoint configuration is invalid.",
         "OLLAMA_EMPTY_RESPONSE": "Ollama returned an empty response.",
         "OLLAMA_INVALID_JSON": "Ollama returned invalid JSON.",
         "OLLAMA_SCHEMA_VALIDATION_FAILED": "The Ollama response did not match the required schema.",
@@ -101,6 +103,12 @@ def _http_error_code(status: int, raw: str) -> str:
 
 def _request_json(path: str, *, method: str = "GET", body: bytes | None = None, connect_timeout: float, response_timeout: float) -> dict[str, Any]:
     parsed = urllib.parse.urlsplit(_base_url())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        logger.error("Invalid OLLAMA_BASE_URL configuration")
+        raise AIGatewayError(
+            _safe_message("OLLAMA_CONFIGURATION_ERROR"),
+            code="OLLAMA_CONFIGURATION_ERROR",
+        )
     connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
     connection = connection_type(parsed.hostname, parsed.port, timeout=connect_timeout)
     try:
@@ -231,29 +239,57 @@ def health(*, model: str | None = None, timeout: float | None = None) -> dict[st
         )
         required = {name: _model_available(name, models) for name in required_names if name}
         available = required.get(configured, False)
-        all_required = all(required.values())
+        fallback_models = {
+            name: present for name, present in required.items() if name != configured
+        }
+        optional_missing = [name for name, present in fallback_models.items() if not present]
+        diagnostic = (
+            "PRIMARY_MODEL_MISSING" if not available
+            else "OPTIONAL_MODEL_MISSING" if optional_missing
+            else "AVAILABLE"
+        )
+        error_code = (
+            "OLLAMA_MODEL_NOT_FOUND" if not available
+            else "OLLAMA_OPTIONAL_MODEL_MISSING" if optional_missing
+            else None
+        )
         return ollama_status.record_health(
-            status="healthy" if available and all_required else "degraded",
-            diagnostic_status="AVAILABLE" if available and all_required else "MODEL_NOT_FOUND",
+            provider="ollama",
+            status="healthy" if available and not optional_missing else "degraded",
+            diagnostic_status=diagnostic,
             endpoint_reachable=True,
+            service_reachable=True,
+            serviceReachable=True,
             configured_model=configured,
+            primary_model=configured,
+            primaryModel=configured,
             model_available=available,
+            primary_model_available=available,
+            primaryModelAvailable=available,
             required_models=required,
+            fallback_models=fallback_models,
+            fallbackModels=fallback_models,
+            installed_models=models,
             missing_models=[name for name, present in required.items() if not present],
             response_time_ms=elapsed,
-            error_code=None if available and all_required else "OLLAMA_MODEL_NOT_FOUND",
-            error_message=None if available and all_required else _safe_message("OLLAMA_MODEL_NOT_FOUND"),
+            error_code=error_code,
+            error_message=_safe_message(error_code) if error_code else None,
         )
     except AIGatewayError as exc:
         diagnostic = {
-            "REVERSE_SSH_TUNNEL_UNAVAILABLE": "TUNNEL_ERROR",
+            "REVERSE_SSH_TUNNEL_UNAVAILABLE": "TUNNEL_UNREACHABLE",
             "OLLAMA_CONNECTION_FAILED": "SERVICE_UNREACHABLE",
             "OLLAMA_REQUEST_TIMEOUT": "TIMEOUT",
-            "OLLAMA_MODEL_NOT_FOUND": "MODEL_NOT_FOUND",
+            "OLLAMA_MODEL_NOT_FOUND": "PRIMARY_MODEL_MISSING",
+            "OLLAMA_CONFIGURATION_ERROR": "CONFIGURATION_ERROR",
         }.get(exc.code, "INTERNAL_ERROR")
         return ollama_status.record_health(
-            status="unavailable", endpoint_reachable=False, configured_model=configured,
+            provider="ollama", status="unavailable", endpoint_reachable=False,
+            service_reachable=False, serviceReachable=False,
+            configured_model=configured, primary_model=configured, primaryModel=configured,
             model_available=False, response_time_ms=int((time.monotonic() - started) * 1000),
-            diagnostic_status=diagnostic, required_models={}, missing_models=[],
+            primary_model_available=False, primaryModelAvailable=False,
+            diagnostic_status=diagnostic, required_models={}, fallback_models={},
+            fallbackModels={}, installed_models=[], missing_models=[],
             error_code=exc.code, error_message=str(exc),
         )

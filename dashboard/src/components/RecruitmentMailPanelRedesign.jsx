@@ -835,6 +835,7 @@ export default function RecruitmentMailPanelRedesign() {
   const [evidenceId, setEvidenceId] = useState(null);
   const [updatedAt, setUpdatedAt] = useState(null);
   const [aiStatus, setAiStatus] = useState(null);
+  const [refreshingAi, setRefreshingAi] = useState(false);
   const [range, setRange] = useState({
     range_start: new Date(Date.now() - 29 * 86400000)
       .toISOString()
@@ -912,14 +913,32 @@ export default function RecruitmentMailPanelRedesign() {
   useEffect(() => {
     load();
   }, [load]);
+  const refreshOllama = useCallback(async (interactive = true) => {
+    if (interactive) setRefreshingAi(true);
+    try {
+      const body = await request(
+        `/api/ai-recruitment/ollama/status?refresh=true&_=${Date.now()}`,
+      );
+      setAiStatus(body.ollama || null);
+      setUpdatedAt(new Date(body.ollama?.last_checked_at || Date.now()));
+    } catch (error) {
+      setAiStatus({
+        status: "unavailable",
+        diagnostic_status: "INTERNAL_ERROR",
+        error_code: "DIAGNOSTICS_REQUEST_FAILED",
+        error_message: error.message,
+      });
+      setUpdatedAt(new Date());
+    } finally {
+      if (interactive) setRefreshingAi(false);
+    }
+  }, []);
   useEffect(() => {
     const timer = window.setInterval(() => {
-      request("/api/ai-recruitment/ollama/status?refresh=true")
-        .then((body) => setAiStatus(body.ollama || null))
-        .catch(() => undefined);
+      refreshOllama(false);
     }, 60000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [refreshOllama]);
   const activeSyncSignature = mailboxes
     .filter((row) =>
       ["QUEUED", "RUNNING"].includes(
@@ -1265,12 +1284,22 @@ export default function RecruitmentMailPanelRedesign() {
             className={`sot-ai-status is-${aiStatus?.status || "unknown"}`}
             title={aiStatus?.error_message || "Local Ollama status"}
           >
-            Ollama {human(aiStatus?.status || "not checked")}
+            Ollama{" "}
+            {aiStatus?.status === "healthy"
+              ? "Available"
+              : human(
+                  aiStatus?.diagnostic_status ||
+                    aiStatus?.status ||
+                    "not checked",
+                )}
           </span>
           <span>
             Last updated: {updatedAt ? formatTime(updatedAt) : "Loading…"}
           </span>
-          <button onClick={load} disabled={busy}>
+          <button
+            onClick={() => refreshOllama(true)}
+            disabled={busy || refreshingAi}
+          >
             ↻ Refresh
           </button>
         </div>
