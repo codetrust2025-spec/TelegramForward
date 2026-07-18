@@ -52,11 +52,11 @@ def test_non_iso_offer_dates_are_rejected():
 
 def test_central_recruitment_model_routes_use_required_defaults(monkeypatch):
     from core.ai_model_routing import configured_model_routes
-    for name in ('OLLAMA_MAIL_MODEL','AI_RECRUITMENT_MODEL','AI_RECRUITMENT_VALIDATOR_MODEL','AI_RECRUITMENT_FALLBACK_MODEL','OLLAMA_VISION_MODEL'):
+    for name in ('OLLAMA_PRIMARY_MODEL','OLLAMA_MAIL_MODEL','AI_RECRUITMENT_MODEL','AI_RECRUITMENT_VALIDATOR_MODEL','AI_RECRUITMENT_FALLBACK_MODEL','OLLAMA_VISION_MODEL'):
         monkeypatch.delenv(name,raising=False)
     assert configured_model_routes() == {
-        'recruitment_email_primary':'qwen2.5:7b',
-        'recruitment_email_validator':'gemma2:2b',
+        'recruitment_email_primary':'gemma4:12b',
+        'recruitment_email_validator':'qwen2.5:7b',
         'recruitment_document_vision':'qwen2.5vl:7b',
     }
 

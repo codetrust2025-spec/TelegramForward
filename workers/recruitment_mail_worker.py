@@ -16,7 +16,7 @@ def _publish(event_type:str,**payload):
         logger.debug('Mail real-time event unavailable type=%s',event_type,exc_info=True)
 
 class RecruitmentMailWorker:
-    def __init__(self):self._task=None;self._stopping=False;self._jobs=set();self._last_watch_renewal=0.0
+    def __init__(self):self._task=None;self._stopping=False;self._jobs=set();self._last_watch_renewal=0.0;self._last_ai_recovery=0.0
     def start(self):
         if self._task is None or self._task.done():
             store.recover_interrupted_jobs()
@@ -34,6 +34,8 @@ class RecruitmentMailWorker:
                     await asyncio.to_thread(self.schedule_due)
                     if time.monotonic()-self._last_watch_renewal>=900:
                         await asyncio.to_thread(self.renew_due_watches);self._last_watch_renewal=time.monotonic()
+                    if time.monotonic()-self._last_ai_recovery>=60:
+                        await asyncio.to_thread(self.process_ai_recovery);self._last_ai_recovery=time.monotonic()
                     self._jobs={task for task in self._jobs if not task.done()}
                     maximum=max(1,min(20,int(os.getenv('AI_MAIL_SYNC_MAX_CONCURRENCY','5'))))
                     while len(self._jobs)<maximum:
@@ -77,6 +79,26 @@ class RecruitmentMailWorker:
                 logger.info('Gmail watch renewed mailbox_id=%s',mailbox_id)
             except Exception:
                 logger.exception('Gmail watch renewal failed mailbox_id=%s; polling fallback remains active',mailbox_id)
+    def process_ai_recovery(self):
+        """Safely reprocess stored retry-pending messages when Ollama returns."""
+        from core.ai_gateway import health
+        status=health(timeout=5)
+        if not status.get('endpoint_reachable') or not status.get('model_available'):
+            return
+        for row in store.retry_pending_messages(limit=max(1,min(20,int(os.getenv('AI_MAIL_AI_RETRY_BATCH_SIZE','10'))))):
+            mailbox={'id':row['mailbox_id'],'candidate_id':row.get('mailbox_candidate_id') or row.get('candidate_id'),'email_address':row.get('email_address')}
+            decoded={'provider_message_id':row.get('provider_message_id'),'provider_thread_id':row.get('provider_thread_id'),
+              'sender_name':row.get('sender_name'),'sender_email':row.get('sender_email'),'recipient_email':row.get('recipient_email'),
+              'subject':row.get('subject'),'sent_at':row.get('sent_at'),'body':row.get('body_text') or '',
+              'html_body':row.get('html_body_text') or ''}
+            try:
+                event=process_message(mailbox,decoded,row.get('attachments') or [],reprocess=True)
+                pending=bool(event and str(event.get('validation_status') or '').upper()=='RETRY_PENDING')
+                store.schedule_ai_retry(row['id'],succeeded=not pending)
+                if not pending:logger.info('AI retry completed message_id=%s',row['id'])
+            except Exception:
+                store.schedule_ai_retry(row['id'],succeeded=False)
+                logger.exception('AI retry failed message_id=%s',row['id'])
     def process_job(self,job):
         mailbox=store.mailbox_by_id(job['mailbox_id']);counts={'fetched':0,'processed':0,'events':0}
         if not mailbox:store.finish_job(job['id'],status='FAILED',error='Mailbox not found');return

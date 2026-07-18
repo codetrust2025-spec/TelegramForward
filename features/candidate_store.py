@@ -2876,20 +2876,42 @@ def get_candidate_detail(cid: str) -> dict | None:
 
 
 def candidate_identity_ids(cid: str) -> list[str]:
-    """Return every legacy row id that represents the same phone identity."""
+    """Return legacy row ids linked by explicit profile, phone, or email identity."""
+    try:
+        from core.db.connection import get_connection, use_postgres
+        if use_postgres():
+            with get_connection() as conn, conn.cursor() as cur:
+                cur.execute("""SELECT canonical_candidate_id FROM candidate_identity_links
+                  WHERE alias_candidate_id=%s""",(str(cid),))
+                found=cur.fetchone()
+                if found:
+                    cur.execute("""SELECT alias_candidate_id FROM candidate_identity_links
+                      WHERE canonical_candidate_id=%s ORDER BY alias_candidate_id""",(str(found[0]),))
+                    aliases=[str(row[0]) for row in cur.fetchall()]
+                    if aliases:return aliases
+    except Exception:
+        pass
     rows = _load().get("candidates") or []
     source = next((row for row in rows if str(row.get("id")) == str(cid)), None)
     if not source:
         return [str(cid)]
     phone_key = candidate_phone_identity(source.get("phone"))
-    if not phone_key:
-        return [str(cid)]
-    aliases = [
-        str(row.get("id"))
-        for row in rows
-        if row.get("id")
-        and candidate_phone_identity(row.get("phone")) == phone_key
-    ]
+    email_key = str(source.get("email") or "").strip().casefold()
+    explicit = str(source.get("canonical_candidate_id") or source.get("profile_candidate_id") or "").strip()
+    aliases=[]
+    for row in rows:
+        row_id=str(row.get("id") or "")
+        if not row_id:continue
+        row_phone=candidate_phone_identity(row.get("phone"))
+        row_email=str(row.get("email") or "").strip().casefold()
+        row_explicit=str(row.get("canonical_candidate_id") or row.get("profile_candidate_id") or "").strip()
+        if (
+            (phone_key and row_phone==phone_key)
+            or (email_key and '@' in email_key and row_email==email_key)
+            or (explicit and (row_id==explicit or row_explicit==explicit))
+            or row_explicit==str(cid)
+        ):
+            aliases.append(row_id)
     return aliases or [str(cid)]
 
 

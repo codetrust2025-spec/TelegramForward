@@ -17,7 +17,14 @@ const payloadFor = (url) => {
   if (url.includes("/dashboard"))
     return {
       status: "ok",
-      metrics: { selections_detected: 1 },
+      metrics: {
+        selected: 1,
+        offers_received: 0,
+        offers_accepted: 0,
+        joining_confirmed: 5,
+        joined: 0,
+        needs_review: 0,
+      },
       charts: {},
       flags: [],
     };
@@ -69,6 +76,12 @@ describe("RecruitmentMailPanel", () => {
     expect(screen.getByText("Selected").closest("article")).toHaveTextContent(
       "1",
     );
+    expect(
+      screen.getByText("Joining Confirmed").closest("article"),
+    ).toHaveTextContent("5");
+    expect(screen.getByText("Joined").closest("article")).toHaveTextContent(
+      "0",
+    );
     expect(screen.getByRole("button", { name: "Mailboxes" })).toHaveClass(
       "active",
     );
@@ -112,10 +125,9 @@ describe("RecruitmentMailPanel", () => {
     expect(
       screen.getByRole("option", { name: /Test Candidate/ }),
     ).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("candidate@gmail.com")).toHaveAttribute(
-      "type",
-      "email",
-    );
+    expect(
+      screen.getByPlaceholderText(/^candidate@gmail\.com/),
+    ).toHaveAttribute("type", "email");
     expect(
       screen.getByRole("button", { name: "Connect Gmail" }),
     ).toBeDisabled();

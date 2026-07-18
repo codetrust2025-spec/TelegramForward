@@ -179,7 +179,8 @@ def test_appointment_attachment_requires_document_content():
 def test_context_dependent_joining_background_and_salary_rules():
     assert agent.prefilter_decision("Joining","Please confirm your date of joining.")["qualified"] is False
     thread=[{"subject":"Offer letter","body":"You have been selected for the role."}]
-    assert agent.prefilter_decision("Joining","Please confirm your date of joining.",thread_context=thread)["status"] == "JOINING_CONFIRMED"
+    # A request remains a request even when an older thread contains an offer.
+    assert agent.prefilter_decision("Joining","Please confirm your date of joining.",thread_context=thread)["status"] == "IGNORED_NOT_OFFER_RELATED"
     assert agent.prefilter_decision("Background verification initiated","Please provide documents.")["status"] == "BACKGROUND_VERIFICATION"
     assert agent.prefilter_decision("Salary discussion","Let us discuss compensation.")["qualified"] is False
     background=agent.prefilter_decision("Background verification initiated","Your offer is approved. Complete background verification.")
@@ -242,7 +243,7 @@ def test_historical_false_positive_is_archived_from_all_consumers(monkeypatch):
     assert archived[0][1]["status"] == "IGNORED_NOT_OFFER_RELATED"
 
 
-def test_ai_failure_preserves_strong_joining_evidence_for_manual_review(monkeypatch):
+def test_ai_failure_never_promotes_strong_keywords_to_lifecycle_truth(monkeypatch):
     statuses=[]; created=[]
     monkeypatch.setattr(agent.store,"insert_message",lambda *args:({"id":"stored-message","processing_status":"FILTERED"},True))
     monkeypatch.setattr(agent.store,"is_duplicate_content",lambda *args:False)
@@ -257,13 +258,13 @@ def test_ai_failure_preserves_strong_joining_evidence_for_manual_review(monkeypa
         message("Congratulations and Next Steps", "Your date of joining will be 15th July 2026."),
         [],
     )
-    assert result["primary_status"] == "JOINING_CONFIRMED"
-    assert statuses == []
+    assert result["primary_status"] == "MANUAL_REVIEW_REQUIRED"
+    assert statuses == ["AI_RETRY_PENDING"]
     assert created[0][0][2]["requires_manual_review"] is True
-    assert "AI_UNAVAILABLE_MANUAL_REVIEW" in created[0][0][2]["risk_flags"]
-    assert created[0][1]["model"] == "semantic-router-v3|fallback:ollama_internal_error"
-    assert created[0][0][2]["classification_source"] == "FALLBACK"
-    assert created[0][0][2]["ai_validation_status"] == "UNAVAILABLE"
+    assert created[0][0][2]["lifecycle_event"] == "NONE"
+    assert created[0][1]["model"] == "unavailable:runtimeerror"
+    assert created[0][0][2]["classification_source"] == "FAILURE_REVIEW"
+    assert created[0][0][2]["ai_validation_status"] == "RETRY_PENDING"
 
 
 def test_high_impact_joining_result_uses_independent_validator(monkeypatch):

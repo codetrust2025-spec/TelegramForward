@@ -138,7 +138,7 @@ def configured_models() -> dict[str, str]:
         "validator": routes["recruitment_email_validator"],
         "vision": routes["recruitment_document_vision"],
         # Kept for callers that still use the old generic gateway vocabulary.
-        "fallback": (os.getenv("AI_RECRUITMENT_FALLBACK_MODEL") or os.getenv("OLLAMA_REASONING_MODEL") or "qwen2.5:7b").strip(),
+        "fallback": (os.getenv("OLLAMA_FALLBACK_MODEL") or os.getenv("AI_RECRUITMENT_FALLBACK_MODEL") or os.getenv("OLLAMA_REASONING_MODEL") or "qwen2.5:7b").strip(),
     }
 
 
@@ -224,19 +224,36 @@ def health(*, model: str | None = None, timeout: float | None = None) -> dict[st
         )
         models = [str(item.get("name") or item.get("model") or "") for item in payload.get("models", [])]
         elapsed = int((time.monotonic() - started) * 1000)
-        available = _model_available(configured, models)
+        routes = configured_models()
+        required_names = (
+            dict.fromkeys((configured,)) if model is not None
+            else dict.fromkeys((configured, routes["fallback"], routes["vision"], routes["validator"]))
+        )
+        required = {name: _model_available(name, models) for name in required_names if name}
+        available = required.get(configured, False)
+        all_required = all(required.values())
         return ollama_status.record_health(
-            status="healthy" if available else "degraded",
+            status="healthy" if available and all_required else "degraded",
+            diagnostic_status="AVAILABLE" if available and all_required else "MODEL_NOT_FOUND",
             endpoint_reachable=True,
             configured_model=configured,
             model_available=available,
+            required_models=required,
+            missing_models=[name for name, present in required.items() if not present],
             response_time_ms=elapsed,
-            error_code=None if available else "OLLAMA_MODEL_NOT_FOUND",
-            error_message=None if available else _safe_message("OLLAMA_MODEL_NOT_FOUND"),
+            error_code=None if available and all_required else "OLLAMA_MODEL_NOT_FOUND",
+            error_message=None if available and all_required else _safe_message("OLLAMA_MODEL_NOT_FOUND"),
         )
     except AIGatewayError as exc:
+        diagnostic = {
+            "REVERSE_SSH_TUNNEL_UNAVAILABLE": "TUNNEL_ERROR",
+            "OLLAMA_CONNECTION_FAILED": "SERVICE_UNREACHABLE",
+            "OLLAMA_REQUEST_TIMEOUT": "TIMEOUT",
+            "OLLAMA_MODEL_NOT_FOUND": "MODEL_NOT_FOUND",
+        }.get(exc.code, "INTERNAL_ERROR")
         return ollama_status.record_health(
             status="unavailable", endpoint_reachable=False, configured_model=configured,
             model_available=False, response_time_ms=int((time.monotonic() - started) * 1000),
+            diagnostic_status=diagnostic, required_models={}, missing_models=[],
             error_code=exc.code, error_message=str(exc),
         )

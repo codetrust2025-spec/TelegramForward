@@ -7,10 +7,12 @@ from typing import Any
 
 ALLOWED_STATUSES = (
     "SELECTED", "FINAL_SELECTION_CONFIRMED",
+    "OFFER_INDICATION", "OFFER_IN_PROGRESS", "OFFER_APPROVED",
     "OFFER_LETTER_RECEIVED", "APPOINTMENT_LETTER_RECEIVED",
     "OFFER_ACCEPTED", "JOINING_CONFIRMED",
     "JOINED", "POST_SELECTION_ONBOARDING",
     "INTERVIEW_CONFIRMED", "INTERVIEW_SHORTLISTED",
+    "MANUAL_REVIEW_REQUIRED",
 )
 IGNORED_STATUSES = {
     "IGNORED_NOT_OFFER_RELATED", "IGNORED_LOW_CONFIDENCE", "NO_RELEVANT_STATUS",
@@ -55,7 +57,20 @@ def should_show_in_selection_offer_review(event: dict[str, Any]) -> bool:
     
     # Require evidence and high confidence
     evidence = _evidence(event)
-    if not evidence or float(event.get("confidence") or 0) < 0.8:
+    validation = str(event.get("validation_status") or (event.get("structured_result") or {}).get("validation_status") or "").upper()
+    retry_pending = status == "MANUAL_REVIEW_REQUIRED" and validation == "RETRY_PENDING"
+    if status == "MANUAL_REVIEW_REQUIRED" and not retry_pending:
+        meanings = {
+            str(item.get("meaning") or "").upper()
+            for item in evidence if isinstance(item, dict)
+        }
+        strong_meanings=(set(ALLOWED_STATUSES)-{"MANUAL_REVIEW_REQUIRED"}) | {
+            "JOB_SELECTION_CONFIRMED","OFFER_RECEIVED","OFFER_ACCEPTED",
+            "JOINING_CONFIRMED","ONBOARDING_STARTED",
+        }
+        if not meanings.intersection(strong_meanings):
+            return False
+    if not retry_pending and (not evidence or float(event.get("confidence") or 0) < 0.8):
         return False
     
     # For interview statuses, require explicit date/time details
@@ -78,6 +93,8 @@ def cleanup_reason(event: dict[str, Any]) -> str | None:
     subject = str(event.get("subject") or "").casefold()
     sender = " ".join(str(event.get(key) or "") for key in ("sender_name", "sender_email")).casefold()
     summary = str(event.get("summary") or "").casefold()
+    if "interview" in subject:
+        return "INTERVIEW_OR_ASSESSMENT"
     
     # Filter out noise - profile views, recommendations, generic updates
     noise_patterns = [
@@ -139,8 +156,10 @@ def qualified_event_sql(alias: str = "e") -> tuple[str, list[Any]]:
       AND {alias}.primary_status NOT IN('IGNORED_NOT_OFFER_RELATED','IGNORED_LOW_CONFIDENCE','NO_RELEVANT_STATUS')
       AND {alias}.review_status NOT IN('IGNORED','FALSE_POSITIVE','DUPLICATE')
       AND COALESCE({alias}.visible_in_offer_review,true)=true
-      AND {alias}.confidence>=0.8
-      AND jsonb_array_length(COALESCE({alias}.structured_result->'evidence','[]'::jsonb))>0
+      AND (({alias}.primary_status='MANUAL_REVIEW_REQUIRED' AND COALESCE({alias}.validation_status,{alias}.structured_result->>'validation_status')='RETRY_PENDING') OR (
+        {alias}.confidence>=0.8
+        AND jsonb_array_length(COALESCE({alias}.structured_result->'evidence','[]'::jsonb))>0
+      ))
       AND ({alias}.primary_status NOT IN('INTERVIEW_CONFIRMED','INTERVIEW_SHORTLISTED') OR (
         COALESCE(({alias}.structured_result->'interview'->>'date'),'') <> ''
       ))"""
