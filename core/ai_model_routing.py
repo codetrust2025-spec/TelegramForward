@@ -10,7 +10,7 @@ import os
 
 
 MODEL_ROUTES = {
-    "recruitment_email_primary": ("OLLAMA_PRIMARY_MODEL", "gemma4:12b"),
+    "recruitment_email_primary": ("OLLAMA_PRIMARY_MODEL", "qwen2.5:7b"),
     "recruitment_email_validator": ("AI_RECRUITMENT_VALIDATOR_MODEL", "qwen2.5:7b"),
     "recruitment_document_vision": ("OLLAMA_VISION_MODEL", "qwen2.5vl:7b"),
 }

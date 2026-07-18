@@ -133,6 +133,77 @@ def _confirmed_slots(candidate: dict[str, Any]) -> list[dict[str, Any]]:
     return [row for row in _candidate_slots(candidate) if row.get("slot_confirmed") and row.get("date")]
 
 
+def _same_text(left: Any, right: Any) -> bool:
+    return bool(str(left or "").strip()) and str(left or "").strip().casefold() == str(right or "").strip().casefold()
+
+
+def _reference_schedule(result: dict[str, Any], classification: str) -> dict[str, str] | None:
+    """Normalize an explicitly stated old/cancelled schedule without requiring it to be future."""
+    interview = result.get("interview") or {}
+    prefix = "original_" if classification == "interview_rescheduled" else ""
+    day = str(interview.get(f"{prefix}date") or "").strip()
+    raw_time = str(interview.get(f"{prefix}time") or "").strip()
+    timezone_name = str(interview.get(f"{prefix}timezone") or "").strip()
+    if not (day and raw_time and timezone_name):
+        return None
+    try:
+        source_day = date.fromisoformat(day)
+        source_time = parse_interview_time(raw_time)
+        source_zone = validate_timezone(timezone_name)
+    except (ValueError, BookingValidationError):
+        return None
+    source_dt = datetime.combine(source_day, datetime.strptime(source_time, "%H:%M").time(), source_zone)
+    local = source_dt.astimezone(ZoneInfo("Asia/Kolkata"))
+    return {"date": local.date().isoformat(), "time": local.strftime("%H:%M")}
+
+
+def _resolve_existing_slot(
+    slots: list[dict[str, Any]], *, result: dict[str, Any], message: dict[str, Any], classification: str,
+) -> dict[str, Any]:
+    """Resolve one slot using stable interview identity; never pick an arbitrary recent row."""
+    if not slots:
+        raise BookingValidationError("BOOKING_NOT_FOUND", "No active interview booking was found.")
+    if len(slots) == 1:
+        return slots[0]
+    interview = result.get("interview") or {}
+    company = (result.get("company") or {}).get("name")
+    role = (result.get("job") or {}).get("title")
+    round_name = interview.get("round")
+    thread_id = message.get("provider_thread_id")
+    reference = _reference_schedule(result, classification)
+    ranked: list[tuple[int, dict[str, Any]]] = []
+    for row in slots:
+        score = 0
+        if thread_id and _same_text(row.get("interview_source_thread_id"), thread_id):
+            score += 100
+        if reference and str(row.get("date") or "")[:10] == reference["date"] and str(row.get("time") or "")[:5] == reference["time"]:
+            score += 80
+        if round_name and _same_text(candidate_store.normalise_interview_round(row.get("interview_round")), candidate_store.normalise_interview_round(round_name)):
+            score += 30
+        if company and _same_text(row.get("interview_company"), company):
+            score += 20
+        if role and _same_text(row.get("interview_role"), role):
+            score += 15
+        ranked.append((score, row))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    if ranked[0][0] <= 0 or (len(ranked) > 1 and ranked[0][0] == ranked[1][0]):
+        raise BookingValidationError(
+            "BOOKING_AMBIGUOUS",
+            "Multiple active interview slots match this candidate; the source email does not identify one safely.",
+        )
+    return ranked[0][1]
+
+
+def _booking_metadata(result: dict[str, Any], message: dict[str, Any], schedule: dict[str, str] | None) -> dict[str, str]:
+    return {
+        "interview_company": str((result.get("company") or {}).get("name") or ""),
+        "interview_role": str((result.get("job") or {}).get("title") or ""),
+        "interview_source_thread_id": str(message.get("provider_thread_id") or ""),
+        "interview_source_message_id": str(message.get("provider_message_id") or ""),
+        "interview_source_timezone": str((schedule or {}).get("source_timezone") or ""),
+    }
+
+
 def execute_auto_booking(
     *, mailbox: dict[str, Any], message: dict[str, Any], event: dict[str, Any],
     result: dict[str, Any], correlation_id: str | None = None,
@@ -197,26 +268,29 @@ def _execute_auto_booking(
                 candidate_id=str(candidate["id"]), date=schedule["date"], time=schedule["time"],
                 time_end=schedule["time_end"], interview_round=str((result.get("interview") or {}).get("round") or ""),
                 notes="Automatically booked from validated interview email (AI Mail Monitoring).",
+                **_booking_metadata(result, message, schedule),
             )
             booking_status, event_type = "Auto Booked", "slot_auto_booked"
         elif classification == "interview_rescheduled":
-            if not slots:
-                raise BookingValidationError("BOOKING_NOT_FOUND", "No active interview booking was found to reschedule.", payment_status="PASSED")
-            previous = dict(slots[0]) if len(slots) == 1 else None
-            booking, _ = candidate_store.reschedule_confirmed_interview_slot_by_name(
-                str(candidate.get("name") or ""), date=schedule["date"], time=schedule["time"],
+            target = _resolve_existing_slot(slots, result=result, message=message, classification=classification)
+            conflicts = candidate_store.find_interview_slot_conflicts(
+                schedule["date"], schedule["time"], schedule["time_end"], exclude_candidate_id=str(target["id"]),
+            )
+            if conflicts:
+                raise BookingValidationError("SLOT_CONFLICT", "The rescheduled interview overlaps an existing confirmed slot.", payment_status="PASSED", conflict_status="CONFLICT")
+            previous = dict(target)
+            booking = candidate_store.update_interview_slot(
+                candidate_id=str(target["id"]), date=schedule["date"], time=schedule["time"],
                 time_end=schedule["time_end"], interview_round=str((result.get("interview") or {}).get("round") or ""),
-                notes="Rescheduled from validated interview email (AI Mail Monitoring).", source="AI Mail Monitoring",
+                notes="Rescheduled from validated interview email (AI Mail Monitoring).",
+                **_booking_metadata(result, message, schedule),
             )
             duplicate_status, conflict_status = "PASSED", "PASSED"
             booking_status, event_type = "Rescheduled", "interview_rescheduled"
         else:
-            if not slots:
-                raise BookingValidationError("BOOKING_NOT_FOUND", "No active interview booking was found to cancel.")
-            previous = dict(slots[0]) if len(slots) == 1 else None
-            booking, _ = candidate_store.cancel_confirmed_interview_slot_by_name(
-                str(candidate.get("name") or ""), source="AI Mail Monitoring",
-            )
+            target = _resolve_existing_slot(slots, result=result, message=message, classification=classification)
+            previous = dict(target)
+            booking = candidate_store.cancel_interview_slot(candidate_id=str(target["id"]))
             payment_status, duplicate_status, conflict_status = "NOT_REQUIRED", "PASSED", "NOT_REQUIRED"
             booking_status, event_type = "Cancelled", "interview_cancelled"
         audit = mail_store.record_booking_audit(

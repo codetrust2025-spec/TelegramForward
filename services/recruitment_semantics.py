@@ -14,7 +14,8 @@ from typing import Any
 EMAIL_INTENTS = {
     "JOB_ADVERTISEMENT", "JOB_REQUIREMENT", "RECRUITER_QUESTIONNAIRE",
     "CANDIDATE_DETAILS_REQUEST", "JOB_APPLICATION_UPDATE",
-    "INTERVIEW_INVITATION", "SELECTION_CONFIRMATION", "OFFER_LETTER",
+    "INTERVIEW_INVITATION", "INTERVIEW_CONFIRMATION", "INTERVIEW_RESCHEDULE",
+    "INTERVIEW_CANCELLATION", "SELECTION_CONFIRMATION", "OFFER_LETTER",
     "OFFER_ACCEPTANCE", "JOINING_CONFIRMATION",
     "ACTUAL_JOINING_CONFIRMATION", "REJECTION", "DOCUMENT_SUBMISSION",
     "EMPLOYMENT_DOCUMENT", "GENERAL", "UNKNOWN",
@@ -25,7 +26,7 @@ DOCUMENT_TYPES = {
     "JOINING_LETTER", "EXPERIENCE_LETTER", "RELIEVING_LETTER",
     "EMPLOYMENT_VERIFICATION", "BACKGROUND_VERIFICATION_DOCUMENT",
     "RESUME", "BANK_STATEMENT", "ID_DOCUMENT", "EDUCATION_DOCUMENT",
-    "CANDIDATE_FORM", "OTHER",
+    "CANDIDATE_FORM", "INTERVIEW_INVITATION_DOCUMENT", "OTHER",
 }
 
 LIFECYCLE_EVENTS = {
@@ -33,6 +34,10 @@ LIFECYCLE_EVENTS = {
     "OFFER_IN_PROGRESS", "OFFER_APPROVED", "OFFER_LETTER_RECEIVED",
     "APPOINTMENT_LETTER_RECEIVED", "OFFER_ACCEPTED", "JOINING_CONFIRMED",
     "JOINED", "POST_SELECTION_ONBOARDING",
+}
+
+INTERVIEW_EVENTS = {
+    "NONE", "INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED",
 }
 
 _QUESTIONNAIRE_FIELDS = (
@@ -93,6 +98,7 @@ def classify_document(filename: str, text: str = "", declared_type: str = "") ->
         ("JOINING_LETTER", (r"joining\s+letter", r"joining confirmation")),
         ("EMPLOYMENT_VERIFICATION", (r"employment verification", r"employment certificate")),
         ("CANDIDATE_FORM", (r"candidate information form", r"candidate details form")),
+        ("INTERVIEW_INVITATION_DOCUMENT", (r"interview invitation", r"interview schedule")),
     )
     for label, patterns in rules:
         if any(re.search(pattern, blob) for pattern in patterns):
@@ -179,6 +185,19 @@ def classify_context(
         "you have been selected", "selected for the role", "selected for the position",
         "selection has been confirmed", "final selection confirmed",
     ))
+    interview_cancelled = bool(re.search(
+        r"(?:\binterview\b.{0,80}\b(?:cancelled|canceled|called off)\b|\b(?:cancelled|canceled|called off)\b.{0,80}\binterview\b)",
+        lowered,
+    ))
+    interview_rescheduled = bool(re.search(
+        r"(?:\binterview\b.{0,100}\b(?:rescheduled|moved|postponed)\b|\b(?:rescheduled|moved|postponed)\b.{0,100}\binterview\b)",
+        lowered,
+    ))
+    interview_confirmed = bool(re.search(
+        r"(?:\b(?:interview|technical round|managerial round|hr round)\b.{0,120}\b(?:confirmed|scheduled)\b|"
+        r"\b(?:confirmed|scheduled)\b.{0,120}\b(?:interview|technical round|managerial round|hr round)\b)",
+        lowered,
+    ))
 
     if questionnaire:
         intent, summary = "RECRUITER_QUESTIONNAIRE", "Recruiter is requesting candidate information. No employment outcome is confirmed."
@@ -188,6 +207,12 @@ def classify_context(
         intent, summary = "EMPLOYMENT_DOCUMENT", "Payslip contains historical employee metadata. No current joining event was found."
     elif question:
         intent, summary = "CANDIDATE_DETAILS_REQUEST", "The message asks for candidate information; it does not assert an employment outcome."
+    elif interview_cancelled:
+        intent, summary = "INTERVIEW_CANCELLATION", "The message explicitly cancels a candidate interview."
+    elif interview_rescheduled:
+        intent, summary = "INTERVIEW_RESCHEDULE", "The message explicitly changes an existing candidate interview schedule."
+    elif interview_confirmed:
+        intent, summary = "INTERVIEW_CONFIRMATION", "The message explicitly confirms a candidate interview schedule."
     elif actual_joined:
         intent, summary = "ACTUAL_JOINING_CONFIRMATION", "The message explicitly confirms that employment has started."
     elif joining_confirmed:
@@ -214,6 +239,20 @@ def classify_context(
         elif selected:
             lifecycle = "SELECTED"
 
+    interview_event = "NONE"
+    if not (questionnaire or job_ad or question or historical):
+        if interview_cancelled:
+            interview_event = "INTERVIEW_CANCELLED"
+        elif interview_rescheduled:
+            interview_event = "INTERVIEW_RESCHEDULED"
+        elif interview_confirmed:
+            interview_event = "INTERVIEW_CONFIRMED"
+    business_domain = (
+        "INTERVIEW_TRACKING" if interview_event != "NONE"
+        else "SELECTION_TRACKING" if lifecycle != "NONE"
+        else "NONE"
+    )
+
     return {
         "email_intent": intent,
         "document_type": document_type,
@@ -226,6 +265,8 @@ def classify_context(
         "is_historical_information": historical,
         "historical_employment_evidence": historical,
         "lifecycle_event": lifecycle,
+        "interview_event": interview_event,
+        "business_domain": business_domain,
         "event_reference_date": _event_date(sent_at).isoformat(),
         "evidence_summary": summary,
     }
@@ -254,4 +295,22 @@ def validate_lifecycle_event(proposed: str, context: dict[str, Any]) -> tuple[st
     }
     if status in comparable and supported not in comparable[status]:
         return "NONE", "PROPOSED_EVENT_NOT_SUPPORTED_BY_ASSERTIVE_CONTEXT"
+    return status, None
+
+
+def validate_interview_event(proposed: str, context: dict[str, Any]) -> tuple[str, str | None]:
+    """Require deterministic, assertive support before routing an interview mutation."""
+    status = str(proposed or "NONE").upper()
+    if status not in INTERVIEW_EVENTS:
+        return "NONE", "NOT_AN_INTERVIEW_EVENT"
+    if status == "NONE":
+        return status, None
+    if any(context.get(key) for key in (
+        "is_questionnaire", "is_question", "is_promotional_or_job_ad",
+        "is_historical_information",
+    )):
+        return "NONE", str(context.get("email_intent") or "NON_OUTCOME_CONTEXT")
+    supported = str(context.get("interview_event") or "NONE").upper()
+    if supported != status:
+        return "NONE", "INTERVIEW_EVENT_NOT_SUPPORTED_BY_ASSERTIVE_CONTEXT"
     return status, None

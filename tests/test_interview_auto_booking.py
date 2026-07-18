@@ -153,7 +153,7 @@ def test_reschedule_updates_existing_booking_and_preserves_previous(monkeypatch)
     monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
     old = {"id": "slot1", "name": "Rahul", "slot_confirmed": True, "date": "2026-07-19", "time": "14:00"}
     _candidate, audits = install_store_fakes(monkeypatch, rows=[old])
-    monkeypatch.setattr(booking.candidate_store, "reschedule_confirmed_interview_slot_by_name", lambda *args, **kwargs: ({"id": "slot1", "date": kwargs["date"], "time": kwargs["time"]}, "rescheduled"))
+    monkeypatch.setattr(booking.candidate_store, "update_interview_slot", lambda **kwargs: {"id": "slot1", "date": kwargs["date"], "time": kwargs["time"]})
     outcome = execute(result("interview_rescheduled"))
     assert outcome["status"] == "Rescheduled"
     assert audits[-1]["previous_booking"]["date"] == "2026-07-19"
@@ -163,10 +163,36 @@ def test_cancellation_keeps_audit_and_does_not_touch_payment(monkeypatch):
     monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
     old = {"id": "slot1", "name": "Rahul", "slot_confirmed": True, "date": "2026-07-19", "time": "14:00"}
     _candidate, audits = install_store_fakes(monkeypatch, rows=[old], payment_reason="must not be evaluated")
-    monkeypatch.setattr(booking.candidate_store, "cancel_confirmed_interview_slot_by_name", lambda *args, **kwargs: ({"id": "slot1", "slot_confirmed": False}, "cancelled"))
+    monkeypatch.setattr(booking.candidate_store, "cancel_interview_slot", lambda **kwargs: {"id": "slot1", "slot_confirmed": False})
     outcome = execute(result("interview_cancelled", date=None, time=None, timezone=None))
     assert outcome["status"] == "Cancelled"
     assert audits[-1]["payment_status"] == "NOT_REQUIRED"
+
+
+def test_reschedule_resolves_correct_slot_from_thread_not_first_row(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    wrong = {"id": "slot1", "name": "Rahul", "slot_confirmed": True, "date": "2026-07-19", "time": "14:00", "interview_source_thread_id": "other"}
+    target = {"id": "slot2", "name": "Rahul", "slot_confirmed": True, "date": "2026-07-20", "time": "15:00", "interview_source_thread_id": "gt1"}
+    _candidate, audits = install_store_fakes(monkeypatch, rows=[wrong, target])
+    monkeypatch.setattr(booking.candidate_store, "update_interview_slot", lambda **kwargs: {"id": kwargs["candidate_id"], "date": kwargs["date"], "time": kwargs["time"]})
+    outcome = execute(result("interview_rescheduled", date="2026-07-21", time="11:00 AM"))
+    assert outcome["status"] == "Rescheduled"
+    assert outcome["booking"]["id"] == "slot2"
+    assert audits[-1]["previous_booking"]["id"] == "slot2"
+
+
+def test_cancellation_with_multiple_unidentified_slots_is_blocked(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    rows = [
+        {"id": "slot1", "name": "Rahul", "slot_confirmed": True, "date": "2026-07-19", "time": "14:00"},
+        {"id": "slot2", "name": "Rahul", "slot_confirmed": True, "date": "2026-07-20", "time": "15:00"},
+    ]
+    install_store_fakes(monkeypatch, rows=rows)
+    value = result("interview_cancelled", date=None, time=None, timezone=None, round=None)
+    value["company"]["name"] = None
+    value["job"]["title"] = None
+    outcome = execute(value)
+    assert outcome["failure_code"] == "BOOKING_AMBIGUOUS"
 
 
 def test_duplicate_gmail_message_does_not_mutate_booking_twice(monkeypatch):
