@@ -64,8 +64,11 @@ const isVisibleEvent = (event) =>
   trackedStatuses.has(event.primary_status) &&
   !hiddenReviews.has(event.review_status) &&
   event.visible_in_offer_review !== false &&
-  Number(event.confidence || 0) >= 0.8 &&
-  Boolean(event.structured_result?.evidence?.length);
+  ((event.primary_status === "MANUAL_REVIEW_REQUIRED" &&
+    (event.validation_status || event.structured_result?.validation_status) ===
+      "RETRY_PENDING") ||
+    (Number(event.confidence || 0) >= 0.8 &&
+      Boolean(event.structured_result?.evidence?.length)));
 
 export function SummaryCard({ tone, icon, value, title, subtitle }) {
   return (
@@ -403,11 +406,13 @@ function ReviewQueue({
         <table className="sot-review-table">
           <thead>
             <tr>
-              <th>Detected</th>
               <th>Candidate</th>
-              <th>Status</th>
-              <th>Company / Role</th>
+              <th>Email Subject</th>
+              <th>Intent / Lifecycle</th>
+              <th>Company</th>
               <th>Confidence</th>
+              <th>AI / Validation</th>
+              <th>Evidence Summary</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -421,16 +426,28 @@ function ReviewQueue({
                   String(event.ai_model || "").includes("ai-unavailable");
                 return (
                   <tr key={event.id}>
-                    <td>{formatTime(event.created_at)}</td>
-                    <td>{names[event.candidate_id] || event.candidate_id}</td>
                     <td>
+                      <strong>
+                        {names[event.candidate_id] || event.candidate_id}
+                      </strong>
+                      <small>{formatTime(event.created_at)}</small>
+                    </td>
+                    <td>{event.subject || "No subject"}</td>
+                    <td>
+                      <small>
+                        {human(
+                          event.email_intent ||
+                            event.structured_result?.email_intent ||
+                            "Unknown",
+                        )}
+                      </small>
                       <span className="sot-outcome-badge">
                         {human(event.primary_status)}
                       </span>
                     </td>
                     <td>
                       <strong>{event.company_name || "Unknown company"}</strong>
-                      <small>{event.job_title || event.summary}</small>
+                      <small>{event.job_title || "Unknown role"}</small>
                     </td>
                     <td>
                       {fallback ? (
@@ -448,9 +465,34 @@ function ReviewQueue({
                       )}
                     </td>
                     <td>
+                      <strong>{event.ai_model || "Not analyzed"}</strong>
+                      <small>
+                        {human(
+                          event.ai_status ||
+                            event.structured_result?.ai_status ||
+                            "Unknown",
+                        )}
+                        {" Â· "}
+                        {human(
+                          event.validation_status ||
+                            event.structured_result?.validation_status ||
+                            event.review_status,
+                        )}
+                      </small>
+                    </td>
+                    <td>
+                      {event.evidence_summary ||
+                        event.structured_result?.evidence_summary ||
+                        event.summary ||
+                        "No summary"}
+                    </td>
+                    <td>
                       <div className="sot-review-actions">
                         <button onClick={() => onEvidence(event.id)}>
                           Evidence
+                        </button>
+                        <button onClick={() => onReview(event.id, "retry")}>
+                          Retry AI
                         </button>
                         {event.review_status === "PENDING" && (
                           <>
@@ -476,7 +518,7 @@ function ReviewQueue({
               })
             ) : (
               <tr>
-                <td colSpan={6} className="sot-empty">
+                <td colSpan={8} className="sot-empty">
                   No important detections need review.
                 </td>
               </tr>
@@ -691,6 +733,45 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
           <p>{event.summary}</p>
           <dl>
             <div>
+              <dt>Email intent</dt>
+              <dd>
+                {human(
+                  event.email_intent ||
+                    event.structured_result?.email_intent ||
+                    "Unknown",
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>Document</dt>
+              <dd>
+                {human(
+                  event.document_type ||
+                    event.structured_result?.document_type ||
+                    "None",
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>Lifecycle event</dt>
+              <dd>
+                {human(
+                  event.structured_result?.lifecycle_event ||
+                    event.primary_status,
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>Validation</dt>
+              <dd>
+                {human(
+                  event.validation_status ||
+                    event.structured_result?.validation_status ||
+                    event.review_status,
+                )}
+              </dd>
+            </div>
+            <div>
               <dt>Sender</dt>
               <dd>{event.sender_name || event.sender_email}</dd>
             </div>
@@ -699,6 +780,10 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
               <dd>{event.ai_model}</dd>
             </div>
           </dl>
+          <p>
+            {event.evidence_summary ||
+              event.structured_result?.evidence_summary}
+          </p>
           <ul>
             {(event.structured_result?.evidence || []).map((item, index) => (
               <li key={index}>
@@ -723,11 +808,12 @@ export default function RecruitmentMailPanelRedesign() {
   const { confirm } = useConfirm();
   const [tab, setTab] = useState("mailboxes");
   const [metrics, setMetrics] = useState({
-    pending_reviews: 0,
-    selections_detected: 0,
+    needs_review: 0,
+    selected: 0,
+    offers_received: 0,
     offers_accepted: 0,
-    candidates_joined: 0,
-    joining_confirmations: 0,
+    joining_confirmed: 0,
+    joined: 0,
   });
   const [charts, setCharts] = useState({});
   const [flags, setFlags] = useState([]);
@@ -790,11 +876,12 @@ export default function RecruitmentMailPanelRedesign() {
                 `/api/candidates/${candidate.id}/mailbox`,
               );
               // Multi-mailbox: expand one row per mailbox
-              const list = result.mailboxes && result.mailboxes.length
-                ? result.mailboxes
-                : result.mailbox
-                  ? [{ mailbox: result.mailbox, stats: result.stats || {} }]
-                  : [];
+              const list =
+                result.mailboxes && result.mailboxes.length
+                  ? result.mailboxes
+                  : result.mailbox
+                    ? [{ mailbox: result.mailbox, stats: result.stats || {} }]
+                    : [];
               return list.map((entry) => ({
                 candidate,
                 mailbox: entry.mailbox,
@@ -805,7 +892,9 @@ export default function RecruitmentMailPanelRedesign() {
             }
           }),
         )
-      ).flat().filter(Boolean);
+      )
+        .flat()
+        .filter(Boolean);
       setMetrics(dashboard.metrics || {});
       setCharts(dashboard.charts || {});
       setFlags(dashboard.flags || []);
@@ -823,6 +912,14 @@ export default function RecruitmentMailPanelRedesign() {
   useEffect(() => {
     load();
   }, [load]);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      request("/api/ai-recruitment/ollama/status?refresh=true")
+        .then((body) => setAiStatus(body.ollama || null))
+        .catch(() => undefined);
+    }, 60000);
+    return () => window.clearInterval(timer);
+  }, []);
   const activeSyncSignature = mailboxes
     .filter((row) =>
       ["QUEUED", "RUNNING"].includes(
@@ -941,9 +1038,12 @@ export default function RecruitmentMailPanelRedesign() {
     if (ok)
       run(
         () =>
-          request(`/api/candidates/${row.candidate.id}/mailbox?mailbox_id=${encodeURIComponent(row.mailbox.id)}`, {
-            method: "DELETE",
-          }),
+          request(
+            `/api/candidates/${row.candidate.id}/mailbox?mailbox_id=${encodeURIComponent(row.mailbox.id)}`,
+            {
+              method: "DELETE",
+            },
+          ),
         {
           started: `Disconnecting ${row.candidate.name}'s Gmail (${row.mailbox.email_address})…`,
           success: `${row.candidate.name}'s Gmail (${row.mailbox.email_address}) was disconnected.`,
@@ -981,7 +1081,10 @@ export default function RecruitmentMailPanelRedesign() {
       () =>
         request(`/api/candidates/${row.candidate.id}/mailbox/settings`, {
           method: "PATCH",
-          body: JSON.stringify({ mailbox_id: row.mailbox.id, monitoring_enabled: action === "resume" }),
+          body: JSON.stringify({
+            mailbox_id: row.mailbox.id,
+            monitoring_enabled: action === "resume",
+          }),
         }),
       {
         started:
@@ -1072,39 +1175,25 @@ export default function RecruitmentMailPanelRedesign() {
   const names = Object.fromEntries(
     candidates.map((candidate) => [candidate.id, candidate.name]),
   );
-  const selectedCount = events.filter((event) =>
-    ["SELECTED", "FINAL_SELECTION_CONFIRMED"].includes(event.primary_status),
-  ).length;
-  const offersReceived = events.filter((event) =>
-    [
-      "OFFER_INDICATION",
-      "OFFER_IN_PROGRESS",
-      "OFFER_APPROVED",
-      "OFFER_LETTER_RECEIVED",
-      "APPOINTMENT_LETTER_RECEIVED",
-    ].includes(event.primary_status),
-  ).length;
   const summary = [
     {
       tone: "amber",
       icon: "△",
-      value:
-        metrics.pending_reviews ||
-        events.filter((event) => event.review_status === "PENDING").length,
+      value: metrics.needs_review ?? 0,
       title: "Needs Review",
       subtitle: "Requires your attention",
     },
     {
       tone: "blue",
       icon: "♙",
-      value: metrics.selections_detected ?? selectedCount,
+      value: metrics.selected ?? 0,
       title: "Selected",
       subtitle: "AI-detected selections",
     },
     {
       tone: "blue",
       icon: "✉",
-      value: offersReceived,
+      value: metrics.offers_received ?? 0,
       title: "Offers Received",
       subtitle: "Offer emails detected",
     },
@@ -1118,10 +1207,16 @@ export default function RecruitmentMailPanelRedesign() {
     {
       tone: "green",
       icon: "♧",
-      value:
-        (metrics.candidates_joined || 0) + (metrics.joining_confirmations || 0),
+      value: metrics.joining_confirmed ?? 0,
+      title: "Joining Confirmed",
+      subtitle: "Candidates with confirmed joining arrangements",
+    },
+    {
+      tone: "green",
+      icon: "â™§",
+      value: metrics.joined ?? 0,
       title: "Joined",
-      subtitle: "Joining confirmations",
+      subtitle: "Candidates confirmed as joined",
     },
   ];
   const viewEmails = (row) => {
@@ -1239,7 +1334,8 @@ export default function RecruitmentMailPanelRedesign() {
                   <h3>Connect a candidate Gmail</h3>
                   <span>
                     Select a candidate and authorize their Gmail securely with
-                    Google. You can add multiple Gmail accounts for the same candidate.
+                    Google. You can add multiple Gmail accounts for the same
+                    candidate.
                   </span>
                 </div>
                 <label>

@@ -12,6 +12,13 @@ from typing import Any
 
 from core import recruitment_mail_store as store
 from core.ai_gateway import AIGatewayError, chat_structured, configured_models
+from services.recruitment_semantics import (
+    DOCUMENT_TYPES,
+    EMAIL_INTENTS,
+    classify_context,
+    redact_sensitive_text,
+    validate_lifecycle_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +35,11 @@ def _publish(event_type: str, **payload: Any) -> None:
 
 def _failure_review_result(message: dict[str, Any], exc: Exception) -> dict[str, Any]:
     code = getattr(exc, "code", None) or type(exc).__name__
+    context = classify_context(
+        str(message.get("subject") or ""), str(message.get("body") or ""),
+        sender_email=str(message.get("sender_email") or ""),
+        sent_at=message.get("sent_at"), attachments=message.get("attachments") or [],
+    )
     return {
         "schema_version": "selection_offer_event_v1",
         "is_recruitment_related": True,
@@ -54,7 +66,20 @@ def _failure_review_result(message: dict[str, Any], exc: Exception) -> dict[str,
         "summary": "AI validation is unavailable; this recruitment email requires administrator review.",
         "recommended_action": "Review the email metadata and evidence, then retry AI analysis or correct the result manually.",
         "classification_source": "FAILURE_REVIEW",
-        "ai_validation_status": "UNAVAILABLE",
+        "ai_validation_status": "RETRY_PENDING",
+        "ai_status": "RETRY_PENDING",
+        "validation_status": "RETRY_PENDING",
+        "email_intent": context["email_intent"],
+        "document_type": context["document_type"],
+        "is_candidate_specific": context["is_candidate_specific"],
+        "is_job_outcome": False,
+        "is_current_event": False,
+        "is_questionnaire": context["is_questionnaire"],
+        "is_promotional_or_job_ad": context["is_promotional_or_job_ad"],
+        "is_historical_information": context["is_historical_information"],
+        "historical_employment_evidence": context["historical_employment_evidence"],
+        "lifecycle_event": "NONE",
+        "evidence_summary": "AI analysis could not complete. No candidate lifecycle event was created; retry is pending.",
     }
 
 VISIBLE_STATUSES = [
@@ -139,6 +164,9 @@ SCHEMA = {
         "candidate", "company", "job", "recruiter", "interview", "offer",
         "attachments", "evidence", "risk_flags", "requires_manual_review",
         "summary", "reason", "recommended_action", "classification", "candidate_status",
+        "email_intent", "document_type", "is_candidate_specific", "is_job_outcome",
+        "is_current_event", "is_questionnaire", "is_promotional_or_job_ad",
+        "is_historical_information", "lifecycle_event", "evidence_summary",
     ],
     "properties": {
         "schema_version": {"const": "selection_offer_event_v1"},
@@ -148,6 +176,19 @@ SCHEMA = {
         "status": {"type": "string", "enum": STATUSES},
         "classification": {"type": "string", "enum": sorted(store.CANONICAL_CLASSIFICATIONS)},
         "candidate_status": {"type": "string", "enum": sorted(set(store._CLASSIFICATION_STATUS.values()))},
+        "email_intent": {"type": "string", "enum": sorted(EMAIL_INTENTS)},
+        "document_type": {"type": "string", "enum": sorted(DOCUMENT_TYPES)},
+        "is_candidate_specific": {"type": "boolean"},
+        "is_job_outcome": {"type": "boolean"},
+        "is_current_event": {"type": "boolean"},
+        "is_questionnaire": {"type": "boolean"},
+        "is_promotional_or_job_ad": {"type": "boolean"},
+        "is_historical_information": {"type": "boolean"},
+        "historical_employment_evidence": {"type": "boolean"},
+        "lifecycle_event": {"type": "string"},
+        "evidence_summary": {"type": "string", "maxLength": 1000},
+        "validation_status": {"type": "string"},
+        "ai_status": {"type": "string"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 100},
         "ignore_reason": {"type": ["string", "null"]},
         "candidate": {"type": "object", "properties": {"name": {"type": ["string", "null"]}, "email": {"type": ["string", "null"]}}, "required": ["name", "email"]},
@@ -265,6 +306,24 @@ def _extract_context(subject: str, body: str, sender_email: str) -> tuple[str | 
 
 def prefilter_decision(subject: str, body: str, sender_name: str = "", sender_email: str = "", attachments: list[dict[str, Any]] | None = None, thread_context: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     sources = _source_texts(subject, body, attachments, thread_context)
+    semantic = classify_context(
+        subject, body, sender_email=sender_email, attachments=attachments,
+    )
+    if (
+        semantic["is_questionnaire"]
+        or semantic["is_promotional_or_job_ad"]
+        or semantic["is_historical_information"]
+        or semantic.get("is_question")
+    ):
+        haystack = " ".join([subject, sender_name, sender_email, body]).lower()
+        for reason, phrases in NOISE_RULES:
+            if reason in {"JOB_RECOMMENDATION","JOB_ALERT","JOB_PORTAL_MARKETING","PROFILE_NOTIFICATION","APPLICATION_UPDATE","ASSESSMENT"} and any(phrase in haystack for phrase in phrases):
+                return {"qualified": False, "score": 0.0, "status": "IGNORED_NOT_OFFER_RELATED", "evidence": [], "ignore_reason": reason}
+        return {
+            "qualified": False, "score": 0.0,
+            "status": "IGNORED_NOT_OFFER_RELATED", "evidence": [],
+            "ignore_reason": semantic["email_intent"], "semantic_context": semantic,
+        }
     evidence = []
     detected = []
     for source, values in sources.items():
@@ -394,6 +453,21 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         raise ValueError("confidence must be between 0 and 100")
     if raw_confidence > 1:
         value["confidence"] = raw_confidence / 100.0
+    context = classify_context(
+        str((message or {}).get("subject") or ""),
+        str((message or {}).get("body") or ""),
+        sender_email=str((message or {}).get("sender_email") or ""),
+        sent_at=(message or {}).get("sent_at"), attachments=attachments,
+    )
+    for key in (
+        "email_intent", "document_type", "is_candidate_specific", "is_job_outcome",
+        "is_current_event", "is_questionnaire", "is_promotional_or_job_ad",
+        "is_historical_information", "historical_employment_evidence",
+        "lifecycle_event", "evidence_summary",
+    ):
+        value.setdefault(key, context[key])
+    value.setdefault("ai_status", "ANALYZED")
+    value.setdefault("validation_status", "AI_DETECTED")
     value.setdefault("classification", store.canonical_classification(value))
     value.setdefault("candidate_status", store._CLASSIFICATION_STATUS[value["classification"]])
     value.setdefault("reason", str(value.get("ignore_reason") or "Contextual employment classification"))
@@ -407,7 +481,36 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         value["should_create_review_record"] = False
         value["requires_manual_review"] = False
         value["ignore_reason"] = value.get("ignore_reason") or "AI_NOT_OFFER_RELATED"
+        value["validation_status"] = "REJECTED"
+        value["lifecycle_event"] = "NONE"
         return
+    safe_status, rejection_reason = validate_lifecycle_event(value["status"], context)
+    if safe_status == "NONE":
+        value.update(
+            status="IGNORED_NOT_OFFER_RELATED",
+            classification="not_relevant",
+            candidate_status="Profile Active",
+            is_selection_or_offer_related=False,
+            should_create_review_record=False,
+            requires_manual_review=False,
+            ignore_reason=rejection_reason or context["email_intent"],
+            validation_status="REJECTED",
+            lifecycle_event="NONE",
+            is_job_outcome=False,
+            evidence_summary=context["evidence_summary"],
+            summary=context["evidence_summary"],
+        )
+        return
+    value["lifecycle_event"] = safe_status
+    value["email_intent"] = context["email_intent"]
+    value["document_type"] = context["document_type"]
+    value["is_job_outcome"] = True
+    value["is_current_event"] = True
+    value["evidence_summary"] = context["evidence_summary"]
+    value["evidence"] = [
+        {**item, "text": redact_sensitive_text(str(item.get("text") or ""))}
+        for item in value.get("evidence") or []
+    ]
     sources = _source_texts((message or {}).get("subject", ""), (message or {}).get("body", ""), attachments, (message or {}).get("thread_context"))
     if not value["evidence"] or not all(_evidence_supported(item, sources) for item in value["evidence"]):
         raise ValueError("selection/offer evidence is missing or unsupported")
@@ -417,14 +520,17 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         value.update(status="MANUAL_REVIEW_REQUIRED", classification="needs_review", candidate_status="Needs Review",
                      should_create_review_record=True, requires_manual_review=True, ignore_reason=None,
                      reason="AI confidence is below the configured automatic-update threshold")
+        value["validation_status"] = "NEEDS_REVIEW"
     elif confidence < auto_threshold:
         actionable_interview = value.get("classification") in {"interview_confirmed", "interview_rescheduled"}
         explicit_schedule = all(str((value.get("interview") or {}).get(key) or "").strip() for key in ("date", "time", "timezone"))
         if not (actionable_interview and explicit_schedule and not value.get("risk_flags")):
             value.update(status="MANUAL_REVIEW_REQUIRED", requires_manual_review=True, ignore_reason=None)
+        value["validation_status"] = "NEEDS_REVIEW"
     else:
         value["requires_manual_review"] = bool(value.get("requires_manual_review") or value.get("risk_flags"))
         value["ignore_reason"] = None
+        value["validation_status"] = "NEEDS_REVIEW" if value["requires_manual_review"] else "AUTO_VALIDATED"
     for field in ("offer_date", "joining_date", "offer_expiry_date"):
         raw = (value.get("offer") or {}).get(field)
         if raw:
@@ -450,13 +556,8 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
             if not date_valid: missing.append("date")
             if not time_valid: missing.append("time")
             if not tz_valid: missing.append("timezone")
-            logger.warning(
-                "Interview classification has invalid/missing schedule fields=%s; flagging for manual review",
-                ",".join(missing),
-            )
-            value["requires_manual_review"] = True
-            value["risk_flags"] = list(dict.fromkeys((value.get("risk_flags") or []) + ["INTERVIEW_SCHEDULE_INCOMPLETE"]))
-            value["reason"] = f"Interview schedule incomplete (missing/invalid: {', '.join(missing)}); manual review required"
+            labels={"date":"ISO date","time":"12-hour time","timezone":"timezone"}
+            raise ValueError("interview requires valid " + ", ".join(labels[item] for item in missing))
 
 
 def parse_model_json(raw: str) -> dict[str, Any]:
@@ -498,13 +599,19 @@ message clearly changes an existing interview and includes the new schedule. Use
 INTERVIEW_CANCELLED only for an explicit cancellation. A shortlist without a
 schedule is INTERVIEW_SHORTLISTED or INTERVIEW_UPDATE and must never be confirmed.
 Return IST as Asia/Kolkata. Never invent schedule, round, company, or meeting link.
-Return confidence as 0-100; the backend normalizes it after parsing.
+First classify email_intent and document_type. Questions, requested fields,
+questionnaires, job advertisements, payslips, and historical employment documents
+must return lifecycle_event NONE and is_job_outcome false. JOINING_CONFIRMED means
+a confirmed joining arrangement; JOINED requires an explicit statement that work
+actually started. Return confidence as 0-100; the backend normalizes it after parsing.
 
 Requested actions and conditional wording matter. "Complete your application to
 move forward" is application-stage, not selection. Evidence must be short verbatim
 text present in EMAIL_SUBJECT, EMAIL_BODY, ATTACHMENT, or THREAD_CONTEXT.
 Also return the canonical lowercase classification, user-facing candidate_status,
-and a concise reason. Return only JSON matching selection_offer_event_v1."""
+and a concise evidence_summary/reason. Never include bank, PAN, Aadhaar, UAN, PF,
+or other financial/government identifiers. Return only JSON matching
+selection_offer_event_v1."""
 
 VALIDATOR_PROMPT = """You are the independent validator for a high-impact employment
 outcome classifier. Re-read the complete source independently, then inspect the
@@ -761,6 +868,7 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
     decoded["body_hash"] = content_hash(decoded["body"])
     processed = [extract_attachment(item) if item.get("data") is not None else item for item in (attachment_texts or [])]
     safe = [{key: item.get(key) for key in ("filename", "mime_type", "text", "attachment_type", "extraction_status", "checksum")} for item in processed]
+    decoded["attachments"] = safe
     critical_attachment_failure = any(
         str(item.get("attachment_type") or "") in {"OFFER_LETTER","APPOINTMENT_LETTER","JOINING_LETTER","COMPENSATION_BREAKUP"}
         and str(item.get("extraction_status") or "") in {"FAILED","MANUAL_REVIEW_REQUIRED"}
@@ -794,17 +902,14 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
         _publish("mail_ai_analyzing", candidate_id=mailbox.get("candidate_id"), gmail_message_id=decoded.get("provider_message_id"), processing_status="AI Analyzing")
         result, model, duration = analyze(decoded, safe)
     except Exception as exc:
-        result = _manual_review_from_strong_context(decoded, route.get("context") or {}, exc)
-        if result is None:
-            result = _failure_review_result(decoded, exc)
-            model = f"unavailable:{getattr(exc, 'code', type(exc).__name__).lower()}"
-            duration = 0
-            logger.warning("Recruitment email queued for review because AI validation failed code=%s", getattr(exc, 'code', type(exc).__name__))
+        # An unavailable semantic model must never promote keyword evidence to
+        # candidate truth. Persist one idempotent retry-pending review record.
+        result = _failure_review_result(decoded, exc)
+        model = f"unavailable:{getattr(exc, 'code', type(exc).__name__).lower()}"
+        duration = 0
+        logger.warning("Recruitment email queued for semantic retry code=%s", getattr(exc, 'code', type(exc).__name__))
         failure_code = getattr(exc, "code", None) or "OLLAMA_INTERNAL_ERROR"
-        if result.get("classification_source") == "FALLBACK":
-            model = f"semantic-router-v3|fallback:{failure_code.lower()}"
-            duration = 0
-            logger.warning("Recruitment classification used deterministic fallback: %s", failure_code)
+        store.mark_message_status(row["id"], "AI_RETRY_PENDING", reason=failure_code)
     if critical_attachment_failure and (not result.get("is_selection_or_offer_related") or not result.get("should_create_review_record")):
         result = _failure_review_result(decoded, RuntimeError("Critical employment attachment extraction failed"))
         result["reason"] = "A potentially important employment attachment could not be extracted"

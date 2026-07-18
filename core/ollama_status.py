@@ -11,9 +11,12 @@ _lock = threading.Lock()
 _last_request_succeeded: bool | None = None
 _state: dict[str, Any] = {
     "status": "unavailable",
+    "diagnostic_status": "NOT_CHECKED",
     "endpoint_reachable": False,
     "configured_model": None,
     "model_available": False,
+    "required_models": {},
+    "missing_models": [],
     "response_time_ms": None,
     "last_checked_at": None,
     "last_successful_request_at": None,

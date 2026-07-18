@@ -16,8 +16,28 @@ def _usable_text(text:str)->bool:
     return alphanumeric>=24 and letters/max(1,len(normalized))>=.35
 
 def classify_attachment(filename:str,text:str='')->str:
-    blob=re.sub(r'[_-]+',' ',f'{filename} {text[:2000]}'.lower())
-    rules=[('OFFER_LETTER',r'offer[ _-]?letter|employment offer'),('APPOINTMENT_LETTER',r'appointment[ _-]?letter'),('COMPENSATION_BREAKUP',r'compensation|salary structure|ctc breakup'),('INTERVIEW_INVITATION',r'interview|meeting invite'),('ASSESSMENT_INSTRUCTIONS',r'assessment|coding test'),('JOINING_LETTER',r'joining|onboarding'),('BACKGROUND_VERIFICATION_FORM',r'background verification|bgv'),('DOCUMENT_VERIFICATION_REQUEST',r'document verification'),('JOB_DESCRIPTION',r'job description|\bjd\b')]
+    blob=re.sub(r'[_-]+',' ',f'{filename} {text[:12000]}'.lower())
+    # Document identity is established before lifecycle analysis.  Specific
+    # historical/sensitive documents intentionally precede generic words such
+    # as "joining" because payslips commonly contain a Date of Joining field.
+    rules=[
+        ('PAYSLIP',r'\bpayslip\b|\bsalary slip\b|pay slip for the month'),
+        ('EXPERIENCE_LETTER',r'experience letter|certificate of experience'),
+        ('RELIEVING_LETTER',r'relieving letter|relieved from'),
+        ('BANK_STATEMENT',r'bank statement'),
+        ('RESUME',r'\bresume\b|curriculum vitae|\bcv\b'),
+        ('ID_DOCUMENT',r'\baadhaar\b|\baadhar\b|\bpassport\b|\bpan card\b'),
+        ('EDUCATION_DOCUMENT',r'degree certificate|marksheet|transcript'),
+        ('OFFER_LETTER',r'offer[ _-]?letter|employment offer'),
+        ('APPOINTMENT_LETTER',r'appointment[ _-]?letter'),
+        ('COMPENSATION_BREAKUP',r'compensation|salary structure|ctc breakup'),
+        ('INTERVIEW_INVITATION',r'interview|meeting invite'),
+        ('ASSESSMENT_INSTRUCTIONS',r'assessment|coding test'),
+        ('BACKGROUND_VERIFICATION_DOCUMENT',r'background verification|\bbgv\b'),
+        ('DOCUMENT_VERIFICATION_REQUEST',r'document verification'),
+        ('JOB_DESCRIPTION',r'job description|\bjd\b'),
+        ('JOINING_LETTER',r'joining letter|joining confirmation|onboarding letter'),
+    ]
     for label,pattern in rules:
         if re.search(pattern,blob):return label
     return 'OTHER_RECRUITMENT_DOCUMENT'

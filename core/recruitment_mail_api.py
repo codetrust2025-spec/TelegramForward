@@ -264,6 +264,18 @@ def install_recruitment_mail_routes(app):
     @app.post('/api/ai-recruitment/events/{event_id}/{action}')
     async def review_action(event_id:str,action:str,request:Request,body:dict):
         _guard();profile=require_fleet_admin(request)
+        if action=='retry':
+            context=await asyncio.to_thread(store.event_reprocess_context,event_id)
+            if not context:raise HTTPException(404,'Event not found')
+            from services.recruitment_mail_agent import process_message
+            mailbox={'id':context.get('mailbox_id'),'candidate_id':context.get('mailbox_candidate_id'),'email_address':context.get('email_address')}
+            decoded={'provider_message_id':context.get('provider_message_id'),'provider_thread_id':context.get('provider_thread_id'),
+              'sender_name':context.get('sender_name'),'sender_email':context.get('sender_email'),'recipient_email':context.get('recipient_email'),
+              'subject':context.get('subject'),'sent_at':context.get('sent_at'),'body':context.get('body_text') or '',
+              'html_body':context.get('html_body_text') or ''}
+            event=await asyncio.to_thread(process_message,mailbox,decoded,context.get('attachments') or [],reprocess=True)
+            store.audit(actor=profile.get('username') or 'admin',role='admin',action='MAIL_AI_EVENT_RETRY',candidate_id=context.get('mailbox_candidate_id'),source_id=event_id,new={'result_event_id':event.get('id') if event else None})
+            return {'status':'ok','event':event}
         if action not in ('approve','reject','false-positive','duplicate'):raise HTTPException(404,'Unknown review action')
         row=store.review_event(event_id,action,profile.get('username') or 'admin',str(body.get('notes') or ''))
         if not row:raise HTTPException(404,'Event not found')
@@ -273,30 +285,24 @@ def install_recruitment_mail_routes(app):
         _guard();require_fleet_admin(request)
         from core.db.connection import get_connection
         from core.recruitment_offer_visibility import qualified_event_sql
+        truth=await asyncio.to_thread(store.selection_tracking_stats)
         predicate,params=qualified_event_sql('e')
         with get_connection() as conn,conn.cursor() as cur:
-            cur.execute(f"""WITH qualified AS (
-              SELECT e.* FROM ai_recruitment_events e WHERE {predicate}
-            ) SELECT
-              (SELECT count(*) FROM qualified WHERE primary_status IN('SELECTED','FINAL_SELECTION_CONFIRMED')) selections_detected,
-              (SELECT count(*) FROM qualified WHERE primary_status='OFFER_INDICATION') offer_indications,
-              (SELECT count(*) FROM qualified WHERE primary_status IN('OFFER_IN_PROGRESS','OFFER_APPROVED')) offers_in_progress,
-              (SELECT count(*) FROM qualified WHERE primary_status='OFFER_LETTER_RECEIVED') offer_letters_detected,
-              (SELECT count(*) FROM qualified WHERE primary_status='APPOINTMENT_LETTER_RECEIVED') appointment_letters_detected,
-              (SELECT count(DISTINCT candidate_id) FROM qualified WHERE primary_status='OFFER_ACCEPTED') offers_accepted,
-              (SELECT count(DISTINCT candidate_id) FROM qualified WHERE primary_status='JOINING_CONFIRMED') joining_confirmations,
-              (SELECT count(DISTINCT candidate_id) FROM qualified WHERE primary_status='JOINED') candidates_joined,
-              (SELECT count(*) FROM qualified WHERE review_status='PENDING') pending_reviews,
-              (SELECT count(*) FROM offer_verification_cases c JOIN qualified q ON q.id=c.ai_recruitment_event_id WHERE c.verification_status='VERIFIED') verified_offers""",params);cols=[d.name for d in cur.description];metrics=dict(zip(cols,cur.fetchone()))
             cur.execute(f"""SELECT e.created_at::date AS event_day,count(*) AS event_count FROM ai_recruitment_events e
-              WHERE e.created_at>=current_date-30 AND {predicate} GROUP BY 1 ORDER BY 1""",params);events_by_day=[{'day':str(r[0]),'count':r[1]} for r in cur.fetchall()]
+              WHERE e.created_at>=current_date-30 AND e.validation_status IN('AUTO_VALIDATED','APPROVED')
+                AND {predicate} GROUP BY 1 ORDER BY 1""",params);events_by_day=[{'day':str(r[0]),'count':r[1]} for r in cur.fetchall()]
             cur.execute(f"""SELECT e.primary_status,count(*) count FROM ai_recruitment_events e
-              WHERE {predicate} GROUP BY 1 ORDER BY 2 DESC""",params);status_distribution=[{'status':r[0],'count':r[1]} for r in cur.fetchall()]
+              WHERE e.validation_status IN('AUTO_VALIDATED','APPROVED') AND {predicate}
+              GROUP BY 1 ORDER BY 2 DESC""",params);status_distribution=[{'status':r[0],'count':r[1]} for r in cur.fetchall()]
         response.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
         response.headers['Pragma']='no-cache'
         response.headers['Expires']='0'
         response.headers['X-Offer-Review-Version']='offer_review_cleanup_v1'
-        return {'status':'ok','metrics':metrics,'charts':{'events_by_day':events_by_day,'status_distribution':status_distribution},'flags':store.list_flags(status='PENDING'),'_timestamp':int(time.time())}
+        return {'status':'ok','metrics':truth['metrics'],'filters':truth['filters'],'charts':{'events_by_day':events_by_day,'status_distribution':status_distribution},'flags':store.list_flags(status='PENDING'),'_timestamp':int(time.time())}
+    @app.get('/api/selection-tracking/stats')
+    async def selection_tracking_stats(request:Request,response:Response):
+        _guard();require_fleet_admin(request);response.headers['Cache-Control']='no-store, max-age=0'
+        return {'status':'ok',**(await asyncio.to_thread(store.selection_tracking_stats)),'_timestamp':int(time.time())}
     @app.get('/api/offer-verification')
     async def offer_list(request:Request,status:str|None=None,limit:int=50,offset:int=0):
         _guard();require_fleet_admin(request)

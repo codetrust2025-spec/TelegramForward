@@ -46,10 +46,10 @@ def test_mailbox_api_hides_unauthenticated_placeholder(monkeypatch):
     monkeypatch.setenv('AI_INTERVIEW_OFFER_TRACKING_ENABLED','true')
     monkeypatch.setattr(recruitment_mail_api.candidate_store, 'get_candidate', lambda _cid: {'id':'current','name':'Ram','phone':'9000000000'})
     monkeypatch.setattr(recruitment_mail_api.candidate_store, 'candidate_identity_ids', lambda _cid: ['current'])
-    monkeypatch.setattr(recruitment_mail_api.store, 'mailbox_for_candidates', lambda _ids: {
+    monkeypatch.setattr(recruitment_mail_api.store, 'mailboxes_for_candidates', lambda _ids: [{
         'id':'mailbox-1','candidate_id':'current','email_address':'ram@example.com',
         'connection_status':'DISCONNECTED','credential_ciphertext':None,
-    })
+    }])
     monkeypatch.setattr(recruitment_mail_api.store, 'list_events', lambda **_kwargs: [])
     response=app_client(monkeypatch).get('/api/candidates/current/mailbox')
     assert response.status_code==200
@@ -60,10 +60,10 @@ def test_mailbox_api_resolves_authenticated_legacy_candidate_id(monkeypatch):
     monkeypatch.setenv('AI_INTERVIEW_OFFER_TRACKING_ENABLED','true')
     monkeypatch.setattr(recruitment_mail_api.candidate_store, 'get_candidate', lambda _cid: {'id':'current','name':'Akhil','phone':'9000000001'})
     monkeypatch.setattr(recruitment_mail_api.candidate_store, 'candidate_identity_ids', lambda _cid: ['legacy','current'])
-    monkeypatch.setattr(recruitment_mail_api.store, 'mailbox_for_candidates', lambda ids: {
+    monkeypatch.setattr(recruitment_mail_api.store, 'mailboxes_for_candidates', lambda ids: [{
         'id':'mailbox-2','candidate_id':ids[0],'email_address':'akhil@example.com',
         'connection_status':'CONNECTED','credential_ciphertext':'encrypted-token',
-    })
+    }])
     monkeypatch.setattr(recruitment_mail_api.store, 'mailbox_stats', lambda _mid: {'important_emails':3})
     monkeypatch.setattr(recruitment_mail_api.store, 'list_events', lambda **_kwargs: [])
     response=app_client(monkeypatch).get('/api/candidates/current/mailbox')
