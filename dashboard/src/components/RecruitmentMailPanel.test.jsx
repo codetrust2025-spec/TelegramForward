@@ -268,6 +268,66 @@ describe("RecruitmentMailPanel", () => {
     structured_result: { evidence: [], validation_status: "RETRY_PENDING" },
   };
 
+  it("filters the Review Queue to matching statuses when a summary tile is clicked", async () => {
+    const joinedEvent = {
+      id: "event-joined-1",
+      candidate_id: "c2",
+      subject: "Welcome aboard!",
+      primary_status: "JOINED",
+      review_status: "APPROVED",
+      validation_status: "AUTO_VALIDATED",
+      ai_status: "ANALYZED",
+      ai_model: "qwen3.6",
+      confidence: 0.95,
+      visible_in_offer_review: true,
+      created_at: "2026-07-15T09:00:00Z",
+      structured_result: {
+        evidence: [
+          { source: "EMAIL_BODY", meaning: "JOINED", text: "welcome aboard" },
+        ],
+      },
+    };
+    fetch.mockImplementation(async (url) => {
+      const path = String(url);
+      if (path.includes("/review"))
+        return {
+          ok: true,
+          json: async () => ({
+            status: "ok",
+            events: [retryPendingEvent, joinedEvent],
+          }),
+        };
+      return { ok: true, json: async () => payloadFor(path) };
+    });
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+    const needsReviewTile = screen
+      .getByText("Needs Review", { selector: "h3" })
+      .closest('[role="button"]');
+    fireEvent.click(needsReviewTile);
+    await screen.findByText(retryPendingEvent.subject);
+    expect(screen.queryByText("Welcome aboard!")).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Clear "Needs Review" filter'),
+    ).toBeInTheDocument();
+
+    const joinedTile = screen
+      .getByText("Joined", { selector: "h3" })
+      .closest('[role="button"]');
+    fireEvent.click(joinedTile);
+    await screen.findByText("Welcome aboard!");
+    expect(
+      screen.queryByText(retryPendingEvent.subject),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(joinedTile);
+    await screen.findByText(retryPendingEvent.subject);
+    expect(screen.getByText("Welcome aboard!")).toBeInTheDocument();
+  });
+
   it("shows 'Pending AI' instead of a misleading 0% when AI never ran", async () => {
     fetch.mockImplementation(async (url) => {
       const path = String(url);
