@@ -268,6 +268,34 @@ describe("RecruitmentMailPanel", () => {
     structured_result: { evidence: [], validation_status: "RETRY_PENDING" },
   };
 
+  it("resolves the candidate name via canonical_candidate_id when candidate_id is a stale alias", async () => {
+    const staleAliasEvent = {
+      ...retryPendingEvent,
+      id: "event-stale-alias-1",
+      candidate_id: "f73cc8f464",
+      canonical_candidate_id: "c1",
+      subject: "You have a new job in your inbox!",
+    };
+    fetch.mockImplementation(async (url) => {
+      const path = String(url);
+      if (path.includes("/review"))
+        return {
+          ok: true,
+          json: async () => ({ status: "ok", events: [staleAliasEvent] }),
+        };
+      return { ok: true, json: async () => payloadFor(path) };
+    });
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review Queue" }));
+    await screen.findByText(staleAliasEvent.subject);
+    expect(screen.getByText("Test Candidate")).toBeInTheDocument();
+    expect(screen.queryByText("f73cc8f464")).not.toBeInTheDocument();
+  });
+
   it("filters the Review Queue to matching statuses when a summary tile is clicked", async () => {
     const joinedEvent = {
       id: "event-joined-1",

@@ -540,7 +540,9 @@ function ReviewQueue({
                   <tr key={event.id}>
                     <td>
                       <strong>
-                        {names[event.candidate_id] || event.candidate_id}
+                        {names[event.canonical_candidate_id] ||
+                          names[event.candidate_id] ||
+                          event.candidate_id}
                       </strong>
                       <small>{formatTime(event.created_at)}</small>
                     </td>
@@ -1719,7 +1721,8 @@ export default function RecruitmentMailPanelRedesign() {
           events={events
             .filter((event) =>
               reviewCandidateId
-                ? event.candidate_id === reviewCandidateId
+                ? event.candidate_id === reviewCandidateId ||
+                  event.canonical_candidate_id === reviewCandidateId
                 : true,
             )
             .filter((event) =>

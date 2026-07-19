@@ -120,6 +120,47 @@ def test_deterministic_job_ad_is_not_routed_to_ai():
     assert route["send_to_ai"] is False
 
 
+# Regression coverage for a follow-up finding: once the Needs Review filter
+# worked, it surfaced real production noise the original fix missed — a bank
+# transaction alert and two Naukri marketing emails, all pulled into AI by
+# the ambiguous-recruitment fallback matching an isolated word ("offer" in a
+# fraud-warning footer, "recruiter" in bulk marketing copy) anywhere in the
+# email body.
+def test_bank_transaction_alert_is_not_routed_to_ai():
+    subject = "INR 13.00 was debited from your A/c no. XX2066."
+    body = (
+        "Dear Customer, here's the summary of your transaction: Amount Debited: "
+        "INR 13.00 Account Number: XX2066 Transaction Info: UPI/P2M/127568896017. "
+        "Regards, Axis Bank Ltd. RBI never deals with individuals for Savings "
+        "Account, Current Account, Credit Card, Debit Card, etc. Don't be victim "
+        "to such offers coming to you on phone or email in the name of RBI."
+    )
+    route = routing_decision(subject, body, "", "alerts@axis.bank.in")
+    assert route["send_to_ai"] is False
+
+
+def test_job_portal_recruiter_marketing_is_not_routed_to_ai():
+    subject = "You have a new job in your inbox!"
+    body = (
+        "You have a job directly sent by recruiter! Apply to the jobs directly "
+        "sent by recruiters. Also keep your profile updated to continue to get "
+        "noticed by recruiters. Component Design Engineer Pimpri-Chinchwad."
+    )
+    route = routing_decision(subject, body, "", "donotreply_mailer@naukri.com")
+    assert route["send_to_ai"] is False
+
+
+def test_job_portal_safety_tips_are_not_routed_to_ai():
+    subject = "How to make your job search safer"
+    body = (
+        "Keep yourself safe while searching for a job! Job scams are an "
+        "unfortunate reality of the recruitment market. Beware of these common "
+        "signs of fraud jobs. A job offer is a scam if you are asked to pay money."
+    )
+    route = routing_decision(subject, body, "", "info@naukri.com")
+    assert route["send_to_ai"] is False
+
+
 def test_candidate_specific_walkin_confirmation_is_routed_to_ai():
     """TEST 2: a candidate-specific confirmed walk-in must still reach AI/validation."""
     route = routing_decision(
