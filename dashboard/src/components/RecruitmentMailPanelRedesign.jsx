@@ -43,6 +43,75 @@ const human = (value) =>
     .replaceAll("_", " ")
     .toLowerCase()
     .replace(/\b\w/g, (c) => c.toUpperCase());
+
+const AI_FAILURE_REASONS = {
+  OLLAMA_CONNECTION_FAILED: "Ollama connection failed",
+  OLLAMA_REQUEST_TIMEOUT: "Ollama request timed out",
+  OLLAMA_MODEL_NOT_FOUND: "Configured AI model is not installed",
+  OLLAMA_MODEL_LOAD_FAILED: "AI model failed to load",
+  OLLAMA_INVALID_JSON: "AI returned invalid JSON",
+  OLLAMA_SCHEMA_VALIDATION_FAILED: "AI response failed schema validation",
+  OLLAMA_INTERNAL_ERROR: "AI service returned an internal error",
+  REVERSE_SSH_TUNNEL_UNAVAILABLE: "AI tunnel is unreachable",
+};
+const aiFailureCode = (event) => {
+  const model = String(event?.ai_model || "");
+  return model.startsWith("unavailable:")
+    ? model.slice("unavailable:".length).toUpperCase()
+    : "";
+};
+const aiFailureReason = (event) => {
+  const code = aiFailureCode(event);
+  if (!code) return "AI validation is temporarily unavailable.";
+  return AI_FAILURE_REASONS[code] || human(code);
+};
+const aiNeverRan = (event) => {
+  const aiStatus = String(
+    event?.ai_status || event?.structured_result?.ai_status || "",
+  ).toUpperCase();
+  const validation = String(
+    event?.validation_status ||
+      event?.structured_result?.validation_status ||
+      "",
+  ).toUpperCase();
+  return (
+    Boolean(aiFailureCode(event)) ||
+    aiStatus === "RETRY_PENDING" ||
+    aiStatus === "NOT_REQUIRED" ||
+    validation === "RETRY_PENDING" ||
+    validation === "NOT_REQUIRED"
+  );
+};
+// Single source of truth for the "AI / Validation" label shown in both the
+// review table and the Detection Evidence drawer, so the two never drift.
+const describeAiStatus = (event) => {
+  const aiStatus = String(
+    event?.ai_status || event?.structured_result?.ai_status || "",
+  ).toUpperCase();
+  const validation = String(
+    event?.validation_status ||
+      event?.structured_result?.validation_status ||
+      "",
+  ).toUpperCase();
+  if (aiFailureCode(event) || aiStatus === "RETRY_PENDING") {
+    return { status: "Retry Pending", reason: aiFailureReason(event) };
+  }
+  if (aiStatus === "NOT_REQUIRED" || validation === "NOT_REQUIRED") {
+    return {
+      status: "Not required",
+      reason:
+        event?.evidence_summary ||
+        event?.structured_result?.evidence_summary ||
+        "Deterministic noise filter classified this email as non-actionable.",
+    };
+  }
+  const statusLabel = human(aiStatus || "Unknown");
+  const validationLabel = human(validation || event?.review_status || "");
+  return {
+    status: statusLabel,
+    reason: validationLabel && validationLabel !== statusLabel ? validationLabel : "",
+  };
+};
 const formatTime = (value) => {
   if (!value) return "Never";
   const date = new Date(value);
@@ -460,23 +529,29 @@ function ReviewQueue({
                         >
                           Fallback evidence
                         </span>
+                      ) : aiNeverRan(event) ? (
+                        <span
+                          className="sot-fallback-confidence"
+                          title="AI has not analyzed this email; 0% would be misleading"
+                        >
+                          {describeAiStatus(event).status === "Not required"
+                            ? "Not analyzed"
+                            : "Pending AI"}
+                        </span>
                       ) : (
                         `${Math.round(Number(event.confidence) * 100)}%`
                       )}
                     </td>
                     <td>
-                      <strong>{event.ai_model || "Not analyzed"}</strong>
+                      <strong>
+                        {aiFailureCode(event)
+                          ? "AI unavailable"
+                          : event.ai_model || "Not analyzed"}
+                      </strong>
                       <small>
-                        {human(
-                          event.ai_status ||
-                            event.structured_result?.ai_status ||
-                            "Unknown",
-                        )}
-                        {" Â· "}
-                        {human(
-                          event.validation_status ||
-                            event.structured_result?.validation_status ||
-                            event.review_status,
+                        {describeAiStatus(event).status}
+                        {describeAiStatus(event).reason && (
+                          <> · {describeAiStatus(event).reason}</>
                         )}
                       </small>
                     </td>
@@ -714,20 +789,125 @@ function Analytics({
   );
 }
 
+const EVIDENCE_LOAD_TIMEOUT_MS = 15000;
+
 function EvidenceDrawer({ id, onClose, onChanged }) {
+  // LOADING | SUCCESS | NO_EVIDENCE | AI_RETRY_PENDING | ERROR
+  const [status, setStatus] = useState("LOADING");
   const [event, setEvent] = useState(null);
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+
   useEffect(() => {
-    request(`/api/ai-recruitment/events/${id}`).then((body) =>
-      setEvent(body.event),
-    );
-  }, [id]);
+    let active = true;
+    setStatus("LOADING");
+    setEvent(null);
+    setError("");
+    const timeoutId = window.setTimeout(() => {
+      if (!active) return;
+      active = false;
+      setStatus("ERROR");
+      setError("The request took too long to respond.");
+    }, EVIDENCE_LOAD_TIMEOUT_MS);
+    request(`/api/ai-recruitment/events/${id}`)
+      .then((body) => {
+        if (!active) return;
+        const row = body.event;
+        if (!row) {
+          setStatus("NO_EVIDENCE");
+          return;
+        }
+        setEvent(row);
+        if (describeAiStatus(row).status === "Retry Pending") {
+          setStatus("AI_RETRY_PENDING");
+        } else if (
+          !row.evidence_summary &&
+          !row.structured_result?.evidence_summary &&
+          !(row.structured_result?.evidence || []).length
+        ) {
+          setStatus("NO_EVIDENCE");
+        } else {
+          setStatus("SUCCESS");
+        }
+      })
+      .catch((err) => {
+        if (!active) return;
+        setStatus("ERROR");
+        setError(err.message || "Unable to load detection evidence.");
+      })
+      .finally(() => {
+        active = false;
+        window.clearTimeout(timeoutId);
+      });
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, [id, attempt]);
+
   return (
     <aside className="sot-evidence">
       <header>
         <h2>Detection Evidence</h2>
         <button onClick={onClose}>Close</button>
       </header>
-      {event ? (
+      {status === "LOADING" && (
+        <p className="sot-evidence-status" role="status">
+          Loading…
+        </p>
+      )}
+      {status === "ERROR" && (
+        <div className="sot-evidence-status">
+          <p>Unable to load detection evidence.</p>
+          {error && <small>{error}</small>}
+          <button
+            className="sot-primary-button"
+            onClick={() => setAttempt((value) => value + 1)}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      {status === "NO_EVIDENCE" && (
+        <p className="sot-evidence-status">
+          No detection evidence is available for this record.
+        </p>
+      )}
+      {status === "AI_RETRY_PENDING" && event && (
+        <>
+          <h3>{event.subject}</h3>
+          <p>
+            AI analysis is pending because the AI service was unavailable.
+            This record will be retried automatically.
+          </p>
+          <dl>
+            <div>
+              <dt>Classification</dt>
+              <dd>Pending AI Analysis</dd>
+            </div>
+            <div>
+              <dt>AI Status</dt>
+              <dd>Retry Pending</dd>
+            </div>
+            <div>
+              <dt>Reason</dt>
+              <dd>{aiFailureReason(event)}</dd>
+            </div>
+            <div>
+              <dt>Candidate Status</dt>
+              <dd>Unchanged</dd>
+            </div>
+            <div>
+              <dt>Interview Schedule</dt>
+              <dd>Unchanged</dd>
+            </div>
+          </dl>
+          <button className="sot-primary-button" onClick={onChanged}>
+            Refresh record
+          </button>
+        </>
+      )}
+      {status === "SUCCESS" && event && (
         <>
           <h3>{event.subject}</h3>
           <p>{event.summary}</p>
@@ -764,11 +944,10 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
             <div>
               <dt>Validation</dt>
               <dd>
-                {human(
-                  event.validation_status ||
-                    event.structured_result?.validation_status ||
-                    event.review_status,
-                )}
+                {describeAiStatus(event).status}
+                {describeAiStatus(event).reason
+                  ? ` · ${describeAiStatus(event).reason}`
+                  : ""}
               </dd>
             </div>
             <div>
@@ -796,8 +975,6 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
             Refresh record
           </button>
         </>
-      ) : (
-        <p>Loading…</p>
       )}
     </aside>
   );

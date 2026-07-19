@@ -41,6 +41,60 @@ def _failure_review_result(message: dict[str, Any], exc: Exception) -> dict[str,
         sender_email=str(message.get("sender_email") or ""),
         sent_at=message.get("sent_at"), attachments=message.get("attachments") or [],
     )
+    is_deterministic_noise = bool(
+        context["is_questionnaire"] or context["is_promotional_or_job_ad"]
+        or context["is_historical_information"] or context.get("is_question")
+    )
+    if is_deterministic_noise:
+        # The deterministic filter already conclusively classified this
+        # message as non-actionable noise (ad/questionnaire/historical
+        # document/question). Ollama is not required to reject noise, so an
+        # AI outage must never force this into Needs Review or retry-pending
+        # — it goes straight to the same audit-only path a healthy AI run
+        # would have produced.
+        return {
+            "schema_version": "selection_offer_event_v1",
+            "is_recruitment_related": True,
+            "is_selection_or_offer_related": False,
+            "should_create_review_record": False,
+            "status": "IGNORED_NOT_OFFER_RELATED",
+            "primary_status": "IGNORED_NOT_OFFER_RELATED",
+            "classification": "not_relevant",
+            "candidate_status": "Profile Active",
+            "confidence": 0.0,
+            "ignore_reason": context["email_intent"],
+            "reason": f"Deterministic noise filter classified this email as {context['email_intent']}; AI analysis was not required.",
+            "candidate": {"name": None, "email": message.get("recipient_email")},
+            "company": {"name": None, "domain": None},
+            "job": {"title": None, "employment_type": None, "location": None},
+            "recruiter": {"name": message.get("sender_name"), "email": message.get("sender_email")},
+            "interview": {key: None for key in ("date", "time", "timezone", "mode", "round", "location", "meeting_link")},
+            "offer": {"offer_detected": False, "offer_letter_detected": False,
+                      "appointment_letter_detected": False, "offer_date": None,
+                      "offered_ctc": None, "currency": None, "joining_date": None,
+                      "offer_expiry_date": None},
+            "attachments": [], "evidence": [], "risk_flags": [],
+            "requires_manual_review": False,
+            "summary": context["evidence_summary"],
+            "recommended_action": "No action required; this message was classified as non-actionable noise.",
+            "classification_source": "DETERMINISTIC_NOISE_FILTER",
+            "ai_validation_status": "NOT_REQUIRED",
+            "ai_status": "NOT_REQUIRED",
+            "validation_status": "NOT_REQUIRED",
+            "email_intent": context["email_intent"],
+            "document_type": context["document_type"],
+            "is_candidate_specific": context["is_candidate_specific"],
+            "is_job_outcome": False,
+            "is_current_event": False,
+            "is_questionnaire": context["is_questionnaire"],
+            "is_promotional_or_job_ad": context["is_promotional_or_job_ad"],
+            "is_historical_information": context["is_historical_information"],
+            "historical_employment_evidence": context["historical_employment_evidence"],
+            "lifecycle_event": "NONE",
+            "interview_event": "NONE",
+            "business_domain": "NONE",
+            "evidence_summary": context["evidence_summary"],
+        }
     return {
         "schema_version": "selection_offer_event_v1",
         "is_recruitment_related": True,
@@ -390,6 +444,22 @@ def prefilter_decision(subject: str, body: str, sender_name: str = "", sender_em
             "risk_flags": ["WORDING_STATUS_CONFLICT"] if conflict else [],
             "requires_manual_review": conflict,
         }
+    semantic_status = semantic.get("interview_event") or semantic.get("lifecycle_event")
+    if semantic_status and semantic_status != "NONE":
+        # classify_context's assertive-context regexes (e.g. "your interview
+        # ... is confirmed today") found a candidate-specific outcome that the
+        # literal STATUS_SIGNALS phrase list did not match verbatim. Route it
+        # to the model rather than silently dropping it as no-signal noise;
+        # validate_lifecycle_event/validate_interview_event re-check
+        # assertiveness independently before any status is ever accepted.
+        return {
+            "qualified": True, "score": 0.6, "status": semantic_status,
+            "evidence": [{
+                "source": "EMAIL_BODY", "meaning": semantic_status,
+                "text": redact_sensitive_text(semantic["evidence_summary"]),
+            }],
+            "ignore_reason": None, "semantic_context": semantic,
+        }
     haystack = " ".join([subject, sender_name, sender_email, body]).lower()
     for reason, phrases in NOISE_RULES:
         if any(phrase in haystack for phrase in phrases):
@@ -427,6 +497,13 @@ def routing_decision(
         "PROFILE_NOTIFICATION", "ASSESSMENT", "INTERVIEW", "REJECTION",
     }:
         return {"send_to_ai": False, "score": 0.0, "reason": reason, "context": context}
+    # The deterministic classifier already conclusively identified this
+    # message as promotional/questionnaire/historical/question noise. Trust
+    # that verdict outright: an incidental keyword match below (e.g. a job
+    # portal's generic tips paragraph mentioning "recruiters") must never
+    # override a conclusive semantic determination and force a model call.
+    if context.get("semantic_context"):
+        return {"send_to_ai": False, "score": 0.0, "reason": reason or "DETERMINISTIC_NOISE_FILTER", "context": context}
     combined = " ".join(
         [subject, body, sender_name, sender_email]
         + [str(item.get("text") or "") for item in (attachments or [])]
