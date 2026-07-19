@@ -60,6 +60,25 @@ _JOB_AD_PATTERNS = (
 _PAYSLIP_PATTERNS = (
     r"\bpayslip\b", r"\bsalary slip\b", r"pay slip for the month",
 )
+# Bulk job-portal marketing that mentions "recruiter(s)" or similar in
+# passing but carries no candidate-specific outcome. Combined with a portal
+# sender so a genuine recruiter's own email is never caught by this alone.
+_JOB_PORTAL_NOTIFICATION_PATTERNS = (
+    r"\bsent by recruiters?\b", r"\bnoticed by recruiters?\b",
+    r"\bnew jobs? in your inbox\b", r"\bjob search saf(?:er|e|ety)\b",
+    r"\bjob scams?\b", r"\bfraud jobs?\b",
+    r"\bkeep your profile updated\b", r"\bprofile (?:viewed|visibility)\b",
+)
+# Bank/payment transaction alerts and OTP messages that occasionally land in
+# a monitored candidate mailbox but are never recruitment-related. These
+# often contain isolated words (e.g. "offer" inside an RBI fraud-warning
+# footer) that would otherwise trip the ambiguous-recruitment fallback.
+_TRANSACTIONAL_PATTERNS = (
+    r"\bamount (?:debited|credited)\b", r"\bwas debited from your\b",
+    r"\bwas credited to your\b", r"\bavailable balance\b",
+    r"\btransaction (?:info|id|alert)\b", r"\bupi[/-]", r"\bblock upi\b",
+    r"\bone[\s-]time password\b", r"\byour otp is\b", r"\bsavings account\b",
+)
 _SENSITIVE_PATTERNS = (
     (r"(?i)\b(?:bank\s*(?:a/?c|account)(?:\s*(?:no|number))?|account\s*(?:no|number))\s*[:#-]?\s*\d(?:[ -]?\d){5,}", "Bank account: [REDACTED]"),
     (r"(?i)\bPAN\s*(?:no|number)?\s*[:#-]?\s*[A-Z]{5}[0-9]{4}[A-Z]\b", "PAN: [REDACTED]"),
@@ -123,7 +142,17 @@ def _is_job_ad(subject: str, body: str, sender_email: str) -> bool:
     portal = any(token in sender_email.casefold() for token in ("naukri", "foundit", "monster", "indeed", "shine", "timesjobs"))
     ad_language = any(re.search(pattern, combined, re.I) for pattern in _JOB_AD_PATTERNS)
     many_requirements = sum(token in combined for token in ("experience", "skills", "location", "notice period", "ctc", "job description")) >= 3
-    return ad_language or (portal and many_requirements)
+    return ad_language or (portal and many_requirements) or _is_job_portal_notification(combined, sender_email)
+
+
+def _is_job_portal_notification(combined: str, sender_email: str) -> bool:
+    portal = any(token in sender_email.casefold() for token in ("naukri", "foundit", "monster", "indeed", "shine", "timesjobs"))
+    return portal and any(re.search(pattern, combined, re.I) for pattern in _JOB_PORTAL_NOTIFICATION_PATTERNS)
+
+
+def _is_transactional_alert(subject: str, body: str) -> bool:
+    combined = f"{subject}\n{body[:4000]}".casefold()
+    return any(re.search(pattern, combined, re.I) for pattern in _TRANSACTIONAL_PATTERNS)
 
 
 def _event_date(sent_at: Any) -> date:
@@ -160,6 +189,7 @@ def classify_context(
     questionnaire = _questionnaire(direct)
     question = _is_question(direct)
     job_ad = _is_job_ad(subject, body, sender_email)
+    transactional = _is_transactional_alert(subject, body)
     payslip = document_type == "PAYSLIP" or any(re.search(pattern, all_text, re.I) for pattern in _PAYSLIP_PATTERNS)
     historical = payslip or document_type in {"EXPERIENCE_LETTER", "RELIEVING_LETTER", "EMPLOYMENT_VERIFICATION"}
 
@@ -201,6 +231,8 @@ def classify_context(
 
     if questionnaire:
         intent, summary = "RECRUITER_QUESTIONNAIRE", "Recruiter is requesting candidate information. No employment outcome is confirmed."
+    elif transactional:
+        intent, summary = "GENERAL", "This is an unrelated transactional/account notification, not a recruitment email."
     elif job_ad:
         intent, summary = "JOB_ADVERTISEMENT", "This is a job advertisement or recruiter requirement, not a candidate employment outcome."
     elif payslip:
@@ -227,7 +259,7 @@ def classify_context(
         intent, summary = "UNKNOWN", "No validated candidate employment outcome was found."
 
     lifecycle = "NONE"
-    if not (questionnaire or job_ad or question or historical):
+    if not (questionnaire or job_ad or transactional or question or historical):
         if actual_joined:
             lifecycle = "JOINED"
         elif joining_confirmed:
@@ -240,7 +272,7 @@ def classify_context(
             lifecycle = "SELECTED"
 
     interview_event = "NONE"
-    if not (questionnaire or job_ad or question or historical):
+    if not (questionnaire or job_ad or transactional or question or historical):
         if interview_cancelled:
             interview_event = "INTERVIEW_CANCELLED"
         elif interview_rescheduled:
@@ -256,12 +288,12 @@ def classify_context(
     return {
         "email_intent": intent,
         "document_type": document_type,
-        "is_candidate_specific": not job_ad,
+        "is_candidate_specific": not (job_ad or transactional),
         "is_job_outcome": lifecycle != "NONE",
         "is_current_event": lifecycle != "NONE" and not historical,
         "is_questionnaire": questionnaire,
         "is_question": question,
-        "is_promotional_or_job_ad": job_ad,
+        "is_promotional_or_job_ad": job_ad or transactional,
         "is_historical_information": historical,
         "historical_employment_evidence": historical,
         "lifecycle_event": lifecycle,
