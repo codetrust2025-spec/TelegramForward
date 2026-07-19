@@ -514,7 +514,11 @@ def routing_decision(
         "onboarding", "appointment", "employment", "compensation", "recruiter",
         "candidate", "job role", "position", "background verification",
     )
-    if any(cue in combined for cue in ambiguous_recruitment_cues):
+    # Word-boundary match, not substring: a plain `cue in combined` check let
+    # "offer" match inside "offering"/"offered" anywhere in the email (a bank
+    # fraud-warning footer, a newsletter's "bond offering"), forcing routine
+    # marketing noise through the model.
+    if any(re.search(rf"\b{re.escape(cue)}\b", combined) for cue in ambiguous_recruitment_cues):
         return {"send_to_ai": True, "score": max(0.25, float(context.get("score") or 0)), "reason": "AMBIGUOUS_RECRUITMENT", "context": context}
     return {"send_to_ai": False, "score": 0.0, "reason": "NO_RECRUITMENT_ROUTING_SIGNAL", "context": context}
 
