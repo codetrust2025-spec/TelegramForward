@@ -38,6 +38,24 @@ const trackedStatuses = new Set([
   "MANUAL_REVIEW_REQUIRED",
 ]);
 const hiddenReviews = new Set(["IGNORED", "FALSE_POSITIVE", "DUPLICATE"]);
+// Mirrors the lifecycle_groups mapping in
+// core/recruitment_mail_store.py::summarize_selection_tracking_events so the
+// summary tiles filter the Review Queue to exactly the statuses each tile's
+// count is derived from.
+const STATUS_GROUP_STATUSES = {
+  needs_review: ["MANUAL_REVIEW_REQUIRED", "IGNORED_LOW_CONFIDENCE"],
+  selected: ["SELECTED", "FINAL_SELECTION_CONFIRMED"],
+  offers_received: [
+    "OFFER_INDICATION",
+    "OFFER_IN_PROGRESS",
+    "OFFER_APPROVED",
+    "OFFER_LETTER_RECEIVED",
+    "APPOINTMENT_LETTER_RECEIVED",
+  ],
+  offers_accepted: ["OFFER_ACCEPTED"],
+  joining_confirmed: ["JOINING_CONFIRMED"],
+  joined: ["JOINED"],
+};
 const human = (value) =>
   String(value || "")
     .replaceAll("_", " ")
@@ -139,9 +157,25 @@ const isVisibleEvent = (event) =>
     (Number(event.confidence || 0) >= 0.8 &&
       Boolean(event.structured_result?.evidence?.length)));
 
-export function SummaryCard({ tone, icon, value, title, subtitle }) {
+export function SummaryCard({ tone, icon, value, title, subtitle, onClick, active }) {
   return (
-    <article className={`sot-summary-card is-${tone}`}>
+    <article
+      className={`sot-summary-card is-${tone}${active ? " is-active" : ""}${onClick ? " is-clickable" : ""}`}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      aria-pressed={onClick ? active : undefined}
+      onKeyDown={
+        onClick
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
+    >
       <span className="sot-summary-icon" aria-hidden="true">
         {icon}
       </span>
@@ -452,6 +486,8 @@ function ReviewQueue({
   names,
   candidateId,
   onClearCandidate,
+  statusFilterLabel,
+  onClearStatusFilter,
   onEvidence,
   onReview,
 }) {
@@ -461,12 +497,19 @@ function ReviewQueue({
         <div>
           <h2>Review Queue</h2>
           <p>
-            Verify AI-detected outcomes before they affect candidate records.
+            {statusFilterLabel
+              ? `Showing only "${statusFilterLabel}" emails.`
+              : "Verify AI-detected outcomes before they affect candidate records."}
           </p>
         </div>
         <div className="sot-review-header-actions">
           {candidateId && (
             <button onClick={onClearCandidate}>Show all candidates</button>
+          )}
+          {statusFilterLabel && (
+            <button onClick={onClearStatusFilter}>
+              Clear "{statusFilterLabel}" filter
+            </button>
           )}
           <span>{events.length} records</span>
         </div>
@@ -1000,6 +1043,7 @@ export default function RecruitmentMailPanelRedesign() {
   const [mailboxes, setMailboxes] = useState([]);
   const [candidateId, setCandidateId] = useState("");
   const [reviewCandidateId, setReviewCandidateId] = useState("");
+  const [reviewStatusFilter, setReviewStatusFilter] = useState("");
   const [timeline, setTimeline] = useState([]);
   const [search, setSearch] = useState("");
   const [mailboxFilter, setMailboxFilter] = useState("ALL");
@@ -1378,6 +1422,7 @@ export default function RecruitmentMailPanelRedesign() {
       value: metrics.needs_review ?? 0,
       title: "Needs Review",
       subtitle: "Requires your attention",
+      group: "needs_review",
     },
     {
       tone: "blue",
@@ -1385,6 +1430,7 @@ export default function RecruitmentMailPanelRedesign() {
       value: metrics.selected ?? 0,
       title: "Selected",
       subtitle: "AI-detected selections",
+      group: "selected",
     },
     {
       tone: "blue",
@@ -1392,6 +1438,7 @@ export default function RecruitmentMailPanelRedesign() {
       value: metrics.offers_received ?? 0,
       title: "Offers Received",
       subtitle: "Offer emails detected",
+      group: "offers_received",
     },
     {
       tone: "green",
@@ -1399,6 +1446,7 @@ export default function RecruitmentMailPanelRedesign() {
       value: metrics.offers_accepted || 0,
       title: "Offers Accepted",
       subtitle: "Candidates accepted",
+      group: "offers_accepted",
     },
     {
       tone: "green",
@@ -1406,17 +1454,24 @@ export default function RecruitmentMailPanelRedesign() {
       value: metrics.joining_confirmed ?? 0,
       title: "Joining Confirmed",
       subtitle: "Candidates with confirmed joining arrangements",
+      group: "joining_confirmed",
     },
     {
       tone: "green",
-      icon: "â™§",
+      icon: "♧",
       value: metrics.joined ?? 0,
       title: "Joined",
       subtitle: "Candidates confirmed as joined",
+      group: "joined",
     },
   ];
   const viewEmails = (row) => {
     setReviewCandidateId(row.candidate.id);
+    setTab("reviews");
+  };
+  const selectStatusFilter = (group) => {
+    setReviewStatusFilter((current) => (current === group ? "" : group));
+    setReviewCandidateId("");
     setTab("reviews");
   };
   const rescan = () => {
@@ -1490,7 +1545,12 @@ export default function RecruitmentMailPanelRedesign() {
       )}
       <section className="sot-summary-grid">
         {summary.map((card) => (
-          <SummaryCard key={card.title} {...card} />
+          <SummaryCard
+            key={card.title}
+            {...card}
+            onClick={() => selectStatusFilter(card.group)}
+            active={tab === "reviews" && reviewStatusFilter === card.group}
+          />
         ))}
       </section>
       <nav className="sot-tabs">
@@ -1656,16 +1716,29 @@ export default function RecruitmentMailPanelRedesign() {
       )}
       {tab === "reviews" && (
         <ReviewQueue
-          events={
-            reviewCandidateId
-              ? events.filter(
-                  (event) => event.candidate_id === reviewCandidateId,
-                )
-              : events
-          }
+          events={events
+            .filter((event) =>
+              reviewCandidateId
+                ? event.candidate_id === reviewCandidateId
+                : true,
+            )
+            .filter((event) =>
+              reviewStatusFilter
+                ? (STATUS_GROUP_STATUSES[reviewStatusFilter] || []).includes(
+                    event.primary_status,
+                  )
+                : true,
+            )}
           names={names}
           candidateId={reviewCandidateId}
           onClearCandidate={() => setReviewCandidateId("")}
+          statusFilterLabel={
+            reviewStatusFilter
+              ? summary.find((card) => card.group === reviewStatusFilter)
+                  ?.title
+              : ""
+          }
+          onClearStatusFilter={() => setReviewStatusFilter("")}
           onEvidence={setEvidenceId}
           onReview={review}
         />

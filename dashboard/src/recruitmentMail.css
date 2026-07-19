@@ -507,6 +507,20 @@
   border-color: rgb(255 166 43 / 72%);
   box-shadow: inset 4px 0 var(--sot-amber);
 }
+.sot-summary-card.is-clickable {
+  cursor: pointer;
+}
+.sot-summary-card.is-clickable:hover {
+  border-color: var(--sot-blue);
+}
+.sot-summary-card.is-clickable:focus-visible {
+  outline: 2px solid var(--sot-blue);
+  outline-offset: 2px;
+}
+.sot-summary-card.is-active {
+  border-color: var(--sot-blue);
+  box-shadow: 0 0 0 1px var(--sot-blue);
+}
 .sot-summary-icon {
   display: grid;
   place-items: center;
