@@ -1284,7 +1284,7 @@ export default function RecruitmentMailPanelRedesign() {
             className={`sot-ai-status is-${aiStatus?.status || "unknown"}`}
             title={aiStatus?.error_message || "Local Ollama status"}
           >
-            Ollama{" "}
+            AI{" "}
             {aiStatus?.status === "healthy"
               ? "Available"
               : human(

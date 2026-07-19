@@ -124,7 +124,7 @@ describe("RecruitmentMailPanel", () => {
         <RecruitmentMailPanel />
       </ConfirmProvider>,
     );
-    expect(await screen.findByText("Ollama Available")).toBeInTheDocument();
+    expect(await screen.findByText("AI Available")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Refresh/ }));
     await waitFor(() =>
       expect(
