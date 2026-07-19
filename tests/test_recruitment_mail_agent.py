@@ -2,7 +2,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from services.recruitment_mail_agent import _prompt_json, clean_email, relevance_score, content_hash, validate_result, parse_model_json
+from core.ai_gateway import AIGatewayError
+from services.recruitment_mail_agent import (
+    _prompt_json, clean_email, relevance_score, content_hash, validate_result, parse_model_json,
+    routing_decision, _failure_review_result,
+)
 
 def valid_result():
     return {'schema_version':'selection_offer_event_v1','is_recruitment_related':True,'is_selection_or_offer_related':True,'should_create_review_record':True,'status':'SELECTED','confidence':.95,'ignore_reason':None,'candidate':{'name':None,'email':None},'company':{'name':None,'domain':None},'job':{'title':None,'employment_type':None,'location':None},'recruiter':{'name':None,'email':None},'interview':{k:None for k in ['date','time','timezone','mode','round','location','meeting_link']},'offer':{'offer_detected':False,'offer_letter_detected':False,'appointment_letter_detected':False,'offer_date':None,'offered_ctc':None,'currency':None,'joining_date':None,'offer_expiry_date':None},'attachments':[],'evidence':[{'source':'EMAIL_BODY','meaning':'SELECTED','text':'you have been selected'}],'risk_flags':[],'requires_manual_review':False,'summary':'Selected.','recommended_action':'Review.'}
@@ -95,3 +99,68 @@ def test_shortlist_without_schedule_remains_informational():
     row['evidence']=[{'source':'EMAIL_BODY','meaning':'INTERVIEW_SHORTLISTED','text':'shortlisted for the next interview'}]
     validate_result(row,{'subject':'Update','body':'You have been shortlisted for the next interview. We will contact you later.'})
     assert row['classification']=='interview_shortlisted'
+
+
+# Regression coverage for the "Ollama should not be required to reject
+# obvious noise" fix. NAUKRI_WALKIN_* reproduces the exact production email
+# (subject/body/sender) that was wrongly routed to the AI model and then,
+# once Ollama was unreachable, wrongly forced into Needs Review.
+NAUKRI_WALKIN_SUBJECT = "Reminder: Don’t Forget to attend these Walk-in's today"
+NAUKRI_WALKIN_BODY = (
+    "Reminder! Don’t forget to attend the walk-in job(s) you have applied to. "
+    "Your walk-in reminder Urgent Opening DevOps Engineer Tcs 18 Jul walkin Interview "
+    "Concepts Unlimited Date & time 2026-7-18, 9.00 AM - 11.30 AM Location Will share "
+    "Be prepared to answer as well as ask questions to the recruiters. Team Naukri"
+)
+
+
+def test_deterministic_job_ad_is_not_routed_to_ai():
+    """TEST 1: obvious deterministic noise must never reach the AI model."""
+    route = routing_decision(NAUKRI_WALKIN_SUBJECT, NAUKRI_WALKIN_BODY, "", "reminder@naukri.com")
+    assert route["send_to_ai"] is False
+
+
+def test_candidate_specific_walkin_confirmation_is_routed_to_ai():
+    """TEST 2: a candidate-specific confirmed walk-in must still reach AI/validation."""
+    route = routing_decision(
+        "Walk-in interview confirmation",
+        "Hi Gopichand, your interview with ABC Technologies is confirmed today at 2 PM IST.",
+        "ABC Technologies HR", "hr@abctechnologies.invalid",
+    )
+    assert route["send_to_ai"] is True
+
+
+def test_ollama_down_and_obvious_ad_is_audit_only_not_retry_pending():
+    """TEST 3: Ollama unavailable + obvious deterministic ad -> Audit Only, never Needs Review."""
+    message = {
+        "subject": NAUKRI_WALKIN_SUBJECT, "body": NAUKRI_WALKIN_BODY,
+        "sender_email": "reminder@naukri.com", "sender_name": "",
+        "recipient_email": "candidate@test.invalid", "sent_at": "2026-07-18T13:38:53Z",
+    }
+    exc = AIGatewayError("Ollama connection failed", code="OLLAMA_CONNECTION_FAILED")
+    result = _failure_review_result(message, exc)
+    assert result["is_selection_or_offer_related"] is False
+    assert result["should_create_review_record"] is False
+    assert result["primary_status"] == "IGNORED_NOT_OFFER_RELATED"
+    assert result["classification"] == "not_relevant"
+    assert result["ai_status"] == "NOT_REQUIRED"
+    assert result["validation_status"] == "NOT_REQUIRED"
+    assert result["lifecycle_event"] == "NONE"
+    assert result["interview_event"] == "NONE"
+    assert result["requires_manual_review"] is False
+
+
+def test_ollama_down_and_ambiguous_recruitment_email_is_retry_pending():
+    """TEST 4: Ollama unavailable + genuinely ambiguous content -> AI_RETRY_PENDING, no lifecycle/interview event."""
+    message = {
+        "subject": "Update on your application",
+        "body": "We wanted to update you on the status of your recent application with our team.",
+        "sender_email": "talent@employer.invalid", "sender_name": "Talent Team",
+        "recipient_email": "candidate@test.invalid", "sent_at": "2026-07-18T13:38:53Z",
+    }
+    exc = AIGatewayError("Ollama connection failed", code="OLLAMA_CONNECTION_FAILED")
+    result = _failure_review_result(message, exc)
+    assert result["primary_status"] == "MANUAL_REVIEW_REQUIRED"
+    assert result["ai_status"] == "RETRY_PENDING"
+    assert result["validation_status"] == "RETRY_PENDING"
+    assert result["lifecycle_event"] == "NONE"

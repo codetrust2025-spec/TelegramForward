@@ -1215,6 +1215,19 @@
 .sot-evidence ul {
   margin: 18px 0;
 }
+.sot-evidence-status {
+  color: var(--sot-muted);
+  text-align: center;
+  padding: 40px 12px;
+}
+.sot-evidence-status p {
+  margin: 0 0 6px;
+  color: var(--sot-text);
+}
+.sot-evidence-status small {
+  display: block;
+  margin-bottom: 14px;
+}
 
 @media (max-width: 1180px) {
   .sot-summary-grid {

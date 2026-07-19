@@ -267,6 +267,57 @@ def test_ai_failure_never_promotes_strong_keywords_to_lifecycle_truth(monkeypatc
     assert created[0][0][2]["ai_validation_status"] == "RETRY_PENDING"
 
 
+def test_ollama_outage_on_obvious_job_ad_is_audit_only_end_to_end(monkeypatch):
+    """TEST 3 (end-to-end): the deterministic noise gate keeps an obvious
+    job-portal ad out of AI entirely, so an Ollama outage never turns it into
+    Needs Review — reproduces the production Naukri walk-in reminder email."""
+    from core.ai_gateway import AIGatewayError
+    statuses=[]; created=[]
+    monkeypatch.setattr(agent.store,"insert_message",lambda *args:({"id":"stored-message","processing_status":"FILTERED"},True))
+    monkeypatch.setattr(agent.store,"is_duplicate_content",lambda *args:False)
+    monkeypatch.setattr(agent.store,"mark_message_status",lambda mid,status,**kwargs:statuses.append(status))
+    monkeypatch.setattr(agent.store,"record_analysis",lambda *args,**kwargs:None)
+    monkeypatch.setattr(agent.store,"create_event",lambda *args,**kwargs:created.append(True))
+
+    def boom(*args):
+        raise AIGatewayError("down", code="OLLAMA_CONNECTION_FAILED")
+    monkeypatch.setattr(agent,"analyze",boom)
+
+    naukri_message = message(
+        subject="Reminder: Don’t Forget to attend these Walk-in's today",
+        body=(
+            "Reminder! Don’t forget to attend the walk-in job(s) you have applied to. "
+            "Your walk-in reminder Urgent Opening DevOps Engineer Tcs 18 Jul walkin Interview "
+            "Concepts Unlimited Date & time 2026-7-18, 9.00 AM - 11.30 AM Location Will share "
+            "Be prepared to answer as well as ask questions to the recruiters. Team Naukri"
+        ),
+    )
+    naukri_message["sender_email"] = "reminder@naukri.com"
+    result = agent.process_message({"id":"mailbox-1","candidate_id":"candidate-1"}, naukri_message, [])
+    assert result is None
+    assert not created, "no review-queue event should be created for deterministic noise, even with Ollama down"
+    assert statuses == ["IGNORED_NOT_OFFER_RELATED"]
+
+
+def test_reprocessing_same_thread_status_does_not_duplicate_events(monkeypatch):
+    """TEST 8: reprocessing the same email must not create a second
+    lifecycle/interview event or a second Review Queue row."""
+    created=[]
+    monkeypatch.setattr(agent.store,"insert_message",lambda *args:({"id":"stored-message","processing_status":"EVENT_CREATED"},False))
+    monkeypatch.setattr(agent.store,"is_duplicate_content",lambda *args:False)
+    monkeypatch.setattr(agent.store,"is_duplicate_offer_attachment",lambda *args:False)
+    monkeypatch.setattr(agent.store,"is_duplicate_thread_status",lambda *args:True)
+    monkeypatch.setattr(agent.store,"mark_message_status",lambda *args,**kwargs:None)
+    monkeypatch.setattr(agent.store,"create_event",lambda *args,**kwargs:created.append(True))
+    monkeypatch.setattr(agent.store,"create_or_reprocess_event",lambda *args,**kwargs:created.append(True))
+    monkeypatch.setattr(agent,"analyze",lambda *args:({**structured("OFFER_LETTER_RECEIVED"),"primary_status":"OFFER_LETTER_RECEIVED"},"model",1))
+    result = agent.process_message(
+        {"id":"mailbox-1","candidate_id":"candidate-1"}, message(), [], reprocess=True,
+    )
+    assert result is None
+    assert not created, "a duplicate thread status must not create a second review-queue event"
+
+
 def test_high_impact_joining_result_uses_independent_validator(monkeypatch):
     source=message(
         "Congratulations and Next Steps - Data Engineer Role",

@@ -252,4 +252,110 @@ describe("RecruitmentMailPanel", () => {
       }),
     ).toBe(true);
   });
+
+  const retryPendingEvent = {
+    id: "event-retry-1",
+    candidate_id: "c1",
+    subject: "Reminder: Don't Forget to attend these Walk-in's today",
+    primary_status: "MANUAL_REVIEW_REQUIRED",
+    review_status: "PENDING",
+    validation_status: "RETRY_PENDING",
+    ai_status: "RETRY_PENDING",
+    ai_model: "unavailable:ollama_connection_failed",
+    confidence: 0,
+    visible_in_offer_review: true,
+    created_at: "2026-07-18T13:38:53Z",
+    structured_result: { evidence: [], validation_status: "RETRY_PENDING" },
+  };
+
+  it("shows 'Pending AI' instead of a misleading 0% when AI never ran", async () => {
+    fetch.mockImplementation(async (url) => {
+      const path = String(url);
+      if (path.includes("/review"))
+        return {
+          ok: true,
+          json: async () => ({ status: "ok", events: [retryPendingEvent] }),
+        };
+      return { ok: true, json: async () => payloadFor(path) };
+    });
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review Queue" }));
+    await screen.findByText(retryPendingEvent.subject);
+    expect(screen.getByText("Pending AI")).toBeInTheDocument();
+    expect(screen.queryByText("0%")).not.toBeInTheDocument();
+    const row = screen.getByText(retryPendingEvent.subject).closest("tr");
+    expect(row).toHaveTextContent("Retry Pending");
+    expect(row).toHaveTextContent("Ollama connection failed");
+  });
+
+  it("shows AI retry-pending details in Detection Evidence instead of staying stuck on Loading", async () => {
+    fetch.mockImplementation(async (url) => {
+      const path = String(url);
+      if (path.includes("/review"))
+        return {
+          ok: true,
+          json: async () => ({ status: "ok", events: [retryPendingEvent] }),
+        };
+      if (path.includes("/api/ai-recruitment/events/event-retry-1"))
+        return {
+          ok: true,
+          json: async () => ({ status: "ok", event: retryPendingEvent }),
+        };
+      return { ok: true, json: async () => payloadFor(path) };
+    });
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review Queue" }));
+    await screen.findByText(retryPendingEvent.subject);
+    fireEvent.click(screen.getByRole("button", { name: "Evidence" }));
+    await screen.findByText(
+      /AI analysis is pending because the AI service was unavailable/,
+    );
+    expect(screen.getByText("Ollama connection failed")).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+  });
+
+  it("shows an error state with a working Retry button when the evidence API fails, never staying stuck on Loading", async () => {
+    let evidenceCalls = 0;
+    fetch.mockImplementation(async (url) => {
+      const path = String(url);
+      if (path.includes("/review"))
+        return {
+          ok: true,
+          json: async () => ({ status: "ok", events: [retryPendingEvent] }),
+        };
+      if (path.includes("/api/ai-recruitment/events/event-retry-1")) {
+        evidenceCalls += 1;
+        if (evidenceCalls === 1) {
+          return { ok: false, json: async () => ({ detail: "Event not found" }) };
+        }
+        return {
+          ok: true,
+          json: async () => ({ status: "ok", event: retryPendingEvent }),
+        };
+      }
+      return { ok: true, json: async () => payloadFor(path) };
+    });
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review Queue" }));
+    await screen.findByText(retryPendingEvent.subject);
+    fireEvent.click(screen.getByRole("button", { name: "Evidence" }));
+    await screen.findByText("Unable to load detection evidence.");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText(
+      /AI analysis is pending because the AI service was unavailable/,
+    );
+  });
 });
