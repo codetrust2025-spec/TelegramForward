@@ -161,6 +161,29 @@ def test_job_portal_safety_tips_are_not_routed_to_ai():
     assert route["send_to_ai"] is False
 
 
+def test_ambiguous_cue_requires_a_whole_word_not_a_substring():
+    """A plain `cue in text` check let "offer" match inside "offering" in an
+    unrelated investment newsletter, forcing it through the AI pipeline."""
+    subject = "New A- rated bond offering is now available"
+    body = (
+        "View the bond details and other important information. Update your "
+        "email preferences here to choose the category of emails you wish to "
+        "receive."
+    )
+    route = routing_decision(subject, body, "", "invest@stablebonds.in")
+    assert route["send_to_ai"] is False
+
+
+def test_genuine_offer_email_still_qualifies_for_ai():
+    """The tightened word-boundary cue match must not lose real signal."""
+    route = routing_decision(
+        "Your Offer",
+        "We are pleased to offer you the position of Software Engineer.",
+        "", "hr@realcompany.invalid",
+    )
+    assert route["send_to_ai"] is True
+
+
 def test_candidate_specific_walkin_confirmation_is_routed_to_ai():
     """TEST 2: a candidate-specific confirmed walk-in must still reach AI/validation."""
     route = routing_decision(
