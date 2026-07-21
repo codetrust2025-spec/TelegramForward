@@ -1,4 +1,5 @@
-import React, { useCallback, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useConfirm } from '../context/ConfirmContext.jsx'
 import { copyToClipboard } from '../utils/copyToClipboard.js'
 
@@ -53,11 +54,25 @@ const SVC_FIELDS = [
 ]
 
 function VaultModal({ title, fields, form, onChange, onSave, onClose, error }) {
-  return (
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [onClose])
+
+  return createPortal(
     <div className="dr-modal-backdrop" role="presentation" onClick={onClose}>
       <div
         className="dr-modal cand-card"
         role="dialog"
+        aria-modal="true"
         aria-labelledby="dr-vault-modal-title"
         onClick={(e) => e.stopPropagation()}
       >
@@ -92,7 +107,8 @@ function VaultModal({ title, fields, form, onChange, onSave, onClose, error }) {
           <button type="button" className="cand-btn cand-btn--primary" onClick={onSave}>Save</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

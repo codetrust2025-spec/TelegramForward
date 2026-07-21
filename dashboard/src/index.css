@@ -14719,18 +14719,27 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 .dr-modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  z-index: 1200;
+  background: rgba(2, 6, 23, 0.88);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 5000;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
 }
 .dr-modal {
+  position: relative;
+  isolation: isolate;
   width: min(560px, 100%);
   max-height: 90vh;
   overflow: auto;
   padding: 20px;
+  color: #e5edf8;
+  background: #0b1628;
+  border: 1px solid rgba(96, 165, 250, 0.34);
+  border-radius: 14px;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.72), 0 0 0 1px rgba(15, 23, 42, 0.9);
 }
 .dr-form-grid {
   display: grid;
@@ -14752,6 +14761,23 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .dr-modal-backdrop {
+    align-items: flex-start;
+    padding: 16px;
+    overflow-y: auto;
+  }
+  .dr-modal {
+    margin: auto 0;
+  }
+  .dr-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .dr-form-full {
+    grid-column: auto;
+  }
 }
 
 .dr-section {
@@ -17007,6 +17033,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   top: auto;
   z-index: 3;
 }
+
 .cand-page > .cand-table-wrap .cand-table thead,
 .cand-page > .cand-table-wrap .cand-table thead th {
   position: static;
