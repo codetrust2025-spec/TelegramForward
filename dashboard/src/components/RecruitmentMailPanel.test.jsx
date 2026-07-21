@@ -123,6 +123,24 @@ describe("RecruitmentMailPanel", () => {
     );
     expect(screen.queryByText("Request failed")).not.toBeInTheDocument();
   });
+  it("opens Gmail connection inline from the main review screen", async () => {
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+    const addButton = await screen.findByRole("button", {
+      name: "+ Add candidate Gmail",
+    });
+    fireEvent.click(addButton);
+    expect(
+      screen.getByRole("heading", { name: "Connect a candidate Gmail" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review Queue" })).toHaveClass(
+      "active",
+    );
+    expect(screen.getByRole("button", { name: "Close Gmail form" })).toBeInTheDocument();
+  });
   it("refreshes Ollama health without reloading the page", async () => {
     render(
       <ConfirmProvider>

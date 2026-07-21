@@ -545,6 +545,53 @@ export function AdvancedToolsAccordion({
   );
 }
 
+function AddMailboxForm({
+  candidates,
+  candidateId,
+  email,
+  busy,
+  onCandidate,
+  onEmail,
+  onSubmit,
+}) {
+  return (
+    <form className="sot-add-mailbox-form sot-main-add-mailbox-form" onSubmit={onSubmit}>
+      <div className="sot-add-mailbox-copy">
+        <h3>Connect a candidate Gmail</h3>
+        <span>
+          Select a candidate and authorize Gmail securely with Google. You can
+          add multiple Gmail accounts without leaving this screen.
+        </span>
+      </div>
+      <label>
+        Candidate
+        <select value={candidateId} onChange={(event) => onCandidate(event.target.value)} required>
+          <option value="">Select candidate</option>
+          {candidates.map((candidate) => (
+            <option key={candidate.id} value={candidate.id}>
+              {candidate.name} · {candidate.phone || "no phone"}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Gmail address
+        <input
+          type="email"
+          value={email}
+          onChange={(event) => onEmail(event.target.value)}
+          placeholder="candidate@gmail.com (or 2nd Gmail)"
+          autoComplete="email"
+          required
+        />
+      </label>
+      <button type="submit" className="sot-primary-button" disabled={busy || !candidateId || !email.trim()}>
+        {busy ? "Starting…" : "Connect Gmail"}
+      </button>
+    </form>
+  );
+}
+
 function ReviewQueue({
   events,
   names,
@@ -554,6 +601,8 @@ function ReviewQueue({
   onClearStatusFilter,
   onEvidence,
   onReview,
+  onAddMailbox,
+  addMailboxOpen,
 }) {
   const pendingEvents = events.filter(
     (event) => String(event.review_status || "").toUpperCase() === "PENDING",
@@ -575,6 +624,14 @@ function ReviewQueue({
           </p>
         </div>
         <div className="sot-review-header-actions">
+          <button
+            type="button"
+            className="sot-add-mailbox-button"
+            onClick={onAddMailbox}
+            aria-expanded={addMailboxOpen}
+          >
+            {addMailboxOpen ? "Close Gmail form" : "+ Add candidate Gmail"}
+          </button>
           {candidateId && (
             <button onClick={onClearCandidate}>Show all candidates</button>
           )}
@@ -2180,7 +2237,19 @@ export default function RecruitmentMailPanelRedesign() {
         </>
       )}
       {tab === "reviews" && (
-        <ReviewQueue
+        <>
+          {showAddMailbox && (
+            <AddMailboxForm
+              candidates={availableMailboxCandidates}
+              candidateId={newMailboxCandidateId}
+              email={newMailboxEmail}
+              busy={busy}
+              onCandidate={selectNewMailboxCandidate}
+              onEmail={setNewMailboxEmail}
+              onSubmit={connectNewMailbox}
+            />
+          )}
+          <ReviewQueue
           events={prioritizedReviewEvents
             .filter((event) =>
               reviewCandidateId
@@ -2207,7 +2276,10 @@ export default function RecruitmentMailPanelRedesign() {
           onClearStatusFilter={() => setReviewStatusFilter("")}
           onEvidence={setEvidenceId}
           onReview={review}
-        />
+          onAddMailbox={() => setShowAddMailbox((visible) => !visible)}
+          addMailboxOpen={showAddMailbox}
+          />
+        </>
       )}
       {tab === "candidates" && (
         <CandidateOutcomes
