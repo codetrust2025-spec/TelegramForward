@@ -42,6 +42,13 @@ def test_manual_review_requires_strong_typed_evidence():
     assert should_show_in_selection_offer_review(weak) is False
 
 
+def test_timeout_only_manual_review_is_never_visible():
+    row = event(confidence=0, subject="Update on your application", meaning="RECRUITMENT")
+    row["validation_status"] = "RETRY_PENDING"
+    row["structured_result"]["evidence"] = []
+    assert should_show_in_selection_offer_review(row) is False
+
+
 def test_explicit_ignored_states_never_show():
     row = event(status="SELECTED", confidence=.95, meaning="SELECTED")
     row["review_status"] = "IGNORED"

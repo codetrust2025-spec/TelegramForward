@@ -8,7 +8,7 @@ from services import interview_auto_booking as booking
 
 def result(classification="interview_confirmed", confidence=.96, **interview):
     details = {
-        "date": "2026-07-20", "time": "03:00 PM", "timezone": "Asia/Kolkata",
+        "date": "2099-07-20", "time": "03:00 PM", "timezone": "Asia/Kolkata",
         "round": "L1", "mode": "Online", "meeting_link": "https://meet.test/room",
         "location": None,
     }
@@ -108,6 +108,15 @@ def execute(value):
     )
 
 
+def execute_manual(value):
+    return booking.execute_manual_approved_booking(
+        mailbox={"id": "mb1", "candidate_id": "c1", "email_address": "candidate@test.invalid"},
+        message={"provider_message_id": "gm1", "provider_thread_id": "gt1"},
+        event={"mailbox_message_id": "mm1", "notification": {"id": "n1", "email_analysis_id": "ma1"}},
+        result=value, reviewer="admin@test", correlation_id="manual1",
+    )
+
+
 def test_valid_confirmed_interview_books_without_approval(monkeypatch):
     monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
     _candidate, audits = install_store_fakes(monkeypatch)
@@ -116,6 +125,39 @@ def test_valid_confirmed_interview_books_without_approval(monkeypatch):
     assert outcome["status"] == "Auto Booked"
     assert outcome["booking"]["time"] == "15:00"
     assert audits[-1]["auto_booked"] is True
+
+
+def test_manual_approval_books_fallback_interview_through_safety_checks(monkeypatch):
+    _candidate, audits = install_store_fakes(monkeypatch)
+    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", lambda **kwargs: {"id": "slot1", **kwargs})
+    value = result(date="2099-07-21", time="12:30 PM")
+    value.update({"classification_source": "FALLBACK", "ai_validation_status": "UNAVAILABLE", "requires_manual_review": True})
+    value["evidence"] = [{"meaning": "INTERVIEW_CONFIRMED", "text": "Join on 21 July at 12:30 PM"}]
+    outcome = execute_manual(value)
+    assert outcome["status"] == "Approved & Booked"
+    assert outcome["booking"]["time"] == "12:30"
+    assert audits[-1]["validation_status"] == "MANUAL_APPROVED"
+    assert audits[-1]["auto_booked"] is True
+
+
+def test_manual_approval_never_books_past_interview(monkeypatch):
+    _candidate, audits = install_store_fakes(monkeypatch)
+    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", lambda **kwargs: pytest.fail("past interview must not book"))
+    value = result(date="2000-01-01", time="12:30 PM")
+    value["evidence"] = [{"meaning": "INTERVIEW_CONFIRMED", "text": "Past interview"}]
+    outcome = execute_manual(value)
+    assert outcome["status"] == "Blocked"
+    assert outcome["failure_code"] == "PAST_INTERVIEW"
+    assert audits[-1]["auto_booked"] is False
+
+
+def test_manual_approval_requires_source_email_evidence(monkeypatch):
+    install_store_fakes(monkeypatch)
+    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", lambda **kwargs: pytest.fail("missing evidence must not book"))
+    value = result(date="2099-07-21")
+    value["evidence"] = []
+    outcome = execute_manual(value)
+    assert outcome["failure_code"] == "MISSING_EVIDENCE"
 
 
 def test_payment_failure_creates_blocked_audit_without_booking(monkeypatch):
@@ -129,7 +171,7 @@ def test_payment_failure_creates_blocked_audit_without_booking(monkeypatch):
 
 def test_duplicate_booking_is_blocked(monkeypatch):
     monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
-    row = {"id": "c1", "name": "Rahul", "slot_confirmed": True, "date": "2026-07-20", "time": "15:00"}
+    row = {"id": "c1", "name": "Rahul", "slot_confirmed": True, "date": "2099-07-20", "time": "15:00"}
     install_store_fakes(monkeypatch, rows=[row])
     outcome = execute(result())
     assert outcome["failure_code"] == "DUPLICATE_BOOKING"
@@ -175,7 +217,7 @@ def test_reschedule_resolves_correct_slot_from_thread_not_first_row(monkeypatch)
     target = {"id": "slot2", "name": "Rahul", "slot_confirmed": True, "date": "2026-07-20", "time": "15:00", "interview_source_thread_id": "gt1"}
     _candidate, audits = install_store_fakes(monkeypatch, rows=[wrong, target])
     monkeypatch.setattr(booking.candidate_store, "update_interview_slot", lambda **kwargs: {"id": kwargs["candidate_id"], "date": kwargs["date"], "time": kwargs["time"]})
-    outcome = execute(result("interview_rescheduled", date="2026-07-21", time="11:00 AM"))
+    outcome = execute(result("interview_rescheduled", date="2099-07-21", time="11:00 AM"))
     assert outcome["status"] == "Rescheduled"
     assert outcome["booking"]["id"] == "slot2"
     assert audits[-1]["previous_booking"]["id"] == "slot2"

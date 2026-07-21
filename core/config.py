@@ -15,11 +15,8 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-_DEFAULT_API_ID = REMOVED_TELEGRAM_API_ID
-_DEFAULT_API_HASH = "REMOVED_TELEGRAM_API_HASH"
-
-API_ID = _int_env("TELEGRAM_API_ID", _DEFAULT_API_ID)
-API_HASH = (os.environ.get("TELEGRAM_API_HASH") or _DEFAULT_API_HASH).strip()
+API_ID = _int_env("TELEGRAM_API_ID", 0)
+API_HASH = (os.environ.get("TELEGRAM_API_HASH") or "").strip()
 
 
 def is_production_deploy() -> bool:
@@ -31,7 +28,7 @@ def warn_default_telegram_creds() -> None:
     """Log when production still uses baked-in Telethon API defaults."""
     if not is_production_deploy():
         return
-    if API_ID == _DEFAULT_API_ID or API_HASH == _DEFAULT_API_HASH:
+    if not API_ID or not API_HASH:
         logger.warning(
             "TELEGRAM_API_ID / TELEGRAM_API_HASH still use dev defaults — set env vars in production"
         )

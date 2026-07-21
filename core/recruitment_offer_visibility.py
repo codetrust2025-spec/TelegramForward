@@ -58,8 +58,16 @@ def should_show_in_selection_offer_review(event: dict[str, Any]) -> bool:
     # Require evidence and high confidence
     evidence = _evidence(event)
     validation = str(event.get("validation_status") or (event.get("structured_result") or {}).get("validation_status") or "").upper()
-    retry_pending = status == "MANUAL_REVIEW_REQUIRED" and validation == "RETRY_PENDING"
-    if status == "MANUAL_REVIEW_REQUIRED" and not retry_pending:
+    manual_audit_keep = (
+        status == "MANUAL_REVIEW_REQUIRED"
+        and str(event.get("cleanup_version") or "") == "manual_content_audit_keep_v1"
+    )
+    # AI availability is an infrastructure state, not relevance evidence.
+    # Timeout-only MANUAL_REVIEW_REQUIRED rows must remain hidden while the
+    # recovery worker retries them. A manual audit or strong source evidence
+    # can still make a genuinely important message visible.
+    manual_review_visible = manual_audit_keep
+    if status == "MANUAL_REVIEW_REQUIRED" and not manual_review_visible:
         meanings = {
             str(item.get("meaning") or "").upper()
             for item in evidence if isinstance(item, dict)
@@ -70,7 +78,7 @@ def should_show_in_selection_offer_review(event: dict[str, Any]) -> bool:
         }
         if not meanings.intersection(strong_meanings):
             return False
-    if not retry_pending and (not evidence or float(event.get("confidence") or 0) < 0.8):
+    if not manual_review_visible and (not evidence or float(event.get("confidence") or 0) < 0.8):
         return False
     
     # For interview statuses, require explicit date/time details
@@ -156,7 +164,8 @@ def qualified_event_sql(alias: str = "e") -> tuple[str, list[Any]]:
       AND {alias}.primary_status NOT IN('IGNORED_NOT_OFFER_RELATED','IGNORED_LOW_CONFIDENCE','NO_RELEVANT_STATUS')
       AND {alias}.review_status NOT IN('IGNORED','FALSE_POSITIVE','DUPLICATE')
       AND COALESCE({alias}.visible_in_offer_review,true)=true
-      AND (({alias}.primary_status='MANUAL_REVIEW_REQUIRED' AND COALESCE({alias}.validation_status,{alias}.structured_result->>'validation_status')='RETRY_PENDING') OR (
+      AND (({alias}.primary_status='MANUAL_REVIEW_REQUIRED'
+        AND {alias}.cleanup_version='manual_content_audit_keep_v1') OR (
         {alias}.confidence>=0.8
         AND jsonb_array_length(COALESCE({alias}.structured_result->'evidence','[]'::jsonb))>0
       ))

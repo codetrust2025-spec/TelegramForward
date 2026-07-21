@@ -23,6 +23,7 @@ WITH noisy AS (
   FROM ai_recruitment_events e
   JOIN mailbox_messages m ON m.id=e.mailbox_message_id
   WHERE (e.review_status='PENDING' OR e.review_notes='Automatically archived by strict job-outcome filter v2.')
+    AND e.cleanup_version IS DISTINCT FROM 'manual_content_audit_keep_v1'
     -- Migrations are applied idempotently at startup. Only clean legacy
     -- detections; v3 events have already passed the evidence/confidence gate.
     AND e.prompt_version IS DISTINCT FROM 'v3'

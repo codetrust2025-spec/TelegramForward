@@ -35,9 +35,16 @@ const trackedStatuses = new Set([
   "JOINING_CONFIRMED",
   "JOINED",
   "POST_SELECTION_ONBOARDING",
+  "INTERVIEW_CONFIRMED",
+  "INTERVIEW_SHORTLISTED",
   "MANUAL_REVIEW_REQUIRED",
 ]);
 const hiddenReviews = new Set(["IGNORED", "FALSE_POSITIVE", "DUPLICATE"]);
+const bookableInterviewStatuses = new Set([
+  "INTERVIEW_CONFIRMED",
+  "INTERVIEW_RESCHEDULED",
+  "INTERVIEW_CANCELLED",
+]);
 // Mirrors the lifecycle_groups mapping in
 // core/recruitment_mail_store.py::summarize_selection_tracking_events so the
 // summary tiles filter the Review Queue to exactly the statuses each tile's
@@ -83,6 +90,8 @@ const aiFailureReason = (event) => {
   if (!code) return "AI validation is temporarily unavailable.";
   return AI_FAILURE_REASONS[code] || human(code);
 };
+const isManualAuditKeep = (event) =>
+  event?.cleanup_version === "manual_content_audit_keep_v1";
 const aiNeverRan = (event) => {
   const aiStatus = String(
     event?.ai_status || event?.structured_result?.ai_status || "",
@@ -111,6 +120,12 @@ const describeAiStatus = (event) => {
       event?.structured_result?.validation_status ||
       "",
   ).toUpperCase();
+  if (isManualAuditKeep(event)) {
+    return {
+      status: "Manual audit",
+      reason: "Content verified; automatic AI retry disabled",
+    };
+  }
   if (aiFailureCode(event) || aiStatus === "RETRY_PENDING") {
     return { status: "Retry Pending", reason: aiFailureReason(event) };
   }
@@ -140,6 +155,50 @@ const formatTime = (value) => {
       : date.toLocaleDateString();
   return `${label}, ${date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 };
+const formatEmailDate = (value) => {
+  if (!value) return "Never";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Never";
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${day}-${month}-${date.getFullYear()}`;
+};
+const formatEmailBody = (value) => {
+  let body = String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+>[ \t]+/g, "\n")
+    .replace(/^\s*>+\s?/gm, "")
+    .replace(/(?:^|\s)\*\s+(?=[A-Z])/g, "\n• ")
+    .replace(/\*([^*\n]+)\*/g, "$1")
+    .replace(/\s+_{12,}\s+/g, "\n\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+  body = body
+    .replace(/\bInvitation\s+(Dear\s+)/i, "Invitation\n\n$1")
+    .replace(/,\s+(Greetings from\s+)/i, ",\n$1")
+    .replace(/!\s+(We are pleased\s+)/i, "!\n\n$1")
+    .replace(/\.\s+(Please find the interview details below:)/i, ".\n\n$1")
+    .replace(
+      /Skill\s+(.+?)\s+Date\s+(.+?)\s+Time\s+(.+?)\s+Duration\s+(.+?)\s+Mode\s+(.+?)\s+Meeting Link\b/i,
+      "Skill\n$1\n\nDate\n$2\n\nTime\n$3\n\nDuration\n$4\n\nMode\n$5\n\nMeeting Link",
+    )
+    .replace(/Microsoft Teams meeting\s+Join:/i, "Microsoft Teams meeting\nJoin:")
+    .replace(/(https?:\/\/\S+)\s+(Meeting ID:)/i, "$1\n$2")
+    .replace(/(Meeting ID:\s+.+?)\s+(Passcode:)/i, "$1\n$2")
+    .replace(/(Passcode:\s+\S+)\s+(Important Instructions:)/i, "$1\n\n$2")
+    .replace(/(scheduled time\.)\s+(We wish)/i, "$1\n\n$2")
+    .replace(/(discussion\.)\s+(Regards,)/i, "$1\n\n$2")
+    .replace(/(TAG Team)\s+(This is an automated)/i, "$1\n\n$2")
+    .replace(/(invitation email\.)\s+(Information contained)/i, "$1\n\n$2")
+    .replace(/\n{3,}/g, "\n\n");
+  return body.trim();
+};
+const formatEmailAddress = (name, email) => {
+  const safeName = String(name || "").trim();
+  const safeEmail = String(email || "").trim();
+  if (safeName && safeEmail) return `${safeName} <${safeEmail}>`;
+  return safeEmail || safeName || "Unknown";
+};
 const initials = (name) =>
   String(name || "?")
     .split(/\s+/)
@@ -152,8 +211,9 @@ const isVisibleEvent = (event) =>
   !hiddenReviews.has(event.review_status) &&
   event.visible_in_offer_review !== false &&
   ((event.primary_status === "MANUAL_REVIEW_REQUIRED" &&
-    (event.validation_status || event.structured_result?.validation_status) ===
-      "RETRY_PENDING") ||
+    ((event.validation_status || event.structured_result?.validation_status) ===
+      "RETRY_PENDING" ||
+      event.cleanup_version === "manual_content_audit_keep_v1")) ||
     (Number(event.confidence || 0) >= 0.8 &&
       Boolean(event.structured_result?.evidence?.length)));
 
@@ -536,15 +596,23 @@ function ReviewQueue({
                     "FALLBACK" ||
                   String(event.ai_model || "").includes("fallback:") ||
                   String(event.ai_model || "").includes("ai-unavailable");
+                const canBookInterview =
+                  bookableInterviewStatuses.has(event.primary_status) &&
+                  !event.booking_id;
                 return (
                   <tr key={event.id}>
                     <td>
                       <strong>
-                        {names[event.canonical_candidate_id] ||
+                        {event.candidate_name ||
+                          names[event.canonical_candidate_id] ||
                           names[event.candidate_id] ||
                           event.candidate_id}
                       </strong>
-                      <small>{formatTime(event.created_at)}</small>
+                      <small title="Email received time">
+                        {formatEmailDate(
+                          event.email_sent_at || event.created_at,
+                        )}
+                      </small>
                     </td>
                     <td>{event.subject || "No subject"}</td>
                     <td>
@@ -564,7 +632,11 @@ function ReviewQueue({
                       <small>{event.job_title || "Unknown role"}</small>
                     </td>
                     <td>
-                      {fallback ? (
+                      {isManualAuditKeep(event) ? (
+                        <span className="sot-fallback-confidence">
+                          Manual audit
+                        </span>
+                      ) : fallback ? (
                         <span
                           className="sot-fallback-confidence"
                           title={
@@ -589,7 +661,9 @@ function ReviewQueue({
                     </td>
                     <td>
                       <strong>
-                        {aiFailureCode(event)
+                        {isManualAuditKeep(event)
+                          ? "Manually reviewed"
+                          : aiFailureCode(event)
                           ? "AI unavailable"
                           : event.ai_model || "Not analyzed"}
                       </strong>
@@ -614,14 +688,31 @@ function ReviewQueue({
                         <button onClick={() => onReview(event.id, "retry")}>
                           Retry AI
                         </button>
-                        {event.review_status === "PENDING" && (
-                          <>
+                        {canBookInterview &&
+                          ["PENDING", "APPROVED"].includes(
+                            event.review_status,
+                          ) && (
                             <button
                               className="approve"
-                              onClick={() => onReview(event.id, "approve")}
+                              onClick={() =>
+                                onReview(event.id, "approve-and-book")
+                              }
                             >
-                              Approve
+                              {event.review_status === "APPROVED"
+                                ? "Book Interview"
+                                : "Approve & Book"}
                             </button>
+                          )}
+                        {event.review_status === "PENDING" && (
+                          <>
+                            {!canBookInterview && (
+                              <button
+                                className="approve"
+                                onClick={() => onReview(event.id, "approve")}
+                              >
+                                Approve
+                              </button>
+                            )}
                             <button
                               onClick={() =>
                                 onReview(event.id, "false-positive")
@@ -920,15 +1011,16 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
       )}
       {status === "AI_RETRY_PENDING" && event && (
         <>
-          <h3>{event.subject}</h3>
+          <h3>{event.received_email?.subject || event.subject}</h3>
           <p>
             AI analysis is pending because the AI service was unavailable.
-            This record will be retried automatically.
+            The source email and deterministic fallback evidence are shown
+            below for safe manual review.
           </p>
           <dl>
             <div>
               <dt>Classification</dt>
-              <dd>Pending AI Analysis</dd>
+              <dd>{human(event.primary_status)} (fallback)</dd>
             </div>
             <div>
               <dt>AI Status</dt>
@@ -944,9 +1036,67 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
             </div>
             <div>
               <dt>Interview Schedule</dt>
-              <dd>Unchanged</dd>
+              <dd>
+                {[
+                  event.structured_result?.interview?.date,
+                  event.structured_result?.interview?.time,
+                  event.structured_result?.interview?.timezone,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "Not extracted"}
+              </dd>
             </div>
           </dl>
+          <p>
+            {event.evidence_summary ||
+              event.structured_result?.evidence_summary ||
+              "Fallback evidence requires administrator verification."}
+          </p>
+          <ul>
+            {(event.structured_result?.evidence || []).map((item, index) => (
+              <li key={index}>
+                <strong>{human(item.meaning)}</strong>
+                <span>{item.text}</span>
+              </li>
+            ))}
+          </ul>
+          <section className="sot-full-email">
+            <h4>Complete email</h4>
+            <dl>
+              <div>
+                <dt>From</dt>
+                <dd>
+                  {formatEmailAddress(
+                    event.received_email?.sender_name || event.sender_name,
+                    event.received_email?.sender_email || event.sender_email,
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>To</dt>
+                <dd>
+                  {event.received_email?.recipient_email ||
+                    event.recipient_email ||
+                    "Unknown"}
+                </dd>
+              </div>
+              <div>
+                <dt>Received</dt>
+                <dd>
+                  {formatEmailDate(
+                    event.received_email?.sent_at ||
+                      event.email_sent_at ||
+                      event.created_at,
+                  )}
+                </dd>
+              </div>
+            </dl>
+            <pre>
+              {formatEmailBody(
+                event.received_email?.body || event.email_body,
+              ) || "Email body is not available."}
+            </pre>
+          </section>
           <button className="sot-primary-button" onClick={onChanged}>
             Refresh record
           </button>
@@ -954,7 +1104,7 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
       )}
       {status === "SUCCESS" && event && (
         <>
-          <h3>{event.subject}</h3>
+          <h3>{event.received_email?.subject || event.subject}</h3>
           <p>{event.summary}</p>
           <dl>
             <div>
@@ -1001,7 +1151,11 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
             </div>
             <div>
               <dt>Model</dt>
-              <dd>{event.ai_model}</dd>
+              <dd>
+                {isManualAuditKeep(event)
+                  ? "Manual operator audit"
+                  : event.ai_model}
+              </dd>
             </div>
           </dl>
           <p>
@@ -1016,6 +1170,49 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
               </li>
             ))}
           </ul>
+          <section className="sot-full-email">
+            <h4>Complete email</h4>
+            {event.received_email?.subject !== event.subject && (
+              <p className="sot-full-email-note">
+                Showing the original received message from this Gmail thread.
+              </p>
+            )}
+            <dl>
+              <div>
+                <dt>From</dt>
+                <dd>
+                  {formatEmailAddress(
+                    event.received_email?.sender_name || event.sender_name,
+                    event.received_email?.sender_email || event.sender_email,
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>To</dt>
+                <dd>
+                  {event.received_email?.recipient_email ||
+                    event.recipient_email ||
+                    "Unknown"}
+                </dd>
+              </div>
+              <div>
+                <dt>Received</dt>
+                <dd>
+                  {formatEmailDate(
+                    event.received_email?.sent_at ||
+                      event.email_sent_at ||
+                      event.created_at,
+                  )}
+                </dd>
+              </div>
+            </dl>
+            <pre>
+              {formatEmailBody(
+                event.received_email?.body || event.email_body,
+              ) ||
+                "Email body is not available."}
+            </pre>
+          </section>
           <button className="sot-primary-button" onClick={onChanged}>
             Refresh record
           </button>
@@ -1025,10 +1222,149 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
   );
 }
 
+const INTERVIEW_CLASSIFICATIONS = new Set([
+  "interview_confirmed",
+  "interview_rescheduled",
+  "interview_cancelled",
+]);
+
+function JourneyFlow({ steps, tone = "blue" }) {
+  return (
+    <ol className={`sot-journey-flow is-${tone}`}>
+      {steps.map((step, index) => (
+        <li key={step.title}>
+          <span className="sot-journey-index">{index + 1}</span>
+          <div>
+            <strong>{step.title}</strong>
+            <small>{step.detail}</small>
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function MonitoringOverview({
+  metrics,
+  mailboxRows,
+  interviewSummary,
+  aiStatus,
+  onOpen,
+}) {
+  const activeMailboxes = mailboxRows.filter((row) =>
+    ["CONNECTED", "SYNCING", "SYNC_QUEUED"].includes(row.uiStatus),
+  ).length;
+  return (
+    <section className="sot-monitoring-overview">
+      <div className="sot-command-strip">
+        <article>
+          <span>01</span>
+          <div><strong>Gmail monitoring</strong><small>{activeMailboxes} accounts actively watched</small></div>
+        </article>
+        <i aria-hidden="true">&rarr;</i>
+        <article>
+          <span>02</span>
+          <div><strong>Relevance filter</strong><small>Noise is removed before lifecycle analysis</small></div>
+        </article>
+        <i aria-hidden="true">&rarr;</i>
+        <article>
+          <span>03</span>
+          <div><strong>AI validation</strong><small>{aiStatus?.status === "healthy" ? "qwen2.5:7b is ready" : "Failures route to review"}</small></div>
+        </article>
+        <i aria-hidden="true">&rarr;</i>
+        <article>
+          <span>04</span>
+          <div><strong>Outcome router</strong><small>Selection and interview flows separate here</small></div>
+        </article>
+      </div>
+
+      <div className="sot-journey-grid">
+        <article className="sot-journey-card is-selection">
+          <header>
+            <div><span className="sot-journey-kicker">CAREER OUTCOMES</span><h2>Selection &amp; Offer flow</h2></div>
+            <strong className="sot-journey-total">{(metrics.selected || 0) + (metrics.offers_received || 0) + (metrics.joining_confirmed || 0)}</strong>
+          </header>
+          <p>Tracks positive employment outcomes and advances the candidate lifecycle only after validation.</p>
+          <JourneyFlow tone="blue" steps={[
+            { title: "Selected", detail: "Candidate-specific selection evidence" },
+            { title: "Offer received", detail: "Offer or appointment letter detected" },
+            { title: "Offer accepted", detail: "Acceptance confirmed by source email" },
+            { title: "Joining", detail: "Joining date and onboarding monitored" },
+          ]} />
+          <button type="button" onClick={() => onOpen("selection")}>Open Selection &amp; Offers <span>&rarr;</span></button>
+        </article>
+
+        <article className="sot-journey-card is-interview">
+          <header>
+            <div><span className="sot-journey-kicker">SCHEDULE OPERATIONS</span><h2>Interview monitoring flow</h2></div>
+            <strong className="sot-journey-total">{interviewSummary.auto_booked_interviews || 0}</strong>
+          </header>
+          <p>Extracts confirmed interview schedules and books only when every safety check succeeds.</p>
+          <JourneyFlow tone="violet" steps={[
+            { title: "Interview detected", detail: "Date, time, timezone and round extracted" },
+            { title: "Safety validation", detail: "Candidate, payment, duplicate and conflict checks" },
+            { title: "Slot booked", detail: "Confirmed slot appears in Daily Ops" },
+            { title: "Attendance", detail: "Upcoming, attended or missed status recorded" },
+          ]} />
+          <button type="button" onClick={() => onOpen("interviews")}>Open Interview Monitoring <span>&rarr;</span></button>
+        </article>
+      </div>
+
+      <aside className="sot-review-rule">
+        <span className="sot-review-rule-icon">!</span>
+        <div><strong>Fail-safe review lane</strong><small>Low confidence, model timeout, missing schedule, payment block or slot conflict never changes candidate data automatically.</small></div>
+        <button type="button" onClick={() => onOpen("reviews")}>{metrics.needs_review || 0} waiting</button>
+      </aside>
+    </section>
+  );
+}
+
+function InterviewWorkspace({ notifications, summary, onReview }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const upcoming = notifications.filter((item) => String(item.interview_date || "") >= today && !["Cancelled", "Blocked", "Processing Failed"].includes(item.booking_status)).length;
+  const blocked = notifications.filter((item) => ["Blocked", "Processing Failed"].includes(item.booking_status)).length;
+  return (
+    <section className="sot-workspace sot-interview-workspace">
+      <header className="sot-workspace-head">
+        <div><span className="sot-workspace-eyebrow">INTERVIEW OPERATIONS</span><h2>Interview Monitoring</h2><p>From a confirmed email schedule to a safe Daily Ops booking.</p></div>
+        <button type="button" className="sot-secondary-button" onClick={onReview}>Open review queue</button>
+      </header>
+      <div className="sot-interview-metrics">
+        <MailboxMetric icon="AI" label="Detected alerts" value={notifications.length} />
+        <MailboxMetric icon="OK" label="Auto-booked" value={summary.auto_booked_interviews || 0} tone="green" />
+        <MailboxMetric icon="UP" label="Upcoming" value={upcoming} tone="blue" />
+        <MailboxMetric icon="!" label="Blocked / failed" value={blocked} tone="amber" />
+      </div>
+      <JourneyFlow tone="violet" steps={[
+        { title: "Confirmed email", detail: "Not a generic invite or recruiter campaign" },
+        { title: "Structured schedule", detail: "Future date, 12-hour time and timezone required" },
+        { title: "Business checks", detail: "Owner, payment, duplicate and overlap validation" },
+        { title: "Daily Ops slot", detail: "Booking, reschedule or cancellation is audited" },
+      ]} />
+      <div className="sot-interview-list">
+        <div className="sot-section-title"><div><h3>Recent interview activity</h3><p>Persistent notifications generated by the interview branch.</p></div><span>{notifications.length} records</span></div>
+        {notifications.length ? (
+          <div className="sot-table-shell"><table className="sot-interview-table"><thead><tr><th>Candidate</th><th>Interview</th><th>Company / role</th><th>AI confidence</th><th>Booking result</th></tr></thead><tbody>
+            {notifications.slice(0, 20).map((item) => (
+              <tr key={item.id}>
+                <td><strong>{item.candidate_name || "Candidate"}</strong><small>{item.email_subject || "No subject"}</small></td>
+                <td><strong>{item.interview_date || "Date unavailable"}</strong><small>{[item.interview_time, item.interview_timezone, item.interview_round].filter(Boolean).join(" · ") || "Schedule incomplete"}</small></td>
+                <td>{item.company_name || "Unknown company"}<small>{item.job_role || human(item.classification)}</small></td>
+                <td>{Math.round(Number(item.ai_confidence || 0) * 100)}%</td>
+                <td><span className={`sot-booking-state is-${String(item.booking_status || "detected").toLowerCase().replace(/\s+/g, "-")}`}>{item.booking_status || human(item.classification)}</span></td>
+              </tr>
+            ))}
+          </tbody></table></div>
+        ) : <div className="sot-empty-state"><strong>No interview notifications yet</strong><span>Validated interview emails and booking results will appear here.</span></div>}
+      </div>
+    </section>
+  );
+}
+
 export default function RecruitmentMailPanelRedesign() {
   const today = new Date().toISOString().slice(0, 10);
   const { confirm } = useConfirm();
-  const [tab, setTab] = useState("mailboxes");
+  const [tab, setTab] = useState("overview");
   const [metrics, setMetrics] = useState({
     needs_review: 0,
     selected: 0,
@@ -1043,6 +1379,12 @@ export default function RecruitmentMailPanelRedesign() {
   const [offers, setOffers] = useState([]);
   const [candidates, setCandidates] = useState([]);
   const [mailboxes, setMailboxes] = useState([]);
+  const [monitoringSummary, setMonitoringSummary] = useState({
+    auto_booked_interviews: 0,
+    needs_review: 0,
+    unread: 0,
+  });
+  const [interviewNotifications, setInterviewNotifications] = useState([]);
   const [candidateId, setCandidateId] = useState("");
   const [reviewCandidateId, setReviewCandidateId] = useState("");
   const [reviewStatusFilter, setReviewStatusFilter] = useState("");
@@ -1069,7 +1411,7 @@ export default function RecruitmentMailPanelRedesign() {
   const load = useCallback(async () => {
     try {
       setMessage("");
-      const [dashboard, review, cases, people, ai] = await Promise.all([
+      const [dashboard, review, cases, people, ai, notificationCounts, notificationList] = await Promise.all([
         request("/api/ai-recruitment/dashboard").catch(() => ({
           metrics: {},
           charts: {},
@@ -1090,6 +1432,8 @@ export default function RecruitmentMailPanelRedesign() {
               "AI diagnostics could not be loaded. Candidate and offer data remain available.",
           },
         })),
+        request("/api/mail-monitoring/summary").catch(() => ({ summary: {} })),
+        request("/api/mail-monitoring/notifications?limit=100&sort=newest").catch(() => ({ notifications: [] })),
       ]);
       const candidateList = people.candidates || [];
       const mailboxRows = (
@@ -1126,6 +1470,12 @@ export default function RecruitmentMailPanelRedesign() {
       setOffers(cases.cases || []);
       setCandidates(candidateList);
       setMailboxes(mailboxRows);
+      setMonitoringSummary(notificationCounts.summary || {});
+      setInterviewNotifications(
+        (notificationList.notifications || []).filter((item) =>
+          INTERVIEW_CLASSIFICATIONS.has(String(item.classification || "").toLowerCase()),
+        ),
+      );
       setAiStatus(ai.ollama || null);
       setUpdatedAt(new Date());
     } catch (error) {
@@ -1341,18 +1691,38 @@ export default function RecruitmentMailPanelRedesign() {
     );
   };
   const review = async (id, action) => {
+    const approveAndBook = action === "approve-and-book";
     const ok = await confirm({
-      title: `${human(action)} detection?`,
-      message: "This decision is recorded in the audit log.",
-      confirmLabel: human(action),
-      variant: action === "approve" ? "success" : "danger",
+      title: approveAndBook
+        ? "Approve and book this interview?"
+        : `${human(action)} detection?`,
+      message: approveAndBook
+        ? "The source evidence will be approved and the schedule will pass payment, duplicate, conflict, timezone, and future-date checks before Daily Ops is changed."
+        : "This decision is recorded in the audit log.",
+      confirmLabel: approveAndBook ? "Approve & Book" : human(action),
+      variant:
+        action === "approve" || approveAndBook ? "success" : "danger",
     });
     if (ok)
-      run(() =>
-        request(`/api/ai-recruitment/events/${id}/${action}`, {
-          method: "POST",
-          body: "{}",
-        }),
+      run(
+        () =>
+          request(`/api/ai-recruitment/events/${id}/${action}`, {
+            method: "POST",
+            body: "{}",
+          }),
+        approveAndBook
+          ? {
+              started: "Validating and booking the reviewed interview…",
+              success: (result) => {
+                const booking = result.booking_result || {};
+                if (booking.status === "Blocked")
+                  return `Detection approved, but booking was blocked: ${booking.message || booking.failure_code || "review the booking checks"}.`;
+                if (booking.duplicate)
+                  return "This interview was already booked; no duplicate slot was created.";
+                return `Interview ${booking.status || "approved"}. Daily Ops has been updated.`;
+              },
+            }
+          : {},
       );
   };
   const offerReview = async (id, action) => {
@@ -1506,10 +1876,11 @@ export default function RecruitmentMailPanelRedesign() {
         <div className="sot-title">
           <span className="sot-brand-avatar">AD</span>
           <div>
-            <h1>Selection &amp; Offer Tracking</h1>
+            <span className="sot-page-eyebrow">AI MAIL OPERATIONS</span>
+            <h1>Mail &amp; Interview Monitoring</h1>
             <p>
-              AI-detected selections, offers, joining confirmations, and
-              candidate updates.
+              One inbox pipeline, separated into career outcomes and interview
+              scheduling.
             </p>
           </div>
         </div>
@@ -1545,18 +1916,17 @@ export default function RecruitmentMailPanelRedesign() {
           {notice}
         </div>
       )}
-      <section className="sot-summary-grid">
-        {summary.map((card) => (
-          <SummaryCard
-            key={card.title}
-            {...card}
-            onClick={() => selectStatusFilter(card.group)}
-            active={tab === "reviews" && reviewStatusFilter === card.group}
-          />
-        ))}
+      <section className="sot-health-strip" aria-label="Monitoring health">
+        <div><span className={`sot-health-dot is-${aiStatus?.status || "unknown"}`} /><small>AI engine</small><strong>{aiStatus?.status === "healthy" ? "Ready" : "Needs attention"}</strong></div>
+        <div><span className="sot-health-dot is-healthy" /><small>Connected Gmail</small><strong>{rows.filter((row) => ["CONNECTED", "SYNCING", "SYNC_QUEUED"].includes(row.uiStatus)).length} / {rows.length}</strong></div>
+        <div><span className={`sot-health-dot ${Number(metrics.needs_review || 0) ? "is-warning" : "is-healthy"}`} /><small>Review queue</small><strong>{metrics.needs_review || 0} pending</strong></div>
+        <div><span className="sot-health-dot is-healthy" /><small>Interview bookings</small><strong>{monitoringSummary.auto_booked_interviews || 0} automatic</strong></div>
       </section>
       <nav className="sot-tabs">
         {[
+          ["overview", "Overview"],
+          ["selection", "Selection & Offers"],
+          ["interviews", "Interview Monitoring"],
           ["reviews", "Review Queue"],
           ["mailboxes", "Mailboxes"],
           ["candidates", "Candidates"],
@@ -1571,6 +1941,45 @@ export default function RecruitmentMailPanelRedesign() {
           </button>
         ))}
       </nav>
+      {tab === "overview" && (
+        <MonitoringOverview
+          metrics={metrics}
+          mailboxRows={rows}
+          interviewSummary={monitoringSummary}
+          aiStatus={aiStatus}
+          onOpen={setTab}
+        />
+      )}
+      {tab === "selection" && (
+        <section className="sot-workspace sot-selection-workspace">
+          <header className="sot-workspace-head">
+            <div><span className="sot-workspace-eyebrow">CAREER OUTCOMES</span><h2>Selection &amp; Offer Tracking</h2><p>Only candidate-specific, source-supported positive outcomes advance this flow.</p></div>
+            <button type="button" className="sot-secondary-button" onClick={() => setTab("reviews")}>Open review queue</button>
+          </header>
+          <section className="sot-summary-grid">
+            {summary.map((card) => (
+              <SummaryCard
+                key={card.title}
+                {...card}
+                onClick={() => selectStatusFilter(card.group)}
+                active={reviewStatusFilter === card.group}
+              />
+            ))}
+          </section>
+          <div className="sot-selection-flow-copy">
+            <div><span>What enters</span><strong>Selection, offer, acceptance, joining and onboarding evidence</strong></div>
+            <div><span>What stays out</span><strong>Job alerts, generic recruiter campaigns, rejections and unconfirmed applications</strong></div>
+            <div><span>Safety rule</span><strong>Unknown or unsupported outcomes wait for human review</strong></div>
+          </div>
+        </section>
+      )}
+      {tab === "interviews" && (
+        <InterviewWorkspace
+          notifications={interviewNotifications}
+          summary={monitoringSummary}
+          onReview={() => setTab("reviews")}
+        />
+      )}
       {tab === "mailboxes" && (
         <>
           <section className="sot-content-card sot-mailbox-overview">

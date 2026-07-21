@@ -4,7 +4,7 @@ import pytest
 
 from core.ai_gateway import AIGatewayError
 from services.recruitment_mail_agent import (
-    _prompt_json, clean_email, relevance_score, content_hash, validate_result, parse_model_json,
+    _prompt_json, _manual_review_from_strong_context, clean_email, relevance_score, content_hash, validate_result, parse_model_json,
     routing_decision, _failure_review_result,
 )
 
@@ -20,6 +20,30 @@ def test_mail_filter_tracks_interview_update_but_ignores_job_alert():
     alert=relevance_score('LinkedIn job alert','New jobs selected for you',[])
     assert invite >= .9
     assert alert == 0
+
+
+def test_mail_filter_routes_assertive_calendar_invite_wording():
+    invite=relevance_score(
+        'Virtual Interview - Senior Full Stack Engineer (Front-End Focused)',
+        'Please join the Virtual Interview at 12.30 pm on 21st July, 2026. Microsoft Teams meeting.',
+    )
+    assert invite >= .6
+
+
+def test_ai_outage_keeps_strong_interview_invite_visible_for_review():
+    subject='Virtual Interview - Senior Full Stack Engineer (Front-End Focused)'
+    body='Please join the Virtual Interview at 12.30 pm on 21st July, 2026. Microsoft Teams meeting.'
+    route=routing_decision(subject,body,sender_email='recruiter@example.com')
+    result=_manual_review_from_strong_context(
+        {'subject':subject,'body':body,'sent_at':datetime(2026,7,20,tzinfo=timezone.utc)},
+        route['context'],
+        AIGatewayError('timeout',code='OLLAMA_REQUEST_TIMEOUT'),
+    )
+    assert result['primary_status'] == 'INTERVIEW_CONFIRMED'
+    assert result['business_domain'] == 'INTERVIEW_TRACKING'
+    assert result['interview']['date'] == '2026-07-21'
+    assert result['interview']['time'] == '12:30 PM'
+    assert result['requires_manual_review'] is True
 
 def test_mail_filter_uses_qualified_thread_context():
     interview=relevance_score('Re: update','Please see below.',[],[{'subject':'Technical round interview confirmation'}])
@@ -228,3 +252,18 @@ def test_ollama_down_and_ambiguous_recruitment_email_is_retry_pending():
     assert result["ai_status"] == "RETRY_PENDING"
     assert result["validation_status"] == "RETRY_PENDING"
     assert result["lifecycle_event"] == "NONE"
+
+
+@pytest.mark.parametrize("subject", [
+    "You’re now open to work - we can help you get noticed",
+    "Aparna Kartik and others share their thoughts on LinkedIn",
+    "Job application successful.",
+    "You applied for 5 jobs on 17 Jul",
+    "Reddy Charan, add Subarta Chandra as a contact",
+])
+def test_known_profile_network_and_application_noise_skips_ai(subject):
+    route = routing_decision(
+        subject, "This notification does not confirm selection, offer, or joining.",
+        sender_email="messages-noreply@linkedin.com",
+    )
+    assert route["send_to_ai"] is False

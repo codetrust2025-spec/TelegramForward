@@ -2,6 +2,7 @@ from core.recruitment_mail_store import summarize_selection_tracking_events
 from services.recruitment_mail_agent import _failure_review_result, prefilter_decision
 from services.recruitment_semantics import (
     classify_context,
+    extract_interview_schedule,
     redact_sensitive_text,
 )
 from workers import recruitment_mail_worker as worker_module
@@ -80,6 +81,38 @@ def test_interview_confirmation_routes_to_interview_domain_only():
     assert result["business_domain"] == "INTERVIEW_TRACKING"
     assert result["interview_event"] == "INTERVIEW_CONFIRMED"
     assert result["lifecycle_event"] == "NONE"
+
+
+def test_virtual_interview_invite_with_concrete_schedule_is_confirmed():
+    subject = "Virtual Interview - Senior Full Stack Engineer (Front-End Focused)"
+    body = (
+        "Hello Charan, Please join the Virtual Interview at 12.30 pm on "
+        "21st July, 2026. Microsoft Teams meeting "
+        "https://teams.microsoft.com/meet/428762767388459 Meeting ID: 428 762."
+    )
+    result = classify_context(subject, body, sender_email="recruiter@example.com")
+    route = prefilter_decision(subject, body, sender_email="recruiter@example.com")
+    assert result["email_intent"] == "INTERVIEW_CONFIRMATION"
+    assert result["interview_event"] == "INTERVIEW_CONFIRMED"
+    assert result["business_domain"] == "INTERVIEW_TRACKING"
+    assert route["qualified"] is True
+    assert route["status"] == "INTERVIEW_CONFIRMED"
+    schedule = extract_interview_schedule(subject, body)
+    assert schedule == {
+        "date": "2026-07-21", "time": "12:30 PM", "timezone": None,
+        "mode": "Microsoft Teams", "round": None, "location": None,
+        "meeting_link": "https://teams.microsoft.com/meet/428762767388459",
+    }
+
+
+def test_virtual_interview_training_with_schedule_is_not_candidate_invite():
+    result = classify_context(
+        "Virtual interview preparation workshop",
+        "Learn interview tips tomorrow at 12:30 PM in our Microsoft Teams webinar.",
+        sender_email="events@example.com",
+    )
+    assert result["interview_event"] == "NONE"
+    assert result["business_domain"] == "NONE"
 
 
 def test_interview_reschedule_and_cancellation_are_distinct_events():

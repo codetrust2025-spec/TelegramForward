@@ -167,8 +167,10 @@ def mailbox_for_candidates(candidate_ids: list[str]) -> dict[str, Any] | None:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT * FROM candidate_mailboxes WHERE candidate_id=ANY(%s)
-               ORDER BY (credential_ciphertext IS NOT NULL) DESC,
+               ORDER BY monitoring_enabled DESC,
+                        (credential_ciphertext IS NOT NULL) DESC,
                         (connection_status='CONNECTED') DESC,
+                        last_successful_sync_at DESC NULLS LAST,
                         updated_at DESC LIMIT 1""",
             (ids,),
         )
@@ -184,10 +186,24 @@ def mailboxes_for_candidates(candidate_ids: list[str]) -> list[dict[str, Any]]:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT * FROM candidate_mailboxes WHERE candidate_id=ANY(%s)
-               ORDER BY (connection_status='CONNECTED') DESC, updated_at DESC""",
+               ORDER BY monitoring_enabled DESC,
+                        (credential_ciphertext IS NOT NULL) DESC,
+                        (connection_status='CONNECTED') DESC,
+                        last_successful_sync_at DESC NULLS LAST,
+                        updated_at DESC""",
             (ids,),
         )
-        return _rows(cur)
+        rows = _rows(cur)
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = str(row.get("email_address") or "").strip().casefold()
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        unique.append(row)
+    return unique
 
 
 def mailbox_by_id(mailbox_id: str) -> dict[str, Any] | None:
@@ -212,7 +228,46 @@ def mailbox_by_email(email_address: str) -> dict[str, Any] | None:
 
 def upsert_mailbox(candidate_id: str, email: str, **fields: Any) -> dict[str, Any]:
     mailbox_id = fields.pop("id", None) or _id()
+    email = str(email or "").strip().lower()
     with get_connection() as conn, conn.cursor() as cur:
+        # Reconnecting through a legacy candidate alias must reuse the Gmail
+        # mailbox already attached to the same verified person identity.
+        cur.execute(
+            "SELECT canonical_candidate_id FROM candidate_identity_links WHERE alias_candidate_id=%s",
+            (candidate_id,),
+        )
+        identity = cur.fetchone()
+        canonical_id = str(identity[0]) if identity and identity[0] else str(candidate_id)
+        cur.execute(
+            "SELECT alias_candidate_id FROM candidate_identity_links WHERE canonical_candidate_id=%s",
+            (canonical_id,),
+        )
+        identity_ids = {canonical_id, str(candidate_id), *(str(value[0]) for value in cur.fetchall())}
+        cur.execute(
+            """SELECT * FROM candidate_mailboxes
+               WHERE candidate_id=ANY(%s) AND lower(email_address)=lower(%s)
+               ORDER BY monitoring_enabled DESC,
+                        (credential_ciphertext IS NOT NULL) DESC,
+                        (connection_status='CONNECTED') DESC,
+                        last_successful_sync_at DESC NULLS LAST,
+                        updated_at DESC LIMIT 1 FOR UPDATE""",
+            (list(identity_ids), email),
+        )
+        existing = _rows(cur)
+        if existing:
+            cur.execute(
+                """UPDATE candidate_mailboxes SET monitoring_enabled=%s,
+                     connection_status=%s,
+                     credential_ciphertext=COALESCE(%s,credential_ciphertext),
+                     updated_at=now() WHERE id=%s RETURNING *""",
+                (
+                    bool(fields.get("monitoring_enabled", False)),
+                    fields.get("connection_status", "PENDING"),
+                    fields.get("credential_ciphertext"),
+                    existing[0]["id"],
+                ),
+            )
+            return _rows(cur)[0]
         cur.execute("""
             INSERT INTO candidate_mailboxes(id,candidate_id,provider,email_address,connection_type,monitoring_enabled,connection_status,credential_ciphertext,created_at,updated_at)
             VALUES(%s,%s,'gmail',%s,'oauth2',%s,%s,%s,now(),now())
@@ -222,7 +277,7 @@ def upsert_mailbox(candidate_id: str, email: str, **fields: Any) -> dict[str, An
             RETURNING *
         """, (mailbox_id,candidate_id,email,bool(fields.get("monitoring_enabled",False)),fields.get("connection_status","PENDING"),fields.get("credential_ciphertext")))
         row=_rows(cur)[0]
-        cur.execute("SELECT candidate_id FROM candidate_mailboxes WHERE lower(email_address)=lower(%s) AND candidate_id<>%s LIMIT 1",(email,candidate_id));duplicate=cur.fetchone()
+        cur.execute("SELECT candidate_id FROM candidate_mailboxes WHERE lower(email_address)=lower(%s) AND NOT (candidate_id=ANY(%s)) LIMIT 1",(email,list(identity_ids)));duplicate=cur.fetchone()
         if duplicate:
             cur.execute("""INSERT INTO recruitment_review_flags(id,candidate_id,flag_type,severity,details,created_at)
               VALUES(%s,%s,'POSSIBLE_DUPLICATE_CANDIDATE','HIGH',%s::jsonb,now()) ON CONFLICT(candidate_id,event_id,flag_type) DO NOTHING""",(_id(),candidate_id,json.dumps({'matching_candidate_id':duplicate[0],'reason':'same_mailbox_email'})))
@@ -239,6 +294,110 @@ def update_mailbox(mailbox_id: str, values: dict[str, Any]) -> dict[str, Any]:
         cur.execute(f"UPDATE candidate_mailboxes SET {assignments},updated_at=now() WHERE id=%s RETURNING *", (*clean.values(),mailbox_id))
         rows=_rows(cur)
     return rows[0] if rows else {}
+
+
+def stage_gmail_messages_and_advance_cursor(
+    mailbox_id: str, refs: list[dict[str, Any]], cursor: str | None,
+) -> int:
+    """Atomically persist every discovered Gmail ID, then advance its cursor."""
+    unique_ids = list(dict.fromkeys(str(ref.get("id") or "") for ref in refs if ref.get("id")))
+    with get_connection() as conn, conn.cursor() as cur:
+        inserted = 0
+        for provider_message_id in unique_ids:
+            cur.execute(
+                """INSERT INTO gmail_message_ingestion_queue(
+                       id,mailbox_id,provider_message_id,source_history_id,discovery_source,status,discovered_at,updated_at)
+                   VALUES(%s,%s,%s,%s,'GMAIL_HISTORY','QUEUED',now(),now())
+                   ON CONFLICT(mailbox_id,provider_message_id) DO NOTHING""",
+                (_id(), mailbox_id, provider_message_id, cursor),
+            )
+            inserted += int(cur.rowcount or 0)
+        cur.execute(
+            """UPDATE candidate_mailboxes SET provider_history_id=%s,sync_cursor=%s,
+                 updated_at=now() WHERE id=%s""",
+            (cursor, cursor, mailbox_id),
+        )
+    return inserted
+
+
+def stage_gmail_messages(
+    mailbox_id: str, refs: list[dict[str, Any]], *, discovery_source: str = "RECOVERY_AUDIT",
+    source_history_id: str | None = None,
+) -> int:
+    """Durably stage explicitly selected Gmail IDs without changing the cursor."""
+    unique_ids = list(dict.fromkeys(str(ref.get("id") or "") for ref in refs if ref.get("id")))
+    with get_connection() as conn, conn.cursor() as cur:
+        inserted = 0
+        for provider_message_id in unique_ids:
+            cur.execute(
+                """INSERT INTO gmail_message_ingestion_queue(
+                       id,mailbox_id,provider_message_id,source_history_id,discovery_source,status,discovered_at,updated_at)
+                   VALUES(%s,%s,%s,%s,%s,'QUEUED',now(),now())
+                   ON CONFLICT(mailbox_id,provider_message_id) DO NOTHING""",
+                (_id(), mailbox_id, provider_message_id, source_history_id, discovery_source),
+            )
+            inserted += int(cur.rowcount or 0)
+    return inserted
+
+
+def claim_gmail_ingestion(mailbox_id: str, *, limit: int) -> list[dict[str, Any]]:
+    """Claim a bounded durable batch, recovering rows abandoned by a crash."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE gmail_message_ingestion_queue SET status='QUEUED',started_at=NULL,updated_at=now(),
+                 last_error_message='Recovered after interrupted processing'
+               WHERE mailbox_id=%s AND status='RUNNING' AND updated_at<now()-interval '30 minutes'""",
+            (mailbox_id,),
+        )
+        cur.execute(
+            """SELECT id FROM gmail_message_ingestion_queue
+               WHERE mailbox_id=%s AND status='QUEUED'
+               ORDER BY discovered_at,id FOR UPDATE SKIP LOCKED LIMIT %s""",
+            (mailbox_id, max(1, min(int(limit), 500))),
+        )
+        ids = [row[0] for row in cur.fetchall()]
+        if not ids:
+            return []
+        cur.execute(
+            """UPDATE gmail_message_ingestion_queue SET status='RUNNING',attempts=attempts+1,
+                 started_at=now(),updated_at=now() WHERE id=ANY(%s) RETURNING *""",
+            (ids,),
+        )
+        rows = _rows(cur)
+    order = {value: index for index, value in enumerate(ids)}
+    return sorted(rows, key=lambda row: order[row["id"]])
+
+
+def finish_gmail_ingestion(
+    ingestion_id: str, *, status: str, error: Exception | None = None, max_attempts: int = 5,
+) -> str:
+    """Complete, tombstone, or safely requeue one staged Gmail message."""
+    requested = str(status).upper()
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT attempts FROM gmail_message_ingestion_queue WHERE id=%s FOR UPDATE", (ingestion_id,))
+        row = cur.fetchone()
+        attempts = int(row[0] if row else max_attempts)
+        final = requested
+        if requested == "QUEUED" and attempts >= max_attempts:
+            final = "DEAD_LETTER"
+        cur.execute(
+            """UPDATE gmail_message_ingestion_queue SET status=%s,
+                 completed_at=CASE WHEN %s IN ('COMPLETED','DELETED','DEAD_LETTER') THEN now() ELSE NULL END,
+                 started_at=CASE WHEN %s='QUEUED' THEN NULL ELSE started_at END,
+                 last_error_code=%s,last_error_message=%s,updated_at=now() WHERE id=%s""",
+            (final, final, final, type(error).__name__ if error else None, str(error)[:400] if error else None, ingestion_id),
+        )
+    return final
+
+
+def pending_gmail_ingestion_count(mailbox_id: str) -> int:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM gmail_message_ingestion_queue WHERE mailbox_id=%s AND status IN ('QUEUED','RUNNING')",
+            (mailbox_id,),
+        )
+        row = cur.fetchone()
+    return int(row[0] if row else 0)
 
 
 def record_pubsub_delivery(
@@ -612,25 +771,74 @@ def list_events(*, candidate_id: str|None=None, review_status: str|None=None, li
         predicate,predicate_params=qualified_event_sql('e');where.append(predicate);params.extend(predicate_params)
     if candidate_id:where.append('e.candidate_id=%s');params.append(candidate_id)
     if review_status:where.append('e.review_status=%s');params.append(review_status)
-    sql='''SELECT e.*,m.subject,m.sender_name,m.sender_email,m.sent_at AS email_sent_at
-      FROM ai_recruitment_events e LEFT JOIN mailbox_messages m ON m.id=e.mailbox_message_id'''+((' WHERE '+' AND '.join(where)) if where else '')+' ORDER BY e.created_at DESC LIMIT %s OFFSET %s';params.extend([limit,offset])
+    sql='''SELECT e.*,m.subject,m.sender_name,m.sender_email,m.sent_at AS email_sent_at,
+      booking.booking_id,booking.booking_status,booking.failure_code AS booking_failure_code
+      FROM ai_recruitment_events e
+      LEFT JOIN mailbox_messages m ON m.id=e.mailbox_message_id
+      LEFT JOIN LATERAL (
+        SELECT a.booking_id,a.booking_status,a.failure_code
+        FROM interview_auto_booking_audit a
+        WHERE a.gmail_message_id=m.provider_message_id
+        ORDER BY a.created_at DESC LIMIT 1
+      ) booking ON true'''+((' WHERE '+' AND '.join(where)) if where else '')+' ORDER BY e.created_at DESC LIMIT %s OFFSET %s';params.extend([limit,offset])
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(sql,params);rows=_rows(cur)
-    return [row for row in rows if not active_only or should_show_in_selection_offer_review(row)]
+    visible_rows=[row for row in rows if not active_only or should_show_in_selection_offer_review(row)]
+    from features import candidate_store
+    for row in visible_rows:
+        for candidate_key in (row.get('canonical_candidate_id'),row.get('candidate_id')):
+            candidate=candidate_store.get_candidate(str(candidate_key)) if candidate_key else None
+            if candidate and candidate.get('name'):
+                row['candidate_name']=candidate['name']
+                break
+    return visible_rows
 
 
 def event_detail(event_id:str,*,include_evidence:bool=False)->dict[str,Any]|None:
     with get_connection() as conn,conn.cursor() as cur:
-        cur.execute("""SELECT e.*,m.subject,m.sender_name,m.sender_email,m.sent_at AS email_sent_at,m.provider_message_id,m.provider_thread_id
-          FROM ai_recruitment_events e LEFT JOIN mailbox_messages m ON m.id=e.mailbox_message_id WHERE e.id=%s""",(event_id,));rows=_rows(cur)
+        cur.execute("""SELECT e.*,m.subject,m.sender_name,m.sender_email,m.recipient_email,
+          m.sent_at AS email_sent_at,m.provider_message_id,m.provider_thread_id,
+          m.body_text,m.html_body_text,m.mailbox_id,b.email_address AS mailbox_email
+          FROM ai_recruitment_events e
+          LEFT JOIN mailbox_messages m ON m.id=e.mailbox_message_id
+          LEFT JOIN candidate_mailboxes b ON b.id=m.mailbox_id
+          WHERE e.id=%s""",(event_id,));rows=_rows(cur)
     if not rows:return None
+    row=rows[0]
     from services.recruitment_semantics import redact_sensitive_text
     structured=dict(row.get('structured_result') or {})
     structured['evidence']=[{**item,'text':redact_sensitive_text(str(item.get('text') or ''))} for item in structured.get('evidence') or [] if isinstance(item,dict)]
     row['structured_result']=structured
+    row['email_body']=row.get('body_text') or row.get('html_body_text') or ''
+    received=None
+    if row.get('mailbox_id') and row.get('provider_thread_id'):
+        with get_connection() as conn,conn.cursor() as cur:
+            cur.execute("""SELECT subject,sender_name,sender_email,recipient_email,sent_at,
+              body_text,html_body_text
+              FROM mailbox_messages
+              WHERE mailbox_id=%s AND provider_thread_id=%s
+                AND lower(COALESCE(sender_email,''))<>lower(COALESCE(%s,''))
+                AND sent_at<=%s
+              ORDER BY sent_at DESC LIMIT 1""",
+              (row['mailbox_id'],row['provider_thread_id'],row.get('mailbox_email'),row.get('email_sent_at')))
+            incoming=cur.fetchone()
+            if incoming:
+                received={
+                    'subject':incoming[0],'sender_name':incoming[1],
+                    'sender_email':incoming[2],'recipient_email':incoming[3],
+                    'sent_at':incoming[4],
+                    'body':incoming[5] or incoming[6] or '',
+                }
+    row['received_email']=received or {
+        'subject':row.get('subject'),'sender_name':row.get('sender_name'),
+        'sender_email':row.get('sender_email'),'recipient_email':row.get('recipient_email'),
+        'sent_at':row.get('email_sent_at'),'body':row['email_body'],
+    }
+    row.pop('body_text',None);row.pop('html_body_text',None)
+    row.pop('mailbox_email',None)
     # Extracted attachment text may contain bank/government identifiers. The
     # UI receives document metadata plus already-redacted evidence summaries.
-    row=rows[0];row['attachments']=attachments_for_message(row['mailbox_message_id'],include_text=False) if row.get('mailbox_message_id') else []
+    row['attachments']=attachments_for_message(row['mailbox_message_id'],include_text=False) if row.get('mailbox_message_id') else []
     return row
 
 
@@ -706,7 +914,15 @@ def summarize_selection_tracking_events(events: list[dict[str, Any]]) -> dict[st
     filters: dict[str,list[str]]={}
     for key,statuses in lifecycle_groups.items():
         filters[key]=sorted({str(event.get('canonical_candidate_id') or event.get('candidate_id')) for event in truth if event.get('primary_status') in statuses})
-    filters['needs_review']=sorted({str(event.get('id')) for event in events if event.get('id') and str(event.get('review_status') or '').upper()=='PENDING' and str(event.get('validation_status') or '').upper() in {'NEEDS_REVIEW','RETRY_PENDING'}})
+    filters['needs_review']=sorted({
+        str(event.get('id')) for event in events
+        if event.get('id')
+        and str(event.get('review_status') or '').upper() == 'PENDING'
+        and (
+            str(event.get('validation_status') or '').upper() in {'NEEDS_REVIEW','RETRY_PENDING'}
+            or str(event.get('cleanup_version') or '') == 'manual_content_audit_keep_v1'
+        )
+    })
     metrics={key:len(value) for key,value in filters.items()}
     # Backward-compatible aliases for older clients; all originate here.
     metrics.update({
@@ -724,7 +940,8 @@ def selection_tracking_stats() -> dict[str, Any]:
     predicate, params = qualified_event_sql('e')
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(f"""SELECT e.id,e.candidate_id,e.canonical_candidate_id,e.primary_status,
-          e.review_status,e.validation_status FROM ai_recruitment_events e WHERE {predicate}""",params)
+          e.review_status,e.validation_status,e.cleanup_version
+          FROM ai_recruitment_events e WHERE {predicate}""",params)
         events=_rows(cur)
     return summarize_selection_tracking_events(events)
 
@@ -1228,6 +1445,16 @@ def booking_audit_for_message(gmail_message_id: str, classification: str) -> dic
         cur.execute(
             "SELECT * FROM interview_auto_booking_audit WHERE gmail_message_id=%s AND classification=%s LIMIT 1",
             (gmail_message_id, classification),
+        )
+        rows = _rows(cur)
+    return rows[0] if rows else None
+
+
+def notification_for_event(event_id: str) -> dict[str, Any] | None:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM mail_monitoring_notifications WHERE ai_recruitment_event_id=%s ORDER BY created_at DESC LIMIT 1",
+            (event_id,),
         )
         rows = _rows(cur)
     return rows[0] if rows else None

@@ -133,3 +133,33 @@ def test_gmail_pubsub_rejects_bad_token_without_reading_mailbox(monkeypatch):
     monkeypatch.setenv('GMAIL_PUBSUB_VERIFICATION_TOKEN','secret')
     response=app_client(monkeypatch).post('/api/gmail/pubsub/push?token=wrong',json=pubsub_payload())
     assert response.status_code==403
+
+
+def test_manual_approve_and_book_bridges_review_event_to_booking(monkeypatch):
+    monkeypatch.setenv('AI_INTERVIEW_OFFER_TRACKING_ENABLED','true')
+    structured={
+        'classification':'interview_confirmed',
+        'interview':{'date':'2099-07-21','time':'12:30 PM','timezone':None},
+        'evidence':[{'meaning':'INTERVIEW_CONFIRMED','text':'Join the interview'}],
+    }
+    event={'id':'e1','candidate_id':'c1','mailbox_message_id':'mm1','primary_status':'INTERVIEW_CONFIRMED','structured_result':structured}
+    context={'mailbox_id':'mb1','mailbox_candidate_id':'c1','email_address':'candidate@test.invalid',
+             'provider_message_id':'gm1','provider_thread_id':'gt1','recipient_email':'candidate@test.invalid'}
+    audits=[]
+    monkeypatch.setattr(recruitment_mail_api.store,'event_detail',lambda *args,**kwargs:event)
+    monkeypatch.setattr(recruitment_mail_api.store,'event_reprocess_context',lambda _id:context)
+    monkeypatch.setattr(recruitment_mail_api.store,'review_event',lambda *args,**kwargs:{**event,'review_status':'APPROVED'})
+    monkeypatch.setattr(recruitment_mail_api.store,'notification_for_event',lambda _id:{'id':'n1'})
+    monkeypatch.setattr(recruitment_mail_api.store,'audit',lambda **kwargs:audits.append(kwargs))
+    from services import interview_auto_booking
+    calls=[]
+    monkeypatch.setattr(interview_auto_booking,'execute_manual_approved_booking',lambda **kwargs:calls.append(kwargs) or {
+        'status':'Approved & Booked','booking':{'id':'slot1'},'failure_code':None,
+    })
+    response=app_client(monkeypatch).post('/api/ai-recruitment/events/e1/approve-and-book',json={})
+    assert response.status_code==200
+    assert response.json()['booking_result']['status']=='Approved & Booked'
+    assert calls[0]['result']['ai_validation_status']=='MANUAL_APPROVED'
+    assert calls[0]['result']['interview']['timezone']=='Asia/Kolkata'
+    assert calls[0]['reviewer']=='dev'
+    assert audits[0]['action']=='INTERVIEW_APPROVE_AND_BOOK'

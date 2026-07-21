@@ -7,7 +7,7 @@ historical employment documents, questions, and other non-outcomes.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 
@@ -68,6 +68,21 @@ _JOB_PORTAL_NOTIFICATION_PATTERNS = (
     r"\bnew jobs? in your inbox\b", r"\bjob search saf(?:er|e|ety)\b",
     r"\bjob scams?\b", r"\bfraud jobs?\b",
     r"\bkeep your profile updated\b", r"\bprofile (?:viewed|visibility)\b",
+    r"\b(?:you're|you are) now open to work\b", r"\bget noticed\b",
+    r"\bshare their thoughts on linkedin\b", r"\bpeople you may know\b",
+    r"\bgrow your network\b",
+)
+_NON_OUTCOME_RECRUITMENT_PATTERNS = (
+    r"\bjob application (?:was )?successful\b",
+    r"\bapplication (?:was )?(?:received|submitted|successful|under review)\b",
+    r"\bthank you for (?:applying|your application)\b",
+    r"\byou applied for \d+ jobs?\b",
+    r"\b(?:you're|you are) now open to work\b",
+    r"\b(?:help you )?get noticed\b",
+    r"\bshare their thoughts on linkedin\b",
+    r"\bpeople you may know\b",
+    r"\bgrow your network\b",
+    r"\badd [a-z][a-z .'-]{1,60} (?:as a )?contact\b",
 )
 # Bank/payment transaction alerts and OTP messages that occasionally land in
 # a monitored candidate mailbox but are never recruitment-related. These
@@ -146,13 +161,142 @@ def _is_job_ad(subject: str, body: str, sender_email: str) -> bool:
 
 
 def _is_job_portal_notification(combined: str, sender_email: str) -> bool:
-    portal = any(token in sender_email.casefold() for token in ("naukri", "foundit", "monster", "indeed", "shine", "timesjobs"))
+    portal = any(token in sender_email.casefold() for token in ("naukri", "foundit", "monster", "indeed", "shine", "timesjobs", "linkedin"))
     return portal and any(re.search(pattern, combined, re.I) for pattern in _JOB_PORTAL_NOTIFICATION_PATTERNS)
+
+
+def _is_non_outcome_recruitment_notice(subject: str, body: str) -> bool:
+    combined = f"{subject}\n{body[:8000]}".casefold()
+    return any(re.search(pattern, combined, re.I) for pattern in _NON_OUTCOME_RECRUITMENT_PATTERNS)
 
 
 def _is_transactional_alert(subject: str, body: str) -> bool:
     combined = f"{subject}\n{body[:4000]}".casefold()
     return any(re.search(pattern, combined, re.I) for pattern in _TRANSACTIONAL_PATTERNS)
+
+
+def _is_assertive_interview_invitation(subject: str, body: str) -> bool:
+    """Recognize concrete interview invites without relying on one phrase.
+
+    Calendar providers and recruiters often say "please join the virtual
+    interview" instead of "your interview is scheduled".  Require a real
+    schedule plus an invitation/meeting signal so generic interview content
+    and preparation webinars do not become candidate events.
+    """
+    title = str(subject or "").casefold()
+    direct = f"{subject}\n{body[:12000]}".casefold()
+    interview = r"(?:virtual\s+)?interview|technical\s+round|managerial\s+round|hr\s+round"
+    if not re.search(rf"\b(?:{interview})\b", direct):
+        return False
+    if re.search(r"\b(?:webinar|workshop|training|preparation|tips|career fair|mock interview)\b", title):
+        return False
+    has_date = any(re.search(pattern, direct, re.I) for pattern in (
+        r"\b(?:today|tomorrow)\b",
+        r"\b[0-3]?\d(?:st|nd|rd|th)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*\d{4})?\b",
+        r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+[0-3]?\d(?:st|nd|rd|th)?(?:\s*,?\s*\d{4})?\b",
+        r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b",
+        r"\b[0-3]?\d[-/][01]?\d(?:[-/]\d{2,4})?\b",
+    ))
+    has_time = bool(re.search(
+        r"\b(?:(?:0?[1-9]|1[0-2])[:.]?[0-5]\d\s*(?:a\.?m\.?|p\.?m\.?)|(?:[01]?\d|2[0-3]):[0-5]\d)\b",
+        direct,
+        re.I,
+    ))
+    if not (has_date and has_time):
+        return False
+    invitation = bool(re.search(
+        rf"(?:\bplease\s+join\b.{{0,100}}\b(?:{interview})\b|"
+        rf"\b(?:you are|you're|you have been)\s+invited\b.{{0,120}}\b(?:{interview})\b|"
+        rf"\bjoin\b.{{0,60}}\b(?:{interview})\b|"
+        rf"\b(?:{interview})\b.{{0,80}}\b(?:will be held|is set|is arranged|is booked)\b)",
+        direct,
+        re.I,
+    ))
+    meeting_details = bool(re.search(
+        r"\b(?:microsoft teams|teams meeting|google meet|zoom meeting|meeting id|passcode)\b|https?://(?:teams\.microsoft\.com|meet\.google\.com|[^\s/]*zoom\.us)/",
+        direct,
+        re.I,
+    ))
+    subject_is_interview = bool(re.search(rf"\b(?:{interview})\b", title, re.I))
+    return invitation or (subject_is_interview and meeting_details)
+
+
+def extract_interview_schedule(subject: str, body: str, *, sent_at: Any = None) -> dict[str, str | None]:
+    """Conservatively extract schedule fields for outage-time visibility.
+
+    These fields never authorize automatic booking; that still requires a
+    validated AI result.  They let a strongly evidenced invite remain visible
+    and actionable while the model service is unavailable.
+    """
+    direct = f"{subject}\n{body[:12000]}"
+    day: date | None = None
+    match = re.search(
+        r"\b([0-3]?\d)(?:st|nd|rd|th)?\s+"
+        r"(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+        r"\s*,?\s*(\d{4})\b",
+        direct,
+        re.I,
+    )
+    if match:
+        value = f"{match.group(1)} {match.group(2)} {match.group(3)}"
+        for fmt in ("%d %B %Y", "%d %b %Y"):
+            try:
+                day = datetime.strptime(value, fmt).date();break
+            except ValueError:
+                pass
+    if day is None:
+        match = re.search(
+            r"\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+            r"\s+([0-3]?\d)(?:st|nd|rd|th)?\s*,?\s*(\d{4})\b",
+            direct,
+            re.I,
+        )
+        if match:
+            value = f"{match.group(2)} {match.group(1)} {match.group(3)}"
+            for fmt in ("%d %B %Y", "%d %b %Y"):
+                try:
+                    day = datetime.strptime(value, fmt).date();break
+                except ValueError:
+                    pass
+    if day is None:
+        match = re.search(r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b", direct)
+        if match:
+            try:day = date(int(match.group(1)),int(match.group(2)),int(match.group(3)))
+            except ValueError:pass
+    if day is None:
+        relative = re.search(r"\b(today|tomorrow)\b", direct, re.I)
+        if relative:
+            day = _event_date(sent_at) + timedelta(days=1 if relative.group(1).casefold()=="tomorrow" else 0)
+
+    time_value: str | None = None
+    match = re.search(r"\b(0?[1-9]|1[0-2])[:.]([0-5]\d)\s*(a\.?m\.?|p\.?m\.?)\b", direct, re.I)
+    if match:
+        meridiem = "AM" if match.group(3).casefold().startswith("a") else "PM"
+        time_value = f"{int(match.group(1)):02d}:{match.group(2)} {meridiem}"
+    if time_value is None:
+        match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", direct)
+        if match:
+            parsed = datetime.strptime(f"{int(match.group(1)):02d}:{match.group(2)}", "%H:%M")
+            time_value = parsed.strftime("%I:%M %p")
+
+    link_match = re.search(r"https?://(?:teams\.microsoft\.com|meet\.google\.com|[^\s/]*zoom\.us)/[^\s<>]+", direct, re.I)
+    lowered = direct.casefold()
+    mode = (
+        "Microsoft Teams" if "microsoft teams" in lowered or "teams.microsoft.com" in lowered
+        else "Google Meet" if "google meet" in lowered or "meet.google.com" in lowered
+        else "Zoom" if "zoom" in lowered
+        else "Online" if link_match else None
+    )
+    timezone_name = "Asia/Kolkata" if re.search(r"\bIST\b|GMT\s*\+\s*5(?::30)?", direct, re.I) else None
+    return {
+        "date": day.isoformat() if day else None,
+        "time": time_value,
+        "timezone": timezone_name,
+        "mode": mode,
+        "round": None,
+        "location": None,
+        "meeting_link": link_match.group(0).rstrip(".,);]") if link_match else None,
+    }
 
 
 def _event_date(sent_at: Any) -> date:
@@ -189,6 +333,7 @@ def classify_context(
     questionnaire = _questionnaire(direct)
     question = _is_question(direct)
     job_ad = _is_job_ad(subject, body, sender_email)
+    non_outcome_notice = _is_non_outcome_recruitment_notice(subject, body)
     transactional = _is_transactional_alert(subject, body)
     payslip = document_type == "PAYSLIP" or any(re.search(pattern, all_text, re.I) for pattern in _PAYSLIP_PATTERNS)
     historical = payslip or document_type in {"EXPERIENCE_LETTER", "RELIEVING_LETTER", "EMPLOYMENT_VERIFICATION"}
@@ -227,12 +372,14 @@ def classify_context(
         r"(?:\b(?:interview|technical round|managerial round|hr round)\b.{0,120}\b(?:confirmed|scheduled)\b|"
         r"\b(?:confirmed|scheduled)\b.{0,120}\b(?:interview|technical round|managerial round|hr round)\b)",
         lowered,
-    ))
+    )) or _is_assertive_interview_invitation(subject, body)
 
     if questionnaire:
         intent, summary = "RECRUITER_QUESTIONNAIRE", "Recruiter is requesting candidate information. No employment outcome is confirmed."
     elif transactional:
         intent, summary = "GENERAL", "This is an unrelated transactional/account notification, not a recruitment email."
+    elif non_outcome_notice:
+        intent, summary = "JOB_APPLICATION_UPDATE", "This is an application, profile, or networking notification; no candidate outcome is confirmed."
     elif job_ad:
         intent, summary = "JOB_ADVERTISEMENT", "This is a job advertisement or recruiter requirement, not a candidate employment outcome."
     elif payslip:
@@ -259,7 +406,7 @@ def classify_context(
         intent, summary = "UNKNOWN", "No validated candidate employment outcome was found."
 
     lifecycle = "NONE"
-    if not (questionnaire or job_ad or transactional or question or historical):
+    if not (questionnaire or job_ad or non_outcome_notice or transactional or question or historical):
         if actual_joined:
             lifecycle = "JOINED"
         elif joining_confirmed:
@@ -272,7 +419,7 @@ def classify_context(
             lifecycle = "SELECTED"
 
     interview_event = "NONE"
-    if not (questionnaire or job_ad or transactional or question or historical):
+    if not (questionnaire or job_ad or non_outcome_notice or transactional or question or historical):
         if interview_cancelled:
             interview_event = "INTERVIEW_CANCELLED"
         elif interview_rescheduled:
@@ -293,7 +440,7 @@ def classify_context(
         "is_current_event": lifecycle != "NONE" and not historical,
         "is_questionnaire": questionnaire,
         "is_question": question,
-        "is_promotional_or_job_ad": job_ad or transactional,
+        "is_promotional_or_job_ad": job_ad or non_outcome_notice or transactional,
         "is_historical_information": historical,
         "historical_employment_evidence": historical,
         "lifecycle_event": lifecycle,

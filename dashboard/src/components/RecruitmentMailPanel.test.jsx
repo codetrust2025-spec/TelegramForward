@@ -68,20 +68,24 @@ describe("RecruitmentMailPanel", () => {
     cleanup();
     vi.unstubAllGlobals();
   });
-  it("renders the redesigned tracking dashboard with mailboxes selected", async () => {
+  it("renders the redesigned monitoring hub with separated journeys", async () => {
     render(
       <ConfirmProvider>
         <RecruitmentMailPanel />
       </ConfirmProvider>,
     );
     expect(
-      screen.getByRole("heading", { name: "Selection & Offer Tracking" }),
+      screen.getByRole("heading", { name: "Mail & Interview Monitoring" }),
     ).toBeInTheDocument();
     await waitFor(() =>
       expect(
-        screen.getByRole("heading", { name: "Mailbox Overview" }),
+        screen.getByRole("heading", { name: "Selection & Offer flow" }),
       ).toBeInTheDocument(),
     );
+    expect(
+      screen.getByRole("heading", { name: "Interview monitoring flow" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Selection & Offers" }));
     expect(screen.getByText("Selected").closest("article")).toHaveTextContent(
       "1",
     );
@@ -91,7 +95,7 @@ describe("RecruitmentMailPanel", () => {
     expect(screen.getByText("Joined").closest("article")).toHaveTextContent(
       "0",
     );
-    expect(screen.getByRole("button", { name: "Mailboxes" })).toHaveClass(
+    expect(screen.getByRole("button", { name: "Selection & Offers" })).toHaveClass(
       "active",
     );
   });
@@ -141,6 +145,7 @@ describe("RecruitmentMailPanel", () => {
         <RecruitmentMailPanel />
       </ConfirmProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Mailboxes" }));
     const addButton = await screen.findByRole("button", {
       name: "+ Add candidate Gmail",
     });
@@ -164,6 +169,7 @@ describe("RecruitmentMailPanel", () => {
         <RecruitmentMailPanel />
       </ConfirmProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Mailboxes" }));
     fireEvent.click(
       await screen.findByRole("button", { name: "+ Add candidate Gmail" }),
     );
@@ -213,6 +219,7 @@ describe("RecruitmentMailPanel", () => {
         <RecruitmentMailPanel />
       </ConfirmProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Mailboxes" }));
     await screen.findByText("candidate@gmail.com");
     fireEvent.click(screen.getByRole("button", { name: "Sync Now" }));
     await waitFor(() =>
@@ -267,6 +274,79 @@ describe("RecruitmentMailPanel", () => {
     created_at: "2026-07-18T13:38:53Z",
     structured_result: { evidence: [], validation_status: "RETRY_PENDING" },
   };
+
+  it("shows a dated interview confirmation in the Review Queue", async () => {
+    const interviewEvent = {
+      id: "event-interview-confirmed-1",
+      candidate_id: "c1",
+      subject: "Virtual Interview - Senior Full Stack Engineer",
+      primary_status: "INTERVIEW_CONFIRMED",
+      review_status: "PENDING",
+      validation_status: "RETRY_PENDING",
+      ai_status: "RETRY_PENDING",
+      ai_model: "unavailable:ollama_request_timeout",
+      confidence: 0.8,
+      visible_in_offer_review: true,
+      created_at: "2026-07-20T14:44:00Z",
+      structured_result: {
+        evidence: [
+          {
+            source: "EMAIL_BODY",
+            meaning: "INTERVIEW_CONFIRMED",
+            text: "Please join the virtual interview at 12:30 PM on 21 July 2026",
+          },
+        ],
+        interview: { date: "2026-07-21", time: "12:30 PM" },
+        validation_status: "RETRY_PENDING",
+      },
+      received_email: {
+        subject: "Virtual Interview - Senior Full Stack Engineer",
+        sender_name: "Supriya Vithanala",
+        sender_email: "recruiter@example.com",
+        recipient_email: "test.candidate@gmail.com",
+        sent_at: "2026-07-20T14:44:00Z",
+        body: "Please join the virtual interview at 12:30 PM on 21 July 2026 using Microsoft Teams.",
+      },
+    };
+    fetch.mockImplementation(async (url) => {
+      const path = String(url);
+      if (path.includes(`/events/${interviewEvent.id}`))
+        return {
+          ok: true,
+          json: async () => ({ status: "ok", event: interviewEvent }),
+        };
+      if (path.includes("/review"))
+        return {
+          ok: true,
+          json: async () => ({ status: "ok", events: [interviewEvent] }),
+        };
+      return { ok: true, json: async () => payloadFor(path) };
+    });
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review Queue" }));
+    await screen.findByText(interviewEvent.subject);
+    expect(screen.getByText("Interview Confirmed")).toBeInTheDocument();
+    expect(screen.getByText("1 records")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Approve & Book" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Approve" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Evidence" }));
+    await screen.findByRole("heading", { name: "Complete email" });
+    expect(
+      screen.getByText(/2026-07-21.*12:30 PM/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/Please join the virtual interview at 12:30 PM/),
+    ).toHaveLength(2);
+  });
 
   it("resolves the candidate name via canonical_candidate_id when candidate_id is a stale alias", async () => {
     const staleAliasEvent = {
@@ -332,6 +412,7 @@ describe("RecruitmentMailPanel", () => {
         <RecruitmentMailPanel />
       </ConfirmProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Selection & Offers" }));
     const needsReviewTile = screen
       .getByText("Needs Review", { selector: "h3" })
       .closest('[role="button"]');
@@ -342,6 +423,7 @@ describe("RecruitmentMailPanel", () => {
       screen.getByText('Clear "Needs Review" filter'),
     ).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "Selection & Offers" }));
     const joinedTile = screen
       .getByText("Joined", { selector: "h3" })
       .closest('[role="button"]');
@@ -351,7 +433,11 @@ describe("RecruitmentMailPanel", () => {
       screen.queryByText(retryPendingEvent.subject),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(joinedTile);
+    fireEvent.click(screen.getByRole("button", { name: "Selection & Offers" }));
+    const joinedTileAgain = screen
+      .getByText("Joined", { selector: "h3" })
+      .closest('[role="button"]');
+    fireEvent.click(joinedTileAgain);
     await screen.findByText(retryPendingEvent.subject);
     expect(screen.getByText("Welcome aboard!")).toBeInTheDocument();
   });

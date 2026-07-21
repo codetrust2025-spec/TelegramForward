@@ -110,6 +110,22 @@ def validate_ai_for_booking(result: dict[str, Any], classification: str) -> None
         raise BookingValidationError("NOT_ACTIONABLE", "This interview classification does not change a booking.")
 
 
+def validate_manual_approval_for_booking(result: dict[str, Any], classification: str) -> None:
+    """Allow an administrator decision to replace AI validation, not safety checks."""
+    if classification not in ACTIONABLE:
+        raise BookingValidationError("NOT_ACTIONABLE", "This interview classification does not change a booking.")
+    evidence = result.get("evidence") or []
+    if not evidence:
+        raise BookingValidationError("MISSING_EVIDENCE", "Source-email evidence is required for manual booking approval.")
+    if classification != "interview_cancelled":
+        interview = result.get("interview") or {}
+        if not all(str(interview.get(key) or "").strip() for key in ("date", "time", "timezone")):
+            raise BookingValidationError(
+                "INCOMPLETE_SCHEDULE",
+                "Date, time, and timezone are required for an approved interview booking.",
+            )
+
+
 def _payment_check(candidate: dict[str, Any], schedule: dict[str, str] | None) -> None:
     preview = dict(candidate)
     preview["slots_group_posted"] = True
@@ -217,9 +233,23 @@ def execute_auto_booking(
             )
 
 
+def execute_manual_approved_booking(
+    *, mailbox: dict[str, Any], message: dict[str, Any], event: dict[str, Any],
+    result: dict[str, Any], reviewer: str, correlation_id: str | None = None,
+) -> dict[str, Any]:
+    """Apply a human-approved interview through the same booking safety gates."""
+    with _BOOKING_LOCK:
+        with mail_store.candidate_booking_lock(str(mailbox.get("candidate_id") or "")):
+            return _execute_auto_booking(
+                mailbox=mailbox, message=message, event=event, result=result,
+                correlation_id=correlation_id, manual_reviewer=reviewer,
+            )
+
+
 def _execute_auto_booking(
     *, mailbox: dict[str, Any], message: dict[str, Any], event: dict[str, Any],
     result: dict[str, Any], correlation_id: str | None = None,
+    manual_reviewer: str | None = None,
 ) -> dict[str, Any]:
     """Apply one actionable classification and durably describe every outcome."""
     correlation_id = correlation_id or str(uuid.uuid4())
@@ -230,7 +260,8 @@ def _execute_auto_booking(
         email_analysis_id=notification.get("email_analysis_id"), mailbox_id=mailbox["id"],
         gmail_message_id=message["provider_message_id"],
         gmail_thread_id=message.get("provider_thread_id"), candidate_id=mailbox["candidate_id"],
-        result=result, validation_status=str(result.get("ai_validation_status") or "UNAVAILABLE"),
+        result=result,
+        validation_status="MANUAL_APPROVED" if manual_reviewer else str(result.get("ai_validation_status") or "UNAVAILABLE"),
         processing_status="VALIDATING",
     )
     existing_audit = mail_store.booking_audit_for_message(message["provider_message_id"], classification)
@@ -243,7 +274,10 @@ def _execute_auto_booking(
     previous: dict[str, Any] | None = None
     payment_status, duplicate_status, conflict_status = "NOT_CHECKED", "NOT_CHECKED", "NOT_CHECKED"
     try:
-        validate_ai_for_booking(result, classification)
+        if manual_reviewer:
+            validate_manual_approval_for_booking(result, classification)
+        else:
+            validate_ai_for_booking(result, classification)
         candidate = candidate_store.get_candidate(str(mailbox.get("candidate_id") or ""))
         if not candidate:
             raise BookingValidationError("CANDIDATE_MAPPING_FAILED", "The connected mailbox candidate could not be found.")
@@ -267,10 +301,17 @@ def _execute_auto_booking(
             booking = candidate_store.assign_interview_slot(
                 candidate_id=str(candidate["id"]), date=schedule["date"], time=schedule["time"],
                 time_end=schedule["time_end"], interview_round=str((result.get("interview") or {}).get("round") or ""),
-                notes="Automatically booked from validated interview email (AI Mail Monitoring).",
+                notes=(
+                    f"Manually approved from reviewed interview email by {manual_reviewer}."
+                    if manual_reviewer else
+                    "Automatically booked from validated interview email (AI Mail Monitoring)."
+                ),
                 **_booking_metadata(result, message, schedule),
             )
-            booking_status, event_type = "Auto Booked", "slot_auto_booked"
+            booking_status, event_type = (
+                ("Approved & Booked", "slot_manually_booked")
+                if manual_reviewer else ("Auto Booked", "slot_auto_booked")
+            )
         elif classification == "interview_rescheduled":
             target = _resolve_existing_slot(slots, result=result, message=message, classification=classification)
             conflicts = candidate_store.find_interview_slot_conflicts(
@@ -282,7 +323,11 @@ def _execute_auto_booking(
             booking = candidate_store.update_interview_slot(
                 candidate_id=str(target["id"]), date=schedule["date"], time=schedule["time"],
                 time_end=schedule["time_end"], interview_round=str((result.get("interview") or {}).get("round") or ""),
-                notes="Rescheduled from validated interview email (AI Mail Monitoring).",
+                notes=(
+                    f"Reschedule manually approved from reviewed email by {manual_reviewer}."
+                    if manual_reviewer else
+                    "Rescheduled from validated interview email (AI Mail Monitoring)."
+                ),
                 **_booking_metadata(result, message, schedule),
             )
             duplicate_status, conflict_status = "PASSED", "PASSED"
@@ -297,14 +342,20 @@ def _execute_auto_booking(
             analysis_id=analysis["id"], candidate_id=str(candidate["id"]),
             gmail_message_id=message["provider_message_id"], gmail_thread_id=message.get("provider_thread_id"),
             classification=classification, booking_id=str(booking.get("id") or ""), auto_booked=True,
-            validation_status="PASSED", payment_status=payment_status, duplicate_status=duplicate_status,
+            validation_status="MANUAL_APPROVED" if manual_reviewer else "PASSED",
+            payment_status=payment_status, duplicate_status=duplicate_status,
             conflict_status=conflict_status, booking_status=booking_status,
             previous_booking=previous, new_booking=booking, correlation_id=correlation_id,
         )
         updated_notification = mail_store.attach_booking_to_notification(
             notification.get("id"), audit_id=audit["id"], booking_id=str(booking.get("id") or ""),
             booking_status=booking_status, result=result, priority="high",
-            display_status="Interview Automatically Booked" if booking_status == "Auto Booked" else f"Interview {booking_status}",
+            display_status=(
+                "Interview Manually Approved & Booked"
+                if booking_status == "Approved & Booked" else
+                "Interview Automatically Booked"
+                if booking_status == "Auto Booked" else f"Interview {booking_status}"
+            ),
         ) if notification.get("id") else {}
         logger.info("Interview booking applied correlation_id=%s classification=%s booking_id=%s", correlation_id, classification, booking.get("id"))
         return {"status": booking_status, "event_type": event_type, "booking": booking, "audit": audit, "notification": updated_notification}

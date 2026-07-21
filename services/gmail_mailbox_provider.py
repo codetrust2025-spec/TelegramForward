@@ -78,8 +78,12 @@ class GmailMailboxProvider(MailboxProvider):
         if cursor:
             try:
                 ids=[];page_token=None;latest=str(cursor)
-                while len(ids)<batch_size:
-                    params={"startHistoryId":cursor,"historyTypes":"messageAdded","maxResults":min(100,batch_size-len(ids))}
+                # Drain every history page before returning the new cursor.  A
+                # Gmail historyId checkpoints the whole response, not merely the
+                # first maxResults messages.  Truncating here and saving `latest`
+                # permanently skips every ID on the remaining pages.
+                while True:
+                    params={"startHistoryId":cursor,"historyTypes":"messageAdded","maxResults":max(1,min(100,batch_size))}
                     if page_token:params["pageToken"]=page_token
                     data=self._request("history?"+urllib.parse.urlencode(params))
                     latest=str(data.get("historyId") or latest)
@@ -89,15 +93,26 @@ class GmailMailboxProvider(MailboxProvider):
                     if not page_token:break
             except urllib.error.HTTPError as exc:
                 # Gmail returns 404 when a history cursor has expired. Recover
-                # with the same bounded recent-message scan used on first sync.
+                # by fully enumerating the reconciliation window before taking
+                # a fresh cursor.  The worker durably stages these IDs first.
                 if exc.code!=404:raise
-                data=self._request("messages?"+urllib.parse.urlencode({"maxResults":batch_size,"q":"newer_than:30d"}))
+                refs=self._list_recent_messages(batch_size=batch_size)
                 profile=self.verify_connection()
                 self._status="CONNECTED"
-                return data.get("messages",[]),str(profile.get("historyId") or "")
-            return ([{"id":x} for x in dict.fromkeys(ids)][:batch_size],latest)
-        data=self._request("messages?"+urllib.parse.urlencode({"maxResults":batch_size,"q":"newer_than:30d"}))
-        profile=self.verify_connection(); return data.get("messages",[]),str(profile.get("historyId") or "")
+                return refs,str(profile.get("historyId") or "")
+            return ([{"id":x} for x in dict.fromkeys(ids)],latest)
+        refs=self._list_recent_messages(batch_size=batch_size)
+        profile=self.verify_connection(); return refs,str(profile.get("historyId") or "")
+    def _list_recent_messages(self,*,batch_size:int)->list[dict[str,Any]]:
+        maximum=max(1,int(os.getenv("AI_MAIL_RECONCILIATION_MAX_MESSAGES","5000")))
+        messages=[];page_token=None
+        while len(messages)<maximum:
+            params={"maxResults":min(100,max(1,batch_size),maximum-len(messages)),"q":"newer_than:30d"}
+            if page_token:params["pageToken"]=page_token
+            data=self._request("messages?"+urllib.parse.urlencode(params))
+            messages.extend(data.get("messages",[]));page_token=data.get("nextPageToken")
+            if not page_token:break
+        return messages
     def fetch_messages_by_date(self,range_start,range_end,*,limit:int=500)->list[dict[str,Any]]:
         # Gmail's `before` boundary is exclusive; include the selected end day.
         from datetime import timedelta

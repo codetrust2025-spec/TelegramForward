@@ -22,6 +22,12 @@ const api = async (path, options = {}) => {
 };
 const human = (value) => String(value || "").replaceAll("_", " ");
 const when = (value) => (value ? new Date(value).toLocaleString() : "Never");
+const emailDate = (value) => {
+  if (!value) return "Never";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Never";
+  return `${String(date.getDate()).padStart(2, "0")}-${String(date.getMonth() + 1).padStart(2, "0")}-${date.getFullYear()}`;
+};
 const IMPORTANT_STATUSES = [
   "SELECTED",
   "FINAL_SELECTION_CONFIRMED",
@@ -224,7 +230,9 @@ function ReviewTable({ rows, names, onReview, onEvidence }) {
           ) : (
             rows.map((event) => (
               <tr key={event.id}>
-                <td>{when(event.created_at)}</td>
+                <td title="Email received time">
+                  {emailDate(event.email_sent_at || event.created_at)}
+                </td>
                 <td>{names[event.candidate_id] || event.candidate_id}</td>
                 <td>
                   <span className="recruitment-mail-badge">

@@ -243,7 +243,7 @@ def test_historical_false_positive_is_archived_from_all_consumers(monkeypatch):
     assert archived[0][1]["status"] == "IGNORED_NOT_OFFER_RELATED"
 
 
-def test_ai_failure_never_promotes_strong_keywords_to_lifecycle_truth(monkeypatch):
+def test_ai_failure_keeps_only_strong_evidence_for_manual_review(monkeypatch):
     statuses=[]; created=[]
     monkeypatch.setattr(agent.store,"insert_message",lambda *args:({"id":"stored-message","processing_status":"FILTERED"},True))
     monkeypatch.setattr(agent.store,"is_duplicate_content",lambda *args:False)
@@ -258,13 +258,33 @@ def test_ai_failure_never_promotes_strong_keywords_to_lifecycle_truth(monkeypatc
         message("Congratulations and Next Steps", "Your date of joining will be 15th July 2026."),
         [],
     )
-    assert result["primary_status"] == "MANUAL_REVIEW_REQUIRED"
+    assert result["primary_status"] == "JOINING_CONFIRMED"
     assert statuses == ["AI_RETRY_PENDING"]
     assert created[0][0][2]["requires_manual_review"] is True
     assert created[0][0][2]["lifecycle_event"] == "NONE"
     assert created[0][1]["model"] == "unavailable:runtimeerror"
-    assert created[0][0][2]["classification_source"] == "FAILURE_REVIEW"
-    assert created[0][0][2]["ai_validation_status"] == "RETRY_PENDING"
+    assert created[0][0][2]["classification_source"] == "FALLBACK"
+    assert created[0][0][2]["ai_validation_status"] == "UNAVAILABLE"
+
+
+def test_ai_timeout_keeps_ambiguous_mail_hidden_for_background_retry(monkeypatch):
+    statuses=[]; created=[]; analyses=[]
+    monkeypatch.setattr(agent.store,"insert_message",lambda *args:({"id":"stored-message","processing_status":"FILTERED"},True))
+    monkeypatch.setattr(agent.store,"is_duplicate_content",lambda *args:False)
+    monkeypatch.setattr(agent.store,"is_duplicate_offer_attachment",lambda *args:False)
+    monkeypatch.setattr(agent.store,"mark_message_status",lambda mid,status,**kwargs:statuses.append(status))
+    monkeypatch.setattr(agent.store,"record_analysis",lambda *args,**kwargs:analyses.append((args,kwargs)))
+    monkeypatch.setattr(agent.store,"create_event",lambda *args,**kwargs:created.append(True))
+    monkeypatch.setattr(agent,"analyze",lambda *args:(_ for _ in ()).throw(RuntimeError("offline")))
+    result=agent.process_message(
+        {"id":"mailbox-1","candidate_id":"candidate-1"},
+        message("Update on your application", "We wanted to share an update about your application."),
+        [],
+    )
+    assert result is None
+    assert statuses == ["AI_RETRY_PENDING"]
+    assert not created
+    assert analyses[0][1]["processing_status"] == "RETRY_PENDING"
 
 
 def test_ollama_outage_on_obvious_job_ad_is_audit_only_end_to_end(monkeypatch):

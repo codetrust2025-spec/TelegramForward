@@ -16,6 +16,7 @@ from services.recruitment_semantics import (
     DOCUMENT_TYPES,
     EMAIL_INTENTS,
     classify_context,
+    extract_interview_schedule,
     redact_sensitive_text,
     validate_interview_event,
     validate_lifecycle_event,
@@ -747,6 +748,7 @@ def _manual_review_from_strong_context(
         "OFFER_IN_PROGRESS", "OFFER_APPROVED", "OFFER_LETTER_RECEIVED",
         "APPOINTMENT_LETTER_RECEIVED", "OFFER_ACCEPTED", "JOINING_CONFIRMED",
         "JOINED", "POST_SELECTION_ONBOARDING",
+        "INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED",
     }
     if not routing_context.get("qualified") or status not in fallback_statuses or not evidence:
         return None
@@ -759,6 +761,14 @@ def _manual_review_from_strong_context(
         "OFFER_ACCEPTED", "JOINING_CONFIRMED", "JOINED",
         "POST_SELECTION_ONBOARDING",
     }
+    is_interview = status in {"INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED"}
+    interview = (
+        extract_interview_schedule(
+            str(message.get("subject") or ""), str(message.get("body") or ""),
+            sent_at=message.get("sent_at"),
+        ) if is_interview else
+        {key: None for key in ("date", "time", "timezone", "mode", "round", "location", "meeting_link")}
+    )
     return {
         "schema_version": "selection_offer_event_v1",
         "is_recruitment_related": True,
@@ -782,7 +792,7 @@ def _manual_review_from_strong_context(
             "name": message.get("sender_name"),
             "email": message.get("sender_email"),
         },
-        "interview": {key: None for key in ("date", "time", "timezone", "mode", "round", "location", "meeting_link")},
+        "interview": interview,
         "offer": {
             "offer_detected": status in offer_statuses,
             "offer_letter_detected": status == "OFFER_LETTER_RECEIVED",
@@ -802,6 +812,11 @@ def _manual_review_from_strong_context(
         "manual_review_required": True,
         "classification_source": "FALLBACK",
         "ai_validation_status": "UNAVAILABLE",
+        "ai_status": "UNAVAILABLE",
+        "validation_status": "NEEDS_REVIEW",
+        "lifecycle_event": "NONE",
+        "interview_event": status if is_interview else "NONE",
+        "business_domain": "INTERVIEW_TRACKING" if is_interview else "SELECTION_TRACKING",
         "fallback_reason": failure_code,
         "fallback_confidence": confidence,
         "summary": (
@@ -1016,14 +1031,35 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
         _publish("mail_ai_analyzing", candidate_id=mailbox.get("candidate_id"), gmail_message_id=decoded.get("provider_message_id"), processing_status="AI Analyzing")
         result, model, duration = analyze(decoded, safe)
     except Exception as exc:
-        # An unavailable semantic model must never promote keyword evidence to
-        # candidate truth. Persist one idempotent retry-pending review record.
-        result = _failure_review_result(decoded, exc)
+        # A model outage is not evidence that a message belongs in the review
+        # queue. Preserve only locally evidenced, high-value outcomes for a
+        # human decision. Everything else remains stored as AI_RETRY_PENDING
+        # and is retried by the recovery worker without creating a visible
+        # lifecycle event.
+        result = _manual_review_from_strong_context(
+            decoded, route.get("context") or {}, exc
+        ) or _failure_review_result(decoded, exc)
         model = f"unavailable:{getattr(exc, 'code', type(exc).__name__).lower()}"
         duration = 0
         logger.warning("Recruitment email queued for semantic retry code=%s", getattr(exc, 'code', type(exc).__name__))
         failure_code = getattr(exc, "code", None) or "OLLAMA_INTERNAL_ERROR"
         store.mark_message_status(row["id"], "AI_RETRY_PENDING", reason=failure_code)
+        if (
+            result.get("primary_status") == "MANUAL_REVIEW_REQUIRED"
+            and not critical_attachment_failure
+        ):
+            # Unknown/ambiguous mail is not user-actionable while AI is down.
+            # Keep its analysis and retry state for recovery, but do not turn
+            # infrastructure failure into a false-positive review record.
+            try:
+                store.record_analysis(
+                    row["id"], mailbox["candidate_id"], result,
+                    model=model, processing_status="RETRY_PENDING",
+                    error_code=failure_code, error_message=str(exc),
+                )
+            except Exception:
+                logger.debug("Unable to persist hidden retry analysis", exc_info=True)
+            return None
     if critical_attachment_failure and (not result.get("is_selection_or_offer_related") or not result.get("should_create_review_record")):
         result = _failure_review_result(decoded, RuntimeError("Critical employment attachment extraction failed"))
         result["reason"] = "A potentially important employment attachment could not be extracted"

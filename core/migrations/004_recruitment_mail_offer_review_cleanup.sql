@@ -15,6 +15,7 @@ WITH candidates AS (
   FROM ai_recruitment_events e
   LEFT JOIN mailbox_messages m ON m.id=e.mailbox_message_id
   WHERE COALESCE(e.visible_in_offer_review,true)=true
+    AND e.cleanup_version IS DISTINCT FROM 'manual_content_audit_keep_v1'
     AND e.review_status NOT IN('IGNORED','APPROVED')
     AND NOT (lower(COALESCE(m.subject,'')||' '||COALESCE(e.summary,'')||' '||COALESCE(e.structured_result::text,'')) ~
       '(you have been selected|selected for the role|selected for the position|selection confirmed|final selection|we are pleased to offer|we are delighted to offer|offer letter attached|employment offer|appointment letter|letter of appointment|offer approved|offer released|offer is being processed|joining date|date of joining|welcome aboard|employee onboarding|pre-joining formalities|report for joining)')

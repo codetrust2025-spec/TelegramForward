@@ -264,6 +264,39 @@ def install_recruitment_mail_routes(app):
     @app.post('/api/ai-recruitment/events/{event_id}/{action}')
     async def review_action(event_id:str,action:str,request:Request,body:dict):
         _guard();profile=require_fleet_admin(request)
+        if action=='approve-and-book':
+            reviewer=profile.get('username') or 'admin'
+            event=await asyncio.to_thread(store.event_detail,event_id,include_evidence=True)
+            if not event:raise HTTPException(404,'Event not found')
+            if str(event.get('primary_status') or '').upper() not in ('INTERVIEW_CONFIRMED','INTERVIEW_RESCHEDULED','INTERVIEW_CANCELLED'):
+                raise HTTPException(400,'Approve & Book is available only for actionable interview events')
+            context=await asyncio.to_thread(store.event_reprocess_context,event_id)
+            if not context:raise HTTPException(404,'Source email not found')
+            approved=await asyncio.to_thread(store.review_event,event_id,'approve',reviewer,str(body.get('notes') or 'Approved for manual interview booking'))
+            result=dict(approved.get('structured_result') or {})
+            result['classification']=store.canonical_classification(result,approved.get('primary_status'))
+            result['classification_source']='MANUAL_REVIEW'
+            result['ai_validation_status']='MANUAL_APPROVED'
+            result['requires_manual_review']=False
+            interview=dict(result.get('interview') or {})
+            if result['classification']!='interview_cancelled' and not str(interview.get('timezone') or '').strip():
+                interview['timezone']=(os.getenv('AI_INTERVIEW_MANUAL_DEFAULT_TIMEZONE') or 'Asia/Kolkata').strip()
+                result['manual_timezone_defaulted']=True
+            result['interview']=interview
+            mailbox={'id':context.get('mailbox_id'),'candidate_id':context.get('mailbox_candidate_id'),'email_address':context.get('email_address')}
+            message={'provider_message_id':context.get('provider_message_id'),'provider_thread_id':context.get('provider_thread_id'),
+              'sender_name':context.get('sender_name'),'sender_email':context.get('sender_email'),'recipient_email':context.get('recipient_email'),
+              'subject':context.get('subject'),'sent_at':context.get('sent_at'),'body':context.get('body_text') or '',
+              'html_body':context.get('html_body_text') or ''}
+            notification=await asyncio.to_thread(store.notification_for_event,event_id)
+            booking_event={**approved,'notification':notification or {}}
+            from services.interview_auto_booking import execute_manual_approved_booking
+            booking=await asyncio.to_thread(execute_manual_approved_booking,mailbox=mailbox,message=message,event=booking_event,
+              result=result,reviewer=reviewer,correlation_id=f'manual-review:{event_id}')
+            store.audit(actor=reviewer,role='admin',action='INTERVIEW_APPROVE_AND_BOOK',candidate_id=approved.get('candidate_id'),
+              source_id=event_id,new={'booking_status':booking.get('status'),'booking_id':(booking.get('booking') or {}).get('id'),
+              'failure_code':booking.get('failure_code')})
+            return {'status':'ok','event':approved,'booking_result':booking}
         if action=='retry':
             context=await asyncio.to_thread(store.event_reprocess_context,event_id)
             if not context:raise HTTPException(404,'Event not found')

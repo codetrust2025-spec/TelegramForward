@@ -16,7 +16,10 @@ def _publish(event_type:str,**payload):
         logger.debug('Mail real-time event unavailable type=%s',event_type,exc_info=True)
 
 class RecruitmentMailWorker:
-    def __init__(self):self._task=None;self._stopping=False;self._jobs=set();self._last_watch_renewal=0.0;self._last_ai_recovery=0.0
+    def __init__(self):
+        self._task=None;self._stopping=False;self._jobs=set()
+        self._watch_task=None;self._ai_recovery_task=None
+        self._last_watch_renewal=0.0;self._last_ai_recovery=0.0
     def start(self):
         if self._task is None or self._task.done():
             store.recover_interrupted_jobs()
@@ -27,23 +30,40 @@ class RecruitmentMailWorker:
         for job in self._jobs:job.cancel()
         if self._jobs:await asyncio.gather(*self._jobs,return_exceptions=True)
         self._jobs.clear()
+        maintenance=[task for task in (self._watch_task,self._ai_recovery_task) if task]
+        for task in maintenance:task.cancel()
+        if maintenance:await asyncio.gather(*maintenance,return_exceptions=True)
+        self._watch_task=None;self._ai_recovery_task=None
+    async def _run_maintenance(self,label,operation):
+        try:await asyncio.to_thread(operation)
+        except asyncio.CancelledError:raise
+        except Exception:logger.exception('Mailbox maintenance failed task=%s',label)
     async def _run(self):
         while not self._stopping:
             try:
                 if os.getenv('AI_INTERVIEW_OFFER_TRACKING_ENABLED','false').lower()=='true' and os.getenv('AI_MAILBOX_SYNC_ENABLED','false').lower()=='true':
                     await asyncio.to_thread(self.schedule_due)
-                    if time.monotonic()-self._last_watch_renewal>=900:
-                        await asyncio.to_thread(self.renew_due_watches);self._last_watch_renewal=time.monotonic()
-                    if time.monotonic()-self._last_ai_recovery>=60:
-                        await asyncio.to_thread(self.process_ai_recovery);self._last_ai_recovery=time.monotonic()
                     self._jobs={task for task in self._jobs if not task.done()}
                     maximum=max(1,min(20,int(os.getenv('AI_MAIL_SYNC_MAX_CONCURRENCY','5'))))
                     while len(self._jobs)<maximum:
                         job=await asyncio.to_thread(store.claim_job)
                         if not job:break
                         self._jobs.add(asyncio.create_task(asyncio.to_thread(self.process_job,job),name=f"mailbox-sync-{job['id']}"))
-                    if self._jobs:
-                        await asyncio.wait(self._jobs,timeout=1,return_when=asyncio.FIRST_COMPLETED);continue
+                    # Watch renewal and AI recovery can each spend minutes waiting
+                    # on external services.  Keep them off the queue-consumer path
+                    # so a slow Ollama response cannot leave Gmail jobs QUEUED.
+                    if self._watch_task and self._watch_task.done():self._watch_task=None
+                    if self._ai_recovery_task and self._ai_recovery_task.done():self._ai_recovery_task=None
+                    now=time.monotonic()
+                    if self._watch_task is None and now-self._last_watch_renewal>=900:
+                        self._last_watch_renewal=now
+                        self._watch_task=asyncio.create_task(self._run_maintenance('watch-renewal',self.renew_due_watches),name='mailbox-watch-renewal')
+                    if self._ai_recovery_task is None and now-self._last_ai_recovery>=60:
+                        self._last_ai_recovery=now
+                        self._ai_recovery_task=asyncio.create_task(self._run_maintenance('ai-recovery',self.process_ai_recovery),name='mailbox-ai-recovery')
+                    active={*self._jobs,*(task for task in (self._watch_task,self._ai_recovery_task) if task)}
+                    if active:
+                        await asyncio.wait(active,timeout=1,return_when=asyncio.FIRST_COMPLETED);continue
             except asyncio.CancelledError:raise
             except Exception:logger.exception('Mailbox worker loop failed')
             await asyncio.sleep(5)
@@ -102,6 +122,7 @@ class RecruitmentMailWorker:
     def process_job(self,job):
         mailbox=store.mailbox_by_id(job['mailbox_id']);counts={'fetched':0,'processed':0,'events':0}
         if not mailbox:store.finish_job(job['id'],status='FAILED',error='Mailbox not found');return
+        active_ingestion=None
         try:
             _publish('mail_processing_started',candidate_id=mailbox.get('candidate_id'),mailbox_id=mailbox.get('id'),processing_status='Processing')
             store.update_mailbox(mailbox['id'],{'last_sync_attempt_at':store.now()})
@@ -109,10 +130,19 @@ class RecruitmentMailWorker:
             historical=job.get('job_type')=='HISTORICAL_RESCAN'
             if historical:
                 refs=provider.fetch_messages_by_date(job['range_start'],job['range_end']);cursor=mailbox.get('provider_history_id') or mailbox.get('sync_cursor')
+                ingestion_by_message={}
             else:
                 refs,cursor=provider.fetch_new_messages(mailbox.get('provider_history_id') or mailbox.get('sync_cursor'),batch_size=batch)
+                # This transaction is the loss-prevention boundary: all IDs are
+                # durable before the Gmail cursor can move beyond them.
+                store.stage_gmail_messages_and_advance_cursor(mailbox['id'],refs,cursor)
+                claimed=store.claim_gmail_ingestion(mailbox['id'],limit=batch)
+                refs=[{'id':row['provider_message_id']} for row in claimed]
+                ingestion_by_message={row['provider_message_id']:row for row in claimed}
             counts['fetched']=len(refs)
             for ref in refs:
+                ingestion=ingestion_by_message.get(ref['id'])
+                active_ingestion=ingestion
                 stored=store.stored_message(mailbox['id'],ref['id']) if historical else None
                 if stored and stored.get('body_text'):
                     raw=None;decoded={"provider_message_id":stored['provider_message_id'],"provider_thread_id":stored.get('provider_thread_id'),"sender_name":stored.get('sender_name'),"sender_email":stored.get('sender_email'),"recipient_email":stored.get('recipient_email'),"subject":stored.get('subject'),"sent_at":stored.get('sent_at'),"body":stored.get('body_text'),"html_body":stored.get('html_body_text') or ''}
@@ -121,6 +151,8 @@ class RecruitmentMailWorker:
                         raw=provider.fetch_message(ref['id'])
                     except urllib.error.HTTPError as exc:
                         if exc.code==404:
+                            if ingestion:store.finish_gmail_ingestion(ingestion['id'],status='DELETED',error=exc)
+                            active_ingestion=None
                             logger.info('Skipping deleted Gmail message mailbox=%s message=%s',mailbox['id'],ref['id']);continue
                         raise
                     decoded=decode_gmail_message(raw,mailbox['email_address'])
@@ -131,10 +163,25 @@ class RecruitmentMailWorker:
                     except Exception:
                         logger.info('Thread context unavailable mailbox=%s message=%s',mailbox['id'],ref['id'])
                 attachments=([{**item,'text':item.get('extracted_text')} for item in store.attachments_for_message(stored['id'],include_text=True)] if stored and stored.get('body_text') else provider.fetch_attachments(raw))
-                event=(process_message(mailbox,decoded,attachments,reprocess=True) if historical else process_message(mailbox,decoded,attachments));counts['processed']+=1;counts['events']+=1 if event else 0
-            store.update_mailbox(mailbox['id'],{'provider_history_id':cursor,'sync_cursor':cursor,'connection_status':'CONNECTED','last_successful_sync_at':store.now(),'failed_sync_count':0,'last_error_code':None,'last_error_message':None})
+                try:
+                    event=(process_message(mailbox,decoded,attachments,reprocess=True) if historical else process_message(mailbox,decoded,attachments))
+                except Exception as exc:
+                    if ingestion:
+                        store.finish_gmail_ingestion(ingestion['id'],status='QUEUED',error=exc,max_attempts=max(1,int(os.getenv('AI_MAIL_SYNC_MAX_RETRIES','5'))))
+                    raise
+                if ingestion:store.finish_gmail_ingestion(ingestion['id'],status='COMPLETED')
+                active_ingestion=None
+                counts['processed']+=1;counts['events']+=1 if event else 0
+            pending=store.pending_gmail_ingestion_count(mailbox['id']) if not historical else 0
+            values={'connection_status':'CONNECTED','last_successful_sync_at':store.now(),'failed_sync_count':0,'last_error_code':None,'last_error_message':None}
+            # A historical scan can overlap newly arriving mail.  Catch up as
+            # soon as it ends; durable backlog batches also continue immediately.
+            if historical or pending:values['next_sync_at']=store.now()
+            store.update_mailbox(mailbox['id'],values)
             store.finish_job(job['id'],status='COMPLETED',counts=counts)
         except Exception as exc:
+            if active_ingestion:
+                store.finish_gmail_ingestion(active_ingestion['id'],status='QUEUED',error=exc,max_attempts=max(1,int(os.getenv('AI_MAIL_SYNC_MAX_RETRIES','5'))))
             failures=int(mailbox.get('failed_sync_count') or 0)+1;delay=min(240,2**min(failures,8))
             store.update_mailbox(mailbox['id'],{'connection_status':'ERROR','failed_sync_count':failures,'last_error_code':type(exc).__name__,'last_error_message':str(exc)[:400],'next_sync_at':store.now()+timedelta(minutes=delay)})
             store.finish_job(job['id'],status='FAILED',counts=counts,error=str(exc)[:400]);final=store.retry_job(job['id'],delay_minutes=delay,error=str(exc)[:400],max_attempts=max(1,int(os.getenv('AI_MAIL_SYNC_MAX_RETRIES','5'))));logger.warning('Mailbox sync failed mailbox=%s code=%s',mailbox['id'],type(exc).__name__)
