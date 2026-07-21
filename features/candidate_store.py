@@ -3829,17 +3829,19 @@ def import_confirmed_interview_slot(
     # Never create a candidate or a confirmed Daily Ops slot from an unmatched
     # public/import name.  A real candidate must exist first; otherwise a
     # malformed upload can silently book someone who has no interview.
-    # EXCEPTION: for preset slot bookers (PUBLIC_SLOT_BOOKER_NAMES), auto-create
-    # a candidate record so recurring users like Keerthana aren't blocked.
+    # EXCEPTIONS: preset slot bookers (PUBLIC_SLOT_BOOKER_NAMES) and round-wise
+    # bookings — round-wise clients type the name themselves per round, so a
+    # first-time name must not be blocked.
     canon_key = _normalise_candidate_name_key(canon)
     is_preset = any(
         _normalise_candidate_name_key(n) == canon_key
         for n in PUBLIC_SLOT_BOOKER_NAMES
     )
-    if is_preset:
-        # Auto-create candidate for this preset booker (round-wise only)
-        auto_tech = row_candidate_technology({"name": canon})
-        auto_ref = "Thrilok"  # default reference for preset bookers
+    is_round_wise = _normalise_service_type(service_type, {}) == "round_wise"
+    if is_preset or is_round_wise:
+        # Auto-create the candidate record for this booking.
+        auto_tech = tech or row_candidate_technology({"name": canon})
+        auto_ref = "Thrilok"  # default reference for auto-created slot bookers
         new_candidate = create_candidate({
             "name": canon,
             "technology": auto_tech or "Unspecified",
