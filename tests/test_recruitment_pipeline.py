@@ -458,3 +458,19 @@ def test_job_outcome_migration_archives_old_broad_matches():
     assert "ignored_at" in precision
     assert "cleanup_version" in precision
     assert "offer_case_key" in precision
+
+
+def test_legacy_offer_cleanups_protect_and_restore_interview_reviews():
+    migrations=Path(__file__).parents[1] / "core" / "migrations"
+    for name in (
+        "002_recruitment_mail_job_outcomes.sql",
+        "003_recruitment_mail_selection_offer_precision.sql",
+        "004_recruitment_mail_offer_review_cleanup.sql",
+    ):
+        sql=(migrations / name).read_text("utf-8").lower()
+        assert "not like 'interview_%'" in sql
+    restore=(migrations / "012_recruitment_mail_restore_interview_reviews.sql").read_text("utf-8").lower()
+    assert "review_status='pending'" in restore
+    assert "confidence>=0.8" in restore
+    assert "jsonb_array_length" in restore
+    assert "interview_cleanup_restore_v1" in restore

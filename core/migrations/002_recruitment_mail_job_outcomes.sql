@@ -7,6 +7,9 @@ SET review_status='FALSE_POSITIVE',
 FROM mailbox_messages m
 WHERE e.mailbox_message_id=m.id
   AND e.review_status='PENDING'
+  -- Interview review is a first-class workflow now. This legacy
+  -- selection/offer cleanup must never archive interview decisions.
+  AND COALESCE(e.primary_status,'') NOT LIKE 'INTERVIEW_%'
   -- This legacy cleanup is rerun by ensure_schema(). Never reclassify events
   -- produced by the precision-first v3 pipeline on a later restart.
   AND e.prompt_version IS DISTINCT FROM 'v3'

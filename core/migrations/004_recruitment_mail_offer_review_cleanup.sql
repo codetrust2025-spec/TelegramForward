@@ -15,6 +15,9 @@ WITH candidates AS (
   FROM ai_recruitment_events e
   LEFT JOIN mailbox_messages m ON m.id=e.mailbox_message_id
   WHERE COALESCE(e.visible_in_offer_review,true)=true
+    -- Interview events belong to the unified review queue but are outside the
+    -- scope of this selection/offer cleanup.
+    AND COALESCE(e.primary_status,'') NOT LIKE 'INTERVIEW_%'
     AND e.cleanup_version IS DISTINCT FROM 'manual_content_audit_keep_v1'
     AND e.review_status NOT IN('IGNORED','APPROVED')
     AND NOT (lower(COALESCE(m.subject,'')||' '||COALESCE(e.summary,'')||' '||COALESCE(e.structured_result::text,'')) ~
