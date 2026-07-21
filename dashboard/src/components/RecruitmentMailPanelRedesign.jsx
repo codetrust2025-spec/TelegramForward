@@ -92,6 +92,9 @@ const aiFailureReason = (event) => {
 };
 const isManualAuditKeep = (event) =>
   event?.cleanup_version === "manual_content_audit_keep_v1";
+const isManuallyApproved = (event) =>
+  String(event?.review_status || "").toUpperCase() === "APPROVED" &&
+  String(event?.validation_status || "").toUpperCase() === "APPROVED";
 const aiNeverRan = (event) => {
   const aiStatus = String(
     event?.ai_status || event?.structured_result?.ai_status || "",
@@ -126,10 +129,7 @@ const describeAiStatus = (event) => {
       reason: "Content verified; automatic AI retry disabled",
     };
   }
-  if (
-    String(event?.review_status || "").toUpperCase() === "APPROVED" &&
-    validation === "APPROVED"
-  ) {
+  if (isManuallyApproved(event)) {
     return {
       status: "Manually approved",
       reason: aiFailureCode(event)
@@ -1211,7 +1211,11 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
       {status === "SUCCESS" && event && (
         <>
           <h3>{event.received_email?.subject || event.subject}</h3>
-          <p>{event.summary}</p>
+          <p>
+            {isManuallyApproved(event) && aiFailureCode(event)
+              ? "This record was manually approved from the complete source email. The earlier AI timeout is retained only in audit history."
+              : event.summary}
+          </p>
           <dl>
             <div>
               <dt>Email intent</dt>
@@ -1237,7 +1241,9 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
               <dt>Lifecycle event</dt>
               <dd>
                 {human(
-                  event.structured_result?.lifecycle_event ||
+                  (String(event.structured_result?.lifecycle_event || "").toUpperCase() === "NONE"
+                    ? ""
+                    : event.structured_result?.lifecycle_event) ||
                     event.primary_status,
                 )}
               </dd>
@@ -1253,20 +1259,29 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
             </div>
             <div>
               <dt>Sender</dt>
-              <dd>{event.sender_name || event.sender_email}</dd>
+              <dd>
+                {formatEmailAddress(
+                  event.received_email?.sender_name || event.sender_name,
+                  event.received_email?.sender_email || event.sender_email,
+                )}
+              </dd>
             </div>
             <div>
-              <dt>Model</dt>
+              <dt>{isManuallyApproved(event) ? "Review method" : "Model"}</dt>
               <dd>
-                {isManualAuditKeep(event)
+                {isManuallyApproved(event)
+                  ? "Human approval"
+                  : isManualAuditKeep(event)
                   ? "Manual operator audit"
                   : event.ai_model}
               </dd>
             </div>
           </dl>
           <p>
-            {event.evidence_summary ||
-              event.structured_result?.evidence_summary}
+            {isManuallyApproved(event) && aiFailureCode(event)
+              ? "Source email evidence was reviewed and approved."
+              : event.evidence_summary ||
+                event.structured_result?.evidence_summary}
           </p>
           <ul>
             {(event.structured_result?.evidence || []).map((item, index) => (

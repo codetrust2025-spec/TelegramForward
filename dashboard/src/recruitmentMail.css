@@ -1329,6 +1329,9 @@
 .sot-evidence ul {
   margin: 18px 0;
 }
+.sot-evidence li strong {
+  margin-right: 6px;
+}
 .sot-evidence-status {
   color: var(--sot-muted);
   text-align: center;

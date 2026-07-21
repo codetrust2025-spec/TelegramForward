@@ -68,8 +68,8 @@ const payloadFor = (url) => {
         validation_status: "APPROVED",
         ai_status: "RETRY_PENDING",
         ai_model: "unavailable:ollama_request_timeout",
-        summary: "Interview invitation detected.",
-        evidence_summary: "The source email contains an interview schedule.",
+        summary: "Fallback evidence indicates interview confirmed. AI validation unavailable (OLLAMA_REQUEST_TIMEOUT).",
+        evidence_summary: "Fallback evidence indicates interview confirmed. AI validation unavailable (OLLAMA_REQUEST_TIMEOUT).",
         structured_result: {
           evidence: [
             { meaning: "Interview confirmed", text: "Interview at 3 PM" },
@@ -205,6 +205,19 @@ describe("RecruitmentMailPanel", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByText(/^Manually approved/)).toBeInTheDocument();
+    expect(screen.getByText("Human approval")).toBeInTheDocument();
+    expect(screen.getAllByText("Interview Confirmed").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(
+        "This record was manually approved from the complete source email. The earlier AI timeout is retained only in audit history.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/AI validation unavailable/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("unavailable:ollama_request_timeout"),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByText(
         /AI analysis is pending because the AI service was unavailable/,
