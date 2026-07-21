@@ -3539,19 +3539,13 @@ def _default_slot_time_end(start: str, end: str = "") -> str:
     """Use parsed end, or start + 30 minutes when end is missing or invalid."""
     start = _clean_str(start)
     end = _clean_str(end)
-    if end and end != start:
-        try:
-            sh, sm = map(int, start.split(":"))
-            eh, em = map(int, end.split(":"))
-            if (eh, em) > (sh, sm):
-                return end
-        except ValueError:
-            pass
-    try:
-        sh, sm = map(int, start.split(":"))
-    except ValueError:
+    # Parse via the roster sort key so 12-hour input ("12:30 PM") works too.
+    start_min = _interview_time_sort_key(start)[0]
+    if end and end != start and _interview_time_sort_key(end)[0] > start_min:
+        return end
+    if start_min >= 24 * 60:  # blank or unparseable start — nothing to derive from
         return start
-    total = sh * 60 + sm + 30
+    total = start_min + 30
     return f"{(total // 60) % 24:02d}:{total % 60:02d}"
 
 
@@ -3839,7 +3833,9 @@ def import_confirmed_interview_slot(
     )
     is_round_wise = _normalise_service_type(service_type, {}) == "round_wise"
     if is_preset or is_round_wise:
-        # Auto-create the candidate record for this booking.
+        # Auto-create the candidate record, then book the slot through the normal
+        # assign path so it lands as a confirmed slot (slot_confirmed, booking
+        # source, attendee) exactly like a booking for an existing candidate.
         auto_tech = tech or row_candidate_technology({"name": canon})
         auto_ref = "Thrilok"  # default reference for auto-created slot bookers
         new_candidate = create_candidate({
@@ -3847,14 +3843,17 @@ def import_confirmed_interview_slot(
             "technology": auto_tech or "Unspecified",
             "reference": auto_ref,
             "stage": "in_progress",
-            "date": day,
-            "logged_date": day,
-            "time": slot_time,
-            "time_end": slot_end,
-            "notes": note,
-            "interview_round": rnd,
             "service_type": service_type or "round_wise",
         })
+        new_candidate = assign_interview_slot(
+            candidate_id=new_candidate["id"],
+            date=day,
+            time=slot_time,
+            time_end=slot_end,
+            notes=note,
+            interview_round=rnd,
+            interview_booking_source="candidate_booked",
+        )
         return _finish_public_slot_import(
             new_candidate,
             "auto_created",
