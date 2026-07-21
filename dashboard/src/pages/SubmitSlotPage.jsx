@@ -238,6 +238,10 @@ export function SubmitSlotPage() {
   const [slotPreview, setSlotPreview] = useState('')
   const [paymentProofId, setPaymentProofId] = useState('')
   const [paymentFile, setPaymentFile] = useState(null)
+  // Set when the booking call comes back payment_due — round-wise names are typed
+  // freely and may not be in the candidate list, so `selected` can't reveal the
+  // payment card on its own.
+  const [paymentDue, setPaymentDue] = useState(null)
   const [sessionFile, setSessionFile] = useState(null)
   const [sessionPreview, setSessionPreview] = useState('')
   const [manualDate, setManualDate] = useState('')
@@ -268,7 +272,14 @@ export function SubmitSlotPage() {
   }, [parsedSlot, manualDate, manualTime, interviewRound])
 
   const showManualSlotFields = Boolean(slotFile && !parsing && (!aiExtraction || aiExtraction.manual_fields_required || aiExtraction.confidence_score < 70))
-  const needsPaymentProof = Boolean(selected?.needs_payment_proof && !paymentProofId)
+  const showPaymentCard = Boolean(selected?.needs_payment_proof || paymentDue)
+  const paymentBalanceDue = selected?.needs_payment_proof
+    ? (selected.balance_due || 0)
+    : (paymentDue?.balance_due || 0)
+  const needsPaymentProof = Boolean(showPaymentCard && !paymentProofId)
+
+  // A payment_due answer belongs to one name — drop it as soon as that changes.
+  useEffect(() => { setPaymentDue(null) }, [effectiveName, serviceType])
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -430,7 +441,16 @@ export function SubmitSlotPage() {
       fd.append('file', slotFile)
       const res = await fetch(`${API_BASE}/public/slots/book`, { method: 'POST', body: fd })
       const data = await res.json()
-      if (!res.ok) { setError(data.payment_due ? (data.message || 'Payment required.') : (data.message || 'Could not book slot')); return }
+      if (!res.ok) {
+        if (data.payment_due) {
+          // Reveal the payment card so the proof can be uploaded right here.
+          setPaymentDue({ balance_due: data.balance_due || 0, name: data.name || effectiveName })
+          setError(data.message || 'Payment required.')
+        } else {
+          setError(data.message || 'Could not book slot')
+        }
+        return
+      }
       if (slotPreview) URL.revokeObjectURL(slotPreview)
       setSlotFile(null); setSlotPreview(''); setParsedSlot(null); setManualDate(''); setManualTime(''); setInterviewRound(''); setServiceType('profile_service'); setPaymentProofId('')
       setName('')
@@ -597,9 +617,9 @@ export function SubmitSlotPage() {
                 {triedSubmit && !interviewRound && <span className="sbs-hint sbs-hint--warn">Required — select a round to confirm.</span>}
               </label>
 
-              {selected?.needs_payment_proof && (
+              {showPaymentCard && (
                 <div className="sbs-pay-card">
-                  <div className="sbs-pay-head"><span>Payment due</span><strong>₹{(selected.balance_due || 0).toLocaleString('en-IN')}</strong></div>
+                  <div className="sbs-pay-head"><span>Payment due</span><strong>₹{paymentBalanceDue.toLocaleString('en-IN')}</strong></div>
                   {paymentProofId ? (
                     <>
                       <p className="sbs-pay-ok">Payment proof on file ✓</p>
