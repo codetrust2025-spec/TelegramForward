@@ -77,11 +77,12 @@ describe("RecruitmentMailPanel", () => {
     expect(
       screen.getByRole("heading", { name: "Mail & Interview Monitoring" }),
     ).toBeInTheDocument();
-    await waitFor(() =>
-      expect(
-        screen.getByRole("heading", { name: "Selection & Offer flow" }),
-      ).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(
+      screen.getByRole("heading", { name: "Priority Mail Review" }),
+    ).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Review Queue" })).toHaveClass("active");
+    fireEvent.click(screen.getByRole("button", { name: "Overview" }));
+    expect(screen.getByRole("heading", { name: "Selection & Offer flow" })).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Interview monitoring flow" }),
     ).toBeInTheDocument();

@@ -551,15 +551,23 @@ function ReviewQueue({
   onEvidence,
   onReview,
 }) {
+  const pendingEvents = events.filter(
+    (event) => String(event.review_status || "").toUpperCase() === "PENDING",
+  );
+  const interviewEvents = events.filter((event) =>
+    String(event.primary_status || "").startsWith("INTERVIEW_"),
+  );
+  const selectionEvents = events.length - interviewEvents.length;
   return (
-    <section className="sot-content-card">
+    <section className="sot-content-card sot-priority-review">
       <header>
         <div>
-          <h2>Review Queue</h2>
+          <span className="sot-workspace-eyebrow">FIRST ACTION</span>
+          <h2>Priority Mail Review</h2>
           <p>
             {statusFilterLabel
               ? `Showing only "${statusFilterLabel}" emails.`
-              : "Verify AI-detected outcomes before they affect candidate records."}
+              : "Review every pending selection, offer and interview email before moving to monitoring or analytics."}
           </p>
         </div>
         <div className="sot-review-header-actions">
@@ -574,6 +582,27 @@ function ReviewQueue({
           <span>{events.length} records</span>
         </div>
       </header>
+      <div className="sot-priority-review-summary" aria-label="Priority review summary">
+        <article className={pendingEvents.length ? "is-urgent" : ""}>
+          <small>Needs action now</small>
+          <strong>{pendingEvents.length}</strong>
+          <span>Pending human decisions</span>
+        </article>
+        <article>
+          <small>Selection &amp; offers</small>
+          <strong>{selectionEvents}</strong>
+          <span>Career outcome emails</span>
+        </article>
+        <article>
+          <small>Interviews</small>
+          <strong>{interviewEvents.length}</strong>
+          <span>Schedule and booking emails</span>
+        </article>
+        <div className="sot-priority-order-note">
+          <strong>Pending first</strong>
+          <span>Newest actionable mail is always shown at the top.</span>
+        </div>
+      </div>
       <div className="sot-table-wrap">
         <table className="sot-review-table">
           <thead>
@@ -625,6 +654,11 @@ function ReviewQueue({
                       </small>
                       <span className="sot-outcome-badge">
                         {human(event.primary_status)}
+                      </span>
+                      <span className={`sot-mail-domain ${String(event.primary_status || "").startsWith("INTERVIEW_") ? "is-interview" : "is-selection"}`}>
+                        {String(event.primary_status || "").startsWith("INTERVIEW_")
+                          ? "Interview"
+                          : "Selection / Offer"}
                       </span>
                     </td>
                     <td>
@@ -1364,7 +1398,9 @@ function InterviewWorkspace({ notifications, summary, onReview }) {
 export default function RecruitmentMailPanelRedesign() {
   const today = new Date().toISOString().slice(0, 10);
   const { confirm } = useConfirm();
-  const [tab, setTab] = useState("overview");
+  // Human decisions are the operational bottleneck, so every visit starts on
+  // one unified selection/offer/interview review lane.
+  const [tab, setTab] = useState("reviews");
   const [metrics, setMetrics] = useState({
     needs_review: 0,
     selected: 0,
@@ -1837,6 +1873,20 @@ export default function RecruitmentMailPanelRedesign() {
       group: "joined",
     },
   ];
+
+  const prioritizedReviewEvents = useMemo(
+    () =>
+      [...events].sort((left, right) => {
+        const pendingRank = (event) =>
+          String(event.review_status || "").toUpperCase() === "PENDING" ? 0 : 1;
+        const rankDifference = pendingRank(left) - pendingRank(right);
+        if (rankDifference) return rankDifference;
+        const leftTime = new Date(left.email_sent_at || left.created_at || 0).getTime();
+        const rightTime = new Date(right.email_sent_at || right.created_at || 0).getTime();
+        return rightTime - leftTime;
+      }),
+    [events],
+  );
   const viewEmails = (row) => {
     setReviewCandidateId(row.candidate.id);
     setTab("reviews");
@@ -1924,10 +1974,10 @@ export default function RecruitmentMailPanelRedesign() {
       </section>
       <nav className="sot-tabs">
         {[
-          ["overview", "Overview"],
+          ["reviews", "Review Queue"],
           ["selection", "Selection & Offers"],
           ["interviews", "Interview Monitoring"],
-          ["reviews", "Review Queue"],
+          ["overview", "Overview"],
           ["mailboxes", "Mailboxes"],
           ["candidates", "Candidates"],
           ["analytics", "Analytics"],
@@ -2127,7 +2177,7 @@ export default function RecruitmentMailPanelRedesign() {
       )}
       {tab === "reviews" && (
         <ReviewQueue
-          events={events
+          events={prioritizedReviewEvents
             .filter((event) =>
               reviewCandidateId
                 ? event.candidate_id === reviewCandidateId ||
