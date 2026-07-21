@@ -39,6 +39,48 @@ const payloadFor = (url) => {
     };
   if (url.includes("/review")) return { status: "ok", events: [] };
   if (url.includes("/offer-verification")) return { status: "ok", cases: [] };
+  if (url.includes("/mail-monitoring/notifications"))
+    return {
+      status: "ok",
+      notifications: [
+        {
+          id: "notification-1",
+          ai_recruitment_event_id: "event-1",
+          candidate_name: "Test Candidate",
+          classification: "interview_confirmed",
+          email_subject: "Frontend interview invitation",
+          interview_date: "2026-07-22",
+          interview_time: "03:00 PM",
+          interview_timezone: "Asia/Kolkata",
+          ai_confidence: 0.8,
+          booking_status: "Blocked",
+        },
+      ],
+    };
+  if (url.includes("/events/event-1"))
+    return {
+      status: "ok",
+      event: {
+        id: "event-1",
+        subject: "Frontend interview invitation",
+        primary_status: "INTERVIEW_CONFIRMED",
+        summary: "Interview invitation detected.",
+        evidence_summary: "The source email contains an interview schedule.",
+        structured_result: {
+          evidence: [
+            { meaning: "Interview confirmed", text: "Interview at 3 PM" },
+          ],
+        },
+        received_email: {
+          subject: "Frontend interview invitation",
+          sender_name: "Recruiter",
+          sender_email: "recruiter@example.com",
+          recipient_email: "candidate@gmail.com",
+          sent_at: "2026-07-21T08:00:00Z",
+          body: "Your frontend interview is scheduled for tomorrow at 3 PM.",
+        },
+      },
+    };
   if (url.includes("/candidates?"))
     return {
       status: "ok",
@@ -133,6 +175,31 @@ describe("RecruitmentMailPanel", () => {
       ).toBeInTheDocument(),
     );
     expect(screen.queryByText("Request failed")).not.toBeInTheDocument();
+  });
+  it("opens the complete source mail when an interview activity row is selected", async () => {
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Interview Monitoring" }),
+    );
+    const activity = await screen.findByLabelText(
+      "Open source mail: Frontend interview invitation",
+    );
+    fireEvent.click(activity);
+    expect(
+      await screen.findByRole("heading", { name: "Detection Evidence" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Complete email" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Your frontend interview is scheduled for tomorrow at 3 PM.",
+      ),
+    ).toBeInTheDocument();
   });
   it("opens Gmail connection inline from the main review screen", async () => {
     render(

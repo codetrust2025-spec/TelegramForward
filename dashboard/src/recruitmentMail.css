@@ -2164,6 +2164,9 @@
 .sot-interview-table td { padding: 12px 14px; border-bottom: 1px solid #1d334d; text-align: left; vertical-align: top; }
 .sot-interview-table th { color: #7890ad; background: #091728; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
 .sot-interview-table td { color: #d5e1ef; font-size: 12px; }
+.sot-interview-table tbody tr.is-clickable { cursor: pointer; transition: background-color .16s ease; }
+.sot-interview-table tbody tr.is-clickable:hover { background: rgba(50, 132, 255, .08); }
+.sot-interview-table tbody tr.is-clickable:focus-visible { outline: 2px solid var(--sot-blue); outline-offset: -2px; background: rgba(50, 132, 255, .1); }
 .sot-interview-table td strong,
 .sot-interview-table td small { display: block; }
 .sot-interview-table td small { max-width: 340px; margin-top: 4px; overflow: hidden; color: #7890ad; text-overflow: ellipsis; white-space: nowrap; }
