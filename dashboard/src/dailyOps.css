@@ -465,6 +465,9 @@
 .ops-dash-table--v3 .ops-interview-time{padding-left:4px;padding-right:8px;white-space:nowrap}
 .ops-dash-table--v3 td[data-label=Candidate]{padding-left:6px;padding-right:6px;overflow:hidden}
 .ops-dash-table--v3 td[data-label=Candidate] strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ops-booking-source{display:inline-flex;align-items:center;width:max-content;max-width:100%;margin-top:4px;padding:2px 6px;border:1px solid;border-radius:999px;font-size:9px;font-weight:700;line-height:1.2;letter-spacing:.02em;white-space:nowrap}
+.ops-booking-source--auto{color:#6ee7b7;background:#064e3b59;border-color:#10b98173}
+.ops-booking-source--candidate{color:#bfdbfe;background:#1e3a5f73;border-color:#3b82f673}
 .ops-dash-table__status-col,.ops-dash-table--v3 .ops-dash-attendance{padding-left:6px;padding-right:4px}
 .ops-dash-attend-cell__controls{flex:1 1 auto;min-width:0}
 .ops-dash-status-select{flex:1 1 auto;min-width:108px;width:100%;max-width:none;min-height:28px;padding:4px 24px 4px 8px;font-size:11px;border-radius:6px;font-weight:500;border:1px solid rgba(255,255,255,.1);background-color:#0003;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%2394a3b8' d='M1 1l4 4 4-4'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;color:#cbd5e1;-moz-appearance:none;appearance:none;-webkit-appearance:none;line-height:1.2;color-scheme:dark}

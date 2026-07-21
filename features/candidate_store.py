@@ -782,6 +782,7 @@ _ALLOWED_FIELDS = {
     "interview_round",
     "interview_company", "interview_role", "interview_source_thread_id",
     "interview_source_message_id", "interview_source_timezone",
+    "interview_booking_source",
     "purpose",
 }
 
@@ -961,6 +962,7 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         "interview_source_thread_id": _clean_str(record.get("interview_source_thread_id", base.get("interview_source_thread_id"))),
         "interview_source_message_id": _clean_str(record.get("interview_source_message_id", base.get("interview_source_message_id"))),
         "interview_source_timezone": _clean_str(record.get("interview_source_timezone", base.get("interview_source_timezone"))),
+        "interview_booking_source": _clean_str(record.get("interview_booking_source", base.get("interview_booking_source"))).lower(),
         "telegram_slot":    _clean_str(record.get("telegram_slot", base.get("telegram_slot"))),
         "telegram_user_id": int(record.get("telegram_user_id") or base.get("telegram_user_id") or 0) or None,
         "proofs":           list(base.get("proofs") or []),
@@ -1008,6 +1010,28 @@ def _row_lead_date(row: dict) -> str:
     return _clean_str(row.get("date"))[:10]
 
 
+def interview_booking_source(row: dict) -> str:
+    """Return the durable origin label used by Daily Ops.
+
+    New bookings persist the source explicitly. Older AI-mail bookings are
+    identified from the audit note written by the booking pipeline so existing
+    roster rows receive the correct label without a data migration.
+    """
+    if not _coerce_bool(row.get("slot_confirmed")):
+        return ""
+    stored = _clean_str(row.get("interview_booking_source")).lower()
+    if stored in {"ai_auto_booked", "candidate_booked"}:
+        return stored
+    note = _clean_str(row.get("notes")).lower()
+    automatic_markers = (
+        "automatically booked from validated interview email",
+        "rescheduled from validated interview email",
+    )
+    if any(marker in note for marker in automatic_markers):
+        return "ai_auto_booked"
+    return "candidate_booked"
+
+
 def _with_computed(row: dict) -> dict:
     """Append derived fields (`balance_due`, `payment_status`) without
     persisting them. Keeps the storage format simple while giving the
@@ -1031,6 +1055,7 @@ def _with_computed(row: dict) -> dict:
     else:
         status = "partial"
     enriched = dict(row)
+    enriched["interview_booking_source"] = interview_booking_source(row)
     enriched["consultancy"] = consultancy
     enriched["bgv_certificates"] = _coerce_bool(row.get("bgv_certificates"))
     enriched["service_type"] = service_type
@@ -3033,6 +3058,7 @@ def create_interview_slot(
         "notes": _clean_str(notes),
         "interview_attendee": attendee,
         "interview_round": normalise_interview_round(interview_round),
+        "interview_booking_source": "candidate_booked",
         "service_type": "round_wise",
         "interview_scope": "external",
         "stage": "in_progress",
@@ -3064,6 +3090,7 @@ def _duplicate_candidate_slot(
     interview_source_thread_id: str = "",
     interview_source_message_id: str = "",
     interview_source_timezone: str = "",
+    interview_booking_source: str = "candidate_booked",
 ) -> dict:
     """Clone an in-progress candidate so a second interview slot keeps prior rows."""
     existing_service = _normalise_service_type(source.get("service_type"), source)
@@ -3099,6 +3126,7 @@ def _duplicate_candidate_slot(
         "interview_source_thread_id": _clean_str(interview_source_thread_id),
         "interview_source_message_id": _clean_str(interview_source_message_id),
         "interview_source_timezone": _clean_str(interview_source_timezone),
+        "interview_booking_source": _clean_str(interview_booking_source).lower() or "candidate_booked",
         "slot_confirmed": True,
         "slots_group_posted": True,
         "interview_attendance_status": "",
@@ -3126,6 +3154,7 @@ def assign_interview_slot(
     interview_source_thread_id: str = "",
     interview_source_message_id: str = "",
     interview_source_timezone: str = "",
+    interview_booking_source: str = "candidate_booked",
 ) -> dict:
     """Schedule an existing candidate — first slot updates the record; later slots clone."""
     cid = _clean_str(candidate_id)
@@ -3154,6 +3183,7 @@ def assign_interview_slot(
             interview_source_thread_id=interview_source_thread_id,
             interview_source_message_id=interview_source_message_id,
             interview_source_timezone=interview_source_timezone,
+            interview_booking_source=interview_booking_source,
         )
 
     existing_service = _normalise_service_type(existing.get("service_type"), existing)
@@ -3196,6 +3226,7 @@ def assign_interview_slot(
         "interview_source_thread_id": _clean_str(interview_source_thread_id),
         "interview_source_message_id": _clean_str(interview_source_message_id),
         "interview_source_timezone": _clean_str(interview_source_timezone),
+        "interview_booking_source": _clean_str(interview_booking_source).lower() or "candidate_booked",
     })
     return update_candidate(cid, patch, allow_slot_without_rules=True)
 
@@ -3214,6 +3245,7 @@ def update_interview_slot(
     interview_source_thread_id: str | None = None,
     interview_source_message_id: str | None = None,
     interview_source_timezone: str | None = None,
+    interview_booking_source: str | None = None,
 ) -> dict:
     """Reschedule an existing confirmed slot — updates date/time and optional notes."""
     cid = _clean_str(candidate_id)
@@ -3251,6 +3283,7 @@ def update_interview_slot(
         ("interview_source_thread_id", interview_source_thread_id),
         ("interview_source_message_id", interview_source_message_id),
         ("interview_source_timezone", interview_source_timezone),
+        ("interview_booking_source", interview_booking_source),
     ):
         if value is not None:
             patch[key] = _clean_str(value)

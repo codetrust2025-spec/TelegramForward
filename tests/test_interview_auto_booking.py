@@ -126,6 +126,7 @@ def test_valid_confirmed_interview_books_without_approval(monkeypatch):
     outcome = execute(result())
     assert outcome["status"] == "Auto Booked"
     assert outcome["booking"]["time"] == "15:00"
+    assert outcome["booking"]["interview_booking_source"] == "ai_auto_booked"
     assert audits[-1]["auto_booked"] is True
 
 
@@ -174,8 +175,21 @@ def test_manual_approval_books_fallback_interview_through_safety_checks(monkeypa
     outcome = execute_manual(value)
     assert outcome["status"] == "Approved & Booked"
     assert outcome["booking"]["time"] == "12:30"
+    assert outcome["booking"]["interview_booking_source"] == "candidate_booked"
     assert audits[-1]["validation_status"] == "MANUAL_APPROVED"
     assert audits[-1]["auto_booked"] is True
+
+
+def test_legacy_automatic_booking_note_gets_daily_ops_source_label():
+    row = {
+        "slot_confirmed": True,
+        "notes": "Automatically booked from validated interview email (AI Mail Monitoring).",
+    }
+    assert booking.candidate_store.interview_booking_source(row) == "ai_auto_booked"
+
+
+def test_unmarked_confirmed_slot_gets_candidate_booked_source_label():
+    assert booking.candidate_store.interview_booking_source({"slot_confirmed": True}) == "candidate_booked"
 
 
 def test_manual_approval_never_books_past_interview(monkeypatch):

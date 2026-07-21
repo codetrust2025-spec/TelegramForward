@@ -453,6 +453,7 @@ def _execute_auto_booking(
                     if manual_reviewer else
                     "Automatically booked from validated interview email (AI Mail Monitoring)."
                 ),
+                interview_booking_source="candidate_booked" if manual_reviewer else "ai_auto_booked",
                 **_booking_metadata(result, message, schedule),
             )
             booking_status, event_type = (
@@ -475,6 +476,7 @@ def _execute_auto_booking(
                     if manual_reviewer else
                     "Rescheduled from validated interview email (AI Mail Monitoring)."
                 ),
+                interview_booking_source="candidate_booked" if manual_reviewer else "ai_auto_booked",
                 **_booking_metadata(result, message, schedule),
             )
             duplicate_status, conflict_status = "PASSED", "PASSED"

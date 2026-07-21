@@ -69,6 +69,21 @@ function AttendanceSelect({ value, disabled, onChange, ariaLabel }) {
   )
 }
 
+function bookingSourceMeta(row) {
+  if (row?.interview_booking_source === 'ai_auto_booked') {
+    return {
+      label: 'AI Auto-booked',
+      tone: 'auto',
+      title: 'Booked automatically from a validated interview email.',
+    }
+  }
+  return {
+    label: 'Candidate booked',
+    tone: 'candidate',
+    title: 'Booked through the candidate or manual slot workflow.',
+  }
+}
+
 function SlotScreenshotModal({ row, onClose }) {
   const proof = row?.slot_screenshot_proof
   useEffect(() => {
@@ -490,6 +505,7 @@ export function InterviewRoster({
                   return s === dashboardStatusFilter
                 }).map(row => {
                   const status = resolvedStatus(row)
+                  const bookingSource = bookingSourceMeta(row)
                   return (
                     <tr key={row.id} className={`ops-interview-row ops-interview-row--${statusTone(status)}`}>
                       <td data-label="Date" className="ops-interview-date">
@@ -501,6 +517,12 @@ export function InterviewRoster({
                       <td data-label="Candidate">
                         <strong>{row.name}</strong>
                         {row.phone && <span className="ops-interview-phone">{row.phone}</span>}
+                        <span
+                          className={`ops-booking-source ops-booking-source--${bookingSource.tone}`}
+                          title={bookingSource.title}
+                        >
+                          {bookingSource.label}
+                        </span>
                       </td>
                       <td data-label="Technology">{row.technology || '—'}</td>
                       <td data-label="Round">{row.interview_round || '—'}</td>
