@@ -2173,6 +2173,8 @@ export default function RecruitmentMailPanelRedesign() {
       row.uiStatus === mailboxFilter ||
       (mailboxFilter === "CONNECTED" &&
         connectedStatuses.includes(row.uiStatus)) ||
+      (mailboxFilter === "RELEVANT_EMAILS" &&
+        Number(row.stats.important_emails || 0) > 0) ||
       (mailboxFilter === "NEEDS_REVIEW" &&
         Number(row.stats.pending_reviews || 0) > 0);
     return matchesSearch && matchesFilter;
@@ -2594,6 +2596,7 @@ export default function RecruitmentMailPanelRedesign() {
               {[
                 ["ALL", "All"],
                 ["CONNECTED", "Connected"],
+                ["RELEVANT_EMAILS", "Relevant Emails"],
                 ["RECONNECT_REQUIRED", "Reconnect Required"],
                 ["NEEDS_REVIEW", "Needs Review"],
               ].map(([value, label]) => (

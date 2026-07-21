@@ -335,6 +335,59 @@ describe("RecruitmentMailPanel", () => {
     );
     expect(screen.getByRole("button", { name: "Connect Gmail" })).toBeEnabled();
   });
+  it("filters mailboxes by relevant emails and review requirements", async () => {
+    fetch.mockImplementation(async (url, options = {}) => {
+      const path = String(url);
+      if (
+        path.includes("/api/candidates/c1/mailbox") &&
+        (!options.method || options.method === "GET")
+      ) {
+        return {
+          ok: true,
+          json: async () => ({
+            status: "ok",
+            mailboxes: [
+              {
+                mailbox: {
+                  id: "mailbox-relevant",
+                  email_address: "relevant@gmail.com",
+                  connection_status: "CONNECTED",
+                  monitoring_enabled: true,
+                },
+                stats: { important_emails: 3, pending_reviews: 0 },
+              },
+              {
+                mailbox: {
+                  id: "mailbox-review",
+                  email_address: "review@gmail.com",
+                  connection_status: "CONNECTED",
+                  monitoring_enabled: true,
+                },
+                stats: { important_emails: 0, pending_reviews: 1 },
+              },
+            ],
+          }),
+        };
+      }
+      return { ok: true, json: async () => payloadFor(path) };
+    });
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Mailboxes" }));
+    await screen.findByText("relevant@gmail.com");
+    expect(screen.getByText("review@gmail.com")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Relevant Emails" }));
+    expect(screen.getByText("relevant@gmail.com")).toBeInTheDocument();
+    expect(screen.queryByText("review@gmail.com")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Needs Review" }));
+    expect(screen.queryByText("relevant@gmail.com")).not.toBeInTheDocument();
+    expect(screen.getByText("review@gmail.com")).toBeInTheDocument();
+  });
   it("shows action confirmation and live sync progress for a mailbox", async () => {
     let syncRequested = false;
     fetch.mockImplementation(async (url, options = {}) => {
