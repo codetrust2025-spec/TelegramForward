@@ -153,7 +153,8 @@ const describeAiStatus = (event) => {
   const validationLabel = human(validation || event?.review_status || "");
   return {
     status: statusLabel,
-    reason: validationLabel && validationLabel !== statusLabel ? validationLabel : "",
+    reason:
+      validationLabel && validationLabel !== statusLabel ? validationLabel : "",
   };
 };
 const formatTime = (value) => {
@@ -193,7 +194,10 @@ const formatEmailBody = (value) => {
       /Skill\s+(.+?)\s+Date\s+(.+?)\s+Time\s+(.+?)\s+Duration\s+(.+?)\s+Mode\s+(.+?)\s+Meeting Link\b/i,
       "Skill\n$1\n\nDate\n$2\n\nTime\n$3\n\nDuration\n$4\n\nMode\n$5\n\nMeeting Link",
     )
-    .replace(/Microsoft Teams meeting\s+Join:/i, "Microsoft Teams meeting\nJoin:")
+    .replace(
+      /Microsoft Teams meeting\s+Join:/i,
+      "Microsoft Teams meeting\nJoin:",
+    )
     .replace(/(https?:\/\/\S+)\s+(Meeting ID:)/i, "$1\n$2")
     .replace(/(Meeting ID:\s+.+?)\s+(Passcode:)/i, "$1\n$2")
     .replace(/(Passcode:\s+\S+)\s+(Important Instructions:)/i, "$1\n\n$2")
@@ -232,7 +236,15 @@ const isActionRequiredEvent = (event) =>
   isVisibleEvent(event) &&
   String(event.review_status || "").toUpperCase() === "PENDING";
 
-export function SummaryCard({ tone, icon, value, title, subtitle, onClick, active }) {
+export function SummaryCard({
+  tone,
+  icon,
+  value,
+  title,
+  subtitle,
+  onClick,
+  active,
+}) {
   return (
     <article
       className={`sot-summary-card is-${tone}${active ? " is-active" : ""}${onClick ? " is-clickable" : ""}`}
@@ -566,7 +578,10 @@ function AddMailboxForm({
   onSubmit,
 }) {
   return (
-    <form className="sot-add-mailbox-form sot-main-add-mailbox-form" onSubmit={onSubmit}>
+    <form
+      className="sot-add-mailbox-form sot-main-add-mailbox-form"
+      onSubmit={onSubmit}
+    >
       <div className="sot-add-mailbox-copy">
         <h3>Connect a candidate Gmail</h3>
         <span>
@@ -576,7 +591,12 @@ function AddMailboxForm({
       </div>
       <label>
         Candidate
-        <select value={candidateId} onChange={(event) => onCandidate(event.target.value)} required>
+        <select
+          aria-label="Candidate Gmail owner"
+          value={candidateId}
+          onChange={(event) => onCandidate(event.target.value)}
+          required
+        >
           <option value="">Select candidate</option>
           {candidates.map((candidate) => (
             <option key={candidate.id} value={candidate.id}>
@@ -596,7 +616,11 @@ function AddMailboxForm({
           required
         />
       </label>
-      <button type="submit" className="sot-primary-button" disabled={busy || !candidateId || !email.trim()}>
+      <button
+        type="submit"
+        className="sot-primary-button"
+        disabled={busy || !candidateId || !email.trim()}
+      >
         {busy ? "Starting…" : "Connect Gmail"}
       </button>
     </form>
@@ -654,7 +678,10 @@ function ReviewQueue({
           <span>{events.length} records</span>
         </div>
       </header>
-      <div className="sot-priority-review-summary" aria-label="Priority review summary">
+      <div
+        className="sot-priority-review-summary"
+        aria-label="Priority review summary"
+      >
         <article className={pendingEvents.length ? "is-urgent" : ""}>
           <small>Needs action now</small>
           <strong>{pendingEvents.length}</strong>
@@ -727,8 +754,12 @@ function ReviewQueue({
                       <span className="sot-outcome-badge">
                         {human(event.primary_status)}
                       </span>
-                      <span className={`sot-mail-domain ${String(event.primary_status || "").startsWith("INTERVIEW_") ? "is-interview" : "is-selection"}`}>
-                        {String(event.primary_status || "").startsWith("INTERVIEW_")
+                      <span
+                        className={`sot-mail-domain ${String(event.primary_status || "").startsWith("INTERVIEW_") ? "is-interview" : "is-selection"}`}
+                      >
+                        {String(event.primary_status || "").startsWith(
+                          "INTERVIEW_",
+                        )
                           ? "Interview"
                           : "Selection / Offer"}
                       </span>
@@ -770,8 +801,8 @@ function ReviewQueue({
                         {isManualAuditKeep(event)
                           ? "Manually reviewed"
                           : aiFailureCode(event)
-                          ? "AI unavailable"
-                          : event.ai_model || "Not analyzed"}
+                            ? "AI unavailable"
+                            : event.ai_model || "Not analyzed"}
                       </strong>
                       <small>
                         {describeAiStatus(event).status}
@@ -848,10 +879,8 @@ function ReviewQueue({
 }
 
 function CandidateOutcomes({
-  candidates,
   offers,
   selectedId,
-  onSelected,
   timeline,
   onEvidence,
   onOfferReview,
@@ -864,63 +893,50 @@ function CandidateOutcomes({
           <p>Selection, offer, and joining history in one candidate view.</p>
         </div>
       </header>
-      <label className="sot-candidate-picker">
-        Candidate
-        <select value={selectedId} onChange={(e) => onSelected(e.target.value)}>
-          <option value="">Select candidate</option>
-          {candidates.map((candidate) => (
-            <option key={candidate.id} value={candidate.id}>
-              {candidate.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      {selectedId && (
-        <div className="sot-candidate-details">
-          <div>
-            <h3>Candidate timeline</h3>
-            {timeline.length ? (
-              <ol className="sot-timeline">
-                {timeline.map((item) => (
-                  <li key={item.id}>
-                    <time>{formatTime(item.created_at)}</time>
-                    <strong>{human(item.primary_status)}</strong>
-                    <span>
-                      {item.company_name || "Unknown company"} ·{" "}
-                      {item.job_title || "Unknown role"}
-                    </span>
-                    <button onClick={() => onEvidence(item.id)}>
-                      View evidence
-                    </button>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="sot-empty">No timeline events.</p>
-            )}
-          </div>
-          <div>
-            <h3>Offer cases</h3>
-            {offers
-              .filter((offer) => offer.candidate_id === selectedId)
-              .map((offer) => (
-                <article className="sot-offer-case" key={offer.id}>
-                  <strong>{offer.company_name || "Unknown company"}</strong>
-                  <span>{offer.job_title || "Unknown role"}</span>
-                  <small>
-                    {human(offer.verification_status)} ·{" "}
-                    {Math.round(Number(offer.confidence) * 100)}%
-                  </small>
-                  {offer.verification_status === "PENDING_REVIEW" && (
-                    <button onClick={() => onOfferReview(offer.id, "verify")}>
-                      Verify offer
-                    </button>
-                  )}
-                </article>
+      <div className="sot-candidate-details">
+        <div>
+          <h3>Candidate timeline</h3>
+          {timeline.length ? (
+            <ol className="sot-timeline">
+              {timeline.map((item) => (
+                <li key={item.id}>
+                  <time>{formatTime(item.created_at)}</time>
+                  <strong>{human(item.primary_status)}</strong>
+                  <span>
+                    {item.company_name || "Unknown company"} ·{" "}
+                    {item.job_title || "Unknown role"}
+                  </span>
+                  <button onClick={() => onEvidence(item.id)}>
+                    View evidence
+                  </button>
+                </li>
               ))}
-          </div>
+            </ol>
+          ) : (
+            <p className="sot-empty">No timeline events.</p>
+          )}
         </div>
-      )}
+        <div>
+          <h3>Offer cases</h3>
+          {offers
+            .filter((offer) => offer.candidate_id === selectedId)
+            .map((offer) => (
+              <article className="sot-offer-case" key={offer.id}>
+                <strong>{offer.company_name || "Unknown company"}</strong>
+                <span>{offer.job_title || "Unknown role"}</span>
+                <small>
+                  {human(offer.verification_status)} ·{" "}
+                  {Math.round(Number(offer.confidence) * 100)}%
+                </small>
+                {offer.verification_status === "PENDING_REVIEW" && (
+                  <button onClick={() => onOfferReview(offer.id, "verify")}>
+                    Verify offer
+                  </button>
+                )}
+              </article>
+            ))}
+        </div>
+      </div>
     </section>
   );
 }
@@ -1119,9 +1135,9 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
         <>
           <h3>{event.received_email?.subject || event.subject}</h3>
           <p>
-            AI analysis is pending because the AI service was unavailable.
-            The source email and deterministic fallback evidence are shown
-            below for safe manual review.
+            AI analysis is pending because the AI service was unavailable. The
+            source email and deterministic fallback evidence are shown below for
+            safe manual review.
           </p>
           <dl>
             <div>
@@ -1241,7 +1257,9 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
               <dt>Lifecycle event</dt>
               <dd>
                 {human(
-                  (String(event.structured_result?.lifecycle_event || "").toUpperCase() === "NONE"
+                  (String(
+                    event.structured_result?.lifecycle_event || "",
+                  ).toUpperCase() === "NONE"
                     ? ""
                     : event.structured_result?.lifecycle_event) ||
                     event.primary_status,
@@ -1272,8 +1290,8 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
                 {isManuallyApproved(event)
                   ? "Human approval"
                   : isManualAuditKeep(event)
-                  ? "Manual operator audit"
-                  : event.ai_model}
+                    ? "Manual operator audit"
+                    : event.ai_model}
               </dd>
             </div>
           </dl>
@@ -1330,8 +1348,7 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
             <pre>
               {formatEmailBody(
                 event.received_email?.body || event.email_body,
-              ) ||
-                "Email body is not available."}
+              ) || "Email body is not available."}
             </pre>
           </section>
           <button className="sot-primary-button" onClick={onChanged}>
@@ -1380,61 +1397,137 @@ function MonitoringOverview({
       <div className="sot-command-strip">
         <article>
           <span>01</span>
-          <div><strong>Gmail monitoring</strong><small>{activeMailboxes} accounts actively watched</small></div>
+          <div>
+            <strong>Gmail monitoring</strong>
+            <small>{activeMailboxes} accounts actively watched</small>
+          </div>
         </article>
         <i aria-hidden="true">&rarr;</i>
         <article>
           <span>02</span>
-          <div><strong>Relevance filter</strong><small>Noise is removed before lifecycle analysis</small></div>
+          <div>
+            <strong>Relevance filter</strong>
+            <small>Noise is removed before lifecycle analysis</small>
+          </div>
         </article>
         <i aria-hidden="true">&rarr;</i>
         <article>
           <span>03</span>
-          <div><strong>AI validation</strong><small>{aiStatus?.status === "healthy" ? "qwen2.5:7b is ready" : "Failures route to review"}</small></div>
+          <div>
+            <strong>AI validation</strong>
+            <small>
+              {aiStatus?.status === "healthy"
+                ? "qwen2.5:7b is ready"
+                : "Failures route to review"}
+            </small>
+          </div>
         </article>
         <i aria-hidden="true">&rarr;</i>
         <article>
           <span>04</span>
-          <div><strong>Outcome router</strong><small>Selection and interview flows separate here</small></div>
+          <div>
+            <strong>Outcome router</strong>
+            <small>Selection and interview flows separate here</small>
+          </div>
         </article>
       </div>
 
       <div className="sot-journey-grid">
         <article className="sot-journey-card is-selection">
           <header>
-            <div><span className="sot-journey-kicker">CAREER OUTCOMES</span><h2>Selection &amp; Offer flow</h2></div>
-            <strong className="sot-journey-total">{(metrics.selected || 0) + (metrics.offers_received || 0) + (metrics.joining_confirmed || 0)}</strong>
+            <div>
+              <span className="sot-journey-kicker">CAREER OUTCOMES</span>
+              <h2>Selection &amp; Offer flow</h2>
+            </div>
+            <strong className="sot-journey-total">
+              {(metrics.selected || 0) +
+                (metrics.offers_received || 0) +
+                (metrics.joining_confirmed || 0)}
+            </strong>
           </header>
-          <p>Tracks positive employment outcomes and advances the candidate lifecycle only after validation.</p>
-          <JourneyFlow tone="blue" steps={[
-            { title: "Selected", detail: "Candidate-specific selection evidence" },
-            { title: "Offer received", detail: "Offer or appointment letter detected" },
-            { title: "Offer accepted", detail: "Acceptance confirmed by source email" },
-            { title: "Joining", detail: "Joining date and onboarding monitored" },
-          ]} />
-          <button type="button" onClick={() => onOpen("selection")}>Open Selection &amp; Offers <span>&rarr;</span></button>
+          <p>
+            Tracks positive employment outcomes and advances the candidate
+            lifecycle only after validation.
+          </p>
+          <JourneyFlow
+            tone="blue"
+            steps={[
+              {
+                title: "Selected",
+                detail: "Candidate-specific selection evidence",
+              },
+              {
+                title: "Offer received",
+                detail: "Offer or appointment letter detected",
+              },
+              {
+                title: "Offer accepted",
+                detail: "Acceptance confirmed by source email",
+              },
+              {
+                title: "Joining",
+                detail: "Joining date and onboarding monitored",
+              },
+            ]}
+          />
+          <button type="button" onClick={() => onOpen("selection")}>
+            Open Selection &amp; Offers <span>&rarr;</span>
+          </button>
         </article>
 
         <article className="sot-journey-card is-interview">
           <header>
-            <div><span className="sot-journey-kicker">SCHEDULE OPERATIONS</span><h2>Interview monitoring flow</h2></div>
-            <strong className="sot-journey-total">{interviewSummary.auto_booked_interviews || 0}</strong>
+            <div>
+              <span className="sot-journey-kicker">SCHEDULE OPERATIONS</span>
+              <h2>Interview monitoring flow</h2>
+            </div>
+            <strong className="sot-journey-total">
+              {interviewSummary.auto_booked_interviews || 0}
+            </strong>
           </header>
-          <p>Extracts confirmed interview schedules and books only when every safety check succeeds.</p>
-          <JourneyFlow tone="violet" steps={[
-            { title: "Interview detected", detail: "Date, time, timezone and round extracted" },
-            { title: "Safety validation", detail: "Candidate, payment, duplicate and conflict checks" },
-            { title: "Slot booked", detail: "Confirmed slot appears in Daily Ops" },
-            { title: "Attendance", detail: "Upcoming, attended or missed status recorded" },
-          ]} />
-          <button type="button" onClick={() => onOpen("interviews")}>Open Interview Monitoring <span>&rarr;</span></button>
+          <p>
+            Extracts confirmed interview schedules and books only when every
+            safety check succeeds.
+          </p>
+          <JourneyFlow
+            tone="violet"
+            steps={[
+              {
+                title: "Interview detected",
+                detail: "Date, time, timezone and round extracted",
+              },
+              {
+                title: "Safety validation",
+                detail: "Candidate, payment, duplicate and conflict checks",
+              },
+              {
+                title: "Slot booked",
+                detail: "Confirmed slot appears in Daily Ops",
+              },
+              {
+                title: "Attendance",
+                detail: "Upcoming, attended or missed status recorded",
+              },
+            ]}
+          />
+          <button type="button" onClick={() => onOpen("interviews")}>
+            Open Interview Monitoring <span>&rarr;</span>
+          </button>
         </article>
       </div>
 
       <aside className="sot-review-rule">
         <span className="sot-review-rule-icon">!</span>
-        <div><strong>Fail-safe review lane</strong><small>Low confidence, model timeout, missing schedule, payment block or slot conflict never changes candidate data automatically.</small></div>
-        <button type="button" onClick={() => onOpen("reviews")}>{metrics.needs_review || 0} waiting</button>
+        <div>
+          <strong>Fail-safe review lane</strong>
+          <small>
+            Low confidence, model timeout, missing schedule, payment block or
+            slot conflict never changes candidate data automatically.
+          </small>
+        </div>
+        <button type="button" onClick={() => onOpen("reviews")}>
+          {metrics.needs_review || 0} waiting
+        </button>
       </aside>
     </section>
   );
@@ -1442,57 +1535,179 @@ function MonitoringOverview({
 
 function InterviewWorkspace({ notifications, summary, onReview, onOpenMail }) {
   const today = new Date().toISOString().slice(0, 10);
-  const upcoming = notifications.filter((item) => String(item.interview_date || "") >= today && !["Cancelled", "Blocked", "Processing Failed"].includes(item.booking_status)).length;
-  const blocked = notifications.filter((item) => ["Blocked", "Processing Failed"].includes(item.booking_status)).length;
+  const upcoming = notifications.filter(
+    (item) =>
+      String(item.interview_date || "") >= today &&
+      !["Cancelled", "Blocked", "Processing Failed"].includes(
+        item.booking_status,
+      ),
+  ).length;
+  const blocked = notifications.filter((item) =>
+    ["Blocked", "Processing Failed"].includes(item.booking_status),
+  ).length;
   return (
     <section className="sot-workspace sot-interview-workspace">
       <header className="sot-workspace-head">
-        <div><span className="sot-workspace-eyebrow">INTERVIEW OPERATIONS</span><h2>Interview Monitoring</h2><p>From a confirmed email schedule to a safe Daily Ops booking.</p></div>
-        <button type="button" className="sot-secondary-button" onClick={onReview}>Open review queue</button>
+        <div>
+          <span className="sot-workspace-eyebrow">INTERVIEW OPERATIONS</span>
+          <h2>Interview Monitoring</h2>
+          <p>From a confirmed email schedule to a safe Daily Ops booking.</p>
+        </div>
+        <button
+          type="button"
+          className="sot-secondary-button"
+          onClick={onReview}
+        >
+          Open review queue
+        </button>
       </header>
       <div className="sot-interview-metrics">
-        <MailboxMetric icon="AI" label="Detected alerts" value={notifications.length} />
-        <MailboxMetric icon="OK" label="Auto-booked" value={summary.auto_booked_interviews || 0} tone="green" />
-        <MailboxMetric icon="UP" label="Upcoming" value={upcoming} tone="blue" />
-        <MailboxMetric icon="!" label="Blocked / failed" value={blocked} tone="amber" />
+        <MailboxMetric
+          icon="AI"
+          label="Detected alerts"
+          value={notifications.length}
+        />
+        <MailboxMetric
+          icon="OK"
+          label="Auto-booked"
+          value={summary.auto_booked_interviews || 0}
+          tone="green"
+        />
+        <MailboxMetric
+          icon="UP"
+          label="Upcoming"
+          value={upcoming}
+          tone="blue"
+        />
+        <MailboxMetric
+          icon="!"
+          label="Blocked / failed"
+          value={blocked}
+          tone="amber"
+        />
       </div>
-      <JourneyFlow tone="violet" steps={[
-        { title: "Confirmed email", detail: "Not a generic invite or recruiter campaign" },
-        { title: "Structured schedule", detail: "Future date, 12-hour time and timezone required" },
-        { title: "Business checks", detail: "Owner, payment, duplicate and overlap validation" },
-        { title: "Daily Ops slot", detail: "Booking, reschedule or cancellation is audited" },
-      ]} />
+      <JourneyFlow
+        tone="violet"
+        steps={[
+          {
+            title: "Confirmed email",
+            detail: "Not a generic invite or recruiter campaign",
+          },
+          {
+            title: "Structured schedule",
+            detail: "Future date, 12-hour time and timezone required",
+          },
+          {
+            title: "Business checks",
+            detail: "Owner, payment, duplicate and overlap validation",
+          },
+          {
+            title: "Daily Ops slot",
+            detail: "Booking, reschedule or cancellation is audited",
+          },
+        ]}
+      />
       <div className="sot-interview-list">
-        <div className="sot-section-title"><div><h3>Recent interview activity</h3><p>Select any row to open the complete source mail and its detection evidence.</p></div><span>{notifications.length} records</span></div>
+        <div className="sot-section-title">
+          <div>
+            <h3>Recent interview activity</h3>
+            <p>
+              Select any row to open the complete source mail and its detection
+              evidence.
+            </p>
+          </div>
+          <span>{notifications.length} records</span>
+        </div>
         {notifications.length ? (
-          <div className="sot-table-shell"><table className="sot-interview-table"><thead><tr><th>Candidate</th><th>Interview</th><th>Company / role</th><th>AI confidence</th><th>Booking result</th></tr></thead><tbody>
-            {notifications.slice(0, 20).map((item) => {
-              const eventId = item.ai_recruitment_event_id;
-              const openMail = () => eventId && onOpenMail(eventId);
-              return (
-              <tr
-                key={item.id}
-                className={eventId ? "is-clickable" : ""}
-                tabIndex={eventId ? 0 : undefined}
-                aria-label={eventId ? `Open source mail: ${item.email_subject || item.candidate_name || "interview notification"}` : undefined}
-                onClick={openMail}
-                onKeyDown={(keyboardEvent) => {
-                  if (eventId && (keyboardEvent.key === "Enter" || keyboardEvent.key === " ")) {
-                    keyboardEvent.preventDefault();
-                    openMail();
-                  }
-                }}
-              >
-                <td><strong>{item.candidate_name || "Candidate"}</strong><small>{item.email_subject || "No subject"}</small></td>
-                <td><strong>{item.interview_date || "Date unavailable"}</strong><small>{[item.interview_time, item.interview_timezone, item.interview_round].filter(Boolean).join(" · ") || "Schedule incomplete"}</small></td>
-                <td>{item.company_name || "Unknown company"}<small>{item.job_role || human(item.classification)}</small></td>
-                <td>{Math.round(Number(item.ai_confidence || 0) * 100)}%</td>
-                <td><span className={`sot-booking-state is-${String(item.booking_status || "detected").toLowerCase().replace(/\s+/g, "-")}`}>{item.booking_status || human(item.classification)}</span></td>
-              </tr>
-              );
-            })}
-          </tbody></table></div>
-        ) : <div className="sot-empty-state"><strong>No interview notifications yet</strong><span>Validated interview emails and booking results will appear here.</span></div>}
+          <div className="sot-table-shell">
+            <table className="sot-interview-table">
+              <thead>
+                <tr>
+                  <th>Candidate</th>
+                  <th>Interview</th>
+                  <th>Company / role</th>
+                  <th>AI confidence</th>
+                  <th>Booking result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {notifications.slice(0, 20).map((item) => {
+                  const eventId = item.ai_recruitment_event_id;
+                  const openMail = () => eventId && onOpenMail(eventId);
+                  return (
+                    <tr
+                      key={item.id}
+                      className={eventId ? "is-clickable" : ""}
+                      tabIndex={eventId ? 0 : undefined}
+                      aria-label={
+                        eventId
+                          ? `Open source mail: ${item.email_subject || item.candidate_name || "interview notification"}`
+                          : undefined
+                      }
+                      onClick={openMail}
+                      onKeyDown={(keyboardEvent) => {
+                        if (
+                          eventId &&
+                          (keyboardEvent.key === "Enter" ||
+                            keyboardEvent.key === " ")
+                        ) {
+                          keyboardEvent.preventDefault();
+                          openMail();
+                        }
+                      }}
+                    >
+                      <td>
+                        <strong>{item.candidate_name || "Candidate"}</strong>
+                        <small>{item.email_subject || "No subject"}</small>
+                      </td>
+                      <td>
+                        <strong>
+                          {item.interview_date || "Date unavailable"}
+                        </strong>
+                        <small>
+                          {[
+                            item.interview_time,
+                            item.interview_timezone,
+                            item.interview_round,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ") || "Schedule incomplete"}
+                        </small>
+                      </td>
+                      <td>
+                        {item.company_name || "Unknown company"}
+                        <small>
+                          {item.job_role || human(item.classification)}
+                        </small>
+                      </td>
+                      <td>
+                        {Math.round(Number(item.ai_confidence || 0) * 100)}%
+                      </td>
+                      <td>
+                        <span
+                          className={`sot-booking-state is-${String(
+                            item.booking_status || "detected",
+                          )
+                            .toLowerCase()
+                            .replace(/\s+/g, "-")}`}
+                        >
+                          {item.booking_status || human(item.classification)}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="sot-empty-state">
+            <strong>No interview notifications yet</strong>
+            <span>
+              Validated interview emails and booking results will appear here.
+            </span>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -1525,7 +1740,6 @@ export default function RecruitmentMailPanelRedesign() {
   });
   const [interviewNotifications, setInterviewNotifications] = useState([]);
   const [candidateId, setCandidateId] = useState("");
-  const [reviewCandidateId, setReviewCandidateId] = useState("");
   const [reviewStatusFilter, setReviewStatusFilter] = useState("");
   const [timeline, setTimeline] = useState([]);
   const [search, setSearch] = useState("");
@@ -1550,15 +1764,25 @@ export default function RecruitmentMailPanelRedesign() {
   const load = useCallback(async () => {
     try {
       setMessage("");
-      const [dashboard, review, cases, people, ai, notificationCounts, notificationList] = await Promise.all([
+      const [
+        dashboard,
+        review,
+        cases,
+        people,
+        ai,
+        notificationCounts,
+        notificationList,
+      ] = await Promise.all([
         request("/api/ai-recruitment/dashboard").catch(() => ({
           metrics: {},
           charts: {},
           flags: [],
         })),
-        request("/api/ai-recruitment/review?status=PENDING&limit=100").catch(() => ({
-          events: [],
-        })),
+        request("/api/ai-recruitment/review?status=PENDING&limit=100").catch(
+          () => ({
+            events: [],
+          }),
+        ),
         request("/api/offer-verification?limit=100").catch(() => ({
           cases: [],
         })),
@@ -1572,7 +1796,9 @@ export default function RecruitmentMailPanelRedesign() {
           },
         })),
         request("/api/mail-monitoring/summary").catch(() => ({ summary: {} })),
-        request("/api/mail-monitoring/notifications?limit=100&sort=newest").catch(() => ({ notifications: [] })),
+        request(
+          "/api/mail-monitoring/notifications?limit=100&sort=newest",
+        ).catch(() => ({ notifications: [] })),
       ]);
       const candidateList = people.candidates || [];
       const mailboxRows = (
@@ -1612,7 +1838,9 @@ export default function RecruitmentMailPanelRedesign() {
       setMonitoringSummary(notificationCounts.summary || {});
       setInterviewNotifications(
         (notificationList.notifications || []).filter((item) =>
-          INTERVIEW_CLASSIFICATIONS.has(String(item.classification || "").toLowerCase()),
+          INTERVIEW_CLASSIFICATIONS.has(
+            String(item.classification || "").toLowerCase(),
+          ),
         ),
       );
       setAiStatus(ai.ollama || null);
@@ -1839,8 +2067,7 @@ export default function RecruitmentMailPanelRedesign() {
         ? "The source evidence will be approved and the schedule will pass payment, duplicate, conflict, timezone, and future-date checks before Daily Ops is changed."
         : "This decision is recorded in the audit log.",
       confirmLabel: approveAndBook ? "Approve & Book" : human(action),
-      variant:
-        action === "approve" || approveAndBook ? "success" : "danger",
+      variant: action === "approve" || approveAndBook ? "success" : "danger",
     });
     if (ok)
       run(
@@ -1880,7 +2107,7 @@ export default function RecruitmentMailPanelRedesign() {
       );
   };
 
-  const rows = useMemo(
+  const allRows = useMemo(
     () =>
       mailboxes.map((row) => {
         const error = String(
@@ -1904,6 +2131,25 @@ export default function RecruitmentMailPanelRedesign() {
         return { ...row, uiStatus };
       }),
     [mailboxes],
+  );
+  const rows = useMemo(
+    () =>
+      candidateId
+        ? allRows.filter(
+            (row) => String(row.candidate.id) === String(candidateId),
+          )
+        : allRows,
+    [allRows, candidateId],
+  );
+  const visibleInterviewNotifications = useMemo(
+    () =>
+      candidateId
+        ? interviewNotifications.filter(
+            (notification) =>
+              String(notification.candidate_id) === String(candidateId),
+          )
+        : interviewNotifications,
+    [candidateId, interviewNotifications],
   );
   const visibleRows = rows.filter((row) => {
     const needle = search.trim().toLowerCase();
@@ -1984,19 +2230,22 @@ export default function RecruitmentMailPanelRedesign() {
           String(event.review_status || "").toUpperCase() === "PENDING" ? 0 : 1;
         const rankDifference = pendingRank(left) - pendingRank(right);
         if (rankDifference) return rankDifference;
-        const leftTime = new Date(left.email_sent_at || left.created_at || 0).getTime();
-        const rightTime = new Date(right.email_sent_at || right.created_at || 0).getTime();
+        const leftTime = new Date(
+          left.email_sent_at || left.created_at || 0,
+        ).getTime();
+        const rightTime = new Date(
+          right.email_sent_at || right.created_at || 0,
+        ).getTime();
         return rightTime - leftTime;
       }),
     [events],
   );
   const viewEmails = (row) => {
-    setReviewCandidateId(row.candidate.id);
+    setCandidateId(row.candidate.id);
     setTab("reviews");
   };
   const selectStatusFilter = (group) => {
     setReviewStatusFilter((current) => (current === group ? "" : group));
-    setReviewCandidateId("");
     setTab("reviews");
   };
   const rescan = () => {
@@ -2038,6 +2287,21 @@ export default function RecruitmentMailPanelRedesign() {
           </div>
         </div>
         <div className="sot-header-actions">
+          <label className="sot-global-candidate-filter">
+            <span>Candidate</span>
+            <select
+              aria-label="Global candidate filter"
+              value={candidateId}
+              onChange={(event) => setCandidateId(event.target.value)}
+            >
+              <option value="">All candidates</option>
+              {candidates.map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>
+                  {candidate.name}
+                </option>
+              ))}
+            </select>
+          </label>
           <span
             className={`sot-ai-status is-${aiStatus?.status || "unknown"}`}
             title={aiStatus?.error_message || "Local Ollama status"}
@@ -2070,10 +2334,41 @@ export default function RecruitmentMailPanelRedesign() {
         </div>
       )}
       <section className="sot-health-strip" aria-label="Monitoring health">
-        <div><span className={`sot-health-dot is-${aiStatus?.status || "unknown"}`} /><small>AI engine</small><strong>{aiStatus?.status === "healthy" ? "Ready" : "Needs attention"}</strong></div>
-        <div><span className="sot-health-dot is-healthy" /><small>Connected Gmail</small><strong>{rows.filter((row) => ["CONNECTED", "SYNCING", "SYNC_QUEUED"].includes(row.uiStatus)).length} / {rows.length}</strong></div>
-        <div><span className={`sot-health-dot ${Number(metrics.needs_review || 0) ? "is-warning" : "is-healthy"}`} /><small>Review queue</small><strong>{metrics.needs_review || 0} pending</strong></div>
-        <div><span className="sot-health-dot is-healthy" /><small>Interview bookings</small><strong>{monitoringSummary.auto_booked_interviews || 0} automatic</strong></div>
+        <div>
+          <span
+            className={`sot-health-dot is-${aiStatus?.status || "unknown"}`}
+          />
+          <small>AI engine</small>
+          <strong>
+            {aiStatus?.status === "healthy" ? "Ready" : "Needs attention"}
+          </strong>
+        </div>
+        <div>
+          <span className="sot-health-dot is-healthy" />
+          <small>Connected Gmail</small>
+          <strong>
+            {
+              rows.filter((row) =>
+                ["CONNECTED", "SYNCING", "SYNC_QUEUED"].includes(row.uiStatus),
+              ).length
+            }{" "}
+            / {rows.length}
+          </strong>
+        </div>
+        <div>
+          <span
+            className={`sot-health-dot ${Number(metrics.needs_review || 0) ? "is-warning" : "is-healthy"}`}
+          />
+          <small>Review queue</small>
+          <strong>{metrics.needs_review || 0} pending</strong>
+        </div>
+        <div>
+          <span className="sot-health-dot is-healthy" />
+          <small>Interview bookings</small>
+          <strong>
+            {monitoringSummary.auto_booked_interviews || 0} automatic
+          </strong>
+        </div>
       </section>
       <nav className="sot-tabs">
         {[
@@ -2103,7 +2398,10 @@ export default function RecruitmentMailPanelRedesign() {
           />
           <details className="sot-content-card sot-overview-analytics">
             <summary>Operational analytics &amp; AI diagnostics</summary>
-            <p>Open only when you need trends, conflict checks, or AI troubleshooting.</p>
+            <p>
+              Open only when you need trends, conflict checks, or AI
+              troubleshooting.
+            </p>
             <Analytics
               charts={charts}
               flags={flags}
@@ -2120,8 +2418,21 @@ export default function RecruitmentMailPanelRedesign() {
         <>
           <section className="sot-workspace sot-selection-workspace">
             <header className="sot-workspace-head">
-              <div><span className="sot-workspace-eyebrow">CAREER OUTCOMES</span><h2>Selection &amp; Offer Tracking</h2><p>Only candidate-specific, source-supported positive outcomes advance this flow.</p></div>
-              <button type="button" className="sot-secondary-button" onClick={() => setTab("reviews")}>Open review queue</button>
+              <div>
+                <span className="sot-workspace-eyebrow">CAREER OUTCOMES</span>
+                <h2>Selection &amp; Offer Tracking</h2>
+                <p>
+                  Only candidate-specific, source-supported positive outcomes
+                  advance this flow.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="sot-secondary-button"
+                onClick={() => setTab("reviews")}
+              >
+                Open review queue
+              </button>
             </header>
             <section className="sot-summary-grid">
               {summary.map((card) => (
@@ -2134,25 +2445,41 @@ export default function RecruitmentMailPanelRedesign() {
               ))}
             </section>
             <div className="sot-selection-flow-copy">
-              <div><span>What enters</span><strong>Selection, offer, acceptance, joining and onboarding evidence</strong></div>
-              <div><span>What stays out</span><strong>Job alerts, generic recruiter campaigns, rejections and unconfirmed applications</strong></div>
-              <div><span>Safety rule</span><strong>Unknown or unsupported outcomes wait for human review</strong></div>
+              <div>
+                <span>What enters</span>
+                <strong>
+                  Selection, offer, acceptance, joining and onboarding evidence
+                </strong>
+              </div>
+              <div>
+                <span>What stays out</span>
+                <strong>
+                  Job alerts, generic recruiter campaigns, rejections and
+                  unconfirmed applications
+                </strong>
+              </div>
+              <div>
+                <span>Safety rule</span>
+                <strong>
+                  Unknown or unsupported outcomes wait for human review
+                </strong>
+              </div>
             </div>
           </section>
-          <CandidateOutcomes
-            candidates={candidates}
-            offers={offers}
-            selectedId={candidateId}
-            onSelected={setCandidateId}
-            timeline={timeline}
-            onEvidence={setEvidenceId}
-            onOfferReview={offerReview}
-          />
+          {candidateId && (
+            <CandidateOutcomes
+              offers={offers}
+              selectedId={candidateId}
+              timeline={timeline}
+              onEvidence={setEvidenceId}
+              onOfferReview={offerReview}
+            />
+          )}
         </>
       )}
       {tab === "interviews" && (
         <InterviewWorkspace
-          notifications={interviewNotifications}
+          notifications={visibleInterviewNotifications}
           summary={monitoringSummary}
           onReview={() => setTab("reviews")}
           onOpenMail={setEvidenceId}
@@ -2196,6 +2523,7 @@ export default function RecruitmentMailPanelRedesign() {
                 <label>
                   Candidate
                   <select
+                    aria-label="Candidate Gmail owner"
                     value={newMailboxCandidateId}
                     onChange={(event) =>
                       selectNewMailboxCandidate(event.target.value)
@@ -2317,34 +2645,34 @@ export default function RecruitmentMailPanelRedesign() {
             />
           )}
           <ReviewQueue
-          events={prioritizedReviewEvents
-            .filter((event) =>
-              reviewCandidateId
-                ? event.candidate_id === reviewCandidateId ||
-                  event.canonical_candidate_id === reviewCandidateId
-                : true,
-            )
-            .filter((event) =>
+            events={prioritizedReviewEvents
+              .filter((event) =>
+                candidateId
+                  ? String(event.candidate_id) === String(candidateId) ||
+                    String(event.canonical_candidate_id) === String(candidateId)
+                  : true,
+              )
+              .filter((event) =>
+                reviewStatusFilter
+                  ? (STATUS_GROUP_STATUSES[reviewStatusFilter] || []).includes(
+                      event.primary_status,
+                    )
+                  : true,
+              )}
+            names={names}
+            candidateId={candidateId}
+            onClearCandidate={() => setCandidateId("")}
+            statusFilterLabel={
               reviewStatusFilter
-                ? (STATUS_GROUP_STATUSES[reviewStatusFilter] || []).includes(
-                    event.primary_status,
-                  )
-                : true,
-            )}
-          names={names}
-          candidateId={reviewCandidateId}
-          onClearCandidate={() => setReviewCandidateId("")}
-          statusFilterLabel={
-            reviewStatusFilter
-              ? summary.find((card) => card.group === reviewStatusFilter)
-                  ?.title
-              : ""
-          }
-          onClearStatusFilter={() => setReviewStatusFilter("")}
-          onEvidence={setEvidenceId}
-          onReview={review}
-          onAddMailbox={() => setShowAddMailbox((visible) => !visible)}
-          addMailboxOpen={showAddMailbox}
+                ? summary.find((card) => card.group === reviewStatusFilter)
+                    ?.title
+                : ""
+            }
+            onClearStatusFilter={() => setReviewStatusFilter("")}
+            onEvidence={setEvidenceId}
+            onReview={review}
+            onAddMailbox={() => setShowAddMailbox((visible) => !visible)}
+            addMailboxOpen={showAddMailbox}
           />
         </>
       )}

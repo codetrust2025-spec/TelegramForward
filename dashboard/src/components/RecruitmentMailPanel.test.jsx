@@ -46,6 +46,7 @@ const payloadFor = (url) => {
         {
           id: "notification-1",
           ai_recruitment_event_id: "event-1",
+          candidate_id: "c1",
           candidate_name: "Test Candidate",
           classification: "interview_confirmed",
           email_subject: "Frontend interview invitation",
@@ -68,8 +69,10 @@ const payloadFor = (url) => {
         validation_status: "APPROVED",
         ai_status: "RETRY_PENDING",
         ai_model: "unavailable:ollama_request_timeout",
-        summary: "Fallback evidence indicates interview confirmed. AI validation unavailable (OLLAMA_REQUEST_TIMEOUT).",
-        evidence_summary: "Fallback evidence indicates interview confirmed. AI validation unavailable (OLLAMA_REQUEST_TIMEOUT).",
+        summary:
+          "Fallback evidence indicates interview confirmed. AI validation unavailable (OLLAMA_REQUEST_TIMEOUT).",
+        evidence_summary:
+          "Fallback evidence indicates interview confirmed. AI validation unavailable (OLLAMA_REQUEST_TIMEOUT).",
         structured_result: {
           evidence: [
             { meaning: "Interview confirmed", text: "Interview at 3 PM" },
@@ -123,12 +126,18 @@ describe("RecruitmentMailPanel", () => {
     expect(
       screen.getByRole("heading", { name: "Mail & Interview Monitoring" }),
     ).toBeInTheDocument();
-    await waitFor(() => expect(
-      screen.getByRole("heading", { name: "Priority Mail Review" }),
-    ).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "Review Queue" })).toHaveClass("active");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: "Priority Mail Review" }),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "Review Queue" })).toHaveClass(
+      "active",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Overview" }));
-    expect(screen.getByRole("heading", { name: "Selection & Offer flow" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Selection & Offer flow" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Interview monitoring flow" }),
     ).toBeInTheDocument();
@@ -142,9 +151,9 @@ describe("RecruitmentMailPanel", () => {
     expect(screen.getByText("Joined").closest("article")).toHaveTextContent(
       "0",
     );
-    expect(screen.getByRole("button", { name: "Selection & Offers" })).toHaveClass(
-      "active",
-    );
+    expect(
+      screen.getByRole("button", { name: "Selection & Offers" }),
+    ).toHaveClass("active");
   });
   it("keeps candidate data visible when Ollama diagnostics fail", async () => {
     fetch.mockImplementation(async (url) => {
@@ -167,18 +176,39 @@ describe("RecruitmentMailPanel", () => {
     expect(
       screen.queryByRole("button", { name: "Analytics" }),
     ).not.toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Selection & Offers" }),
+    const globalCandidateFilter = await screen.findByLabelText(
+      "Global candidate filter",
     );
+    expect(globalCandidateFilter).toHaveValue("");
+    fireEvent.change(globalCandidateFilter, { target: { value: "c1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Selection & Offers" }));
     expect(
       screen.getByRole("heading", { name: "Candidate history" }),
     ).toBeInTheDocument();
-    await waitFor(() =>
-      expect(
-        screen.getByRole("option", { name: /Test Candidate/ }),
-      ).toBeInTheDocument(),
-    );
+    expect(globalCandidateFilter).toHaveValue("c1");
+    expect(
+      screen.queryByRole("option", { name: "Select candidate" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText("Request failed")).not.toBeInTheDocument();
+  });
+  it("uses the header candidate selector as a global filter", async () => {
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+    const globalCandidateFilter = await screen.findByLabelText(
+      "Global candidate filter",
+    );
+    fireEvent.change(globalCandidateFilter, { target: { value: "c1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Selection & Offers" }));
+    expect(
+      screen.getByRole("heading", { name: "Candidate history" }),
+    ).toBeInTheDocument();
+    fireEvent.change(globalCandidateFilter, { target: { value: "" } });
+    expect(
+      screen.queryByRole("heading", { name: "Candidate history" }),
+    ).not.toBeInTheDocument();
   });
   it("opens the complete source mail when an interview activity row is selected", async () => {
     render(
@@ -206,7 +236,9 @@ describe("RecruitmentMailPanel", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/^Manually approved/)).toBeInTheDocument();
     expect(screen.getByText("Human approval")).toBeInTheDocument();
-    expect(screen.getAllByText("Interview Confirmed").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Interview Confirmed").length).toBeGreaterThan(
+      0,
+    );
     expect(
       screen.getByText(
         "This record was manually approved from the complete source email. The earlier AI timeout is retained only in audit history.",
@@ -240,7 +272,9 @@ describe("RecruitmentMailPanel", () => {
     expect(screen.getByRole("button", { name: "Review Queue" })).toHaveClass(
       "active",
     );
-    expect(screen.getByRole("button", { name: "Close Gmail form" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Close Gmail form" }),
+    ).toBeInTheDocument();
   });
   it("refreshes Ollama health without reloading the page", async () => {
     render(
@@ -274,7 +308,7 @@ describe("RecruitmentMailPanel", () => {
       screen.getByRole("heading", { name: "Connect a candidate Gmail" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("option", { name: /Test Candidate/ }),
+      screen.getByRole("option", { name: /Test Candidate · 9000000000/ }),
     ).toBeInTheDocument();
     expect(
       screen.getByPlaceholderText(/^candidate@gmail\.com/),
@@ -293,7 +327,7 @@ describe("RecruitmentMailPanel", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "+ Add candidate Gmail" }),
     );
-    fireEvent.change(screen.getByLabelText("Candidate"), {
+    fireEvent.change(screen.getByLabelText("Candidate Gmail owner"), {
       target: { value: "c1" },
     });
     expect(screen.getByLabelText("Gmail address")).toHaveValue(
@@ -460,9 +494,7 @@ describe("RecruitmentMailPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Evidence" }));
     await screen.findByRole("heading", { name: "Complete email" });
-    expect(
-      screen.getByText(/2026-07-21.*12:30 PM/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/2026-07-21.*12:30 PM/)).toBeInTheDocument();
     expect(
       screen.getAllByText(/Please join the virtual interview at 12:30 PM/),
     ).toHaveLength(2);
@@ -492,7 +524,9 @@ describe("RecruitmentMailPanel", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Review Queue" }));
     await screen.findByText(staleAliasEvent.subject);
-    expect(screen.getByText("Test Candidate")).toBeInTheDocument();
+    expect(
+      screen.getByRole("cell", { name: /Test Candidate/ }),
+    ).toBeInTheDocument();
     expect(screen.queryByText("f73cc8f464")).not.toBeInTheDocument();
   });
 
@@ -539,9 +573,7 @@ describe("RecruitmentMailPanel", () => {
     fireEvent.click(needsReviewTile);
     await screen.findByText(retryPendingEvent.subject);
     expect(screen.queryByText("Welcome aboard!")).not.toBeInTheDocument();
-    expect(
-      screen.getByText('Clear "Needs Review" filter'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Clear "Needs Review" filter')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Selection & Offers" }));
     const joinedTile = screen
@@ -628,7 +660,10 @@ describe("RecruitmentMailPanel", () => {
       if (path.includes("/api/ai-recruitment/events/event-retry-1")) {
         evidenceCalls += 1;
         if (evidenceCalls === 1) {
-          return { ok: false, json: async () => ({ detail: "Event not found" }) };
+          return {
+            ok: false,
+            json: async () => ({ detail: "Event not found" }),
+          };
         }
         return {
           ok: true,
