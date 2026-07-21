@@ -113,7 +113,16 @@ class RecruitmentMailWorker:
               'html_body':row.get('html_body_text') or ''}
             try:
                 event=process_message(mailbox,decoded,row.get('attachments') or [],reprocess=True)
-                pending=bool(event and str(event.get('validation_status') or '').upper()=='RETRY_PENDING')
+                # A failed semantic retry can intentionally return no visible
+                # event while leaving the durable message in AI_RETRY_PENDING.
+                # Verify persistence instead of treating `None` as success;
+                # otherwise the same failed row spins every recovery cycle with
+                # a retry count of zero and no backoff.
+                refreshed=store.stored_message(row['mailbox_id'],row['provider_message_id'])
+                pending=(
+                    str((refreshed or {}).get('processing_status') or '').upper()=='AI_RETRY_PENDING'
+                    or bool(event and str(event.get('validation_status') or '').upper()=='RETRY_PENDING')
+                )
                 store.schedule_ai_retry(row['id'],succeeded=not pending)
                 if not pending:logger.info('AI retry completed message_id=%s',row['id'])
             except Exception:

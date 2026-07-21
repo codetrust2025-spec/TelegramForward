@@ -185,10 +185,27 @@ def test_ollama_recovery_reprocesses_idempotently(monkeypatch):
     }
     monkeypatch.setattr("core.ai_gateway.health", lambda **_kwargs: {"endpoint_reachable": True, "model_available": True})
     monkeypatch.setattr(worker_module.store, "retry_pending_messages", lambda **_kwargs: [row])
+    monkeypatch.setattr(worker_module.store, "stored_message", lambda *_args: {"processing_status": "EVENT_CREATED"})
     monkeypatch.setattr(worker_module.store, "schedule_ai_retry", lambda message_id, **kwargs: calls.append((message_id, kwargs)))
     monkeypatch.setattr(worker_module, "process_message", lambda *args, **kwargs: {"id": "same-event", "validation_status": "AUTO_VALIDATED"})
     worker_module.RecruitmentMailWorker().process_ai_recovery()
     assert calls == [("stored-1", {"succeeded": True})]
+
+
+def test_ollama_recovery_backs_off_when_hidden_retry_remains_pending(monkeypatch):
+    calls = []
+    row = {
+        "id": "stored-1", "mailbox_id": "mb1", "mailbox_candidate_id": "c1",
+        "provider_message_id": "gmail-1", "subject": "Ambiguous mail", "body_text": "Body",
+        "attachments": [],
+    }
+    monkeypatch.setattr("core.ai_gateway.health", lambda **_kwargs: {"endpoint_reachable": True, "model_available": True})
+    monkeypatch.setattr(worker_module.store, "retry_pending_messages", lambda **_kwargs: [row])
+    monkeypatch.setattr(worker_module.store, "stored_message", lambda *_args: {"processing_status": "AI_RETRY_PENDING"})
+    monkeypatch.setattr(worker_module.store, "schedule_ai_retry", lambda message_id, **kwargs: calls.append((message_id, kwargs)))
+    monkeypatch.setattr(worker_module, "process_message", lambda *args, **kwargs: None)
+    worker_module.RecruitmentMailWorker().process_ai_recovery()
+    assert calls == [("stored-1", {"succeeded": False})]
 
 
 def test_detection_evidence_masks_sensitive_identifiers():
