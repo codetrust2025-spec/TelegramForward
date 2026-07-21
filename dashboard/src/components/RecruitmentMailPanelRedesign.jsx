@@ -62,6 +62,15 @@ const STATUS_GROUP_STATUSES = {
   offers_accepted: ["OFFER_ACCEPTED"],
   joining_confirmed: ["JOINING_CONFIRMED"],
   joined: ["JOINED"],
+  offers: [
+    "OFFER_INDICATION",
+    "OFFER_IN_PROGRESS",
+    "OFFER_APPROVED",
+    "OFFER_LETTER_RECEIVED",
+    "APPOINTMENT_LETTER_RECEIVED",
+    "OFFER_ACCEPTED",
+  ],
+  joining: ["JOINING_CONFIRMED", "JOINED"],
 };
 const human = (value) =>
   String(value || "")
@@ -2192,34 +2201,18 @@ export default function RecruitmentMailPanelRedesign() {
     {
       tone: "blue",
       icon: "✉",
-      value: metrics.offers_received ?? 0,
-      title: "Offers Received",
-      subtitle: "Offer emails detected",
-      group: "offers_received",
-    },
-    {
-      tone: "green",
-      icon: "✓",
-      value: metrics.offers_accepted || 0,
-      title: "Offers Accepted",
-      subtitle: "Candidates accepted",
-      group: "offers_accepted",
+      value: `${metrics.offers_received ?? 0} / ${metrics.offers_accepted ?? 0}`,
+      title: "Offers",
+      subtitle: "Received / Accepted",
+      group: "offers",
     },
     {
       tone: "green",
       icon: "♧",
-      value: metrics.joining_confirmed ?? 0,
-      title: "Joining Confirmed",
-      subtitle: "Candidates with confirmed joining arrangements",
-      group: "joining_confirmed",
-    },
-    {
-      tone: "green",
-      icon: "♧",
-      value: metrics.joined ?? 0,
-      title: "Joined",
-      subtitle: "Candidates confirmed as joined",
-      group: "joined",
+      value: `${metrics.joining_confirmed ?? 0} / ${metrics.joined ?? 0}`,
+      title: "Joining",
+      subtitle: "Confirmed / Joined",
+      group: "joining",
     },
   ];
 

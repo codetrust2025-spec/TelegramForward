@@ -145,11 +145,11 @@ describe("RecruitmentMailPanel", () => {
     expect(screen.getByText("Selected").closest("article")).toHaveTextContent(
       "1",
     );
-    expect(
-      screen.getByText("Joining Confirmed").closest("article"),
-    ).toHaveTextContent("5");
-    expect(screen.getByText("Joined").closest("article")).toHaveTextContent(
-      "0",
+    expect(screen.getByText("Offers").closest("article")).toHaveTextContent(
+      "0 / 0",
+    );
+    expect(screen.getByText("Joining").closest("article")).toHaveTextContent(
+      "5 / 0",
     );
     expect(
       screen.getByRole("button", { name: "Selection & Offers" }),
@@ -577,7 +577,7 @@ describe("RecruitmentMailPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Selection & Offers" }));
     const joinedTile = screen
-      .getByText("Joined", { selector: "h3" })
+      .getByText("Joining", { selector: "h3" })
       .closest('[role="button"]');
     fireEvent.click(joinedTile);
     await screen.findByText("Welcome aboard!");
@@ -587,7 +587,7 @@ describe("RecruitmentMailPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Selection & Offers" }));
     const joinedTileAgain = screen
-      .getByText("Joined", { selector: "h3" })
+      .getByText("Joining", { selector: "h3" })
       .closest('[role="button"]');
     fireEvent.click(joinedTileAgain);
     await screen.findByText(retryPendingEvent.subject);
