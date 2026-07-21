@@ -126,6 +126,17 @@ const describeAiStatus = (event) => {
       reason: "Content verified; automatic AI retry disabled",
     };
   }
+  if (
+    String(event?.review_status || "").toUpperCase() === "APPROVED" &&
+    validation === "APPROVED"
+  ) {
+    return {
+      status: "Manually approved",
+      reason: aiFailureCode(event)
+        ? `Human review completed after ${aiFailureReason(event).toLowerCase()}`
+        : "Human review completed",
+    };
+  }
   if (aiFailureCode(event) || aiStatus === "RETRY_PENDING") {
     return { status: "Retry Pending", reason: aiFailureReason(event) };
   }

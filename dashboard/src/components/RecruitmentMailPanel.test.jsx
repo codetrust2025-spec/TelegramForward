@@ -64,6 +64,10 @@ const payloadFor = (url) => {
         id: "event-1",
         subject: "Frontend interview invitation",
         primary_status: "INTERVIEW_CONFIRMED",
+        review_status: "APPROVED",
+        validation_status: "APPROVED",
+        ai_status: "RETRY_PENDING",
+        ai_model: "unavailable:ollama_request_timeout",
         summary: "Interview invitation detected.",
         evidence_summary: "The source email contains an interview schedule.",
         structured_result: {
@@ -200,6 +204,12 @@ describe("RecruitmentMailPanel", () => {
         "Your frontend interview is scheduled for tomorrow at 3 PM.",
       ),
     ).toBeInTheDocument();
+    expect(screen.getByText(/^Manually approved/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        /AI analysis is pending because the AI service was unavailable/,
+      ),
+    ).not.toBeInTheDocument();
   });
   it("opens Gmail connection inline from the main review screen", async () => {
     render(
