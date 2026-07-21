@@ -5,6 +5,8 @@ import logging
 import os
 import re
 import uuid
+from html import unescape
+from io import BytesIO
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -220,6 +222,151 @@ def _booking_metadata(result: dict[str, Any], message: dict[str, Any], schedule:
     }
 
 
+def _evidence_font(size: int, *, bold: bool = False):
+    from PIL import ImageFont
+
+    names = (
+        ("DejaVuSans-Bold.ttf", "Arial Bold.ttf")
+        if bold
+        else ("DejaVuSans.ttf", "Arial.ttf")
+    )
+    for name in names:
+        try:
+            return ImageFont.truetype(name, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _evidence_lines(value: Any, *, width: int = 82, limit: int = 28) -> list[str]:
+    text = unescape(str(value or ""))
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ["Source email body was empty; booking fields came from validated structured evidence."]
+    words = text.split()
+    lines: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for word in words:
+        extra = len(word) + (1 if current else 0)
+        if current and current_len + extra > width:
+            lines.append(" ".join(current))
+            current = [word]
+            current_len = len(word)
+        else:
+            current.append(word)
+            current_len += extra
+        if len(lines) >= limit:
+            break
+    if current and len(lines) < limit:
+        lines.append(" ".join(current))
+    if len(words) > sum(len(line.split()) for line in lines):
+        lines[-1] = f"{lines[-1]} ..."
+    return lines
+
+
+def render_booking_evidence_png(
+    *, candidate: dict[str, Any], message: dict[str, Any], result: dict[str, Any],
+    booking: dict[str, Any], booking_status: str,
+) -> bytes:
+    """Render a safe, self-contained email evidence image for Daily Ops."""
+    from PIL import Image, ImageDraw
+
+    interview = result.get("interview") or {}
+    company = (result.get("company") or {}).get("name") or booking.get("interview_company")
+    role = (result.get("job") or {}).get("title") or booking.get("interview_role")
+    body_lines = _evidence_lines(message.get("body") or message.get("html_body"))
+    detail_rows = [
+        ("Candidate", candidate.get("name") or result.get("candidate", {}).get("name") or "Unknown"),
+        ("Interview", f"{booking.get('date') or interview.get('date') or 'Unknown date'}  {booking.get('time') or interview.get('time') or 'Unknown time'}  Asia/Kolkata"),
+        ("Company / role", f"{company or 'Unknown company'} / {role or 'Unknown role'}"),
+        ("Round", interview.get("round") or booking.get("interview_round") or "Not specified"),
+        ("Email subject", message.get("subject") or "No subject"),
+        ("From", f"{message.get('sender_name') or ''} <{message.get('sender_email') or 'Unknown'}>"),
+        ("To", message.get("recipient_email") or "Unknown"),
+        ("Email received", message.get("sent_at") or "Unknown"),
+        ("Gmail message ID", message.get("provider_message_id") or "Unknown"),
+        ("Booking ID", booking.get("id") or "Unknown"),
+    ]
+    width = 1200
+    height = max(980, 315 + len(detail_rows) * 43 + len(body_lines) * 30)
+    image = Image.new("RGB", (width, height), "#071523")
+    draw = ImageDraw.Draw(image)
+    title_font = _evidence_font(38, bold=True)
+    heading_font = _evidence_font(24, bold=True)
+    label_font = _evidence_font(19, bold=True)
+    body_font = _evidence_font(19)
+    small_font = _evidence_font(16)
+
+    draw.rounded_rectangle((38, 34, width - 38, 190), radius=22, fill="#10243b", outline="#2f80ed", width=3)
+    draw.text((70, 62), "AUTOMATIC INTERVIEW BOOKING EVIDENCE", font=title_font, fill="#f8fbff")
+    draw.text((72, 117), booking_status, font=heading_font, fill="#34d399")
+    draw.text((72, 154), "Generated from the validated source email by AI Mail Monitoring", font=small_font, fill="#91b7df")
+
+    y = 230
+    for label, value in detail_rows:
+        draw.text((70, y), f"{label}:", font=label_font, fill="#60a5fa")
+        draw.text((285, y), str(value or "Unknown")[:105], font=body_font, fill="#eef6ff")
+        y += 43
+    y += 12
+    draw.line((70, y, width - 70, y), fill="#29415f", width=2)
+    y += 28
+    draw.text((70, y), "SOURCE EMAIL CONTENT", font=heading_font, fill="#f8fbff")
+    y += 46
+    for line in body_lines:
+        draw.text((70, y), line, font=body_font, fill="#d7e6f7")
+        y += 30
+    draw.text((70, height - 54), "Audit evidence only - verify changes against the complete source email.", font=small_font, fill="#7890ad")
+
+    output = BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def _attach_automatic_booking_evidence(
+    *, candidate: dict[str, Any], message: dict[str, Any], result: dict[str, Any],
+    booking: dict[str, Any], booking_status: str,
+) -> dict[str, Any] | None:
+    """Attach evidence without allowing rendering/storage failure to undo a booking."""
+    booking_id = str(booking.get("id") or "")
+    if not booking_id:
+        return None
+    try:
+        image = render_booking_evidence_png(
+            candidate=candidate, message=message, result=result,
+            booking=booking, booking_status=booking_status,
+        )
+        proof = candidate_store.attach_public_slot_screenshot(
+            booking_id,
+            data=image,
+            original_name=f"auto-booking-evidence-{booking_id}.png",
+            mime_type="image/png",
+            source="AI Mail Monitoring",
+        )
+        if proof:
+            mail_store.audit(
+                actor="system", role="system", action="AUTO_BOOKING_EVIDENCE_ATTACHED",
+                candidate_id=str(candidate.get("id") or ""), source_id=booking_id,
+                new={"proof_id": proof.get("id"), "gmail_message_id": message.get("provider_message_id")},
+            )
+        return proof
+    except Exception as exc:
+        logger.warning(
+            "Automatic booking evidence snapshot failed booking_id=%s code=%s",
+            booking_id, type(exc).__name__,
+        )
+        try:
+            mail_store.audit(
+                actor="system", role="system", action="AUTO_BOOKING_EVIDENCE_FAILED",
+                candidate_id=str(candidate.get("id") or ""), source_id=booking_id,
+                new={"error_code": type(exc).__name__, "gmail_message_id": message.get("provider_message_id")},
+            )
+        except Exception:
+            logger.debug("Unable to persist evidence failure audit", exc_info=True)
+        return None
+
+
 def execute_auto_booking(
     *, mailbox: dict[str, Any], message: dict[str, Any], event: dict[str, Any],
     result: dict[str, Any], correlation_id: str | None = None,
@@ -357,8 +504,18 @@ def _execute_auto_booking(
                 if booking_status == "Auto Booked" else f"Interview {booking_status}"
             ),
         ) if notification.get("id") else {}
+        evidence_snapshot = None
+        if not manual_reviewer and booking_status in {"Auto Booked", "Rescheduled"}:
+            evidence_snapshot = _attach_automatic_booking_evidence(
+                candidate=candidate, message=message, result=result,
+                booking=booking, booking_status=booking_status,
+            )
         logger.info("Interview booking applied correlation_id=%s classification=%s booking_id=%s", correlation_id, classification, booking.get("id"))
-        return {"status": booking_status, "event_type": event_type, "booking": booking, "audit": audit, "notification": updated_notification}
+        return {
+            "status": booking_status, "event_type": event_type,
+            "booking": booking, "audit": audit, "notification": updated_notification,
+            "evidence_snapshot": evidence_snapshot,
+        }
     except BookingValidationError as exc:
         payment_status = exc.payment_status if exc.payment_status != "NOT_CHECKED" else payment_status
         duplicate_status = exc.duplicate_status if exc.duplicate_status != "NOT_CHECKED" else duplicate_status

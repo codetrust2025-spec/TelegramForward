@@ -91,11 +91,13 @@ def install_store_fakes(monkeypatch, *, rows=None, payment_reason=None, conflict
     audits = []
     monkeypatch.setattr(booking.mail_store, "record_booking_audit", lambda **kwargs: audits.append(kwargs) or {"id": "audit1", **kwargs})
     monkeypatch.setattr(booking.mail_store, "attach_booking_to_notification", lambda *args, **kwargs: {"id": "n1", **kwargs})
+    monkeypatch.setattr(booking.mail_store, "audit", lambda **kwargs: None)
     monkeypatch.setattr(booking.candidate_store, "get_candidate", lambda _cid: candidate)
     monkeypatch.setattr(booking.candidate_store, "candidate_identity_ids", lambda _cid: ["c1"])
     monkeypatch.setattr(booking.candidate_store, "list_candidates", lambda **kwargs: list(rows or []))
     monkeypatch.setattr(booking.candidate_store, "slot_confirm_block_reason", lambda _row: payment_reason)
     monkeypatch.setattr(booking.candidate_store, "find_interview_slot_conflicts", lambda *args, **kwargs: list(conflicts or []))
+    monkeypatch.setattr(booking.candidate_store, "attach_public_slot_screenshot", lambda *args, **kwargs: {"id": "proof1"})
     return candidate, audits
 
 
@@ -124,6 +126,42 @@ def test_valid_confirmed_interview_books_without_approval(monkeypatch):
     outcome = execute(result())
     assert outcome["status"] == "Auto Booked"
     assert outcome["booking"]["time"] == "15:00"
+    assert audits[-1]["auto_booked"] is True
+
+
+def test_auto_booking_attaches_generated_email_evidence_to_exact_slot(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch)
+    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", lambda **kwargs: {"id": "slot1", **kwargs})
+    attached = {}
+
+    def capture(candidate_id, **kwargs):
+        attached.update(candidate_id=candidate_id, **kwargs)
+        return {"id": "proof-evidence", "url": "/candidates/slot1/proofs/proof-evidence"}
+
+    monkeypatch.setattr(booking.candidate_store, "attach_public_slot_screenshot", capture)
+    outcome = execute(result())
+    assert outcome["status"] == "Auto Booked"
+    assert outcome["evidence_snapshot"]["id"] == "proof-evidence"
+    assert attached["candidate_id"] == "slot1"
+    assert attached["mime_type"] == "image/png"
+    assert attached["source"] == "AI Mail Monitoring"
+    assert attached["data"].startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_evidence_snapshot_failure_never_rolls_back_valid_booking(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    _candidate, audits = install_store_fakes(monkeypatch)
+    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", lambda **kwargs: {"id": "slot1", **kwargs})
+    monkeypatch.setattr(
+        booking.candidate_store,
+        "attach_public_slot_screenshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("storage unavailable")),
+    )
+    outcome = execute(result())
+    assert outcome["status"] == "Auto Booked"
+    assert outcome["booking"]["id"] == "slot1"
+    assert outcome["evidence_snapshot"] is None
     assert audits[-1]["auto_booked"] is True
 
 
