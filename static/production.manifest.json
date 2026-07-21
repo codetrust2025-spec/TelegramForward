@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "description": "Pinned production assets \u2014 live site must match these hashes.",
+  "git_commit": "2cdcdd12f5e2fb78708fb922064839e5e8866b39",
+  "git_commit_short": "2cdcdd1",
+  "deployed_at": "2026-07-21T07:16:14Z",
+  "js": "assets/app-CHjkpEGY.js",
+  "css": "assets/index-AU7caJ2p.css",
+  "js_sha256": "ee5be820cabbaffc0e1b2d07b5ef7af70b204d26772546622df4b245c554a3a1",
+  "css_sha256": "53122f92a8ec279925dfaeadd92a22ecd4520d5f313b12fb86c4bbd59fc688d2",
+  "js_bytes": 1321430,
+  "css_bytes": 647339,
+  "server_py_sha256": "42d6c8c9e1c7f4756293aa805831980b274605752472aa87d71dbe68f21af12e"
+}
