@@ -226,6 +226,7 @@ function PaymentAiResultCard({ ai }) {
 export function SubmitSlotPage() {
   const [tab, setTab] = useState('book')
   const [candidates, setCandidates] = useState([])
+  const [roundWiseCandidates, setRoundWiseCandidates] = useState([])
   const [booked, setBooked] = useState([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -260,8 +261,9 @@ export function SubmitSlotPage() {
   const selected = useMemo(() => {
     if (!effectiveName) return null
     const key = effectiveName.toLowerCase()
-    return dedupeCandidates(candidates).find(c => c.name.toLowerCase() === key) || null
-  }, [effectiveName, candidates])
+    const pool = serviceType === 'round_wise' ? roundWiseCandidates : candidates
+    return dedupeCandidates(pool).find(c => c.name.toLowerCase() === key) || null
+  }, [effectiveName, candidates, roundWiseCandidates, serviceType])
 
   const bookingSlot = useMemo(() => {
     const effectiveDate = manualDate || parsedSlot?.date || ''
@@ -284,13 +286,18 @@ export function SubmitSlotPage() {
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      const [cRes, bRes] = await Promise.all([
+      const [cRes, rRes, bRes] = await Promise.all([
         fetch(`${API_BASE}/public/slots/candidates`, { cache: 'no-store' }),
+        fetch(`${API_BASE}/public/slots/candidates?channel=round_wise`, { cache: 'no-store' }),
         fetch(`${API_BASE}/public/slots/booked`, { cache: 'no-store' }),
       ])
       const cData = await cRes.json()
+      const rData = await rRes.json()
       const bData = await bRes.json()
       if (cData.status === 'ok') setCandidates(dedupeCandidates(cData.candidates || []))
+      // Round-wise names are typed, not picked — this roster is only used to
+      // look up a pending balance so the payment card can show before submit.
+      if (rData.status === 'ok') setRoundWiseCandidates(dedupeCandidates(rData.candidates || []))
       if (bData.status === 'ok') setBooked(bData.slots || [])
     } catch { setError('Could not load — check your connection.') }
     finally { setLoading(false) }
