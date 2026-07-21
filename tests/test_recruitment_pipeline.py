@@ -472,5 +472,9 @@ def test_legacy_offer_cleanups_protect_and_restore_interview_reviews():
     restore=(migrations / "012_recruitment_mail_restore_interview_reviews.sql").read_text("utf-8").lower()
     assert "review_status='pending'" in restore
     assert "confidence>=0.8" in restore
+    assert "validation_status in ('needs_review','retry_pending')" in restore
     assert "jsonb_array_length" in restore
     assert "interview_cleanup_restore_v1" in restore
+    guard=(migrations / "013_recruitment_mail_restore_review_guard.sql").read_text("utf-8").lower()
+    assert "review_status='rejected'" in guard
+    assert "validation_status in ('rejected','false_positive')" in guard

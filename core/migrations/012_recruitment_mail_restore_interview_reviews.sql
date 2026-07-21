@@ -18,6 +18,7 @@ WITH restored AS (
       updated_at=now()
   WHERE e.cleanup_version IN ('selection_offer_precision_v3','offer_review_cleanup_v1')
     AND e.review_status IN ('FALSE_POSITIVE','IGNORED')
+    AND e.validation_status IN ('NEEDS_REVIEW','RETRY_PENDING')
     AND (
       COALESCE(e.original_primary_status,'') LIKE 'INTERVIEW_%'
       OR COALESCE(e.structured_result->>'interview_event','') LIKE 'INTERVIEW_%'
