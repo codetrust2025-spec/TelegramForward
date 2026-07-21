@@ -217,6 +217,10 @@ const isVisibleEvent = (event) =>
     (Number(event.confidence || 0) >= 0.8 &&
       Boolean(event.structured_result?.evidence?.length)));
 
+const isActionRequiredEvent = (event) =>
+  isVisibleEvent(event) &&
+  String(event.review_status || "").toUpperCase() === "PENDING";
+
 export function SummaryCard({ tone, icon, value, title, subtitle, onClick, active }) {
   return (
     <article
@@ -567,7 +571,7 @@ function ReviewQueue({
           <p>
             {statusFilterLabel
               ? `Showing only "${statusFilterLabel}" emails.`
-              : "Review every pending selection, offer and interview email before moving to monitoring or analytics."}
+              : "Only selection, offer and interview emails waiting for your decision are shown here."}
           </p>
         </div>
         <div className="sot-review-header-actions">
@@ -599,8 +603,8 @@ function ReviewQueue({
           <span>Schedule and booking emails</span>
         </article>
         <div className="sot-priority-order-note">
-          <strong>Pending first</strong>
-          <span>Newest actionable mail is always shown at the top.</span>
+          <strong>Action required only</strong>
+          <span>Reviewed and completed mail is hidden from this queue.</span>
         </div>
       </div>
       <div className="sot-table-wrap">
@@ -764,7 +768,7 @@ function ReviewQueue({
             ) : (
               <tr>
                 <td colSpan={8} className="sot-empty">
-                  No important detections need review.
+                  No review mails need your action.
                 </td>
               </tr>
             )}
@@ -1453,7 +1457,7 @@ export default function RecruitmentMailPanelRedesign() {
           charts: {},
           flags: [],
         })),
-        request("/api/ai-recruitment/review?limit=100").catch(() => ({
+        request("/api/ai-recruitment/review?status=PENDING&limit=100").catch(() => ({
           events: [],
         })),
         request("/api/offer-verification?limit=100").catch(() => ({
@@ -1502,7 +1506,7 @@ export default function RecruitmentMailPanelRedesign() {
       setMetrics(dashboard.metrics || {});
       setCharts(dashboard.charts || {});
       setFlags(dashboard.flags || []);
-      setEvents((review.events || []).filter(isVisibleEvent));
+      setEvents((review.events || []).filter(isActionRequiredEvent));
       setOffers(cases.cases || []);
       setCandidates(candidateList);
       setMailboxes(mailboxRows);
