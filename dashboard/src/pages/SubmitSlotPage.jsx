@@ -393,11 +393,14 @@ export function SubmitSlotPage() {
     if (file) setSessionPreview(URL.createObjectURL(file)); else setSessionPreview('')
   }
 
-  async function uploadPaymentProof() {
-    if (!effectiveName || !paymentFile) { setError('Enter your name and attach a payment screenshot first.'); return }
+  // `file` is passed in when auto-uploading on drop — paymentFile state has not
+  // settled yet at that point.
+  async function uploadPaymentProof(file = null) {
+    const proof = file || paymentFile
+    if (!effectiveName || !proof) { setError('Enter your name and attach a payment screenshot first.'); return }
     setBusy(true); setError(''); setSuccess(''); setPaymentAiResult(null); setPaymentAnalysing(true)
     try {
-      const fd = new FormData(); fd.append('name', effectiveName); fd.append('file', paymentFile)
+      const fd = new FormData(); fd.append('name', effectiveName); fd.append('file', proof)
       const res = await fetch(`${API_BASE}/public/slots/payment-proof`, { method: 'POST', body: fd })
       const data = await res.json()
       if (!res.ok) { setError(data.message || 'Payment upload failed'); return }
@@ -636,10 +639,15 @@ export function SubmitSlotPage() {
                     </>
                   ) : (
                     <>
-                      <SubmitSlotFileDrop compact label="Payment screenshot" file={paymentFile} disabled={busy || parsing} busy={busy || paymentAnalysing} onFile={f => { setPaymentFile(f); setPaymentAiResult(null) }} />
-                      <button type="button" className="sbs-secondary-btn" disabled={busy || parsing || paymentAnalysing || !paymentFile} onClick={uploadPaymentProof}>
-                        {paymentAnalysing ? <><Spinner size={14} />&nbsp;Analysing…</> : 'Save payment proof'}
-                      </button>
+                      <SubmitSlotFileDrop compact label="Payment screenshot" file={paymentFile} disabled={busy || parsing} busy={busy || paymentAnalysing} onFile={f => { setPaymentFile(f); setPaymentAiResult(null); if (f) uploadPaymentProof(f) }} />
+                      {paymentAnalysing
+                        ? <p className="sbs-pay-ok"><Spinner size={14} />&nbsp;Reading payment screenshot…</p>
+                        : paymentFile && (
+                          /* Only reachable when the automatic upload failed. */
+                          <button type="button" className="sbs-secondary-btn" disabled={busy || parsing} onClick={() => uploadPaymentProof()}>
+                            Retry upload
+                          </button>
+                        )}
                       {triedSubmit && needsPaymentProof && <span className="sbs-hint sbs-hint--warn">Upload and save payment proof to confirm.</span>}
                     </>
                   )}

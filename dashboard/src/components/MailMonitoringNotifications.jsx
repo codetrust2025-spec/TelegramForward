@@ -1,5 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API } from "../config.js";
+import {
+  SELECTION_CLASSIFICATIONS,
+  isTrackedMailAlert,
+  playMailAlertSound,
+  showMailAlertNotification,
+} from "../utils/mailAlertSound.js";
 
 // Mail Monitoring Notifications track only auto interview slot booking and
 // job confirmed monitoring mails.
@@ -31,6 +37,19 @@ function navigate(view, detail = {}) {
   window.dispatchEvent(new CustomEvent("teleautomation:navigate", { detail: { view, ...detail } }));
 }
 
+// Selections and interview bookings are the mails that must never be missed —
+// sound the klaxon wherever the app is open, not just on the notifications page.
+function alertOnTrackedMail(payload) {
+  if (payload?.event !== "notification_created") return;
+  const classification = payload?.classification;
+  if (!isTrackedMailAlert(classification)) return;
+  playMailAlertSound({
+    eventId: payload.event_id || payload.notification_id,
+    urgent: SELECTION_CLASSIFICATIONS.includes(classification),
+  });
+  showMailAlertNotification(payload);
+}
+
 function useMailLive(onUpdate) {
   const [status, setStatus] = useState("Offline");
   const callback = useRef(onUpdate);
@@ -51,6 +70,7 @@ function useMailLive(onUpdate) {
         if (seen.size > 500) seen.delete(seen.values().next().value);
         localStorage.setItem("teleautomation-mail-last-event-id", id);
       }
+      alertOnTrackedMail(payload);
       callback.current?.(payload);
       if (["slot_auto_booked", "interview_rescheduled", "interview_cancelled"].includes(payload?.event)) {
         window.dispatchEvent(new CustomEvent("teleautomation:slot-booking-updated", { detail: payload }));
@@ -112,6 +132,12 @@ export function MailNotificationBell({ compact = false }) {
   useEffect(() => {
     load(); const id = window.setInterval(load, 30000); return () => window.clearInterval(id);
   }, [load]);
+  useEffect(() => {
+    // Ask up front so the first tracked mail doesn't spend its alert on a prompt.
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, []);
   useEffect(() => {
     const close = (event) => wrap.current && !wrap.current.contains(event.target) && setOpen(false);
     document.addEventListener("mousedown", close); return () => document.removeEventListener("mousedown", close);
