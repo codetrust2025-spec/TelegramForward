@@ -849,7 +849,7 @@ function CandidateOutcomes({
     <section className="sot-content-card">
       <header>
         <div>
-          <h2>Candidates</h2>
+          <h2>Candidate history</h2>
           <p>Selection, offer, and joining history in one candidate view.</p>
         </div>
       </header>
@@ -2040,8 +2040,6 @@ export default function RecruitmentMailPanelRedesign() {
           ["interviews", "Interview Monitoring"],
           ["overview", "Overview"],
           ["mailboxes", "Mailboxes"],
-          ["candidates", "Candidates"],
-          ["analytics", "Analytics"],
         ].map(([value, label]) => (
           <button
             key={value}
@@ -2053,36 +2051,62 @@ export default function RecruitmentMailPanelRedesign() {
         ))}
       </nav>
       {tab === "overview" && (
-        <MonitoringOverview
-          metrics={metrics}
-          mailboxRows={rows}
-          interviewSummary={monitoringSummary}
-          aiStatus={aiStatus}
-          onOpen={setTab}
-        />
+        <>
+          <MonitoringOverview
+            metrics={metrics}
+            mailboxRows={rows}
+            interviewSummary={monitoringSummary}
+            aiStatus={aiStatus}
+            onOpen={setTab}
+          />
+          <details className="sot-content-card sot-overview-analytics">
+            <summary>Operational analytics &amp; AI diagnostics</summary>
+            <p>Open only when you need trends, conflict checks, or AI troubleshooting.</p>
+            <Analytics
+              charts={charts}
+              flags={flags}
+              names={names}
+              aiStatus={aiStatus}
+              onConnectionTest={() => testOllama("connection")}
+              onModelTest={() => testOllama("model")}
+              busy={busy}
+            />
+          </details>
+        </>
       )}
       {tab === "selection" && (
-        <section className="sot-workspace sot-selection-workspace">
-          <header className="sot-workspace-head">
-            <div><span className="sot-workspace-eyebrow">CAREER OUTCOMES</span><h2>Selection &amp; Offer Tracking</h2><p>Only candidate-specific, source-supported positive outcomes advance this flow.</p></div>
-            <button type="button" className="sot-secondary-button" onClick={() => setTab("reviews")}>Open review queue</button>
-          </header>
-          <section className="sot-summary-grid">
-            {summary.map((card) => (
-              <SummaryCard
-                key={card.title}
-                {...card}
-                onClick={() => selectStatusFilter(card.group)}
-                active={reviewStatusFilter === card.group}
-              />
-            ))}
+        <>
+          <section className="sot-workspace sot-selection-workspace">
+            <header className="sot-workspace-head">
+              <div><span className="sot-workspace-eyebrow">CAREER OUTCOMES</span><h2>Selection &amp; Offer Tracking</h2><p>Only candidate-specific, source-supported positive outcomes advance this flow.</p></div>
+              <button type="button" className="sot-secondary-button" onClick={() => setTab("reviews")}>Open review queue</button>
+            </header>
+            <section className="sot-summary-grid">
+              {summary.map((card) => (
+                <SummaryCard
+                  key={card.title}
+                  {...card}
+                  onClick={() => selectStatusFilter(card.group)}
+                  active={reviewStatusFilter === card.group}
+                />
+              ))}
+            </section>
+            <div className="sot-selection-flow-copy">
+              <div><span>What enters</span><strong>Selection, offer, acceptance, joining and onboarding evidence</strong></div>
+              <div><span>What stays out</span><strong>Job alerts, generic recruiter campaigns, rejections and unconfirmed applications</strong></div>
+              <div><span>Safety rule</span><strong>Unknown or unsupported outcomes wait for human review</strong></div>
+            </div>
           </section>
-          <div className="sot-selection-flow-copy">
-            <div><span>What enters</span><strong>Selection, offer, acceptance, joining and onboarding evidence</strong></div>
-            <div><span>What stays out</span><strong>Job alerts, generic recruiter campaigns, rejections and unconfirmed applications</strong></div>
-            <div><span>Safety rule</span><strong>Unknown or unsupported outcomes wait for human review</strong></div>
-          </div>
-        </section>
+          <CandidateOutcomes
+            candidates={candidates}
+            offers={offers}
+            selectedId={candidateId}
+            onSelected={setCandidateId}
+            timeline={timeline}
+            onEvidence={setEvidenceId}
+            onOfferReview={offerReview}
+          />
+        </>
       )}
       {tab === "interviews" && (
         <InterviewWorkspace
@@ -2280,28 +2304,6 @@ export default function RecruitmentMailPanelRedesign() {
           addMailboxOpen={showAddMailbox}
           />
         </>
-      )}
-      {tab === "candidates" && (
-        <CandidateOutcomes
-          candidates={candidates}
-          offers={offers}
-          selectedId={candidateId}
-          onSelected={setCandidateId}
-          timeline={timeline}
-          onEvidence={setEvidenceId}
-          onOfferReview={offerReview}
-        />
-      )}
-      {tab === "analytics" && (
-        <Analytics
-          charts={charts}
-          flags={flags}
-          names={names}
-          aiStatus={aiStatus}
-          onConnectionTest={() => testOllama("connection")}
-          onModelTest={() => testOllama("model")}
-          busy={busy}
-        />
       )}
       {evidenceId && (
         <EvidenceDrawer

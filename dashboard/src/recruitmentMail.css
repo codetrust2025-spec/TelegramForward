@@ -669,6 +669,29 @@
 .sot-content-card {
   padding: 22px;
 }
+.sot-overview-analytics {
+  margin-top: 16px;
+}
+.sot-overview-analytics > summary {
+  cursor: pointer;
+  color: var(--sot-text);
+  font-size: 17px;
+  font-weight: 700;
+}
+.sot-overview-analytics > summary::marker {
+  color: var(--sot-blue);
+}
+.sot-overview-analytics > p {
+  margin: 8px 0 18px;
+  color: var(--sot-muted);
+}
+.sot-overview-analytics:not([open]) > p,
+.sot-overview-analytics:not([open]) > .sot-analytics {
+  display: none;
+}
+.sot-selection-workspace + .sot-content-card {
+  margin-top: 16px;
+}
 .sot-content-card > header {
   justify-content: space-between;
   margin-bottom: 18px;

@@ -115,7 +115,18 @@ describe("RecruitmentMailPanel", () => {
         <RecruitmentMailPanel />
       </ConfirmProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Candidates" }));
+    expect(
+      screen.queryByRole("button", { name: "Candidates" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Analytics" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Selection & Offers" }),
+    );
+    expect(
+      screen.getByRole("heading", { name: "Candidate history" }),
+    ).toBeInTheDocument();
     await waitFor(() =>
       expect(
         screen.getByRole("option", { name: /Test Candidate/ }),
