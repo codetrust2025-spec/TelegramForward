@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "description": "Pinned production assets \u2014 live site must match these hashes.",
+  "git_commit": "5f04c0487cbe12418c706f24c85693957c1c2e76",
+  "git_commit_short": "5f04c04",
+  "deployed_at": "2026-07-21T10:55:48Z",
+  "js": "assets/app-COyl2hnI.js",
+  "css": "assets/index-B569Y3WN.css",
+  "js_sha256": "a4f12ef6449d48ab00a83d3f3c0eb1eee8339a4e6929f2835af795390b4afb9a",
+  "css_sha256": "61415f6be3e011c14db5fe006bac2c547e6297028b2e8938eee5e4477192e589",
+  "js_bytes": 1324291,
+  "css_bytes": 648435,
+  "server_py_sha256": "42d6c8c9e1c7f4756293aa805831980b274605752472aa87d71dbe68f21af12e"
+}
