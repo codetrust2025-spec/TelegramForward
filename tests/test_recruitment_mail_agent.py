@@ -30,6 +30,15 @@ def test_mail_filter_routes_assertive_calendar_invite_wording():
     assert invite >= .6
 
 
+def test_mail_filter_routes_numbered_round_calendar_invite_without_interview_word():
+    subject=('Invitation from an unknown sender: L1 Discussion with Gangadhar for SOMT '
+             '@ Tue Jul 21, 2026 11:30am - 12pm (IST) (candidate@gmail.com)')
+    route=routing_decision(subject,'Data Template Infotech Private Limited',sender_email='organizer@example.com')
+    assert route['send_to_ai'] is True
+    assert route['context']['qualified'] is True
+    assert route['context']['status']=='INTERVIEW_CONFIRMED'
+
+
 def test_ai_outage_keeps_strong_interview_invite_visible_for_review():
     subject='Virtual Interview - Senior Full Stack Engineer (Front-End Focused)'
     body='Please join the Virtual Interview at 12.30 pm on 21st July, 2026. Microsoft Teams meeting.'

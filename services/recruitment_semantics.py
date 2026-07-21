@@ -185,7 +185,10 @@ def _is_assertive_interview_invitation(subject: str, body: str) -> bool:
     """
     title = str(subject or "").casefold()
     direct = f"{subject}\n{body[:12000]}".casefold()
-    interview = r"(?:virtual\s+)?interview|technical\s+round|managerial\s+round|hr\s+round"
+    # Recruiters frequently title calendar invites as "L1 Discussion" or
+    # "L2 Round" without the word interview.  Treat that wording as an
+    # interview signal only inside this schedule+invitation gate.
+    interview = r"(?:virtual\s+)?interview|technical\s+round|managerial\s+round|hr\s+round|l[1-5]\s+(?:discussion|round)"
     if not re.search(rf"\b(?:{interview})\b", direct):
         return False
     if re.search(r"\b(?:webinar|workshop|training|preparation|tips|career fair|mock interview)\b", title):
@@ -212,13 +215,17 @@ def _is_assertive_interview_invitation(subject: str, body: str) -> bool:
         direct,
         re.I,
     ))
+    calendar_round_invitation = bool(
+        re.search(r"\binvitation from an unknown sender\b", title, re.I)
+        and re.search(r"\bl[1-5]\s+(?:discussion|round)\b", title, re.I)
+    )
     meeting_details = bool(re.search(
         r"\b(?:microsoft teams|teams meeting|google meet|zoom meeting|meeting id|passcode)\b|https?://(?:teams\.microsoft\.com|meet\.google\.com|[^\s/]*zoom\.us)/",
         direct,
         re.I,
     ))
     subject_is_interview = bool(re.search(rf"\b(?:{interview})\b", title, re.I))
-    return invitation or (subject_is_interview and meeting_details)
+    return invitation or calendar_round_invitation or (subject_is_interview and meeting_details)
 
 
 def extract_interview_schedule(subject: str, body: str, *, sent_at: Any = None) -> dict[str, str | None]:
