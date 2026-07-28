@@ -45,6 +45,15 @@ def _confidence(result: dict[str, Any]) -> float:
     return value / 100 if value > 1 else value
 
 
+def normalize_booking_round(result: dict[str, Any]) -> str:
+    """Discard model/calendar labels unless they are supported round values."""
+    interview = dict(result.get("interview") or {})
+    round_name = candidate_store.normalise_interview_round(interview.get("round"))
+    interview["round"] = round_name or None
+    result["interview"] = interview
+    return round_name
+
+
 def parse_interview_time(value: str) -> str:
     """Require the AI contract's 12-hour clock and return candidate-store HH:MM."""
     match = TIME_RE.fullmatch(str(value or "").strip())
@@ -85,18 +94,171 @@ def normalized_schedule(result: dict[str, Any], *, now: datetime | None = None) 
     if source_dt <= current.astimezone(source_zone):
         raise BookingValidationError("PAST_INTERVIEW", "Interview date and time must be in the future.")
     local = source_dt.astimezone(ZoneInfo("Asia/Kolkata"))
-    end = local + timedelta(minutes=max(15, int(os.getenv("AI_INTERVIEW_DEFAULT_DURATION_MINUTES", "30"))))
+    # Preserve the schedule supplied by the invitation. Trusted RFC 5545
+    # calendar invitations expose ``duration_minutes`` and model results may
+    # expose an explicit ``end_time``. Previously both were discarded and a
+    # fixed 30-minute slot was manufactured.
+    raw_end_time = str(interview.get("end_time") or "").strip()
+    raw_duration = interview.get("duration_minutes")
+    if raw_end_time:
+        end_clock = parse_interview_time(raw_end_time)
+        source_end = datetime.combine(
+            day, datetime.strptime(end_clock, "%H:%M").time(), source_zone,
+        )
+        if source_end <= source_dt:
+            raise BookingValidationError(
+                "INVALID_END_TIME",
+                "Interview end time must be later than the start time.",
+            )
+    elif raw_duration not in (None, ""):
+        try:
+            duration_minutes = int(raw_duration)
+        except (TypeError, ValueError) as exc:
+            raise BookingValidationError(
+                "INVALID_DURATION", "Interview duration must be a whole number of minutes.",
+            ) from exc
+        if not 5 <= duration_minutes <= 12 * 60:
+            raise BookingValidationError(
+                "INVALID_DURATION", "Interview duration must be between 5 and 720 minutes.",
+            )
+        source_end = source_dt + timedelta(minutes=duration_minutes)
+    else:
+        default_minutes = max(
+            15, int(os.getenv("AI_INTERVIEW_DEFAULT_DURATION_MINUTES", "30")),
+        )
+        source_end = source_dt + timedelta(minutes=default_minutes)
+
+    end = source_end.astimezone(ZoneInfo("Asia/Kolkata"))
+    if end.date() != local.date():
+        raise BookingValidationError(
+            "CROSS_DAY_INTERVIEW",
+            "Interview start and end must fall on the same India calendar date.",
+        )
     return {
         "date": local.date().isoformat(), "time": local.strftime("%H:%M"),
         "time_end": end.strftime("%H:%M"), "source_timezone": source_zone.key,
     }
 
 
+def historical_booking_disposition(
+    result: dict[str, Any], classification: str, *, now: datetime | None = None,
+) -> dict[str, str] | None:
+    """Classify delayed historical recovery before live-booking validation.
+
+    A historical rescan must never turn a past interview into a live booking
+    failure. Incomplete historical schedules remain reviewable, while a
+    complete future schedule continues through the normal safety gates.
+    """
+    if not result.get("_historical_reprocess") or classification not in {
+        "interview_confirmed", "interview_rescheduled",
+    }:
+        return None
+    interview = result.get("interview") or {}
+    raw_day = str(interview.get("date") or "").strip()
+    if not raw_day:
+        return {
+            "status": "Review Required",
+            "validation_status": "REVIEW_REQUIRED",
+            "failure_code": "HISTORICAL_SCHEDULE_INCOMPLETE",
+            "message": "Historical interview email has no reliable date; review only and do not auto-book.",
+            "display_status": "Historical Interview — Review Only",
+            "priority": "review_required",
+            "event_type": "historical_interview_review_required",
+        }
+    try:
+        interview_day = date.fromisoformat(raw_day)
+    except ValueError:
+        return {
+            "status": "Review Required",
+            "validation_status": "REVIEW_REQUIRED",
+            "failure_code": "HISTORICAL_SCHEDULE_INCOMPLETE",
+            "message": "Historical interview email has an invalid date; review only and do not auto-book.",
+            "display_status": "Historical Interview — Review Only",
+            "priority": "review_required",
+            "event_type": "historical_interview_review_required",
+        }
+    timezone_name = str(interview.get("timezone") or "").strip()
+    try:
+        zone = validate_timezone(timezone_name) if timezone_name else ZoneInfo("Asia/Kolkata")
+    except BookingValidationError:
+        zone = ZoneInfo("Asia/Kolkata")
+    current = now or datetime.now(zone)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=zone)
+    past = interview_day < current.astimezone(zone).date()
+    if interview_day == current.astimezone(zone).date():
+        raw_time = str(interview.get("time") or "").strip()
+        if not raw_time or not timezone_name:
+            return {
+                "status": "Review Required",
+                "validation_status": "REVIEW_REQUIRED",
+                "failure_code": "HISTORICAL_SCHEDULE_INCOMPLETE",
+                "message": "Today's historical interview email lacks a complete time or timezone; review only.",
+                "display_status": "Historical Interview — Review Only",
+                "priority": "review_required",
+                "event_type": "historical_interview_review_required",
+            }
+        try:
+            source_time = parse_interview_time(raw_time)
+            source_zone = validate_timezone(timezone_name)
+            scheduled = datetime.combine(
+                interview_day, datetime.strptime(source_time, "%H:%M").time(), source_zone,
+            )
+            past = scheduled <= current.astimezone(source_zone)
+        except BookingValidationError:
+            return {
+                "status": "Review Required",
+                "validation_status": "REVIEW_REQUIRED",
+                "failure_code": "HISTORICAL_SCHEDULE_INCOMPLETE",
+                "message": "Historical interview email has an invalid time or timezone; review only.",
+                "display_status": "Historical Interview — Review Only",
+                "priority": "review_required",
+                "event_type": "historical_interview_review_required",
+            }
+    if not past:
+        return None
+    return {
+        "status": "Historical Skipped",
+        "validation_status": "SKIPPED",
+        "failure_code": "PAST_INTERVIEW",
+        "message": "Historical interview date has already passed; no slot was created.",
+        "display_status": "Historical Interview Skipped",
+        "priority": "low",
+        "event_type": "historical_interview_skipped",
+    }
+
+
+def should_suppress_historical_notification(
+    result: dict[str, Any], classification: str, *, now: datetime | None = None,
+) -> bool:
+    """Return whether a historical interview has no remaining admin action.
+
+    The booking audit is still recorded, but a past interview must not create
+    an unread notification, browser sound, or push notification.
+    """
+    disposition = historical_booking_disposition(
+        result, classification, now=now,
+    )
+    return bool(disposition and disposition.get("validation_status") == "SKIPPED")
+
+
 def validate_ai_for_booking(result: dict[str, Any], classification: str) -> None:
     if os.getenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "false").lower() != "true":
         raise BookingValidationError("AUTO_BOOKING_DISABLED", "Automatic interview booking is disabled by configuration.")
-    if result.get("classification_source") != "OLLAMA" or result.get("ai_validation_status") != "VALIDATED":
-        raise BookingValidationError("AI_NOT_VALIDATED", "A validated Ollama analysis is required for automatic booking.")
+    source = result.get("classification_source")
+    ollama_valid = source == "OLLAMA" and result.get("ai_validation_status") == "VALIDATED"
+    calendar_valid = (
+        source == "ICALENDAR_VERIFIED"
+        and result.get("calendar_validation_status") == "TRUSTED"
+        and result.get("validation_status") == "VALIDATED"
+    )
+    structured_valid = (
+        source == "STRUCTURED_EMAIL_VERIFIED"
+        and result.get("structured_validation_status") == "TRUSTED"
+        and result.get("validation_status") == "VALIDATED"
+    )
+    if not (ollama_valid or calendar_valid or structured_valid):
+        raise BookingValidationError("AI_NOT_VALIDATED", "A validated Ollama result or trusted authenticated calendar invitation is required for automatic booking.")
     confidence = _confidence(result)
     review = _threshold("AI_INTERVIEW_REVIEW_THRESHOLD", 0.80)
     automatic = _threshold("AI_INTERVIEW_AUTO_BOOK_THRESHOLD", 0.90)
@@ -155,6 +317,15 @@ def _same_text(left: Any, right: Any) -> bool:
     return bool(str(left or "").strip()) and str(left or "").strip().casefold() == str(right or "").strip().casefold()
 
 
+_STABLE_INTERVIEW_ID_RE = re.compile(r"\b(?=[A-Z0-9]*\d)[A-Z][A-Z0-9]{7,}\b")
+
+
+def _stable_interview_ids(*values: Any) -> set[str]:
+    """Extract enterprise requisition/event IDs used across invite updates."""
+    text = " ".join(str(value or "") for value in values).upper()
+    return set(_STABLE_INTERVIEW_ID_RE.findall(text))
+
+
 def _reference_schedule(result: dict[str, Any], classification: str) -> dict[str, str] | None:
     """Normalize an explicitly stated old/cancelled schedule without requiring it to be future."""
     interview = result.get("interview") or {}
@@ -189,11 +360,27 @@ def _resolve_existing_slot(
     round_name = interview.get("round")
     thread_id = message.get("provider_thread_id")
     reference = _reference_schedule(result, classification)
+    message_ids = _stable_interview_ids(
+        message.get("subject"),
+        message.get("body"),
+        (result.get("job") or {}).get("title"),
+        *((result.get("interview") or {}).get("stable_ids") or []),
+    )
     ranked: list[tuple[int, dict[str, Any]]] = []
     for row in slots:
         score = 0
         if thread_id and _same_text(row.get("interview_source_thread_id"), thread_id):
             score += 100
+        row_ids = _stable_interview_ids(
+            row.get("interview_role"),
+            row.get("notes"),
+            row.get("interview_source_message_id"),
+        )
+        if message_ids.intersection(row_ids):
+            # Enterprise calendar systems often start a new Gmail thread for a
+            # cancellation.  A shared requisition/event ID is more stable than
+            # Gmail's thread id and safely identifies the original booking.
+            score += 120
         if reference and str(row.get("date") or "")[:10] == reference["date"] and str(row.get("time") or "")[:5] == reference["time"]:
             score += 80
         if round_name and _same_text(candidate_store.normalise_interview_round(row.get("interview_round")), candidate_store.normalise_interview_round(round_name)):
@@ -400,6 +587,7 @@ def _execute_auto_booking(
 ) -> dict[str, Any]:
     """Apply one actionable classification and durably describe every outcome."""
     correlation_id = correlation_id or str(uuid.uuid4())
+    interview_round = normalize_booking_round(result)
     classification = mail_store.canonical_classification(result)
     notification = event.get("notification") or {}
     analysis = mail_store.record_interview_analysis(
@@ -417,8 +605,34 @@ def _execute_auto_booking(
         return {"status": existing_audit.get("booking_status") or "Already Processed", "event_type": "notification_created",
                 "booking": {"id": existing_audit.get("booking_id")}, "audit": existing_audit,
                 "notification": notification, "duplicate": True}
+    historical = historical_booking_disposition(result, classification)
+    if historical:
+        audit = mail_store.record_booking_audit(
+            analysis_id=analysis["id"], candidate_id=str(mailbox.get("candidate_id") or ""),
+            gmail_message_id=message["provider_message_id"], gmail_thread_id=message.get("provider_thread_id"),
+            classification=classification, booking_id=None, auto_booked=False,
+            validation_status=historical["validation_status"], payment_status="NOT_CHECKED",
+            duplicate_status="NOT_CHECKED", conflict_status="NOT_CHECKED",
+            booking_status=historical["status"], failure_code=historical["failure_code"],
+            failure_message=historical["message"], correlation_id=correlation_id,
+        )
+        updated_notification = mail_store.attach_booking_to_notification(
+            notification.get("id"), audit_id=audit["id"], booking_id=None,
+            booking_status=historical["status"], result=result, priority=historical["priority"],
+            display_status=historical["display_status"], detail=historical["message"],
+        ) if notification.get("id") else {}
+        logger.info(
+            "Historical interview disposition correlation_id=%s code=%s",
+            correlation_id, historical["failure_code"],
+        )
+        return {
+            "status": historical["status"], "event_type": historical["event_type"],
+            "failure_code": historical["failure_code"], "message": historical["message"],
+            "audit": audit, "notification": updated_notification,
+        }
     booking: dict[str, Any] | None = None
     previous: dict[str, Any] | None = None
+    schedule: dict[str, str] | None = None
     payment_status, duplicate_status, conflict_status = "NOT_CHECKED", "NOT_CHECKED", "NOT_CHECKED"
     try:
         if manual_reviewer:
@@ -447,7 +661,7 @@ def _execute_auto_booking(
             conflict_status = "PASSED"
             booking = candidate_store.assign_interview_slot(
                 candidate_id=str(candidate["id"]), date=schedule["date"], time=schedule["time"],
-                time_end=schedule["time_end"], interview_round=str((result.get("interview") or {}).get("round") or ""),
+                time_end=schedule["time_end"], interview_round=interview_round,
                 notes=(
                     f"Manually approved from reviewed interview email by {manual_reviewer}."
                     if manual_reviewer else
@@ -470,7 +684,7 @@ def _execute_auto_booking(
             previous = dict(target)
             booking = candidate_store.update_interview_slot(
                 candidate_id=str(target["id"]), date=schedule["date"], time=schedule["time"],
-                time_end=schedule["time_end"], interview_round=str((result.get("interview") or {}).get("round") or ""),
+                time_end=schedule["time_end"], interview_round=interview_round,
                 notes=(
                     f"Reschedule manually approved from reviewed email by {manual_reviewer}."
                     if manual_reviewer else
@@ -499,6 +713,7 @@ def _execute_auto_booking(
         updated_notification = mail_store.attach_booking_to_notification(
             notification.get("id"), audit_id=audit["id"], booking_id=str(booking.get("id") or ""),
             booking_status=booking_status, result=result, priority="high",
+            schedule=schedule,
             display_status=(
                 "Interview Manually Approved & Booked"
                 if booking_status == "Approved & Booked" else
@@ -522,21 +737,28 @@ def _execute_auto_booking(
         payment_status = exc.payment_status if exc.payment_status != "NOT_CHECKED" else payment_status
         duplicate_status = exc.duplicate_status if exc.duplicate_status != "NOT_CHECKED" else duplicate_status
         conflict_status = exc.conflict_status if exc.conflict_status != "NOT_CHECKED" else conflict_status
+        duplicate_ignored = exc.code == "DUPLICATE_BOOKING"
+        booking_status = "Duplicate Ignored" if duplicate_ignored else "Blocked"
+        validation_status = "SKIPPED" if duplicate_ignored else "BLOCKED"
+        display_status = "Already Booked — Duplicate Ignored" if duplicate_ignored else "Automatic Booking Blocked"
+        priority = "low" if duplicate_ignored else "review_required"
+        event_type = "duplicate_booking_ignored" if duplicate_ignored else "slot_booking_blocked"
         audit = mail_store.record_booking_audit(
             analysis_id=analysis["id"], candidate_id=str(mailbox.get("candidate_id") or ""),
             gmail_message_id=message["provider_message_id"], gmail_thread_id=message.get("provider_thread_id"),
             classification=classification, booking_id=None, auto_booked=False,
-            validation_status="BLOCKED", payment_status=payment_status, duplicate_status=duplicate_status,
-            conflict_status=conflict_status, booking_status="Blocked", failure_code=exc.code,
+            validation_status=validation_status, payment_status=payment_status, duplicate_status=duplicate_status,
+            conflict_status=conflict_status, booking_status=booking_status, failure_code=exc.code,
             failure_message=exc.message, correlation_id=correlation_id,
         )
         updated_notification = mail_store.attach_booking_to_notification(
             notification.get("id"), audit_id=audit["id"], booking_id=None,
-            booking_status="Blocked", result=result, priority="review_required",
-            display_status="Automatic Booking Blocked", detail=exc.message,
+            booking_status=booking_status, result=result, priority=priority,
+            schedule=schedule,
+            display_status=display_status, detail=exc.message,
         ) if notification.get("id") else {}
         logger.info("Interview booking blocked correlation_id=%s code=%s", correlation_id, exc.code)
-        return {"status": "Blocked", "event_type": "slot_booking_blocked", "failure_code": exc.code, "message": exc.message, "audit": audit, "notification": updated_notification}
+        return {"status": booking_status, "event_type": event_type, "failure_code": exc.code, "message": exc.message, "audit": audit, "notification": updated_notification}
     except Exception as exc:
         code = type(exc).__name__
         audit = mail_store.record_booking_audit(

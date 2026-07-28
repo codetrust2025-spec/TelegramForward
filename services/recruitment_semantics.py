@@ -195,7 +195,7 @@ def _is_assertive_interview_invitation(subject: str, body: str) -> bool:
         return False
     has_date = any(re.search(pattern, direct, re.I) for pattern in (
         r"\b(?:today|tomorrow)\b",
-        r"\b[0-3]?\d(?:st|nd|rd|th)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*\d{4})?\b",
+        r"\b[0-3]?\d(?:st|nd|rd|th)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s*,?\s*\d{2,4})?\b",
         r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+[0-3]?\d(?:st|nd|rd|th)?(?:\s*,?\s*\d{4})?\b",
         r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b",
         r"\b[0-3]?\d[-/][01]?\d(?:[-/]\d{2,4})?\b",
@@ -209,6 +209,7 @@ def _is_assertive_interview_invitation(subject: str, body: str) -> bool:
         return False
     invitation = bool(re.search(
         rf"(?:\bplease\s+join\b.{{0,100}}\b(?:{interview})\b|"
+        rf"\b(?:delighted|pleased)\s+to\s+invite\s+you\b|"
         rf"\b(?:you are|you're|you have been)\s+invited\b.{{0,120}}\b(?:{interview})\b|"
         rf"\bjoin\b.{{0,60}}\b(?:{interview})\b|"
         rf"\b(?:{interview})\b.{{0,80}}\b(?:will be held|is set|is arranged|is booked)\b)",
@@ -228,7 +229,7 @@ def _is_assertive_interview_invitation(subject: str, body: str) -> bool:
     return invitation or calendar_round_invitation or (subject_is_interview and meeting_details)
 
 
-def extract_interview_schedule(subject: str, body: str, *, sent_at: Any = None) -> dict[str, str | None]:
+def extract_interview_schedule(subject: str, body: str, *, sent_at: Any = None) -> dict[str, Any]:
     """Conservatively extract schedule fields for outage-time visibility.
 
     These fields never authorize automatic booking; that still requires a
@@ -240,12 +241,13 @@ def extract_interview_schedule(subject: str, body: str, *, sent_at: Any = None) 
     match = re.search(
         r"\b([0-3]?\d)(?:st|nd|rd|th)?\s+"
         r"(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
-        r"\s*,?\s*(\d{4})\b",
+        r"\s*,?\s*['’]?\s*(\d{2,4})\b",
         direct,
         re.I,
     )
     if match:
-        value = f"{match.group(1)} {match.group(2)} {match.group(3)}"
+        year = int(match.group(3)) + (2000 if len(match.group(3)) == 2 else 0)
+        value = f"{match.group(1)} {match.group(2)} {year}"
         for fmt in ("%d %B %Y", "%d %b %Y"):
             try:
                 day = datetime.strptime(value, fmt).date();break
@@ -271,15 +273,50 @@ def extract_interview_schedule(subject: str, body: str, *, sent_at: Any = None) 
             try:day = date(int(match.group(1)),int(match.group(2)),int(match.group(3)))
             except ValueError:pass
     if day is None:
+        # Recruitment mails received by this India-based service commonly use
+        # day-first numeric dates. Four-digit years keep this conservative and
+        # avoid silently interpreting ambiguous short dates.
+        match = re.search(r"\b([0-3]?\d)[-/]([01]?\d)[-/](\d{4})\b", direct)
+        if match:
+            try:day = date(int(match.group(3)),int(match.group(2)),int(match.group(1)))
+            except ValueError:pass
+    if day is None:
         relative = re.search(r"\b(today|tomorrow)\b", direct, re.I)
         if relative:
             day = _event_date(sent_at) + timedelta(days=1 if relative.group(1).casefold()=="tomorrow" else 0)
 
+    def normalized_12h(hour: str, minute: str, meridiem: str) -> str:
+        suffix = "AM" if meridiem.casefold().startswith("a") else "PM"
+        return f"{int(hour):02d}:{minute} {suffix}"
+
     time_value: str | None = None
-    match = re.search(r"\b(0?[1-9]|1[0-2])[:.]([0-5]\d)\s*(a\.?m\.?|p\.?m\.?)\b", direct, re.I)
-    if match:
-        meridiem = "AM" if match.group(3).casefold().startswith("a") else "PM"
-        time_value = f"{int(match.group(1)):02d}:{match.group(2)} {meridiem}"
+    end_time_value: str | None = None
+    duration_minutes: int | None = None
+    range_match = re.search(
+        r"\b(0?[1-9]|1[0-2])[:.]([0-5]\d)\s*(a\.?m\.?|p\.?m\.?)"
+        r"\s*(?:-|–|—|to)\s*"
+        r"(0?[1-9]|1[0-2])[:.]([0-5]\d)\s*(a\.?m\.?|p\.?m\.?)\b",
+        direct,
+        re.I,
+    )
+    if range_match:
+        time_value = normalized_12h(
+            range_match.group(1), range_match.group(2), range_match.group(3),
+        )
+        end_time_value = normalized_12h(
+            range_match.group(4), range_match.group(5), range_match.group(6),
+        )
+        start_clock = datetime.strptime(time_value, "%I:%M %p")
+        end_clock = datetime.strptime(end_time_value, "%I:%M %p")
+        delta = int((end_clock - start_clock).total_seconds() // 60)
+        if 5 <= delta <= 12 * 60:
+            duration_minutes = delta
+        else:
+            end_time_value = None
+    if time_value is None:
+        match = re.search(r"\b(0?[1-9]|1[0-2])[:.]([0-5]\d)\s*(a\.?m\.?|p\.?m\.?)\b", direct, re.I)
+        if match:
+            time_value = normalized_12h(match.group(1), match.group(2), match.group(3))
     if time_value is None:
         match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", direct)
         if match:
@@ -298,6 +335,8 @@ def extract_interview_schedule(subject: str, body: str, *, sent_at: Any = None) 
     return {
         "date": day.isoformat() if day else None,
         "time": time_value,
+        "end_time": end_time_value,
+        "duration_minutes": duration_minutes,
         "timezone": timezone_name,
         "mode": mode,
         "round": None,
@@ -342,7 +381,12 @@ def classify_context(
     job_ad = _is_job_ad(subject, body, sender_email)
     non_outcome_notice = _is_non_outcome_recruitment_notice(subject, body)
     transactional = _is_transactional_alert(subject, body)
-    payslip = document_type == "PAYSLIP" or any(re.search(pattern, all_text, re.I) for pattern in _PAYSLIP_PATTERNS)
+    # A checklist that asks for prior payslips is not itself a payslip. Only
+    # an extracted/declared attachment may establish historical document type.
+    attachment_text = " ".join(str(item.get("text") or "") for item in attachment_rows)
+    payslip = document_type == "PAYSLIP" or bool(attachment_rows) and any(
+        re.search(pattern, attachment_text, re.I) for pattern in _PAYSLIP_PATTERNS
+    )
     historical = payslip or document_type in {"EXPERIENCE_LETTER", "RELIEVING_LETTER", "EMPLOYMENT_VERIFICATION"}
 
     lowered = direct.casefold()
@@ -380,6 +424,12 @@ def classify_context(
         r"\b(?:confirmed|scheduled)\b.{0,120}\b(?:interview|technical round|managerial round|hr round)\b)",
         lowered,
     )) or _is_assertive_interview_invitation(subject, body)
+
+    # Explicit invitation + schedule semantics take precedence over document
+    # checklist fields embedded in the same recruiter message.
+    if interview_confirmed or interview_rescheduled or interview_cancelled:
+        questionnaire = False
+        question = False
 
     if questionnaire:
         intent, summary = "RECRUITER_QUESTIONNAIRE", "Recruiter is requesting candidate information. No employment outcome is confirmed."

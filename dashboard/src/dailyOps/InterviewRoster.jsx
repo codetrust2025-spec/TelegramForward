@@ -7,6 +7,16 @@ import { formatClockTime } from '../utils/istTime.js'
 
 const ATTENDEES = ['Nikhila', 'Bhavana', 'Tool']
 
+const TECHNOLOGIES = [
+  '.NET', 'Angular', 'Automation Testing', 'AWS Admin', 'AWS Cloud', 'AWS DevOps',
+  'Azure Admin', 'Azure DevOps', 'Business Analyst', 'Cloud', 'Cloud DevOps',
+  'Data Analyst', 'Data Engineer', 'Databricks', 'DevOps', 'ETL', 'Full Stack',
+  'Java Backend', 'ML Engineer', 'MERN stack', 'Node JS', 'Oracle Fusion (Func)',
+  'Oracle Fusion (Tech Con)', 'Power BI', 'Python', 'React JS', 'Salesforce',
+  'SAP BASIS', 'SAP HANA', 'SAP MM', 'SAP Sales', 'ServiceNow', 'Snowflake',
+  'SQL', 'Testing',
+].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+
 const STATUS_OPTIONS = [
   { value: '', label: 'Pending', tone: 'pending' },
   { value: 'attended', label: 'Attended', tone: 'done' },
@@ -148,6 +158,7 @@ function SlotEditModal({ row, mode, targetStatus, targetLabel, busy, onClose, on
   const [timeEnd, setTimeEnd] = useState(row.time_end || '')
   const [notes, setNotes] = useState(row.notes || '')
   const [round, setRound] = useState(row.interview_round || '')
+  const [technology, setTechnology] = useState((row.technology || '').trim())
   const [error, setError] = useState('')
   const attendeeOnly = mode === 'attendee'
   const attendeeWithStatus = mode === 'attendee-with-status'
@@ -161,7 +172,8 @@ function SlotEditModal({ row, mode, targetStatus, targetLabel, busy, onClose, on
       } else if (attendeeWithStatus) {
         await onSave({ attendee, status: targetStatus, remark: remark.trim() })
       } else {
-        await onSave({ date, time, time_end: timeEnd, notes, interview_round: round })
+        if (!technology) { setError('Please select the interview technology.'); return }
+        await onSave({ date, time, time_end: timeEnd, notes, interview_round: round, technology })
       }
       onClose()
     } catch (err) {
@@ -173,7 +185,7 @@ function SlotEditModal({ row, mode, targetStatus, targetLabel, busy, onClose, on
       <form className="cand-modal ops-slot-modal" onSubmit={submit}>
         <header className="cand-modal-header"><div><h3 className="cand-modal-title">{attendeeWithStatus ? `Mark as "${targetLabel}"?` : attendeeOnly ? 'Edit attendee' : 'Edit interview slot'}</h3><p className="cand-modal-sub">{attendeeWithStatus ? `Select attendee and update attendance for ${row.name}` : row.name}</p></div><button type="button" className="cand-modal-close" onClick={onClose} aria-label="Close">×</button></header>
         <div className="cand-modal-body">
-          {(attendeeOnly || attendeeWithStatus) ? <><label className="cand-field cand-field--span2"><span className="cand-field-label">Attendee{attendeeWithStatus ? ' (who attended the interview?)' : ''}</span><select className="cand-input" value={attendee} onChange={event => setAttendee(event.target.value)} required autoFocus>{ATTENDEES.map(name => <option key={name} value={name}>{name}</option>)}</select></label>{attendeeWithStatus && <label className="cand-field cand-field--span2"><span className="cand-field-label">Note / remark *</span><input className="cand-input" value={remark} onChange={event => setRemark(event.target.value)} placeholder="e.g. Interview went well, next round scheduled" required /></label>}</> : <><label className="cand-field"><span className="cand-field-label">Date</span><input className="cand-input" type="date" value={date} onChange={event => setDate(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Start time</span><input className="cand-input" type="time" value={time} onChange={event => setTime(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">End time</span><input className="cand-input" type="time" value={timeEnd} onChange={event => setTimeEnd(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Interview round</span><select className="cand-input" value={round} onChange={event => setRound(event.target.value)}><option value="">Select round</option><option value="L1">L1</option><option value="L2">L2</option><option value="HR">HR</option><option value="Final">Final</option><option value="Screening">Screening</option></select></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Notes</span><input className="cand-input" value={notes} onChange={event => setNotes(event.target.value)} /></label></>}
+          {(attendeeOnly || attendeeWithStatus) ? <><label className="cand-field cand-field--span2"><span className="cand-field-label">Attendee{attendeeWithStatus ? ' (who attended the interview?)' : ''}</span><select className="cand-input" value={attendee} onChange={event => setAttendee(event.target.value)} required autoFocus>{ATTENDEES.map(name => <option key={name} value={name}>{name}</option>)}</select></label>{attendeeWithStatus && <label className="cand-field cand-field--span2"><span className="cand-field-label">Note / remark *</span><input className="cand-input" value={remark} onChange={event => setRemark(event.target.value)} placeholder="e.g. Interview went well, next round scheduled" required /></label>}</> : <><label className="cand-field"><span className="cand-field-label">Date</span><input className="cand-input" type="date" value={date} onChange={event => setDate(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Start time</span><input className="cand-input" type="time" value={time} onChange={event => setTime(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">End time</span><input className="cand-input" type="time" value={timeEnd} onChange={event => setTimeEnd(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Interview round</span><select className="cand-input" value={round} onChange={event => setRound(event.target.value)}><option value="">Select round</option><option value="L1">L1</option><option value="L2">L2</option><option value="HR">HR</option><option value="Final">Final</option><option value="Screening">Screening</option></select></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Technology *</span><select className="cand-input" value={technology} onChange={event => setTechnology(event.target.value)} required><option value="">Select technology</option>{technology && !TECHNOLOGIES.includes(technology) && <option value={technology}>{technology}</option>}{TECHNOLOGIES.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Notes</span><input className="cand-input" value={notes} onChange={event => setNotes(event.target.value)} /></label></>}
           {error && <p className="admin-error cand-field--span2">{error}</p>}
         </div>
         <footer className="cand-modal-footer"><button type="button" className="cand-btn cand-btn--ghost" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className={`cand-btn cand-btn--primary${attendeeWithStatus && (targetStatus === 'not_attended' || targetStatus === 'cancelled') ? ' cand-btn--danger' : ''}`} disabled={busy}>{busy ? 'Saving…' : attendeeWithStatus ? targetLabel : 'Save changes'}</button></footer>
@@ -418,7 +430,7 @@ export function InterviewRoster({
     ? `${reference} — your interview roster`
     : effectiveAttendee
       ? `Attendee: ${effectiveAttendee}`
-      : 'All handlers'
+      : 'All Referrers'
 
   return (
     <section className={isDashboard ? 'ops-dash-roster' : 'admin-card admin-card--full ops-interview-roster'}>
@@ -525,7 +537,7 @@ export function InterviewRoster({
                         </span>
                       </td>
                       <td data-label="Technology">{row.technology || '—'}</td>
-                      <td data-label="Round">{row.interview_round || '—'}</td>
+                      <td data-label="Round">{row.interview_round || 'Not specified in email'}</td>
                       {!handlerView && !effectiveAttendee && (
                         <td data-label="Attendee">{row.interview_attendee_resolved || row.interview_attendee || 'Bhavana'}</td>
                       )}

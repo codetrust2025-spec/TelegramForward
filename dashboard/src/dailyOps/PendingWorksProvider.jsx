@@ -10,7 +10,7 @@ function currentMonthKey() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-function usePendingWorksQuery({ month = 'all', enabled = true, deferMs = 5000 } = {}) {
+function usePendingWorksQuery({ month = 'all', enabled = true } = {}) {
   const [works, setWorks] = useState([])
   const [count, setCount] = useState(0)
   const [candidateCount, setCandidateCount] = useState(0)
@@ -31,7 +31,11 @@ function usePendingWorksQuery({ month = 'all', enabled = true, deferMs = 5000 } 
     try {
       const params = new URLSearchParams()
       if (month && month !== 'all') params.set('month', month)
-      const res = await fetch(`${API}/candidates/pending-works?${params}`, { credentials: 'include' })
+      params.set('_ts', String(Date.now()))
+      const res = await fetch(`${API}/candidates/pending-works?${params}`, {
+        credentials: 'include',
+        cache: 'no-store',
+      })
       if (!(res.headers.get('content-type') || '').includes('application/json')) {
         throw new Error(`Server returned ${res.status}`)
       }
@@ -50,10 +54,10 @@ function usePendingWorksQuery({ month = 'all', enabled = true, deferMs = 5000 } 
   }, [enabled, month])
 
   useEffect(() => {
-    if (!enabled) return undefined
-    const t = setTimeout(() => reload(), deferMs)
-    return () => clearTimeout(t)
-  }, [enabled, reload, deferMs])
+    // Clear stale chips when disabled and refresh immediately when returning
+    // from candidate editing to the dashboard.
+    reload()
+  }, [reload])
 
   useEffect(() => {
     if (!enabled) return undefined
@@ -119,7 +123,6 @@ export function PendingWorksProvider({ children, mainView = 'dashboard' }) {
   const pendingWorks = usePendingWorksQuery({
     enabled: authReady && !deferCandidates,
     month: 'all',
-    deferMs: deferCandidates ? 60000 : 8000,
   })
   const pendingInterviews = usePendingInterviewsQuery({
     enabled: authReady,

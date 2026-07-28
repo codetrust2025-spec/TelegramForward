@@ -54,6 +54,70 @@ def test_non_ist_schedule_is_converted_to_booking_calendar():
     assert schedule == {"date": "2026-07-21", "time": "00:30", "time_end": "01:00", "source_timezone": "America/New_York"}
 
 
+def test_singapore_calendar_schedule_is_normalized_to_ist():
+    value = result(date="2026-07-23", time="08:00 PM", timezone="Asia/Singapore")
+    schedule = booking.normalized_schedule(
+        value,
+        now=datetime(2026, 7, 15, tzinfo=ZoneInfo("Asia/Kolkata")),
+    )
+    assert schedule == {
+        "date": "2026-07-23",
+        "time": "17:30",
+        "time_end": "18:00",
+        "source_timezone": "Asia/Singapore",
+    }
+
+
+def test_trusted_calendar_duration_is_preserved_instead_of_defaulting_to_30_minutes():
+    value = result(
+        date="2026-07-29", time="09:45 AM", timezone="Asia/Kolkata",
+        duration_minutes=45,
+    )
+    schedule = booking.normalized_schedule(
+        value,
+        now=datetime(2026, 7, 28, tzinfo=ZoneInfo("Asia/Kolkata")),
+    )
+    assert schedule == {
+        "date": "2026-07-29",
+        "time": "09:45",
+        "time_end": "10:30",
+        "source_timezone": "Asia/Kolkata",
+    }
+
+
+def test_explicit_interview_end_time_has_priority_over_default_duration():
+    value = result(
+        date="2026-07-29", time="09:45 AM", end_time="10:30 AM",
+        timezone="Asia/Kolkata",
+    )
+    schedule = booking.normalized_schedule(
+        value,
+        now=datetime(2026, 7, 28, tzinfo=ZoneInfo("Asia/Kolkata")),
+    )
+    assert schedule["time"] == "09:45"
+    assert schedule["time_end"] == "10:30"
+
+
+@pytest.mark.parametrize(("field", "value", "code"), [
+    ("duration_minutes", "not-a-number", "INVALID_DURATION"),
+    ("duration_minutes", 0, "INVALID_DURATION"),
+    ("end_time", "09:30 AM", "INVALID_END_TIME"),
+])
+def test_invalid_interview_end_values_are_rejected(field, value, code):
+    details = {
+        "date": "2026-07-29",
+        "time": "09:45 AM",
+        "timezone": "Asia/Kolkata",
+        field: value,
+    }
+    with pytest.raises(booking.BookingValidationError) as exc:
+        booking.normalized_schedule(
+            result(**details),
+            now=datetime(2026, 7, 28, tzinfo=ZoneInfo("Asia/Kolkata")),
+        )
+    assert exc.value.code == code
+
+
 def test_past_schedule_is_blocked():
     value = result(date="2026-07-14")
     with pytest.raises(booking.BookingValidationError, match="future"):
@@ -82,6 +146,36 @@ def test_only_validated_ollama_can_mutate_slots(monkeypatch, source, validation)
     value = result(); value["classification_source"] = source; value["ai_validation_status"] = validation
     with pytest.raises(booking.BookingValidationError, match="validated Ollama"):
         booking.validate_ai_for_booking(value, "interview_confirmed")
+
+
+def test_trusted_authenticated_calendar_can_mutate_slots(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    value = result()
+    value.update({
+        "classification_source": "ICALENDAR_VERIFIED", "ai_validation_status": "NOT_REQUIRED",
+        "calendar_validation_status": "TRUSTED", "validation_status": "VALIDATED",
+    })
+    booking.validate_ai_for_booking(value, "interview_confirmed")
+
+
+def test_untrusted_calendar_cannot_mutate_slots(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    value = result()
+    value.update({
+        "classification_source": "ICALENDAR_VERIFIED", "ai_validation_status": "NOT_REQUIRED",
+        "calendar_validation_status": "UNTRUSTED", "validation_status": "VALIDATED",
+    })
+    with pytest.raises(booking.BookingValidationError):
+        booking.validate_ai_for_booking(value, "interview_confirmed")
+
+
+def test_trusted_structured_email_can_mutate_slots(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    value=result()
+    value.update({"classification_source":"STRUCTURED_EMAIL_VERIFIED",
+                  "structured_validation_status":"TRUSTED","validation_status":"VALIDATED",
+                  "ai_validation_status":"NOT_REQUIRED"})
+    booking.validate_ai_for_booking(value,"interview_confirmed")
 
 
 def install_store_fakes(monkeypatch, *, rows=None, payment_reason=None, conflicts=None):
@@ -127,7 +221,21 @@ def test_valid_confirmed_interview_books_without_approval(monkeypatch):
     assert outcome["status"] == "Auto Booked"
     assert outcome["booking"]["time"] == "15:00"
     assert outcome["booking"]["interview_booking_source"] == "ai_auto_booked"
+    assert outcome["notification"]["schedule"]["time"] == "15:00"
+    assert outcome["notification"]["schedule"]["source_timezone"] == "Asia/Kolkata"
     assert audits[-1]["auto_booked"] is True
+
+
+def test_invalid_round_text_is_not_saved_as_a_round(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch)
+    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", lambda **kwargs: {"id": "slot1", **kwargs})
+    value = result(round="Interview Invite: Candidate | Candidate ID: 123")
+
+    outcome = execute(value)
+
+    assert outcome["booking"]["interview_round"] == ""
+    assert value["interview"]["round"] is None
 
 
 def test_auto_booking_attaches_generated_email_evidence_to_exact_slot(monkeypatch):
@@ -227,6 +335,76 @@ def test_duplicate_booking_is_blocked(monkeypatch):
     install_store_fakes(monkeypatch, rows=[row])
     outcome = execute(result())
     assert outcome["failure_code"] == "DUPLICATE_BOOKING"
+    assert outcome["status"] == "Duplicate Ignored"
+    assert outcome["event_type"] == "duplicate_booking_ignored"
+
+
+def test_past_historical_interview_is_skipped_before_ai_gate(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    _candidate, audits = install_store_fakes(monkeypatch)
+    value = result(date="2000-07-07")
+    value.update({
+        "_historical_reprocess": True,
+        "classification_source": "FALLBACK",
+        "ai_validation_status": "UNAVAILABLE",
+        "requires_manual_review": True,
+    })
+    outcome = execute(value)
+    assert outcome["status"] == "Historical Skipped"
+    assert outcome["event_type"] == "historical_interview_skipped"
+    assert outcome["failure_code"] == "PAST_INTERVIEW"
+    assert audits[-1]["validation_status"] == "SKIPPED"
+    assert audits[-1]["payment_status"] == "NOT_CHECKED"
+
+
+def test_past_historical_interview_does_not_need_user_notification():
+    value = result(date="2000-07-07")
+    value["_historical_reprocess"] = True
+
+    assert booking.should_suppress_historical_notification(
+        value, "interview_confirmed",
+    ) is True
+
+
+def test_future_historical_interview_remains_actionable():
+    value = result(date="2099-07-07")
+    value["_historical_reprocess"] = True
+
+    assert booking.should_suppress_historical_notification(
+        value, "interview_confirmed",
+    ) is False
+
+
+def test_incomplete_historical_interview_is_review_only(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    _candidate, audits = install_store_fakes(monkeypatch)
+    value = result(date="", timezone="")
+    value.update({
+        "_historical_reprocess": True,
+        "classification_source": "FALLBACK",
+        "ai_validation_status": "UNAVAILABLE",
+        "requires_manual_review": True,
+    })
+    outcome = execute(value)
+    assert outcome["status"] == "Review Required"
+    assert outcome["event_type"] == "historical_interview_review_required"
+    assert outcome["failure_code"] == "HISTORICAL_SCHEDULE_INCOMPLETE"
+    assert audits[-1]["validation_status"] == "REVIEW_REQUIRED"
+
+
+def test_future_historical_interview_still_uses_live_safety_gates(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch)
+    value = result(date="2099-07-07")
+    value.update({
+        "_historical_reprocess": True,
+        "classification_source": "FALLBACK",
+        "ai_validation_status": "UNAVAILABLE",
+        "requires_manual_review": True,
+    })
+    outcome = execute(value)
+    assert outcome["status"] == "Blocked"
+    assert outcome["failure_code"] == "AI_NOT_VALIDATED"
 
 
 def test_slot_overlap_is_blocked(monkeypatch):
@@ -287,6 +465,60 @@ def test_cancellation_with_multiple_unidentified_slots_is_blocked(monkeypatch):
     value["job"]["title"] = None
     outcome = execute(value)
     assert outcome["failure_code"] == "BOOKING_AMBIGUOUS"
+
+
+def test_cancellation_resolves_new_gmail_thread_by_stable_requisition_id(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    wrong = {
+        "id": "slot-l2", "name": "Rahul", "slot_confirmed": True,
+        "date": "2099-07-28", "time": "14:00", "interview_round": "L2",
+        "interview_role": "Another interview",
+    }
+    target = {
+        "id": "slot-l1", "name": "Rahul", "slot_confirmed": True,
+        "date": "2099-07-31", "time": "14:00", "interview_round": "L1",
+        "interview_role": "L1-CGEMJP00347400-React UI Developer-Rahul",
+        "interview_source_thread_id": "old-gmail-thread",
+    }
+    _candidate, audits = install_store_fakes(monkeypatch, rows=[wrong, target])
+    monkeypatch.setattr(
+        booking.candidate_store,
+        "cancel_interview_slot",
+        lambda **kwargs: {"id": kwargs["candidate_id"], "slot_confirmed": False},
+    )
+    value = result(
+        "interview_cancelled", date=None, time=None, timezone=None, round="L1",
+    )
+    value.update({
+        "classification_source": "STRUCTURED_EMAIL_VERIFIED",
+        "structured_validation_status": "TRUSTED",
+        "validation_status": "VALIDATED",
+        "ai_validation_status": "NOT_REQUIRED",
+    })
+    value["job"]["title"] = "L1-CGEMJP00347400-React UI Developer-Rahul"
+
+    outcome = booking.execute_auto_booking(
+        mailbox={
+            "id": "mb1", "candidate_id": "c1",
+            "email_address": "candidate@test.invalid",
+        },
+        message={
+            "provider_message_id": "cancel-message",
+            "provider_thread_id": "new-gmail-thread",
+            "subject": "Canceled: L1-CGEMJP00347400-React UI Developer-Rahul",
+            "body": "The interview was cancelled.",
+        },
+        event={
+            "mailbox_message_id": "mm1",
+            "notification": {"id": "n1", "email_analysis_id": "ma1"},
+        },
+        result=value,
+        correlation_id="cancel-corr",
+    )
+
+    assert outcome["status"] == "Cancelled"
+    assert outcome["booking"]["id"] == "slot-l1"
+    assert audits[-1]["previous_booking"]["id"] == "slot-l1"
 
 
 def test_duplicate_gmail_message_does_not_mutate_booking_twice(monkeypatch):
