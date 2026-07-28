@@ -15,11 +15,18 @@ MODEL_ROUTES = {
     "recruitment_document_vision": ("OLLAMA_VISION_MODEL", "qwen2.5vl:7b"),
 }
 
+AUXILIARY_MODEL_ROUTES = {
+    "interview_screenshot_vision": ("OLLAMA_VISION_MODEL", "qwen2.5vl:7b"),
+    "payment_screenshot_vision": ("OLLAMA_VISION_MODEL", "qwen2.5vl:7b"),
+    "resume_vision": ("OLLAMA_VISION_MODEL", "qwen2.5vl:7b"),
+    "reasoning_text": ("OLLAMA_REASONING_MODEL", "qwen2.5:7b"),
+}
+
 
 def model_for(route: str) -> str:
     """Return the configured model for a named AI workload."""
     try:
-        variable, default = MODEL_ROUTES[route]
+        variable, default = {**MODEL_ROUTES, **AUXILIARY_MODEL_ROUTES}[route]
     except KeyError as exc:
         raise ValueError(f"Unknown AI model route: {route}") from exc
     legacy = (

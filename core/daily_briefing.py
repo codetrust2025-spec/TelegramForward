@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import os
 import threading
-import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from core.config import DATA_DIR
+from core.ai_gateway import AIGatewayError, chat_structured
+from core.ai_model_routing import model_for
 
 TIMEZONE = os.getenv("DAILY_BRIEFING_TIMEZONE", "Asia/Kolkata")
 GENERATION_TIME = os.getenv("DAILY_BRIEFING_TIME", "08:00")
@@ -100,22 +101,27 @@ def _ai_summary(metrics: dict[str, int], fallback: dict[str, str]) -> tuple[dict
         f"DATA={json.dumps(metrics, separators=(',', ':'))}"
     )
     try:
-        payload = json.dumps({
-            "model": os.getenv("OLLAMA_REASONING_MODEL", "qwen2.5:7b"),
-            "stream": False,
-            "format": "json",
-            "messages": [{"role": "user", "content": prompt}],
-        }).encode()
-        req = urllib.request.Request(
-            f"{os.getenv('OLLAMA_BASE_URL', 'http://127.0.0.1:11434').rstrip('/')}/api/chat",
-            data=payload, headers={"Content-Type": "application/json"}, method="POST",
+        schema = {
+            "type": "object",
+            "properties": {
+                key: {"type": "string", "minLength": 1}
+                for key in ("overview", "attention", "recommended")
+            },
+            "required": ["overview", "attention", "recommended"],
+            "additionalProperties": False,
+        }
+        result = chat_structured(
+            model=model_for("reasoning_text"),
+            messages=[{"role": "user", "content": prompt}],
+            schema=schema,
+            timeout=float(os.getenv("DAILY_BRIEFING_AI_TIMEOUT", "60")),
+            max_retries=0,
+            workload="daily_briefing",
         )
-        with urllib.request.urlopen(req, timeout=float(os.getenv("DAILY_BRIEFING_AI_TIMEOUT", "12"))) as response:
-            body = json.loads(response.read().decode())
-        parsed = json.loads(body.get("message", {}).get("content", "{}"))
+        parsed = json.loads(result.content)
         if all(isinstance(parsed.get(key), str) and parsed[key].strip() for key in ("overview", "attention", "recommended")):
             return {key: parsed[key].strip() for key in ("overview", "attention", "recommended")}, "ollama"
-    except Exception:
+    except (AIGatewayError, json.JSONDecodeError):
         pass
     return fallback, "deterministic"
 

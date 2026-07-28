@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 import re
-import urllib.request
 import threading
 import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
+
+from core.ai_gateway import AIGatewayError, chat_structured
+from core.ai_model_routing import model_for
 
 ALLOWED_INTENTS = {
     "pending_payments", "tomorrow_interviews", "today_interviews", "today_attended_interviews", "candidates_without_resumes",
@@ -43,24 +45,32 @@ def _ollama_plan(question: str, context: list[dict[str, Any]] | None = None) -> 
 Allowed intents: {', '.join(sorted(ALLOWED_INTENTS))}.
 Schema: {{"intent":"...","name":"","technology":"","days":2,"limit":25}}
 Resolve pronouns and follow-ups from this recent context: {json.dumps((context or [])[-4:], ensure_ascii=False)[:1800]}
-Never output SQL, code, or commentary. Question: {question[:500]}"""
+    Never output SQL, code, or commentary. Question: {question[:500]}"""
     try:
-        payload = json.dumps({
-            "model": os.getenv("OLLAMA_REASONING_MODEL", "qwen2.5:7b"),
-            "stream": False, "format": "json",
-            "messages": [{"role": "user", "content": prompt}],
-        }).encode("utf-8")
-        request = urllib.request.Request(
-            f"{os.getenv('OLLAMA_BASE_URL', 'http://127.0.0.1:11434').rstrip('/')}/api/chat",
-            data=payload, headers={"Content-Type": "application/json"}, method="POST",
+        schema = {
+            "type": "object",
+            "properties": {
+                "intent": {"type": "string", "enum": sorted(ALLOWED_INTENTS)},
+                "name": {"type": "string"},
+                "technology": {"type": "string"},
+                "days": {"type": "integer", "minimum": 0, "maximum": 365},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            },
+            "required": ["intent"],
+            "additionalProperties": False,
+        }
+        result = chat_structured(
+            model=model_for("reasoning_text"),
+            messages=[{"role": "user", "content": prompt}],
+            schema=schema,
+            timeout=float(os.getenv("OLLAMA_TEXT_TIMEOUT", "60")),
+            max_retries=0,
+            workload="knowledge_assistant",
         )
-        with urllib.request.urlopen(request, timeout=float(os.getenv("OLLAMA_TEXT_TIMEOUT", "60"))) as response:
-            body = json.loads(response.read().decode("utf-8"))
-        raw = body.get("message", {}).get("content", "")
-        plan = json.loads(raw)
+        plan = json.loads(result.content)
         if plan.get("intent") in ALLOWED_INTENTS:
             return plan
-    except Exception:
+    except (AIGatewayError, json.JSONDecodeError):
         return None
     return None
 

@@ -138,3 +138,72 @@ def test_tag_refresh_does_not_hide_a_newer_inference_failure():
 
     ollama_status.record_request_success(10)
     assert ollama_status.snapshot()["status"] == "healthy"
+
+
+def test_structured_chat_validates_and_normalizes_json(monkeypatch):
+    monkeypatch.setattr(ai_gateway, "health", lambda **kwargs: {
+        "endpoint_reachable": True, "model_available": True,
+        "error_message": None, "error_code": None,
+    })
+    monkeypatch.setattr(
+        ai_gateway,
+        "_request_json",
+        lambda *args, **kwargs: {"message": {"content": '{"ok": true}'}},
+    )
+    result = ai_gateway.chat_structured(
+        messages=[{"role": "user", "content": "test"}],
+        schema={
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        },
+        model="qwen2.5:7b",
+        workload="test",
+    )
+    assert json.loads(result.content) == {"ok": True}
+
+
+def test_chat_sends_explicit_think_setting(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(ai_gateway, "health", lambda **kwargs: {
+        "endpoint_reachable": True, "model_available": True,
+        "error_message": None, "error_code": None,
+    })
+
+    def respond(*args, **kwargs):
+        captured.update(json.loads(kwargs["body"]))
+        return {"message": {"content": '{"ok": true}'}}
+
+    monkeypatch.setattr(ai_gateway, "_request_json", respond)
+    ai_gateway.chat(
+        messages=[{"role": "user", "content": "test"}],
+        model="qwen3-vl:8b",
+        think=False,
+    )
+
+    assert captured["think"] is False
+
+
+def test_structured_chat_rejects_schema_mismatch(monkeypatch):
+    monkeypatch.setattr(ai_gateway, "health", lambda **kwargs: {
+        "endpoint_reachable": True, "model_available": True,
+        "error_message": None, "error_code": None,
+    })
+    monkeypatch.setattr(
+        ai_gateway,
+        "_request_json",
+        lambda *args, **kwargs: {"message": {"content": '{"ok": "yes"}'}},
+    )
+    with pytest.raises(ai_gateway.AIGatewayError) as error:
+        ai_gateway.chat_structured(
+            messages=[{"role": "user", "content": "test"}],
+            schema={
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+            },
+            model="qwen2.5:7b",
+            workload="test",
+        )
+    assert error.value.code == "OLLAMA_SCHEMA_VALIDATION_FAILED"

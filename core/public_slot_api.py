@@ -42,62 +42,105 @@ def install_public_slot_routes(app) -> None:
         name: str = Form(...),
         file: UploadFile = File(...),
         note: str = Form(default=""),
+        service_type: str = Form(default=""),
+        phone: str = Form(default=""),
+        technology: str = Form(default=""),
+        interview_round: str = Form(default=""),
     ):
         try:
             raw = await file.read()
-            # Validate the image looks like a payment screenshot
-            try:
-                from features.payment_proof_validator import validate_payment_proof
-                # Get the due amount for this candidate
+            if service_type.strip() == "round_wise":
+                payment_owner = cs.ensure_round_wise_payment_row(
+                    name,
+                    phone=phone,
+                    technology=technology,
+                    interview_round=interview_round,
+                    # Tabs opened before the frontend deployment do not send
+                    # these three new fields.  Keep them compatible: the final
+                    # booking endpoint still requires and persists all fields.
+                    allow_incomplete=True,
+                )
+                due_amount = max(
+                    0,
+                    cs.effective_expected_payment(payment_owner)
+                    - int(payment_owner.get("payment") or 0),
+                )
+            else:
                 due_amount = cs.merged_balance_due_for_name(name) if name else 0
-                print(f"[PAYMENT-PROOF] Validating: name={name}, due={due_amount}, size={len(raw)}")
-                is_valid, reason = validate_payment_proof(raw, file.content_type or "", expected_amount=due_amount)
-                print(f"[PAYMENT-PROOF] Result: valid={is_valid}, reason={reason}")
-                if not is_valid:
-                    return _json_error(reason or "This doesn't look like a payment screenshot.")
-            except ImportError as exc:
-                print(f"[PAYMENT-PROOF] Import error: {exc}")
-            except Exception as exc:
-                print(f"[PAYMENT-PROOF] Validation exception: {exc}")
-                import traceback; traceback.print_exc()
+                payment_owner = cs._best_row_for_slot_name(name)
+            # Payee validation is security-critical and deliberately fails
+            # closed. Never save or credit the receipt before this succeeds.
+            try:
+                from features.payment_verification_engine import verify_payment_screenshot
+                from features.ollama_payment_extract import generate_payment_narrative
+
+                ai_extraction = await asyncio.to_thread(
+                    verify_payment_screenshot,
+                    raw,
+                    file.content_type or "image/jpeg",
+                    source_module="public_slot_payment_proof",
+                    expected_amount=due_amount,
+                    entity_id=str((payment_owner or {}).get("id") or ""),
+                    entity_name=name.strip(),
+                    candidate_id=str((payment_owner or {}).get("id") or ""),
+                    referrer_hint=str((payment_owner or {}).get("reference") or ""),
+                    purpose="candidate_payment",
+                    payment_scope=(
+                        "ROUND" if service_type.strip() == "round_wise" else "PROFILE"
+                    ),
+                )
+                ai_extraction["company_payment_reasons"] = list(
+                    ai_extraction.get("deterministic_reasons") or []
+                )
+                if not ai_extraction.get("booking_eligible"):
+                    verification_state = str(
+                        ai_extraction.get("verification_state") or ""
+                    )
+                    if verification_state == "INCOMPLETE_PAYMENT_EVIDENCE":
+                        message = (
+                            "More Payment Details Required. Upload the complete "
+                            "transaction-details screenshot showing the receiver "
+                            "identifier and Transaction ID or UTR."
+                        )
+                    else:
+                        message = (
+                            " ".join(ai_extraction["company_payment_reasons"])
+                            or "This receipt is not a verified payment to a registered company or referrer account."
+                        )
+                    return _json_error(
+                        message,
+                        ai_extraction=ai_extraction,
+                    )
+            except Exception as ai_exc:
+                logger.exception("Company payment verification failed")
+                return _json_error(
+                    "Could not verify this payment against the company/referrer registry. "
+                    "Upload a clear receipt showing the receiver UPI ID or payment phone number, amount, UTR, and successful status."
+                )
+
             result = cs.public_add_payment_proof_for_name(
                 name,
                 data=raw,
                 original_name=file.filename or "payment.jpg",
                 mime_type=file.content_type or "image/jpeg",
                 note=note or "",
+                extraction=ai_extraction,
+                service_type=service_type,
             )
-            # AI extraction (non-blocking addition to response)
-            ai_extraction = None
             try:
-                from features.ollama_payment_extract import (
-                    extract_payment_with_ollama,
-                    verify_payment_against_due,
+                ai_extraction["narrative"] = await asyncio.to_thread(
                     generate_payment_narrative,
+                    ai_extraction,
+                    candidate_name=name,
+                    expected_amount=due_amount,
+                    received_amount=0,
                 )
-                ai_result = await asyncio.to_thread(extract_payment_with_ollama, raw, file.content_type or "image/jpeg")
-                if ai_result and ai_result.get("is_payment_screenshot"):
-                    due = cs.merged_balance_due_for_name(name) if name else 0
-                    ai_extraction = verify_payment_against_due(ai_result, due)
-                    # Generate plain-English narrative for the UI
-                    try:
-                        received = cs.merged_received_for_name(name) if name else 0
-                    except Exception:
-                        received = 0
-                    ai_extraction["narrative"] = await asyncio.to_thread(
-                        generate_payment_narrative,
-                        ai_extraction,
-                        candidate_name=name,
-                        expected_amount=due,
-                        received_amount=0,
-                    )
-            except Exception as ai_exc:
-                logger.debug("AI payment extraction skipped: %s", ai_exc)
+            except Exception as narrative_exc:
+                logger.debug("Payment narrative generation skipped: %s", narrative_exc)
         except ValueError as e:
             return _json_error(str(e))
         resp = {"status": "ok", **result}
-        if ai_extraction:
-            resp["ai_extraction"] = ai_extraction
+        resp["ai_extraction"] = ai_extraction
         return resp
 
     @app.post("/public/slots/parse-screenshot")
@@ -171,18 +214,50 @@ def install_public_slot_routes(app) -> None:
         raw = await file.read()
         mime = file.content_type or "image/jpeg"
         try:
-            from features.ollama_payment_extract import (
-                extract_payment_with_ollama,
-                verify_payment_against_due,
+            from features.payment_verification_engine import verify_payment_screenshot
+
+            amount_due = (
+                cs.merged_balance_due_for_name(candidate_name.strip())
+                if candidate_name.strip()
+                else 0
+            )
+            result = await asyncio.to_thread(
+                verify_payment_screenshot,
+                raw,
+                mime,
+                source_module="public_slot_payment_extract",
+                expected_amount=amount_due,
+                entity_id=str(
+                    (
+                        cs._best_row_for_slot_name(candidate_name.strip())
+                        if candidate_name.strip()
+                        else {}
+                    ).get("id")
+                    or ""
+                ),
+                entity_name=candidate_name.strip(),
+                candidate_id=str(
+                    (
+                        cs._best_row_for_slot_name(candidate_name.strip())
+                        if candidate_name.strip()
+                        else {}
+                    ).get("id")
+                    or ""
+                ),
+                referrer_hint=str(
+                    (
+                        cs._best_row_for_slot_name(candidate_name.strip())
+                        if candidate_name.strip()
+                        else {}
+                    ).get("reference")
+                    or ""
+                ),
+                purpose="candidate_payment",
+                payment_scope="PROFILE",
             )
 
-            result = await asyncio.to_thread(extract_payment_with_ollama, raw, mime)
-
-            # Auto-verify against candidate's due amount if name provided
             if candidate_name.strip() and result.get("is_payment_screenshot"):
                 try:
-                    amount_due = cs.merged_balance_due_for_name(candidate_name.strip())
-                    result = verify_payment_against_due(result, amount_due)
                     # Generate narrative
                     from features.ollama_payment_extract import generate_payment_narrative
                     result["narrative"] = await asyncio.to_thread(
@@ -281,11 +356,26 @@ def install_public_slot_routes(app) -> None:
         time_end: str = Form(default=""),
         interview_round: str = Form(default=""),
         technology: str = Form(default=""),
+        phone: str = Form(default=""),
         service_type: str = Form(default="round_wise"),
         notes: str = Form(default=""),
         payment_proof_id: str = Form(default=""),
         file: UploadFile | None = File(default=None),
     ):
+        normalized_service_type = service_type.strip() or "round_wise"
+        normalized_technology = technology.strip()
+        normalized_phone = phone.strip() if normalized_service_type == "round_wise" else ""
+        if normalized_service_type == "round_wise" and not normalized_technology:
+            return _json_error(
+                "Technology is required for round-wise booking. "
+                "Select the technology and try again."
+            )
+        if normalized_service_type == "round_wise" and not cs.candidate_phone_identity(normalized_phone):
+            return _json_error(
+                "A valid phone number is required for round-wise booking. "
+                "Enter the candidate phone number and try again."
+            )
+
         slot_image: bytes | None = None
         slot_image_name = ""
         slot_image_mime = ""
@@ -305,26 +395,12 @@ def install_public_slot_routes(app) -> None:
         day = date.strip()
         slot_time = time.strip()
         slot_end = time_end.strip()
-        if slot_image and (not day or not slot_time):
-            try:
-                from features.slot_screenshot_parse import parse_invite_screenshot
-
-                parsed = await asyncio.to_thread(
-                    parse_invite_screenshot, slot_image, slot_image_mime
-                )
-                day = day or parsed.get("date") or ""
-                slot_time = slot_time or parsed.get("time") or ""
-                slot_end = slot_end or parsed.get("time_end") or ""
-                if not interview_round.strip() and parsed.get("interview_round"):
-                    interview_round = parsed["interview_round"]
-                if not technology.strip() and parsed.get("technology"):
-                    technology = parsed["technology"]
-            except ValueError as e:
-                return _json_error(str(e))
-
         if not day or not slot_time:
-            return _json_error("Upload a clear invite screenshot — date and time are read automatically.")
-
+            return _json_error(
+                "Interview date and start time are required. "
+                "Automatic booking is allowed only after dual-source AI verification; "
+                "otherwise enter them manually."
+            )
         try:
             row, action = cs.import_confirmed_interview_slot(
                 name=name,
@@ -332,8 +408,9 @@ def install_public_slot_routes(app) -> None:
                 time=slot_time,
                 time_end=slot_end,
                 interview_round=interview_round,
-                technology=technology,
-                service_type=service_type.strip() or "round_wise",
+                technology=normalized_technology,
+                phone=normalized_phone,
+                service_type=normalized_service_type,
                 notes=notes,
                 source="submit-slot form",
                 payment_proof_id=payment_proof_id.strip() or None,

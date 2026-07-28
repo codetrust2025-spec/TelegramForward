@@ -14,6 +14,8 @@ import urllib.request
 from datetime import datetime, timedelta
 from typing import Any
 
+from core.ocr_policy import ocr_enabled
+
 logger = logging.getLogger(__name__)
 
 _MONTH_PATTERN = (
@@ -75,7 +77,10 @@ def _parse_labeled_interview_block(blob: str) -> tuple[str, str, str]:
     combined = re.search(
         r"\bdate\s*(?:&|and)\s*time\s*:\s*"
         r"(\d{1,2})[/.-](\d{1,2})[/.-](20\d{2})"
-        r"[^\n]{0,80}?\bat\s*(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)\b",
+        r"(?:\s*\([^)]{0,24}\))?\s*(?:at\s*)?"
+        r"(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)?\s*(?:IST|UTC|GMT)?\b"
+        r"(?:\s*(?:-|to|\u2013|\u2014|~)\s*"
+        r"(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)?\s*(?:IST|UTC|GMT)?)?",
         text,
         re.IGNORECASE,
     )
@@ -84,10 +89,26 @@ def _parse_labeled_interview_block(blob: str) -> tuple[str, str, str]:
         if m > 12 and d <= 12:
             d, m = m, d
         date = f"{y:04d}-{_pad2(m)}-{_pad2(d)}"
-        sh, sm = _to_24h(int(combined.group(4)), int(combined.group(5)), combined.group(6))
-        time_start = _fmt_hhmm(sh, sm)
-        end_total = sh * 60 + sm + 30
-        time_end = _fmt_hhmm(end_total // 60, end_total % 60)
+        start_hour, start_minute = int(combined.group(4)), int(combined.group(5))
+        start_ampm = combined.group(6) or ""
+        if 0 <= start_minute <= 59 and (
+            (start_ampm and 1 <= start_hour <= 12)
+            or (not start_ampm and 0 <= start_hour <= 23)
+        ):
+            sh, sm = _to_24h(start_hour, start_minute, start_ampm)
+            time_start = _fmt_hhmm(sh, sm)
+            if combined.group(7):
+                end_hour, end_minute = int(combined.group(7)), int(combined.group(8))
+                end_ampm = combined.group(9) or start_ampm
+                if 0 <= end_minute <= 59 and (
+                    (end_ampm and 1 <= end_hour <= 12)
+                    or (not end_ampm and 0 <= end_hour <= 23)
+                ):
+                    eh, em = _to_24h(end_hour, end_minute, end_ampm)
+                    time_end = _fmt_hhmm(eh, em)
+            if not time_end:
+                end_total = sh * 60 + sm + 30
+                time_end = _fmt_hhmm(end_total // 60, end_total % 60)
 
     dm = re.search(
         r"\bdate\s*:\s*(\d{1,2})[/.-](\d{1,2})[/.-](20\d{2})\b",
@@ -105,6 +126,7 @@ def _parse_labeled_interview_block(blob: str) -> tuple[str, str, str]:
     # Reliable label — must win over the phone status-bar clock elsewhere.
     tm = None if time_start else re.search(
         r"\btime\s*:\s*"
+        r"(?!\d{1,2}[/.-]\d{1,2}[/.-]20\d{2}\b)"
         r"(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(am|pm)?"
         r"(?:\s*(?:-|to|\u2013|\u2014|until|untill|till)\s*"
         r"(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(am|pm)?)?",
@@ -227,7 +249,7 @@ def _parse_month_day_24h_line(blob: str) -> tuple[str, str, str]:
 
 def _parse_relative_calendar_line(blob: str, ref: datetime | None = None) -> tuple[str, str, str]:
     """Gmail cards commonly say: ``Tomorrow · 12:00 PM – 12:30 PM``."""
-    text = (blob or "").replace("\n", " ")
+    text = (blob or "").replace("\n", " ").replace("~", "-")
     match = re.search(
         r"\b(today|tomorrow)\b[^\d]{0,32}"
         r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(?:-|to|–|—)\s*"
@@ -320,6 +342,9 @@ def _env_api_base() -> str:
 
 def _local_ocr_text(data: bytes) -> str:
     """Tesseract OCR with image preprocessing for better accuracy."""
+    if not ocr_enabled():
+        logger.info("Global OCR is disabled; skipping local slot screenshot OCR")
+        return ""
     try:
         from PIL import Image, ImageEnhance, ImageOps
         import pytesseract
@@ -467,6 +492,21 @@ def _parse_date_token(text: str) -> str:
         d = int(named2.group(2))
         y = int(named2.group(3))
         if mon:
+            return f"{y:04d}-{_pad2(mon)}-{_pad2(d)}"
+    # Google Calendar cards may use a yearless day-month format:
+    # "Mon, 27 Jul • 14:30 - 15:00". Requiring the weekday avoids
+    # accidentally treating an unrelated day-month phrase as the event date.
+    weekday_day_month = re.search(
+        rf"\b{_WEEKDAY_PATTERN},?\s+(\d{{1,2}})(?:st|nd|rd|th)?\s+"
+        rf"({_MONTH_PATTERN})\b",
+        blob,
+        re.IGNORECASE,
+    )
+    if weekday_day_month:
+        d = int(weekday_day_month.group(1))
+        mon = _month_num(weekday_day_month.group(2))
+        if mon:
+            y = _infer_year(mon, d)
             return f"{y:04d}-{_pad2(mon)}-{_pad2(d)}"
     named3 = re.search(
         rf"(?:{_WEEKDAY_PATTERN},?\s+)?({_MONTH_PATTERN})\s+(\d{{1,2}})\b",
@@ -623,7 +663,10 @@ def parse_invite_text(blob: str) -> dict[str, Any]:
     md24_date, md24_start, md24_end = _parse_month_day_24h_line(blob)
     date = labeled_date or g_date or lf_date or md24_date or _parse_date_token(blob) or relative_date
     if labeled_start:
-        start, end = labeled_start, labeled_end
+        start = labeled_start
+        # The body often provides only the start while Gmail's calendar card
+        # contains the exact end. Use it only when both starts agree.
+        end = relative_end if relative_start == labeled_start and relative_end else labeled_end
     elif relative_start:
         start, end = relative_start, relative_end
     elif g_start:

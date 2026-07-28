@@ -18,7 +18,10 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
+from jsonschema import ValidationError, validate as validate_json_schema
+
 from core import ollama_status
+from core import ollama_nodes
 
 logger = logging.getLogger("teleautomation.ai_gateway")
 _slots = threading.BoundedSemaphore(max(1, int(os.getenv("AI_OLLAMA_MAX_CONCURRENCY", "1"))))
@@ -40,7 +43,11 @@ class AIGatewayError(RuntimeError):
 
 
 def _base_url() -> str:
-    return (os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434").rstrip("/")
+    return ollama_nodes.primary_base_url()
+
+
+def _inference_host_id() -> str:
+    return ollama_nodes.inference_host_id()
 
 
 def _env_float(name: str, default: float) -> float:
@@ -74,6 +81,7 @@ def _safe_message(code: str) -> str:
         "REVERSE_SSH_TUNNEL_UNAVAILABLE": "Ollama is running on the laptop, but the VPS reverse SSH tunnel is unavailable.",
         "OLLAMA_CONNECTION_FAILED": "The Ollama endpoint could not be reached.",
         "OLLAMA_REQUEST_TIMEOUT": "The Ollama model response timed out.",
+        "OLLAMA_QUEUE_TIMEOUT": "The bounded Ollama request queue timed out.",
         "OLLAMA_MODEL_NOT_FOUND": "The configured Ollama model is not installed.",
         "OLLAMA_OPTIONAL_MODEL_MISSING": "Ollama is reachable, but one or more fallback models are not installed.",
         "OLLAMA_CONFIGURATION_ERROR": "The Ollama endpoint configuration is invalid.",
@@ -101,8 +109,8 @@ def _http_error_code(status: int, raw: str) -> str:
     return "OLLAMA_INTERNAL_ERROR"
 
 
-def _request_json(path: str, *, method: str = "GET", body: bytes | None = None, connect_timeout: float, response_timeout: float) -> dict[str, Any]:
-    parsed = urllib.parse.urlsplit(_base_url())
+def _request_json(path: str, *, method: str = "GET", body: bytes | None = None, connect_timeout: float, response_timeout: float, base_url: str | None = None) -> dict[str, Any]:
+    parsed = urllib.parse.urlsplit(base_url or _base_url())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         logger.error("Invalid OLLAMA_BASE_URL configuration")
         raise AIGatewayError(
@@ -150,6 +158,150 @@ def configured_models() -> dict[str, str]:
     }
 
 
+def _remaining(deadline: float | None, requested: float) -> float:
+    if deadline is None:
+        return requested
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise AIGatewayError("The AI job deadline was exceeded.", code="OLLAMA_REQUEST_TIMEOUT")
+    return min(requested, remaining)
+
+
+def chat(
+    *,
+    messages: list[dict[str, Any]],
+    model: str | None = None,
+    timeout: float | None = None,
+    temperature: float = 0,
+    images: list[str] | None = None,
+    max_retries: int | None = None,
+    schema: dict[str, Any] | None = None,
+    workload: str = "generic",
+    deadline_monotonic: float | None = None,
+    num_predict: int | None = None,
+    think: bool | str | None = None,
+) -> AIResult:
+    """Call Ollama through the single bounded production gateway."""
+    chosen = (model or configured_models()["text"]).strip()
+    if not chosen:
+        raise AIGatewayError("No AI model is configured", code="OLLAMA_MODEL_NOT_FOUND")
+    selected_node = ollama_nodes.primary_node_id()
+    selected_base_url = ollama_nodes.base_url_for(selected_node)
+    status = health(
+        model=chosen,
+        timeout=_remaining(
+            deadline_monotonic,
+            _env_float("OLLAMA_HEALTH_TIMEOUT_SECONDS", 10),
+        ),
+        node_id=selected_node,
+    )
+    if not status["endpoint_reachable"]:
+        raise AIGatewayError(status["error_message"], code=status["error_code"])
+    if not status["model_available"]:
+        raise AIGatewayError(status["error_message"], code="OLLAMA_MODEL_NOT_FOUND")
+    wait = _env_float("AI_RECRUITMENT_QUEUE_WAIT_SECONDS", 30)
+    if not _slots.acquire(timeout=_remaining(deadline_monotonic, wait)):
+        raise AIGatewayError("The Ollama request queue timed out.", code="OLLAMA_QUEUE_TIMEOUT")
+    started = time.monotonic()
+    host_id = ollama_nodes.inference_host_id(selected_node)
+    try:
+        prepared_messages = [dict(message) for message in messages]
+        if images and prepared_messages:
+            prepared_messages[-1]["images"] = images
+        request_payload: dict[str, Any] = {
+            "model": chosen,
+            "messages": prepared_messages,
+            "stream": False,
+            "options": {"temperature": temperature},
+        }
+        if schema is not None:
+            request_payload["format"] = schema
+        if num_predict is not None:
+            request_payload["options"]["num_predict"] = int(num_predict)
+        if think is not None:
+            request_payload["think"] = think
+        keep_alive = (os.getenv("OLLAMA_KEEP_ALIVE") or "5m").strip()
+        if keep_alive:
+            request_payload["keep_alive"] = keep_alive
+        body = json.dumps(request_payload).encode("utf-8")
+        connect_timeout = _env_float(
+            "OLLAMA_CONNECT_TIMEOUT",
+            _env_float("OLLAMA_CONNECT_TIMEOUT_SECONDS", 10),
+        )
+        response_timeout = timeout or _env_float(
+            "OLLAMA_REQUEST_TIMEOUT",
+            _env_float("OLLAMA_RESPONSE_TIMEOUT_SECONDS", _env_float("OLLAMA_TIMEOUT", 300)),
+        )
+        configured_retries = _env_int("OLLAMA_RETRY_COUNT", _env_int("OLLAMA_MAX_RETRIES", 1))
+        retry_limit = max(0, min(3, configured_retries if max_retries is None else int(max_retries)))
+        retry_delays = (2, 5, 10)
+        last_error: AIGatewayError | None = None
+        for attempt in range(retry_limit + 1):
+            logger.info(
+                "Ollama request started workload=%s inference_host=%s model=%s attempt=%s",
+                workload, host_id, chosen, attempt + 1,
+            )
+            try:
+                payload = _request_json(
+                    "/api/chat", method="POST", body=body,
+                    connect_timeout=_remaining(deadline_monotonic, connect_timeout),
+                    response_timeout=_remaining(deadline_monotonic, response_timeout),
+                    base_url=selected_base_url,
+                )
+                content = str((payload.get("message") or {}).get("content") or "").strip()
+                if not content:
+                    raise AIGatewayError(_safe_message("OLLAMA_EMPTY_RESPONSE"), code="OLLAMA_EMPTY_RESPONSE")
+                if schema is not None:
+                    try:
+                        parsed_content = json.loads(content)
+                    except json.JSONDecodeError as exc:
+                        raise AIGatewayError(
+                            _safe_message("OLLAMA_INVALID_JSON"), code="OLLAMA_INVALID_JSON"
+                        ) from exc
+                    try:
+                        validate_json_schema(instance=parsed_content, schema=schema)
+                    except ValidationError as exc:
+                        logger.warning(
+                            "Ollama schema validation failed workload=%s inference_host=%s model=%s path=%s",
+                            workload, host_id, chosen, list(exc.absolute_path),
+                        )
+                        raise AIGatewayError(
+                            _safe_message("OLLAMA_SCHEMA_VALIDATION_FAILED"),
+                            code="OLLAMA_SCHEMA_VALIDATION_FAILED",
+                        ) from exc
+                    content = json.dumps(parsed_content, ensure_ascii=False)
+                duration_ms = int((time.monotonic() - started) * 1000)
+                logger.info(
+                    "Ollama response completed workload=%s inference_host=%s model=%s "
+                    "attempt=%s duration_ms=%s",
+                    workload, host_id, chosen, attempt + 1, duration_ms,
+                )
+                ollama_status.record_request_success(duration_ms)
+                return AIResult(content=content, model=chosen, duration_ms=duration_ms)
+            except AIGatewayError as exc:
+                last_error = exc
+                ollama_status.record_request_failure(exc.code, str(exc))
+                logger.warning(
+                    "Ollama request failed workload=%s inference_host=%s model=%s "
+                    "attempt=%s code=%s elapsed_ms=%s",
+                    workload, host_id, chosen, attempt + 1, exc.code,
+                    int((time.monotonic() - started) * 1000),
+                )
+                if exc.code in {
+                    "OLLAMA_MODEL_NOT_FOUND", "OLLAMA_MODEL_LOAD_FAILED",
+                    "OLLAMA_INVALID_JSON", "OLLAMA_EMPTY_RESPONSE", "OLLAMA_BAD_REQUEST",
+                    "OLLAMA_SCHEMA_VALIDATION_FAILED",
+                }:
+                    break
+                if attempt < retry_limit:
+                    delay = retry_delays[min(attempt, len(retry_delays) - 1)]
+                    _remaining(deadline_monotonic, delay)
+                    time.sleep(delay)
+        raise last_error or AIGatewayError(_safe_message("OLLAMA_INTERNAL_ERROR"), code="OLLAMA_INTERNAL_ERROR")
+    finally:
+        _slots.release()
+
+
 def chat_structured(
     *,
     messages: list[dict[str, Any]],
@@ -159,76 +311,36 @@ def chat_structured(
     temperature: float = 0,
     images: list[str] | None = None,
     max_retries: int | None = None,
+    workload: str = "structured",
+    deadline_monotonic: float | None = None,
+    num_predict: int | None = None,
+    think: bool | str | None = None,
 ) -> AIResult:
-    """Return a schema-constrained Ollama response with bounded concurrency."""
-    chosen = (model or configured_models()["text"]).strip()
-    if not chosen:
-        raise AIGatewayError("No AI model is configured", code="OLLAMA_MODEL_NOT_FOUND")
-    status = health(model=chosen)
-    if not status["endpoint_reachable"]:
-        raise AIGatewayError(status["error_message"], code=status["error_code"])
-    if not status["model_available"]:
-        raise AIGatewayError(status["error_message"], code="OLLAMA_MODEL_NOT_FOUND")
-    wait = _env_float("AI_RECRUITMENT_QUEUE_WAIT_SECONDS", 30)
-    if not _slots.acquire(timeout=wait):
-        raise AIGatewayError("The Ollama request queue timed out.", code="OLLAMA_REQUEST_TIMEOUT")
-    started = time.monotonic()
-    try:
-        prepared_messages = [dict(message) for message in messages]
-        if images and prepared_messages:
-            prepared_messages[-1]["images"] = images
-        body = json.dumps({
-            "model": chosen,
-            "messages": prepared_messages,
-            "stream": False,
-            "format": schema,
-            "options": {"temperature": temperature},
-        }).encode("utf-8")
-        connect_timeout = _env_float("OLLAMA_CONNECT_TIMEOUT_SECONDS", 10)
-        response_timeout = timeout or _env_float("OLLAMA_RESPONSE_TIMEOUT_SECONDS", _env_float("OLLAMA_TIMEOUT", _env_float("AI_RECRUITMENT_TIMEOUT_SECONDS", 180)))
-        configured_retries = _env_int("OLLAMA_RETRY_COUNT", _env_int("OLLAMA_MAX_RETRIES", 1))
-        retry_limit = max(0, min(3, configured_retries if max_retries is None else int(max_retries)))
-        retry_delays = (2, 5, 10)
-        last_error: AIGatewayError | None = None
-        for attempt in range(retry_limit + 1):
-            logger.info("Ollama request started model=%s attempt=%s", chosen, attempt + 1)
-            try:
-                payload = _request_json(
-                    "/api/chat", method="POST", body=body,
-                    connect_timeout=connect_timeout, response_timeout=response_timeout,
-                )
-                logger.info("Ollama connection successful model=%s", chosen)
-                content = str((payload.get("message") or {}).get("content") or "").strip()
-                if not content:
-                    raise AIGatewayError(_safe_message("OLLAMA_EMPTY_RESPONSE"), code="OLLAMA_EMPTY_RESPONSE")
-                duration_ms = int((time.monotonic() - started) * 1000)
-                logger.info("Ollama model response received model=%s duration_ms=%s", chosen, duration_ms)
-                ollama_status.record_request_success(duration_ms)
-                return AIResult(content=content, model=chosen, duration_ms=duration_ms)
-            except AIGatewayError as exc:
-                last_error = exc
-                ollama_status.record_request_failure(exc.code, str(exc))
-                logger.warning("Ollama request failed model=%s attempt=%s code=%s", chosen, attempt + 1, exc.code)
-                if exc.code in {
-                    "OLLAMA_MODEL_NOT_FOUND", "OLLAMA_MODEL_LOAD_FAILED",
-                    "OLLAMA_INVALID_JSON", "OLLAMA_EMPTY_RESPONSE", "OLLAMA_BAD_REQUEST",
-                }:
-                    break
-                if attempt < retry_limit:
-                    time.sleep(retry_delays[min(attempt, len(retry_delays) - 1)])
-        raise last_error or AIGatewayError(_safe_message("OLLAMA_INTERNAL_ERROR"), code="OLLAMA_INTERNAL_ERROR")
-    finally:
-        _slots.release()
+    """Return strictly parsed and JSON-schema-validated model output."""
+    return chat(
+        messages=messages, schema=schema, model=model, timeout=timeout,
+        temperature=temperature, images=images, max_retries=max_retries,
+        workload=workload, deadline_monotonic=deadline_monotonic,
+        num_predict=num_predict, think=think,
+    )
 
 
-def health(*, model: str | None = None, timeout: float | None = None) -> dict[str, Any]:
+def health(*, model: str | None = None, timeout: float | None = None, node_id: str | None = None) -> dict[str, Any]:
     """Check endpoint and configured model without exposing network details."""
     configured = (model or configured_models()["text"]).strip()
+    selected_node = node_id or ollama_nodes.primary_node_id()
+    selected_base_url = ollama_nodes.base_url_for(selected_node)
+    host_id = ollama_nodes.inference_host_id(selected_node)
     started = time.monotonic()
     try:
         payload = _request_json(
-            "/api/tags", connect_timeout=_env_float("OLLAMA_CONNECT_TIMEOUT_SECONDS", 10),
+            "/api/tags",
+            connect_timeout=_env_float(
+                "OLLAMA_CONNECT_TIMEOUT",
+                _env_float("OLLAMA_CONNECT_TIMEOUT_SECONDS", 10),
+            ),
             response_timeout=timeout or _env_float("OLLAMA_HEALTH_TIMEOUT_SECONDS", 10),
+            base_url=selected_base_url,
         )
         models = [str(item.get("name") or item.get("model") or "") for item in payload.get("models", [])]
         elapsed = int((time.monotonic() - started) * 1000)
@@ -255,6 +367,8 @@ def health(*, model: str | None = None, timeout: float | None = None) -> dict[st
         )
         return ollama_status.record_health(
             provider="ollama",
+            inference_host=host_id,
+            remote_enabled=(os.getenv("OLLAMA_REMOTE_ENABLED") or "false").lower() in {"1", "true", "yes"},
             status="healthy" if available and not optional_missing else "degraded",
             diagnostic_status=diagnostic,
             endpoint_reachable=True,
@@ -280,11 +394,14 @@ def health(*, model: str | None = None, timeout: float | None = None) -> dict[st
             "REVERSE_SSH_TUNNEL_UNAVAILABLE": "TUNNEL_UNREACHABLE",
             "OLLAMA_CONNECTION_FAILED": "SERVICE_UNREACHABLE",
             "OLLAMA_REQUEST_TIMEOUT": "TIMEOUT",
+            "OLLAMA_QUEUE_TIMEOUT": "QUEUE_TIMEOUT",
             "OLLAMA_MODEL_NOT_FOUND": "PRIMARY_MODEL_MISSING",
             "OLLAMA_CONFIGURATION_ERROR": "CONFIGURATION_ERROR",
         }.get(exc.code, "INTERNAL_ERROR")
         return ollama_status.record_health(
-            provider="ollama", status="unavailable", endpoint_reachable=False,
+            provider="ollama", inference_host=host_id,
+            remote_enabled=(os.getenv("OLLAMA_REMOTE_ENABLED") or "false").lower() in {"1", "true", "yes"},
+            status="unavailable", endpoint_reachable=False,
             service_reachable=False, serviceReachable=False,
             configured_model=configured, primary_model=configured, primaryModel=configured,
             model_available=False, response_time_ms=int((time.monotonic() - started) * 1000),

@@ -22,17 +22,27 @@ import time
 import logging
 from typing import Any
 
-import httpx
+from core.ai_gateway import AIGatewayError, chat, health
+from core.ai_model_routing import model_for
+from core.ocr_policy import ocr_enabled
 
 logger = logging.getLogger(__name__)
 
 # ── Configuration ───────────────────────────────────────────────────────────
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
+OLLAMA_VISION_MODEL = model_for("interview_screenshot_vision")
 OLLAMA_BACKUP_VISION_MODEL = os.environ.get("OLLAMA_BACKUP_VISION_MODEL", "moondream")
-OLLAMA_REASONING_MODEL = os.environ.get("OLLAMA_REASONING_MODEL", "qwen2.5:7b")
+OLLAMA_REASONING_MODEL = model_for("reasoning_text")
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "900"))
 OLLAMA_TEXT_TIMEOUT = int(os.environ.get("OLLAMA_TEXT_TIMEOUT", "60"))
+
+
+def _ollama_only_test_mode() -> bool:
+    """Return True when screenshot OCR is intentionally disabled for testing."""
+    return (
+        not ocr_enabled()
+        or os.environ.get("INVITE_EXTRACTION_MODE", "").strip().lower()
+        == "ollama_only"
+    )
 
 # ── Prompt ──────────────────────────────────────────────────────────────────
 INVITE_EXTRACTION_PROMPT = """You are an interview invite screenshot extraction assistant.
@@ -44,6 +54,14 @@ IMPORTANT: Today's date is {today}. Use this to resolve relative dates:
 - "Tomorrow" means {tomorrow}
 - "Today" means {today}
 - If only month and day are visible (e.g. "JUL 9"), use the current year {year} unless it would be in the past, then use {year} + 1.
+- An explicit interview date in the invitation body or a labelled field such as
+  "Meeting Date and Time", "Interview Date", or "Date" is authoritative.
+- Gmail/Calendar labels such as "Today" and "Tomorrow" may be stale because the
+  screenshot can be uploaded days later. Ignore those relative labels whenever
+  an explicit interview date is visible anywhere in the invitation.
+- If only a relative date is visible and its screenshot/capture date cannot be
+  established from visible information, leave interview_date empty. Do not
+  resolve it from the server date or guess.
 
 Schema:
 {{"candidate_name": "", "candidate_phone": "", "client_name": "", "technology": "", "service_type": "", "interview_round": "", "interview_date": "YYYY-MM-DD", "start_time": "hh:mm AM/PM", "end_time": "hh:mm AM/PM", "timezone": "Asia/Kolkata", "meeting_platform": "", "screenshot_source": "", "meeting_link": "", "attendee_name": "", "confidence_score": 0, "missing_fields": [], "warnings": [], "raw_detected_text": "", "is_payment_screenshot": false, "looks_like_interview_invite": true}}
@@ -135,6 +153,14 @@ def normalize_time_to_12h(time_value: str) -> str:
     match_12h = re.match(r'^(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)$', val)
     if match_12h:
         h, m, ap = int(match_12h.group(1)), int(match_12h.group(2)), match_12h.group(3).upper()
+        # Vision models occasionally combine a 24-hour hour with an AM/PM
+        # suffix (for example, "14:30 PM"). Normalize that malformed hybrid
+        # instead of allowing it into a confirmed booking.
+        if h > 12:
+            ap = "PM"
+            h -= 12
+        if not 1 <= h <= 12 or not 0 <= m <= 59:
+            return ""
         return f"{h:02d}:{m:02d} {ap}"
     
     # Short 12h format (e.g., "7 PM", "11 AM")
@@ -169,17 +195,28 @@ def validate_12h_time_format(time_value: str) -> bool:
     """Check if a time string is valid 12-hour format."""
     if not time_value:
         return False
-    return bool(re.match(r'^\d{2}:\d{2}\s(AM|PM)$', time_value))
+    return bool(re.match(r'^(0[1-9]|1[0-2]):[0-5]\d\s(AM|PM)$', time_value))
+
+
+def _date_time_agree(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    """Require exact agreement on the fields that can create a booking."""
+    first_date = str(first.get("interview_date") or "").strip()
+    second_date = str(second.get("interview_date") or "").strip()
+    first_time = normalize_time_to_12h(str(first.get("start_time") or ""))
+    second_time = normalize_time_to_12h(str(second.get("start_time") or ""))
+    return bool(
+        first_date
+        and first_time
+        and first_date == second_date
+        and first_time == second_time
+    )
 
 
 # ── Ollama API calls ────────────────────────────────────────────────────────
 def _is_ollama_available() -> bool:
     """Check if Ollama is running and accessible."""
-    try:
-        resp = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
-        return resp.status_code == 200
-    except Exception:
-        return False
+    status = health(model=OLLAMA_REASONING_MODEL, timeout=5)
+    return bool(status.get("endpoint_reachable") and status.get("model_available"))
 
 
 def call_ollama_vision_model(
@@ -194,37 +231,22 @@ def call_ollama_vision_model(
     Returns the raw text response or None on failure.
     """
     try:
-        payload = {
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                    "images": [image_base64],
-                }
-            ],
-            "stream": False,
-            "options": {
-                "temperature": 0.1,
-                "num_predict": 2048,
-            },
-        }
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json=payload,
+        result = chat(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            images=[image_base64],
             timeout=timeout,
+            temperature=0.1,
+            num_predict=2048,
+            # Qwen3-VL can consume the complete output budget in its hidden
+            # reasoning field and leave message.content empty. Screenshot
+            # extraction needs only the final structured answer.
+            think=False,
+            workload="interview_screenshot_vision",
         )
-        if resp.status_code != 200:
-            logger.warning("Ollama %s returned %d: %s", model_name, resp.status_code, resp.text[:200])
-            return None
-        data = resp.json()
-        content = data.get("message", {}).get("content", "")
-        return content if content else None
-    except httpx.TimeoutException:
-        logger.warning("Ollama %s timed out after %ds", model_name, timeout)
-        return None
-    except Exception as e:
-        logger.warning("Ollama %s error: %s", model_name, e)
+        return result.content or None
+    except AIGatewayError as exc:
+        logger.warning("Ollama interview vision failed model=%s code=%s", model_name, exc.code)
         return None
 
 
@@ -277,36 +299,17 @@ def call_ollama_text_model(
     Returns the raw text response or None on failure.
     """
     try:
-        payload = {
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            "stream": False,
-            "options": {
-                "temperature": 0.1,
-                "num_predict": 2048,
-            },
-        }
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json=payload,
+        result = chat(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
             timeout=timeout,
+            temperature=0.1,
+            num_predict=2048,
+            workload="interview_screenshot_text",
         )
-        if resp.status_code != 200:
-            logger.warning("Ollama text %s returned %d: %s", model_name, resp.status_code, resp.text[:200])
-            return None
-        data = resp.json()
-        content = data.get("message", {}).get("content", "")
-        return content if content else None
-    except httpx.TimeoutException:
-        logger.warning("Ollama text %s timed out after %ds", model_name, timeout)
-        return None
-    except Exception as e:
-        logger.warning("Ollama text %s error: %s", model_name, e)
+        return result.content or None
+    except AIGatewayError as exc:
+        logger.warning("Ollama interview text failed model=%s code=%s", model_name, exc.code)
         return None
 
 
@@ -486,13 +489,26 @@ def extract_interview_invite_with_ollama(
     
     Ollama runs on the developer's laptop, tunneled to VPS via SSH.
     """
+    ocr_candidate: dict[str, Any] | None = None
+    ollama_only = _ollama_only_test_mode()
+
     # Check if Ollama is reachable (tunnel must be active)
     if not _is_ollama_available():
-        logger.info("Ollama not reachable (SSH tunnel may be down), falling back to OCR")
+        if ollama_only:
+            result = _empty_extraction()
+            result["extraction_source"] = "ollama"
+            result["extraction_method"] = "ollama_only_test"
+            result["ollama_only_test"] = True
+            result["auto_booking_safe"] = False
+            result["warnings"] = [
+                "Ollama is unavailable. OCR is disabled in test mode; enter the fields manually."
+            ]
+            return result
+        logger.info("Ollama not reachable; OCR cannot authorize automatic booking")
         return _fallback_to_existing_ocr(image_data, mime_type)
     
     # ── Step 1: Try OCR + text model (fast path) ────────────────────────────
-    ocr_text = _run_tesseract_ocr(image_data)
+    ocr_text = "" if ollama_only else _run_tesseract_ocr(image_data)
     
     if ocr_text and len(ocr_text) > 10:
         logger.info("OCR extracted %d chars, trying fast extraction", len(ocr_text))
@@ -507,7 +523,7 @@ def extract_interview_invite_with_ollama(
         
         if regex_result and regex_result.get("date") and regex_result.get("time"):
             # Regex found date+time — use it directly, optionally enhance with text model
-            logger.info("Regex found date=%s time=%s, using fast path", regex_result["date"], regex_result["time"])
+            logger.info("Regex proposed date=%s time=%s; requesting vision verification", regex_result["date"], regex_result["time"])
             
             # Build result from regex (instant)
             result = _empty_extraction()
@@ -524,25 +540,29 @@ def extract_interview_invite_with_ollama(
             result["technology"] = regex_result.get("technology", "")
             result["looks_like_interview_invite"] = True
             fields_found = sum(1 for f in ["interview_date", "start_time", "interview_round", "meeting_platform"] if result.get(f))
-            result["confidence_score"] = min(92, fields_found * 25 + 10)
+            result["confidence_score"] = 0
             result["missing_fields"] = [f for f in ["interview_date", "start_time", "interview_round"] if not result.get(f)]
-            result["manual_fields_required"] = bool(result["missing_fields"])
+            result["manual_fields_required"] = True
+            result["auto_booking_safe"] = False
             result = validate_invite_extraction(result)
-            return result
+            ocr_candidate = result
         
         # Regex didn't find date+time — try text model (slower but more capable)
-        logger.info("Regex didn't find date/time, trying text model")
-        extracted = _try_text_model_cleanup(ocr_text)
-        if extracted:
-            extracted = validate_invite_extraction(extracted)
-            if extracted.get("interview_date") and extracted.get("start_time"):
-                extracted["extraction_source"] = "ocr_ai_cleanup"
-                extracted["primary_model"] = OLLAMA_REASONING_MODEL
-                extracted["backup_model"] = ""
-                extracted["detected_by"] = f"OCR + {OLLAMA_REASONING_MODEL}"
-                extracted["extraction_method"] = "hybrid_fast"
-                logger.info("Text model succeeded: date=%s time=%s", extracted["interview_date"], extracted["start_time"])
-                return extracted
+        if ocr_candidate is None:
+            logger.info("Regex didn't find date/time, trying text model")
+            extracted = _try_text_model_cleanup(ocr_text)
+            if extracted:
+                extracted = validate_invite_extraction(extracted)
+                if extracted.get("interview_date") and extracted.get("start_time"):
+                    extracted["extraction_source"] = "ocr_ai_cleanup"
+                    extracted["primary_model"] = OLLAMA_REASONING_MODEL
+                    extracted["backup_model"] = ""
+                    extracted["detected_by"] = f"OCR + {OLLAMA_REASONING_MODEL}"
+                    extracted["extraction_method"] = "hybrid_fast"
+                    extracted["confidence_score"] = 0
+                    extracted["manual_fields_required"] = True
+                    extracted["auto_booking_safe"] = False
+                    ocr_candidate = extracted
     else:
         logger.info("OCR text too short (%d chars), going to vision model", len(ocr_text or ""))
     
@@ -567,7 +587,12 @@ def extract_interview_invite_with_ollama(
             extracted = retry_invalid_json_once(OLLAMA_VISION_MODEL, img_b64, response)
     
     # ── Step 3: If vision failed, try backup model (moondream) ──────────────
-    if not extracted:
+    if (
+        not extracted
+        and not ollama_only
+        and OLLAMA_BACKUP_VISION_MODEL
+        and OLLAMA_BACKUP_VISION_MODEL != OLLAMA_VISION_MODEL
+    ):
         logger.warning("Vision model (%s) failed, trying backup: %s", OLLAMA_VISION_MODEL, OLLAMA_BACKUP_VISION_MODEL)
         backup_response = call_ollama_vision_model(
             OLLAMA_BACKUP_VISION_MODEL, img_b64, _get_invite_prompt(), timeout=OLLAMA_TIMEOUT
@@ -579,7 +604,17 @@ def extract_interview_invite_with_ollama(
     
     # ── Step 4: If all AI failed, fall back to regex OCR ────────────────────
     if not extracted:
-        logger.warning("All AI models failed, falling back to OCR")
+        logger.warning("All vision models failed; refusing automatic booking")
+        if ollama_only:
+            result = _empty_extraction()
+            result["extraction_source"] = "ollama"
+            result["extraction_method"] = "ollama_only_test"
+            result["ollama_only_test"] = True
+            result["auto_booking_safe"] = False
+            result["warnings"] = [
+                "Ollama could not read this screenshot. OCR is disabled in test mode; enter the fields manually."
+            ]
+            return result
         return _fallback_to_existing_ocr(image_data, mime_type)
     
     # Validate and normalize
@@ -591,6 +626,58 @@ def extract_interview_invite_with_ollama(
     extracted["backup_model"] = OLLAMA_BACKUP_VISION_MODEL
     extracted["detected_by"] = used_model
     extracted["extraction_method"] = "vision"
+
+    if ollama_only:
+        extracted["extraction_method"] = "ollama_only_test"
+        extracted["ollama_only_test"] = True
+        extracted["auto_booking_safe"] = False
+        extracted["manual_fields_required"] = True
+        extracted["backup_model"] = ""
+        extracted["detected_by"] = f"{used_model} · Ollama-only test"
+        return extracted
+
+    # Fail closed: a single parser or model cannot authorize an automatic
+    # booking. OCR/text and vision must independently agree on date + start.
+    extracted["auto_booking_safe"] = False
+    if ocr_candidate and _date_time_agree(ocr_candidate, extracted):
+        extracted["auto_booking_safe"] = True
+        extracted["manual_fields_required"] = False
+        extracted["confidence_score"] = 95
+        extracted["detected_by"] = f"OCR + {used_model} verified"
+        extracted["extraction_method"] = "dual_source_verified"
+
+        # End time is optional and is accepted only with exact agreement.
+        ocr_end = normalize_time_to_12h(str(ocr_candidate.get("end_time") or ""))
+        vision_end = normalize_time_to_12h(str(extracted.get("end_time") or ""))
+        if ocr_end and vision_end and ocr_end == vision_end:
+            extracted["end_time"] = vision_end
+        elif ocr_end or vision_end:
+            extracted["end_time"] = ""
+            extracted.setdefault("warnings", []).append(
+                "End time was not independently confirmed; verify it manually."
+            )
+    else:
+        extracted["confidence_score"] = 0
+        extracted["manual_fields_required"] = True
+        if ocr_candidate:
+            extracted["verification_conflict"] = {
+                "ocr": {
+                    "interview_date": ocr_candidate.get("interview_date", ""),
+                    "start_time": normalize_time_to_12h(
+                        str(ocr_candidate.get("start_time") or "")
+                    ),
+                },
+                "vision": {
+                    "interview_date": extracted.get("interview_date", ""),
+                    "start_time": normalize_time_to_12h(
+                        str(extracted.get("start_time") or "")
+                    ),
+                },
+            }
+        extracted.setdefault("warnings", []).append(
+            "OCR and AI did not independently agree on the booking date/time. "
+            "Automatic booking is blocked; enter the fields manually."
+        )
     
     return extracted
 
@@ -643,11 +730,10 @@ def _fallback_to_existing_ocr(image_data: bytes, mime_type: str) -> dict[str, An
         result["looks_like_interview_invite"] = True
         result["warnings"] = ["AI extraction unavailable. Using standard OCR/manual entry."]
         
-        # Calculate confidence based on what was detected
-        fields_found = sum(1 for f in ["interview_date", "start_time", "interview_round"] if result.get(f))
-        result["confidence_score"] = min(85, fields_found * 30)
+        result["confidence_score"] = 0
         result["missing_fields"] = [f for f in ["interview_date", "start_time", "interview_round"] if not result.get(f)]
-        result["manual_fields_required"] = bool(result["missing_fields"])
+        result["manual_fields_required"] = True
+        result["auto_booking_safe"] = False
         
         return result
     except Exception as e:

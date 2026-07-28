@@ -46,7 +46,7 @@ def _now() -> str:
 
 def record_health(**values: Any) -> dict[str, Any]:
     with _lock:
-        # /api/tags proves that the service and model manifest are reachable;
+        # A model-manifest health response proves that the service is reachable;
         # it does not prove that the runner can load or generate.  Do not let a
         # tag refresh erase a newer failed inference and show a false Healthy.
         if values.get("status") == "healthy" and _last_request_succeeded is False:

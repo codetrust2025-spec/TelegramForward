@@ -29,14 +29,16 @@ import time
 from datetime import date
 from typing import Any
 
-import httpx
+from core.ocr_policy import ocr_enabled
+
+from core.ai_gateway import AIGatewayError, chat, health
+from core.ai_model_routing import model_for
 
 logger = logging.getLogger(__name__)
 
 # ── Configuration ───────────────────────────────────────────────────────────
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_REASONING_MODEL = os.environ.get("OLLAMA_REASONING_MODEL", "qwen2.5:7b")
-OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
+OLLAMA_REASONING_MODEL = model_for("reasoning_text")
+OLLAMA_VISION_MODEL = model_for("resume_vision")
 OLLAMA_TEXT_TIMEOUT = int(os.environ.get("OLLAMA_TEXT_TIMEOUT", "60"))
 # Resume extraction may need longer timeout (model cold start on first call)
 OLLAMA_RESUME_TEXT_TIMEOUT = int(os.environ.get("OLLAMA_RESUME_TEXT_TIMEOUT", "180"))
@@ -99,58 +101,40 @@ def _empty_extraction() -> dict[str, Any]:
 
 # ── Ollama helpers ──────────────────────────────────────────────────────────
 def _is_ollama_available() -> bool:
-    try:
-        resp = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
-        return resp.status_code == 200
-    except Exception:
-        return False
+    status = health(model=OLLAMA_REASONING_MODEL, timeout=5)
+    return bool(status.get("endpoint_reachable") and status.get("model_available"))
 
 
 def _call_text_model(prompt: str, *, timeout: int = OLLAMA_TEXT_TIMEOUT) -> str | None:
     try:
-        payload = {
-            "model": OLLAMA_REASONING_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 2048},
-        }
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json=payload,
+        result = chat(
+            model=OLLAMA_REASONING_MODEL,
+            messages=[{"role": "user", "content": prompt}],
             timeout=timeout,
+            temperature=0.1,
+            num_predict=2048,
+            workload="resume_text",
         )
-        if resp.status_code == 200:
-            data = resp.json()
-            content = data.get("message", {}).get("content", "")
-            return content.strip() if content else None
-        return None
-    except Exception as exc:
-        logger.warning("Text model error: %s", exc)
+        return result.content or None
+    except AIGatewayError as exc:
+        logger.warning("Resume text failed model=%s code=%s", OLLAMA_REASONING_MODEL, exc.code)
         return None
 
 
 def _call_vision_model(image_base64: str, prompt: str, *, timeout: int = OLLAMA_TIMEOUT) -> str | None:
     try:
-        payload = {
-            "model": OLLAMA_VISION_MODEL,
-            "messages": [
-                {"role": "user", "content": prompt, "images": [image_base64]}
-            ],
-            "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 2048},
-        }
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json=payload,
+        result = chat(
+            model=OLLAMA_VISION_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            images=[image_base64],
             timeout=timeout,
+            temperature=0.1,
+            num_predict=2048,
+            workload="resume_vision",
         )
-        if resp.status_code == 200:
-            data = resp.json()
-            content = data.get("message", {}).get("content", "")
-            return content.strip() if content else None
-        return None
-    except Exception as exc:
-        logger.warning("Vision model error: %s", exc)
+        return result.content or None
+    except AIGatewayError as exc:
+        logger.warning("Resume vision failed model=%s code=%s", OLLAMA_VISION_MODEL, exc.code)
         return None
 
 
@@ -280,6 +264,8 @@ def _pdf_first_page_to_image(pdf_data: bytes) -> str | None:
 
 def _ocr_text_from_image_base64(image_base64: str) -> str:
     """Read a rendered resume page locally before using the slow vision model."""
+    if not ocr_enabled():
+        return ""
     try:
         import base64
         import io

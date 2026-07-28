@@ -25,15 +25,16 @@ import logging
 from datetime import date, datetime
 from typing import Any
 
-import httpx
+from core.ai_gateway import AIGatewayError, chat, health
+from core.ai_model_routing import model_for
+from core.ocr_policy import ocr_enabled
 
 logger = logging.getLogger(__name__)
 
 # ── Configuration (shared with ollama_invite_extract) ───────────────────────
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
+OLLAMA_VISION_MODEL = model_for("payment_screenshot_vision")
 OLLAMA_BACKUP_VISION_MODEL = os.environ.get("OLLAMA_BACKUP_VISION_MODEL", "moondream")
-OLLAMA_REASONING_MODEL = os.environ.get("OLLAMA_REASONING_MODEL", "qwen2.5:7b")
+OLLAMA_REASONING_MODEL = model_for("reasoning_text")
 OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "900"))
 OLLAMA_TEXT_TIMEOUT = int(os.environ.get("OLLAMA_TEXT_TIMEOUT", "60"))
 
@@ -49,17 +50,19 @@ IMPORTANT: Today's date is {today}.
 Extract these fields from the payment screenshot:
 
 Schema:
-{{"amount": 0, "sender_name": "", "sender_upi_id": "", "receiver_name": "", "receiver_upi_id": "", "utr_number": "", "reference_number": "", "transaction_id": "", "payment_app": "", "bank_name": "", "payment_date": "YYYY-MM-DD", "payment_time": "hh:mm AM/PM", "status": "", "payment_method": "", "confidence_score": 0, "is_payment_screenshot": true, "warnings": [], "raw_detected_text": ""}}
+{{"payment_status": "SUCCESS|FAILED|PENDING|UNKNOWN", "direction": "PAID_TO|RECEIVED_FROM|TRANSFERRED_TO|UNKNOWN", "amount_minor": 0, "currency": "INR", "sender_name": "", "sender_upi_id": "", "sender_phone_number": "", "sender_account_identifier": "", "receiver_name": "", "receiver_upi_id": "", "receiver_phone_number": "", "receiver_account_identifier": "", "credited_to_identifier": "", "debited_from_identifier": "", "transaction_id": "", "utr": "", "transaction_date": "YYYY-MM-DD", "transaction_time": "hh:mm AM/PM", "provider": "", "confidence": {{"payment_status": 0.0, "direction": 0.0, "amount": 0.0, "receiver_name": 0.0, "receiver_upi_id": 0.0, "receiver_phone_number": 0.0, "transaction_id": 0.0, "utr": 0.0}}, "missing_fields": [], "warnings": [], "is_payment_screenshot": true}}
 
 Rules:
-- "amount" must be a number (no ₹ symbol, no commas). Example: 10000 not "₹10,000"
-- "status" should be one of: "success", "pending", "failed", "unknown"
-- "payment_method" should be one of: "upi", "neft", "imps", "rtgs", "cash", "unknown"
-- "payment_app" examples: "PhonePe", "GPay", "Paytm", "CRED", "BHIM", "HDFC", "SBI"
-- "utr_number" is the unique transaction reference (12-digit alphanumeric for UPI)
-- "confidence_score" is 0-100 based on how clearly you can read the payment details
-- If the image is NOT a payment screenshot, set "is_payment_screenshot": false and "amount": 0
-- If a field is not visible in the screenshot, leave it as empty string or 0
+- "amount_minor" is integer paise. Example: INR 5,000 is 500000.
+- "payment_status" is SUCCESS, PENDING, FAILED, or UNKNOWN.
+- "direction" is critical. A person under "Received from" is the sender, not the receiver.
+- For RECEIVED_FROM, put the account after "Credited to" in "credited_to_identifier".
+- Never copy sender details into receiver fields.
+- "receiver_phone_number" is the complete phone shown for the paid-to recipient.
+- "receiver_account_identifier" is the receiving bank account identifier, if visible.
+- Confidence values are 0.0-1.0. The backend makes the final authorization decision.
+- If the image is not a payment receipt, set "is_payment_screenshot": false.
+- If a field is not visible, leave it empty and include its name in "missing_fields".
 """
 
 
@@ -67,10 +70,21 @@ Rules:
 def _empty_extraction() -> dict[str, Any]:
     return {
         "amount": 0,
+        "amount_minor": 0,
+        "currency": "INR",
+        "direction": "UNKNOWN",
         "sender_name": "",
         "sender_upi_id": "",
+        "sender_phone_number": "",
+        "sender_account_identifier": "",
         "receiver_name": "",
         "receiver_upi_id": "",
+        "receiver_phone": "",
+        "receiver_phone_number": "",
+        "receiver_account": "",
+        "receiver_account_identifier": "",
+        "credited_to_identifier": "",
+        "debited_from_identifier": "",
         "utr_number": "",
         "reference_number": "",
         "transaction_id": "",
@@ -80,9 +94,12 @@ def _empty_extraction() -> dict[str, Any]:
         "payment_time": "",
         "status": "unknown",
         "payment_method": "unknown",
+        "receiver_type": "unknown",
         "confidence_score": 0,
         "is_payment_screenshot": False,
         "warnings": [],
+        "missing_fields": [],
+        "confidence": {},
         "raw_detected_text": "",
         "extraction_source": "",
         "extraction_method": "",
@@ -100,11 +117,8 @@ def _empty_extraction() -> dict[str, Any]:
 # ── Ollama helpers (reuse pattern from ollama_invite_extract) ───────────────
 def _is_ollama_available() -> bool:
     """Check if Ollama is running and accessible."""
-    try:
-        resp = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
-        return resp.status_code == 200
-    except Exception:
-        return False
+    status = health(model=OLLAMA_REASONING_MODEL, timeout=5)
+    return bool(status.get("endpoint_reachable") and status.get("model_available"))
 
 
 def _call_vision_model(
@@ -116,66 +130,35 @@ def _call_vision_model(
 ) -> str | None:
     """Call Ollama vision model with an image and prompt."""
     try:
-        payload = {
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                    "images": [image_base64],
-                }
-            ],
-            "stream": False,
-            "options": {
-                "temperature": 0.1,
-                "num_predict": 2048,
-            },
-        }
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json=payload,
+        result = chat(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            images=[image_base64],
             timeout=timeout,
+            temperature=0.1,
+            num_predict=2048,
+            workload="payment_screenshot_vision",
         )
-        if resp.status_code == 200:
-            data = resp.json()
-            content = data.get("message", {}).get("content", "")
-            return content.strip() if content else None
-        logger.warning("Vision model %s returned status %d", model_name, resp.status_code)
-        return None
-    except httpx.TimeoutException:
-        logger.warning("Vision model %s timed out after %ds", model_name, timeout)
-        return None
-    except Exception as exc:
-        logger.warning("Vision model %s error: %s", model_name, exc)
+        return result.content or None
+    except AIGatewayError as exc:
+        logger.warning("Payment vision failed model=%s code=%s", model_name, exc.code)
         return None
 
 
 def _call_text_model(prompt: str, *, timeout: int = OLLAMA_TEXT_TIMEOUT) -> str | None:
     """Call Ollama text model (qwen2.5:7b) for fast OCR text cleanup."""
     try:
-        payload = {
-            "model": OLLAMA_REASONING_MODEL,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "stream": False,
-            "options": {
-                "temperature": 0.1,
-                "num_predict": 2048,
-            },
-        }
-        resp = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json=payload,
+        result = chat(
+            model=OLLAMA_REASONING_MODEL,
+            messages=[{"role": "user", "content": prompt}],
             timeout=timeout,
+            temperature=0.1,
+            num_predict=2048,
+            workload="payment_screenshot_text",
         )
-        if resp.status_code == 200:
-            data = resp.json()
-            content = data.get("message", {}).get("content", "")
-            return content.strip() if content else None
-        return None
-    except Exception as exc:
-        logger.warning("Text model error: %s", exc)
+        return result.content or None
+    except AIGatewayError as exc:
+        logger.warning("Payment text failed model=%s code=%s", OLLAMA_REASONING_MODEL, exc.code)
         return None
 
 
@@ -247,6 +230,12 @@ def _extract_amount_from_text(text: str) -> float:
             val = float(m.group(1).replace(',', ''))
             if val >= 500:
                 amounts.append(val)
+        except ValueError:
+            pass
+    # OCR can drop the rupee symbol while retaining comma grouping.
+    for m in re.finditer(r'(?<![\d,])(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?)(?![\d,])', text):
+        try:
+            amounts.append(float(m.group(1).replace(',', '')))
         except ValueError:
             pass
     if not amounts:
@@ -349,6 +338,18 @@ def _extract_date_from_text(text: str) -> str:
     return ""
 
 
+def _extract_receiver_upi_from_text(text: str) -> str:
+    """Extract the visible paid-to UPI identifier from OCR text."""
+    match = re.search(r"\b[A-Za-z0-9._-]{2,}@[A-Za-z][A-Za-z0-9.-]{1,}\b", text)
+    return match.group(0).lower() if match else ""
+
+
+def _extract_receiver_phone_from_text(text: str) -> str:
+    """Extract a visible Indian recipient phone number from OCR text."""
+    match = re.search(r"(?:\+?91[\s-]*)?[6-9](?:[\s-]*\d){9}\b", text)
+    return match.group(0).strip() if match else ""
+
+
 # ── OCR-based fast extraction (no AI needed) ───────────────────────────────
 def _ocr_regex_extraction(ocr_text: str) -> dict[str, Any] | None:
     """Try to extract payment details from OCR text using regex only.
@@ -363,6 +364,8 @@ def _ocr_regex_extraction(ocr_text: str) -> dict[str, Any] | None:
     status = _detect_status(ocr_text)
     app = _detect_payment_app(ocr_text)
     pay_date = _extract_date_from_text(ocr_text)
+    receiver_upi = _extract_receiver_upi_from_text(ocr_text)
+    receiver_phone = _extract_receiver_phone_from_text(ocr_text)
 
     # Need at least amount + one of (UTR, success status) to trust regex
     if not utr and status != "success":
@@ -374,6 +377,8 @@ def _ocr_regex_extraction(ocr_text: str) -> dict[str, Any] | None:
     result["status"] = status
     result["payment_app"] = app
     result["payment_date"] = pay_date
+    result["receiver_upi_id"] = receiver_upi
+    result["receiver_phone"] = receiver_phone
     result["is_payment_screenshot"] = True
     result["confidence_score"] = min(85, 40 + (20 if utr else 0) + (15 if status == "success" else 0) + (10 if app else 0))
     result["extraction_source"] = "ocr_regex"
@@ -401,7 +406,7 @@ OCR Text:
 ---
 
 Schema:
-{{"amount": 0, "sender_name": "", "sender_upi_id": "", "receiver_name": "", "receiver_upi_id": "", "utr_number": "", "reference_number": "", "transaction_id": "", "payment_app": "", "bank_name": "", "payment_date": "YYYY-MM-DD", "payment_time": "hh:mm AM/PM", "status": "", "payment_method": "", "confidence_score": 0, "is_payment_screenshot": true, "warnings": []}}
+{{"amount": 0, "sender_name": "", "sender_upi_id": "", "receiver_name": "", "receiver_upi_id": "", "receiver_phone": "", "utr_number": "", "reference_number": "", "transaction_id": "", "payment_app": "", "bank_name": "", "payment_date": "YYYY-MM-DD", "payment_time": "hh:mm AM/PM", "status": "", "payment_method": "", "confidence_score": 0, "is_payment_screenshot": true, "warnings": []}}
 
 Rules:
 - "amount" must be a number (no ₹, no commas). Example: 10000
@@ -438,6 +443,9 @@ def _get_payment_prompt() -> str:
 def extract_payment_with_ollama(
     image_data: bytes,
     mime_type: str = "image/jpeg",
+    *,
+    allow_slow_ai: bool = True,
+    use_ocr: bool | None = None,
 ) -> dict[str, Any]:
     """Extract payment details from a screenshot using hybrid OCR + AI approach.
 
@@ -457,7 +465,10 @@ def extract_payment_with_ollama(
         logger.info("Ollama not reachable (SSH tunnel may be down), using OCR only")
 
     # ── Step 1: OCR + regex (instant) ───────────────────────────────────────
-    ocr_text = _run_tesseract_ocr(image_data)
+    run_ocr = ocr_enabled() if use_ocr is None else bool(use_ocr and ocr_enabled())
+    ocr_text = _run_tesseract_ocr(image_data) if run_ocr else None
+    if not run_ocr:
+        logger.info("Global OCR is disabled; sending payment proof directly to Ollama vision")
 
     if ocr_text and len(ocr_text) > 10:
         logger.info("OCR extracted %d chars for payment", len(ocr_text))
@@ -475,6 +486,24 @@ def extract_payment_with_ollama(
             return regex_result
 
         # ── Step 2: Text model cleanup (~10-30s) ────────────────────────────
+        if not allow_slow_ai:
+            fallback = _empty_extraction()
+            fallback["amount"] = int(_extract_amount_from_text(ocr_text))
+            fallback["utr_number"] = _extract_utr_from_text(ocr_text)
+            fallback["status"] = _detect_status(ocr_text)
+            fallback["payment_app"] = _detect_payment_app(ocr_text)
+            fallback["payment_date"] = _extract_date_from_text(ocr_text)
+            fallback["receiver_upi_id"] = _extract_receiver_upi_from_text(ocr_text)
+            fallback["receiver_phone"] = _extract_receiver_phone_from_text(ocr_text)
+            fallback["is_payment_screenshot"] = fallback["amount"] >= 500
+            fallback["raw_detected_text"] = ocr_text[:1000]
+            fallback["extraction_source"] = "ocr_interactive"
+            fallback["extraction_method"] = "ocr_bounded"
+            fallback["detected_by"] = "OCR (interactive upload)"
+            fallback["confidence_score"] = 35 if fallback["amount"] > 0 else 0
+            fallback["warnings"] = ["AI enrichment skipped to keep the upload responsive"]
+            return fallback
+
         if ollama_available:
             logger.info("Regex incomplete, trying text model for payment extraction")
             text_result = _try_text_model_cleanup(ocr_text)
@@ -497,6 +526,14 @@ def extract_payment_with_ollama(
     else:
         logger.info("OCR text too short (%d chars), going to vision model", len(ocr_text or ""))
 
+    if not allow_slow_ai:
+        fallback = _empty_extraction()
+        fallback["extraction_source"] = "interactive_no_ocr"
+        fallback["extraction_method"] = "ocr_bounded"
+        fallback["detected_by"] = "OCR (interactive upload)"
+        fallback["warnings"] = ["Payment details need manual review; AI enrichment was skipped"]
+        return fallback
+
     # ── Step 3: Vision model (slow path, ~5 min) ────────────────────────────
     if not ollama_available:
         # Return whatever OCR found (even if incomplete)
@@ -507,6 +544,8 @@ def extract_payment_with_ollama(
             fallback["status"] = _detect_status(ocr_text)
             fallback["payment_app"] = _detect_payment_app(ocr_text)
             fallback["payment_date"] = _extract_date_from_text(ocr_text)
+            fallback["receiver_upi_id"] = _extract_receiver_upi_from_text(ocr_text)
+            fallback["receiver_phone"] = _extract_receiver_phone_from_text(ocr_text)
             fallback["is_payment_screenshot"] = fallback["amount"] >= 500
             fallback["raw_detected_text"] = ocr_text[:1000]
         fallback["extraction_source"] = "ocr_only"
@@ -527,12 +566,16 @@ def extract_payment_with_ollama(
 
     extracted = None
     used_model = OLLAMA_VISION_MODEL
+    used_raw_response = response or ""
 
     if response:
         extracted = _parse_json_response(response)
 
     # ── Step 4: Backup model (moondream) ────────────────────────────────────
-    if not extracted or not extracted.get("is_payment_screenshot"):
+    if (
+        (not extracted or not extracted.get("is_payment_screenshot"))
+        and OLLAMA_BACKUP_VISION_MODEL != OLLAMA_VISION_MODEL
+    ):
         logger.warning("Primary vision failed for payment, trying backup: %s", OLLAMA_BACKUP_VISION_MODEL)
         backup_response = _call_vision_model(
             OLLAMA_BACKUP_VISION_MODEL, img_b64, prompt, timeout=OLLAMA_TIMEOUT
@@ -542,11 +585,53 @@ def extract_payment_with_ollama(
             if backup_parsed and backup_parsed.get("is_payment_screenshot"):
                 extracted = backup_parsed
                 used_model = OLLAMA_BACKUP_VISION_MODEL
+                used_raw_response = backup_response
 
     # ── Build final result ──────────────────────────────────────────────────
     if extracted and extracted.get("is_payment_screenshot"):
         result = _empty_extraction()
         result.update(extracted)
+        # Normalize the V2 extraction contract into the legacy-compatible
+        # fields consumed by the central verification service.
+        result["status"] = str(
+            result.get("payment_status") or result.get("status") or "unknown"
+        ).lower()
+        result["utr_number"] = result.get("utr") or result.get("utr_number") or ""
+        result["payment_date"] = (
+            result.get("transaction_date") or result.get("payment_date") or ""
+        )
+        result["payment_time"] = (
+            result.get("transaction_time") or result.get("payment_time") or ""
+        )
+        result["payment_app"] = result.get("provider") or result.get("payment_app") or ""
+        result["receiver_phone"] = (
+            result.get("receiver_phone_number")
+            or result.get("receiver_phone")
+            or ""
+        )
+        result["receiver_account"] = (
+            result.get("receiver_account_identifier")
+            or result.get("receiver_account")
+            or ""
+        )
+        if not result.get("amount") and result.get("amount_minor") is not None:
+            try:
+                result["amount"] = int(result["amount_minor"]) // 100
+            except (TypeError, ValueError):
+                result["amount"] = 0
+        if not result.get("confidence_score") and isinstance(
+            result.get("confidence"), dict
+        ):
+            confidence_values = [
+                float(value)
+                for value in result["confidence"].values()
+                if isinstance(value, (int, float))
+            ]
+            if confidence_values:
+                average = sum(confidence_values) / len(confidence_values)
+                result["confidence_score"] = round(
+                    average if average > 1 else average * 100
+                )
         # Normalize amount to int
         try:
             result["amount"] = int(float(result.get("amount", 0)))
@@ -555,6 +640,9 @@ def extract_payment_with_ollama(
         result["extraction_source"] = "vision_model"
         result["extraction_method"] = "vision"
         result["primary_model"] = used_model
+        # The central payment engine persists this for audit and removes it
+        # from API responses before returning to the browser.
+        result["_raw_model_response"] = used_raw_response
         result["detected_by"] = f"Vision ({used_model})"
         result["is_payment_screenshot"] = True
         if ocr_text:
@@ -570,13 +658,20 @@ def extract_payment_with_ollama(
         fallback["status"] = _detect_status(ocr_text)
         fallback["payment_app"] = _detect_payment_app(ocr_text)
         fallback["payment_date"] = _extract_date_from_text(ocr_text)
+        fallback["receiver_upi_id"] = _extract_receiver_upi_from_text(ocr_text)
+        fallback["receiver_phone"] = _extract_receiver_phone_from_text(ocr_text)
         fallback["is_payment_screenshot"] = fallback["amount"] >= 500
         fallback["raw_detected_text"] = ocr_text[:1000]
-    fallback["extraction_source"] = "ocr_fallback"
-    fallback["extraction_method"] = "ocr_fallback"
-    fallback["detected_by"] = "OCR (AI models failed)"
+    fallback["extraction_source"] = "ocr_fallback" if ocr_text else "vision_failed"
+    fallback["extraction_method"] = "ocr_fallback" if ocr_text else "vision"
+    fallback["detected_by"] = "OCR (AI models failed)" if ocr_text else "Ollama Vision failed"
     fallback["confidence_score"] = 25 if fallback["amount"] > 0 else 0
-    fallback["warnings"] = ["All AI models failed — OCR-only extraction"]
+    fallback["warnings"] = (
+        ["All AI models failed — OCR-only extraction"]
+        if ocr_text
+        else ["All configured Ollama Vision models failed"]
+    )
+    fallback["_raw_model_response"] = used_raw_response
     return fallback
 
 

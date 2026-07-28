@@ -82,6 +82,7 @@ def _default_config() -> dict:
         "work_hours_offline_message": "I'm currently offline. I'll reply in working hours.",
         # UPI + QR used when leads ask how to pay.
         "payment_upi_id": "company@upi",
+        "payment_phone_number": "+919000000001",
         "payment_qr_path": "data/payment_qr.png",
         # Human typing simulation before send (seconds).
         "min_delay_seconds": 1,
