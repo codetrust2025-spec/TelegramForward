@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 from core import recruitment_mail_store as store
+from core.ocr_policy import ocr_enabled
 
-SUPPORTED={'.pdf','.doc','.docx','.txt','.png','.jpg','.jpeg','.webp'}
+SUPPORTED={'.pdf','.doc','.docx','.txt','.ics','.png','.jpg','.jpeg','.webp'}
 
 def _usable_text(text:str)->bool:
     """Reject empty or OCR-garbage text before semantic document analysis."""
@@ -67,6 +68,8 @@ def _pdf_text(data:bytes)->str:
     with pdfplumber.open(io.BytesIO(data)) as pdf:return '\n'.join((p.extract_text() or '') for p in pdf.pages[:30])
 
 def _image_text(data:bytes)->str:
+    if not ocr_enabled():
+        return ''
     from PIL import Image
     import pytesseract
     return pytesseract.image_to_string(Image.open(io.BytesIO(data)))
@@ -74,7 +77,16 @@ def _image_text(data:bytes)->str:
 def _vision_summary(data:bytes,mime_type:str)->str:
     from core.ai_gateway import chat_structured,configured_models
     schema={"type":"object","required":["document_type","supported_text","confidence"],"properties":{"document_type":{"type":"string"},"supported_text":{"type":"string"},"confidence":{"type":"number","minimum":0,"maximum":1}},"additionalProperties":False}
-    result=chat_structured(messages=[{"role":"system","content":"Read this recruitment document. Return only text visibly supported by the image. Do not invent salary, company, dates, or offer status."},{"role":"user","content":"Extract a short factual transcription and document type."}],schema=schema,model=configured_models()['vision'],images=[base64.b64encode(data).decode()])
+    result=chat_structured(
+        messages=[
+            {"role":"system","content":"Read this recruitment document. Return only text visibly supported by the image. Do not invent salary, company, dates, or offer status."},
+            {"role":"user","content":"Extract a short factual transcription and document type."},
+        ],
+        schema=schema,
+        model=configured_models()['vision'],
+        images=[base64.b64encode(data).decode()],
+        workload="recruitment_attachment_vision",
+    )
     import json
     parsed=json.loads(result.content);return str(parsed.get('supported_text') or '')
 
@@ -87,11 +99,14 @@ def _pdf_first_page_image(data:bytes)->bytes|None:
     except Exception:return None
 
 def extract_attachment(raw:dict[str,Any])->dict[str,Any]:
-    data=raw.get('data') or b'';checksum=hashlib.sha256(data).hexdigest();cached=store.attachment_cache(checksum)
-    if cached:return {**raw,'checksum':checksum,'text':cached.get('extracted_text') or '','attachment_type':cached.get('attachment_type'),'extraction_method':cached.get('extraction_method'),'extraction_status':'CACHED'}
-    suffix=Path(raw.get('filename') or '').suffix.lower();text='';method='unsupported';status='UNSUPPORTED'
+    data=raw.get('data') or b'';checksum=hashlib.sha256(data).hexdigest();suffix=Path(raw.get('filename') or '').suffix.lower();cached=store.attachment_cache(checksum)
+    # Older releases cached .ics files as unsupported empty text.  Do not let
+    # that stale entry permanently prevent deterministic calendar recovery.
+    if cached and (suffix!='.ics' or 'BEGIN:VCALENDAR' in str(cached.get('extracted_text') or '').upper()):
+        return {**raw,'checksum':checksum,'text':cached.get('extracted_text') or '','attachment_type':cached.get('attachment_type'),'extraction_method':cached.get('extraction_method'),'extraction_status':'CACHED'}
+    text='';method='unsupported';status='UNSUPPORTED'
     try:
-        if suffix=='.txt':text=data.decode('utf-8','replace');method='text'
+        if suffix in ('.txt','.ics'):text=data.decode('utf-8','replace');method='icalendar' if suffix=='.ics' else 'text'
         elif suffix=='.pdf':
             text=_pdf_text(data);method='pdfplumber'
             if not _usable_text(text):
@@ -104,5 +119,7 @@ def extract_attachment(raw:dict[str,Any])->dict[str,Any]:
         elif suffix=='.doc':text,method=_legacy_doc_text(data)
         status='EXTRACTED' if text.strip() else 'MANUAL_REVIEW_REQUIRED'
     except Exception:status='FAILED'
-    text=re.sub(r'\s+',' ',text).strip()[:100000]
+    # RFC 5545 parsing depends on line/property boundaries and folded lines.
+    # Preserve those for calendar files; normalize prose documents as before.
+    text=(text.strip() if suffix=='.ics' else re.sub(r'\s+',' ',text).strip())[:100000]
     return {**raw,'data':None,'checksum':checksum,'text':text,'attachment_type':classify_attachment(raw.get('filename',''),text),'extraction_method':method,'extraction_status':status}

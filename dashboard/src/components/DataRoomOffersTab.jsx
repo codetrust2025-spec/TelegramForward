@@ -12,6 +12,20 @@ function slugId(text) {
   return String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || `item_${Date.now()}`
 }
 
+async function readApiResponse(response) {
+  const contentType = response.headers.get('content-type') || ''
+  if (contentType.includes('application/json')) return response.json()
+  const text = await response.text()
+  if (response.status === 413) {
+    throw new Error('The PDF is too large for the server. Maximum file size is 25 MB.')
+  }
+  throw new Error(
+    response.ok
+      ? 'The server returned an invalid response. Please try again.'
+      : `Upload failed (${response.status}). ${text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120)}`,
+  )
+}
+
 const OFFER_FIELDS = [
   { key: 'id', label: 'ID (stable slug)', placeholder: 'e.g. luxoft_2024_01' },
   { key: 'filename', label: 'Filename' },
@@ -23,12 +37,13 @@ const OFFER_FIELDS = [
   { key: 'notes', label: 'Notes', full: true },
 ]
 
-function VaultModal({ title, fields, form, onChange, onSave, onClose, error }) {
+function VaultModal({ title, fields, form, onChange, onSave, onClose, error, uploadPanel, saving }) {
   return (
     <div className="dr-modal-backdrop" role="presentation" onClick={onClose}>
       <div className="dr-modal cand-card" role="dialog" onClick={(e) => e.stopPropagation()}>
         <h2 className="cand-title">{title}</h2>
         {error && <p className="dr-error">{error}</p>}
+        {uploadPanel}
         <div className="dr-form-grid">
           {fields.map((f) => (
             <label key={f.key} className={f.full ? 'dr-form-full' : ''}>
@@ -43,7 +58,9 @@ function VaultModal({ title, fields, form, onChange, onSave, onClose, error }) {
         </div>
         <div className="dr-modal-actions">
           <button type="button" className="cand-btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="cand-btn cand-btn--primary" onClick={onSave}>Save</button>
+          <button type="button" className="cand-btn cand-btn--primary" onClick={onSave} disabled={saving}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
         </div>
       </div>
     </div>
@@ -57,9 +74,13 @@ export function DataRoomOffersTab({ offers = [], onReload }) {
   const [uploading, setUploading] = useState(false)
   const [uploadId, setUploadId] = useState(null)
   const [uploadError, setUploadError] = useState('')
+  const [analyzing, setAnalyzing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [analysisMessage, setAnalysisMessage] = useState('')
 
   const openAdd = () => {
     setModalError('')
+    setAnalysisMessage('')
     setModal({ mode: 'create', form: { id: '', filename: '', candidate: '', company_name: '', date_modified: '', size_kb: '', drive_file_id: '', notes: '' } })
   }
 
@@ -84,11 +105,69 @@ export function DataRoomOffersTab({ offers = [], onReload }) {
       ? `${API_BASE}/data-room/credentials/vault/offer_letters`
       : `${API_BASE}/data-room/credentials/vault/offer_letters/${id}`
     const method = mode === 'create' ? 'POST' : 'PATCH'
-    const res = await fetch(url, { method, credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    const data = await res.json()
-    if (data.status !== 'ok') { setModalError(data.message || 'Save failed'); return }
-    setModal(null)
-    onReload()
+    setSaving(true)
+    setModalError('')
+    try {
+      const res = await fetch(url, { method, credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const data = await readApiResponse(res)
+      if (data.status !== 'ok') { setModalError(data.message || 'Save failed'); return }
+      setModal(null)
+      setAnalysisMessage('')
+      onReload()
+    } catch (error) {
+      setModalError(error.message || 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleInitialUpload = async (file) => {
+    if (!file) return
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      setModalError('Please upload a PDF offer letter.')
+      return
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setModalError('PDF is too large. Maximum size is 25 MB.')
+      return
+    }
+    setAnalyzing(true)
+    setModalError('')
+    setAnalysisMessage('')
+    const body = new FormData()
+    body.append('file', file)
+    try {
+      const res = await fetch(`${API_BASE}/data-room/offer-letters/upload-analyze`, {
+        method: 'POST',
+        credentials: 'include',
+        body,
+      })
+      const data = await readApiResponse(res)
+      if (!res.ok || data.status !== 'ok') {
+        throw new Error(data.message || 'Upload or analysis failed')
+      }
+      const row = data.offer_letter || {}
+      setModal({
+        mode: 'edit',
+        id: row.id,
+        form: {
+          id: row.id || '',
+          filename: row.filename || file.name,
+          candidate: row.candidate || '',
+          company_name: row.company_name || '',
+          date_modified: row.date_modified || '',
+          size_kb: String(row.size_kb || ''),
+          drive_file_id: row.drive_file_id || '',
+          notes: row.notes || '',
+        },
+      })
+      setAnalysisMessage(data.message || 'PDF saved and fields auto-filled.')
+      onReload()
+    } catch (error) {
+      setModalError(error.message || 'Upload or analysis failed')
+    } finally {
+      setAnalyzing(false)
+    }
   }
 
   const handleUpload = async (rowId, file) => {
@@ -100,7 +179,7 @@ export function DataRoomOffersTab({ offers = [], onReload }) {
     fd.append('file', file)
     try {
       const res = await fetch(`${API_BASE}/data-room/offer-letters/${rowId}/upload`, { method: 'POST', credentials: 'include', body: fd })
-      const data = await res.json()
+      const data = await readApiResponse(res)
       if (data.status !== 'ok') setUploadError(data.message || 'Upload failed')
       else onReload()
     } catch (e) {
@@ -151,8 +230,8 @@ export function DataRoomOffersTab({ offers = [], onReload }) {
         <table className="dr-tab-table">
           <thead>
             <tr>
-              <th>File</th>
               <th>Candidate</th>
+              <th>File</th>
               <th>Company</th>
               <th>Modified</th>
               <th>Size</th>
@@ -165,8 +244,8 @@ export function DataRoomOffersTab({ offers = [], onReload }) {
             )}
             {offers.map(row => (
               <tr key={row.id}>
-                <td><strong className="dr-offer-filename">{row.filename || row.id}</strong></td>
                 <td>{row.candidate || '—'}</td>
+                <td><strong className="dr-offer-filename">{row.filename || row.id}</strong></td>
                 <td>{row.company_name || '—'}</td>
                 <td>{row.date_modified || '—'}</td>
                 <td>{row.size_kb ? `${row.size_kb} KB` : '—'}</td>
@@ -197,6 +276,48 @@ export function DataRoomOffersTab({ offers = [], onReload }) {
           onSave={handleSave}
           onClose={() => setModal(null)}
           error={modalError}
+          saving={saving}
+          uploadPanel={modal.mode === 'create' ? (
+            <div className={`dr-offer-upload-panel${analyzing ? ' dr-offer-upload-panel--busy' : ''}`}>
+              <div className="dr-offer-upload-copy">
+                <strong>{analyzing ? 'Saving and analyzing PDF…' : 'Upload offer letter PDF'}</strong>
+                <span>
+                  The original PDF is saved first. Candidate, company, filename, date, size and notes are then auto-filled for review.
+                </span>
+              </div>
+              <label className={`cand-btn cand-btn--primary${analyzing ? ' cand-btn--disabled' : ''}`}>
+                {analyzing ? 'Analyzing…' : 'Choose PDF'}
+                <input
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  disabled={analyzing}
+                  style={{ display: 'none' }}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    event.target.value = ''
+                    handleInitialUpload(file)
+                  }}
+                />
+              </label>
+              {analysisMessage && <p className="dr-offer-analysis-ok">{analysisMessage}</p>}
+            </div>
+          ) : analysisMessage ? (
+            <div className="dr-offer-upload-panel">
+              <div className="dr-offer-upload-copy">
+                <strong>PDF saved successfully</strong>
+                <span>Review the auto-filled values below and save any corrections.</span>
+              </div>
+              <a
+                className="cand-btn"
+                href={`${API_BASE}/data-room/offer-letters/${modal.id}/preview`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Preview PDF
+              </a>
+              <p className="dr-offer-analysis-ok">{analysisMessage}</p>
+            </div>
+          ) : null}
         />
       )}
     </section>

@@ -23,10 +23,12 @@ def test_worker_completes_incremental_job(monkeypatch):
     monkeypatch.setattr(module.store,'pending_gmail_ingestion_count',lambda mid:0)
     monkeypatch.setattr(module,'GmailMailboxProvider',FakeProvider)
     monkeypatch.setattr(module,'decode_gmail_message',lambda raw,email:{'provider_message_id':'m1','provider_thread_id':'t1','sender_email':'jobs'+'@'+'test.invalid','recipient_email':email,'subject':'Interview','sent_at':None,'body':'Scheduled'})
-    monkeypatch.setattr(module,'process_message',lambda mailbox,message,attachments:{'id':'event1'})
+    calls=[]
+    monkeypatch.setattr(module,'process_message',lambda mailbox,message,attachments,**kwargs:calls.append(kwargs) or None)
     RecruitmentMailWorker().process_job({'id':'j1','mailbox_id':'mb1','attempts':1})
     assert finished[-1]['status']=='COMPLETED'
-    assert finished[-1]['counts']=={'fetched':1,'processed':1,'events':1}
+    assert finished[-1]['counts']=={'fetched':1,'processed':1,'events':0}
+    assert calls == [{'reprocess':False,'defer_ai':True}]
     assert any(v.get('last_successful_sync_at') for v in updates)
 
 
@@ -43,7 +45,7 @@ def test_worker_reprocesses_historical_messages_without_duplicate_download(monke
     monkeypatch.setattr(module,'GmailMailboxProvider',FakeProvider)
     monkeypatch.setattr(module,'process_message',lambda mailbox,message,attachments,**kwargs:calls.append(kwargs) or {'id':'event1'})
     RecruitmentMailWorker().process_job({'id':'j2','mailbox_id':'mb1','attempts':1,'job_type':'HISTORICAL_RESCAN','range_start':__import__('datetime').date(2026,7,1),'range_end':__import__('datetime').date(2026,7,14)})
-    assert calls == [{'reprocess':True}]
+    assert calls == [{'reprocess':True,'defer_ai':True}]
     assert finished[-1]['status']=='COMPLETED'
     assert finished[-1]['counts']=={'fetched':1,'processed':1,'events':1}
 

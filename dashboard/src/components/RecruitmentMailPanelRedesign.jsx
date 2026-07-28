@@ -1,6 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API } from "../config.js";
 import { useConfirm } from "../context/ConfirmContext.jsx";
+import {
+  playGmailReconnectAlertSound,
+  showMailAlertNotification,
+} from "../utils/mailAlertSound.js";
+import { ButtonContent, InlineLoader, OverlayLoader } from "../Loader.jsx";
 
 const request = async (path, options = {}) => {
   const isGet = !options.method || options.method === "GET";
@@ -395,8 +400,7 @@ export function ActionMenu({ row, busy, onAction }) {
   );
 }
 
-export function MailboxRow({ row, busy, onView, onAction }) {
-  const needsReview = Number(row.stats.pending_reviews || 0);
+export function MailboxRow({ row, busy, onAction }) {
   const syncStatus = String(row.stats.latest_sync_status || "").toUpperCase();
   const syncActive = ["QUEUED", "RUNNING"].includes(syncStatus);
   return (
@@ -417,13 +421,6 @@ export function MailboxRow({ row, busy, onView, onAction }) {
         <td data-label="Status">
           <StatusBadge status={row.uiStatus} />
         </td>
-        <td data-label="Relevant Emails">{row.stats.important_emails || 0}</td>
-        <td data-label="Needs Review">
-          <span className={needsReview ? "sot-review-count" : ""}>
-            {needsReview ? "● " : ""}
-            {needsReview}
-          </span>
-        </td>
         <td data-label="Last Sync">
           {syncActive ? (
             <span className="sot-sync-progress" role="status">
@@ -438,16 +435,13 @@ export function MailboxRow({ row, busy, onView, onAction }) {
         </td>
         <td data-label="Actions">
           <div className="sot-row-actions">
-            <button className="sot-outline-button" onClick={() => onView(row)}>
-              View Emails
-            </button>
             <ActionMenu row={row} busy={busy} onAction={onAction} />
           </div>
         </td>
       </tr>
       {row.uiStatus === "RECONNECT_REQUIRED" && (
         <tr className="sot-reconnect-row">
-          <td colSpan={7}>
+          <td colSpan={5}>
             <span>
               ⚠ Gmail connection expired. Reconnect to continue monitoring.
             </span>
@@ -461,7 +455,7 @@ export function MailboxRow({ row, busy, onView, onAction }) {
   );
 }
 
-export function MailboxTable({ rows, busy, onView, onAction }) {
+export function MailboxTable({ rows, busy, onAction }) {
   return (
     <div className="sot-table-wrap">
       <table className="sot-mailbox-table">
@@ -470,8 +464,6 @@ export function MailboxTable({ rows, busy, onView, onAction }) {
             <th>Candidate</th>
             <th>Gmail Account</th>
             <th>Status</th>
-            <th>Relevant Emails</th>
-            <th>Needs Review</th>
             <th>Last Sync</th>
             <th>Actions</th>
           </tr>
@@ -483,14 +475,77 @@ export function MailboxTable({ rows, busy, onView, onAction }) {
                 key={row.mailbox.id}
                 row={row}
                 busy={busy}
-                onView={onView}
                 onAction={onAction}
               />
             ))
           ) : (
             <tr>
-              <td colSpan={7} className="sot-empty">
+              <td colSpan={5} className="sot-empty">
                 No mailboxes match this view.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function PendingMailboxTable({ candidates, busy, onConnect }) {
+  return (
+    <div className="sot-table-wrap">
+      <table className="sot-mailbox-table sot-pending-mailbox-table">
+        <thead>
+          <tr>
+            <th>Candidate</th>
+            <th>Phone</th>
+            <th>Technology</th>
+            <th>Email on profile</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {candidates.length ? (
+            candidates.map((candidate) => (
+              <tr key={candidate.id}>
+                <td data-label="Candidate">
+                  <div className="sot-candidate">
+                    <span className="sot-avatar">
+                      {initials(candidate.name)}
+                    </span>
+                    <div>
+                      <strong>{candidate.name}</strong>
+                      <small>Profile in progress</small>
+                    </div>
+                  </div>
+                </td>
+                <td data-label="Phone">{candidate.phone || "Not added"}</td>
+                <td data-label="Technology">
+                  {candidate.technology || "Not specified"}
+                </td>
+                <td data-label="Email on profile">
+                  {candidate.email ||
+                    candidate.email_address ||
+                    candidate.gmail_address ||
+                    candidate.candidate_email ||
+                    "Not added"}
+                </td>
+                <td data-label="Action">
+                  <button
+                    type="button"
+                    className="sot-link-gmail-button"
+                    disabled={busy}
+                    onClick={() => onConnect(candidate)}
+                  >
+                    Link Gmail
+                  </button>
+                </td>
+              </tr>
+            ))
+          ) : (
+            <tr>
+              <td colSpan={5} className="sot-empty">
+                Every in-progress profile candidate has a linked Gmail account.
               </td>
             </tr>
           )}
@@ -1119,9 +1174,9 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
         <button onClick={onClose}>Close</button>
       </header>
       {status === "LOADING" && (
-        <p className="sot-evidence-status" role="status">
-          Loading…
-        </p>
+        <div className="sot-evidence-status">
+          <InlineLoader label="Loading detection evidence…" />
+        </div>
       )}
       {status === "ERROR" && (
         <div className="sot-evidence-status">
@@ -1366,6 +1421,98 @@ function EvidenceDrawer({ id, onClose, onChanged }) {
         </>
       )}
     </aside>
+  );
+}
+
+function AiNodeManager({
+  nodes,
+  busy,
+  refreshing,
+  onRefresh,
+  onMakePrimary,
+  onUnload,
+}) {
+  return (
+    <section className="sot-ai-nodes" aria-label="Ollama AI nodes">
+      <header>
+        <strong>AI nodes</strong>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={busy || refreshing}
+          aria-label="Refresh AI node health"
+        >
+          <ButtonContent loading={refreshing} loadingLabel="Checking">
+            Refresh
+          </ButtonContent>
+        </button>
+      </header>
+      <div className="sot-ai-node-grid">
+        {nodes.length ? (
+          nodes.map((node) => (
+            <article
+              className={`sot-ai-node is-${node.status || "offline"}`}
+              key={node.id}
+            >
+              <div className="sot-ai-node-title">
+                <i aria-hidden="true" />
+                <strong>{node.label}</strong>
+                {node.primary && <span>PRIMARY</span>}
+              </div>
+              <dl>
+                <div>
+                  <dt>Health</dt>
+                  <dd>{human(node.status || "offline")}</dd>
+                </div>
+                <div>
+                  <dt>Required models</dt>
+                  <dd>{node.ready ? "Ready" : "Missing / unavailable"}</dd>
+                </div>
+                <div>
+                  <dt>Vision model</dt>
+                  <dd>{node.model_loaded ? "Loaded" : "Idle"}</dd>
+                </div>
+                <div>
+                  <dt>Response</dt>
+                  <dd>
+                    {node.response_time_ms == null
+                      ? "—"
+                      : `${node.response_time_ms} ms`}
+                  </dd>
+                </div>
+              </dl>
+              <div className="sot-ai-node-actions">
+                {!node.primary && (
+                  <button
+                    type="button"
+                    disabled={busy || !node.ready}
+                    onClick={() => onMakePrimary(node)}
+                  >
+                    Set primary
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="is-warning"
+                  disabled={busy || !node.endpoint_reachable}
+                  onClick={() => onUnload(node)}
+                  title={`Unload AI models on ${node.label}`}
+                >
+                  Unload
+                </button>
+              </div>
+              {!node.endpoint_reachable && (
+                <small className="sot-ai-node-error">
+                  Connection unavailable
+                </small>
+              )}
+            </article>
+          ))
+        ) : (
+          <p className="sot-empty">Node health has not loaded yet.</p>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -1725,9 +1872,9 @@ function InterviewWorkspace({ notifications, summary, onReview, onOpenMail }) {
 export default function RecruitmentMailPanelRedesign() {
   const today = new Date().toISOString().slice(0, 10);
   const { confirm } = useConfirm();
-  // Human decisions are the operational bottleneck, so every visit starts on
-  // one unified selection/offer/interview review lane.
-  const [tab, setTab] = useState("reviews");
+  // This page is intentionally mailbox-only. Career review and interview
+  // operations live in their dedicated pages.
+  const [tab, setTab] = useState("mailboxes");
   const [metrics, setMetrics] = useState({
     needs_review: 0,
     selected: 0,
@@ -1752,124 +1899,118 @@ export default function RecruitmentMailPanelRedesign() {
   const [reviewStatusFilter, setReviewStatusFilter] = useState("");
   const [timeline, setTimeline] = useState([]);
   const [search, setSearch] = useState("");
-  const [mailboxFilter, setMailboxFilter] = useState("ALL");
+  const [mailboxListMode, setMailboxListMode] = useState("linked");
   const [showAddMailbox, setShowAddMailbox] = useState(false);
   const [newMailboxCandidateId, setNewMailboxCandidateId] = useState("");
   const [newMailboxEmail, setNewMailboxEmail] = useState("");
   const [message, setMessage] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [evidenceId, setEvidenceId] = useState(null);
   const [updatedAt, setUpdatedAt] = useState(null);
   const [aiStatus, setAiStatus] = useState(null);
+  const [aiNodes, setAiNodes] = useState([]);
   const [refreshingAi, setRefreshingAi] = useState(false);
-  const [range, setRange] = useState({
-    range_start: new Date(Date.now() - 29 * 86400000)
-      .toISOString()
-      .slice(0, 10),
-    range_end: today,
-  });
+  const loadInFlight = useRef(null);
 
-  const load = useCallback(async () => {
-    try {
+  const load = useCallback(async ({ showLoader = false } = {}) => {
+    if (loadInFlight.current) return loadInFlight.current;
+    if (showLoader) setLoading(true);
+    const operation = (async () => {
+      try {
       setMessage("");
-      const [
-        dashboard,
-        review,
-        cases,
-        people,
-        ai,
-        notificationCounts,
-        notificationList,
-      ] = await Promise.all([
-        request("/api/ai-recruitment/dashboard").catch(() => ({
-          metrics: {},
-          charts: {},
-          flags: [],
-        })),
-        request("/api/ai-recruitment/review?status=PENDING&limit=100").catch(
-          () => ({
-            events: [],
-          }),
-        ),
-        request("/api/offer-verification?limit=100").catch(() => ({
-          cases: [],
-        })),
+      const [people, mailboxOverview] = await Promise.all([
         request("/candidates?limit=500"),
-        request("/api/ai-recruitment/ollama/status?refresh=true").catch(() => ({
-          ollama: {
-            status: "unavailable",
-            error_code: "DIAGNOSTICS_REQUEST_FAILED",
-            error_message:
-              "AI diagnostics could not be loaded. Candidate and offer data remain available.",
-          },
+        request("/api/candidate-mailboxes/overview").catch(() => ({
+          mailboxes: [],
         })),
-        request("/api/mail-monitoring/summary").catch(() => ({ summary: {} })),
-        request(
-          "/api/mail-monitoring/notifications?limit=100&sort=newest",
-        ).catch(() => ({ notifications: [] })),
       ]);
       const candidateList = people.candidates || [];
-      const mailboxRows = (
-        await Promise.all(
-          candidateList.map(async (candidate) => {
-            try {
-              const result = await request(
-                `/api/candidates/${candidate.id}/mailbox`,
-              );
-              // Multi-mailbox: expand one row per mailbox
-              const list =
-                result.mailboxes && result.mailboxes.length
-                  ? result.mailboxes
-                  : result.mailbox
-                    ? [{ mailbox: result.mailbox, stats: result.stats || {} }]
-                    : [];
-              return list.map((entry) => ({
-                candidate,
-                mailbox: entry.mailbox,
-                stats: entry.stats || {},
-              }));
-            } catch {
-              return [];
-            }
-          }),
-        )
-      )
-        .flat()
+      const candidatesById = new Map(
+        candidateList.map((candidate) => [String(candidate.id), candidate]),
+      );
+      const mailboxRows = (mailboxOverview.mailboxes || [])
+        .map((entry) => {
+          const mailbox = entry.mailbox || entry;
+          // Mailboxes connected before duplicate candidate rows were merged
+          // can retain the legacy row id.  The API exposes the canonical id so
+          // those valid Gmail accounts remain visible in the current roster.
+          const candidate =
+            candidatesById.get(String(mailbox.canonical_candidate_id || "")) ||
+            candidatesById.get(String(mailbox.candidate_id));
+          return candidate
+            ? { candidate, mailbox, stats: entry.stats || {} }
+            : null;
+        })
         .filter(Boolean);
-      setMetrics(dashboard.metrics || {});
-      setCharts(dashboard.charts || {});
-      setFlags(dashboard.flags || []);
-      setEvents((review.events || []).filter(isActionRequiredEvent));
-      setOffers(cases.cases || []);
       setCandidates(candidateList);
       setMailboxes(mailboxRows);
-      setMonitoringSummary(notificationCounts.summary || {});
-      setInterviewNotifications(
-        (notificationList.notifications || []).filter((item) =>
-          INTERVIEW_CLASSIFICATIONS.has(
-            String(item.classification || "").toLowerCase(),
-          ),
-        ),
-      );
-      setAiStatus(ai.ollama || null);
       setUpdatedAt(new Date());
-    } catch (error) {
-      setMessage(error.message);
+      } catch (error) {
+        setMessage(error.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+    loadInFlight.current = operation;
+    try {
+      return await operation;
+    } finally {
+      loadInFlight.current = null;
     }
   }, []);
 
   useEffect(() => {
-    load();
+    load({ showLoader: true });
   }, [load]);
+  useEffect(() => {
+    let stopped = false;
+    const refreshMailboxHealth = async () => {
+      try {
+        const body = await request(`/api/candidate-mailboxes/health?_=${Date.now()}`);
+        if (stopped) return;
+        const healthById = new Map(
+          (body.mailboxes || []).map((mailbox) => [String(mailbox.id), mailbox]),
+        );
+        setMailboxes((current) =>
+          current.map((row) => {
+            const health = healthById.get(String(row.mailbox.id));
+            return health ? { ...row, mailbox: { ...row.mailbox, ...health } } : row;
+          }),
+        );
+      } catch {
+        /* The full page load remains the fallback when health polling fails. */
+      }
+    };
+    const timer = window.setInterval(refreshMailboxHealth, 30000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, []);
   const refreshOllama = useCallback(async (interactive = true) => {
     if (interactive) setRefreshingAi(true);
     try {
-      const body = await request(
-        `/api/ai-recruitment/ollama/status?refresh=true&_=${Date.now()}`,
-      );
-      setAiStatus(body.ollama || null);
-      setUpdatedAt(new Date(body.ollama?.last_checked_at || Date.now()));
+      const [statusResult, nodesResult] = await Promise.allSettled([
+        request(`/api/ai-recruitment/ollama/status?_=${Date.now()}`),
+        request(`/api/ai-recruitment/ollama/nodes?_=${Date.now()}`),
+      ]);
+      if (statusResult.status === "fulfilled") {
+        setAiStatus(statusResult.value.ollama || null);
+        setUpdatedAt(
+          new Date(statusResult.value.ollama?.last_checked_at || Date.now()),
+        );
+      }
+      if (nodesResult.status === "fulfilled") {
+        setAiNodes(nodesResult.value.nodes || []);
+      }
+      if (
+        statusResult.status === "rejected" &&
+        nodesResult.status === "rejected"
+      ) {
+        throw statusResult.reason;
+      }
     } catch (error) {
       setAiStatus({
         status: "unavailable",
@@ -1888,6 +2029,9 @@ export default function RecruitmentMailPanelRedesign() {
     }, 60000);
     return () => window.clearInterval(timer);
   }, [refreshOllama]);
+  useEffect(() => {
+    if (!loading) refreshOllama(false);
+  }, [loading, refreshOllama]);
   const activeSyncSignature = mailboxes
     .filter((row) =>
       ["QUEUED", "RUNNING"].includes(
@@ -1898,9 +2042,36 @@ export default function RecruitmentMailPanelRedesign() {
     .join("|");
   useEffect(() => {
     if (!activeSyncSignature) return undefined;
-    const timer = window.setInterval(load, 3000);
+    const refreshActiveSyncs = async () => {
+      try {
+        const body = await request(
+          `/api/candidate-mailboxes/overview?_=${Date.now()}`,
+        );
+        const overviewById = new Map(
+          (body.mailboxes || []).map((entry) => [
+            String((entry.mailbox || entry).id),
+            entry,
+          ]),
+        );
+        setMailboxes((current) =>
+          current.map((row) => {
+            const entry = overviewById.get(String(row.mailbox.id));
+            return entry
+              ? {
+                  ...row,
+                  mailbox: { ...row.mailbox, ...(entry.mailbox || entry) },
+                  stats: entry.stats || {},
+                }
+              : row;
+          }),
+        );
+      } catch {
+        /* The normal refresh button remains available when polling fails. */
+      }
+    };
+    const timer = window.setInterval(refreshActiveSyncs, 3000);
     return () => window.clearInterval(timer);
-  }, [activeSyncSignature, load]);
+  }, [activeSyncSignature]);
   useEffect(() => {
     if (!candidateId) {
       setTimeline([]);
@@ -1994,6 +2165,10 @@ export default function RecruitmentMailPanelRedesign() {
           .toLowerCase(),
       );
     }
+  };
+  const startPendingMailboxConnection = (candidate) => {
+    selectNewMailboxCandidate(candidate.id);
+    setShowAddMailbox(true);
   };
   const disconnect = async (row) => {
     const ok = await confirm({
@@ -2141,6 +2316,39 @@ export default function RecruitmentMailPanelRedesign() {
       }),
     [mailboxes],
   );
+  useEffect(() => {
+    const storageKey = "teleautomation:gmail-reconnect-alerted";
+    const disconnected = allRows.filter((row) => row.uiStatus === "RECONNECT_REQUIRED");
+    let alerted = [];
+    try {
+      alerted = JSON.parse(sessionStorage.getItem(storageKey) || "[]");
+    } catch {
+      alerted = [];
+    }
+    const alertedIds = new Set(alerted.map(String));
+    const newlyDisconnected = disconnected.filter(
+      (row) => !alertedIds.has(String(row.mailbox.id)),
+    );
+    if (newlyDisconnected.length) {
+      const names = newlyDisconnected.map((row) => row.candidate.name).filter(Boolean);
+      playGmailReconnectAlertSound({
+        eventId: `gmail-reconnect-${newlyDisconnected.map((row) => row.mailbox.id).sort().join("-")}`,
+      });
+      showMailAlertNotification({
+        status: "Gmail connection expired",
+        candidate_name: names.length === 1 ? names[0] : `${names.length} candidate accounts`,
+        notification_id: `gmail-reconnect-${newlyDisconnected.map((row) => row.mailbox.id).sort().join("-")}`,
+      });
+    }
+    try {
+      sessionStorage.setItem(
+        storageKey,
+        JSON.stringify(disconnected.map((row) => String(row.mailbox.id))),
+      );
+    } catch {
+      /* session storage is optional */
+    }
+  }, [allRows]);
   const rows = useMemo(
     () =>
       candidateId
@@ -2167,18 +2375,39 @@ export default function RecruitmentMailPanelRedesign() {
       `${row.candidate.name} ${row.candidate.phone || ""} ${row.mailbox.email_address}`
         .toLowerCase()
         .includes(needle);
-    const connectedStatuses = ["CONNECTED", "SYNC_QUEUED", "SYNCING"];
-    const matchesFilter =
-      mailboxFilter === "ALL" ||
-      row.uiStatus === mailboxFilter ||
-      (mailboxFilter === "CONNECTED" &&
-        connectedStatuses.includes(row.uiStatus)) ||
-      (mailboxFilter === "RELEVANT_EMAILS" &&
-        Number(row.stats.important_emails || 0) > 0) ||
-      (mailboxFilter === "NEEDS_REVIEW" &&
-        Number(row.stats.pending_reviews || 0) > 0);
-    return matchesSearch && matchesFilter;
+    return matchesSearch;
   });
+  const activeMailboxCount = rows.filter((row) =>
+    ["CONNECTED", "SYNC_QUEUED", "SYNCING"].includes(row.uiStatus),
+  ).length;
+  const pendingMailboxCandidates = useMemo(() => {
+    const linkedCandidateIds = new Set(
+      mailboxes.map((row) => String(row.candidate.id)),
+    );
+    return candidates.filter((candidate) => {
+      const serviceType = String(
+        candidate.service_type || "profile_service",
+      ).toLowerCase();
+      return (
+        serviceType === "profile_service" &&
+        String(candidate.stage || "").toLowerCase() === "in_progress" &&
+        !linkedCandidateIds.has(String(candidate.id))
+      );
+    });
+  }, [candidates, mailboxes]);
+  const visiblePendingMailboxCandidates = pendingMailboxCandidates.filter(
+    (candidate) => {
+      const needle = search.trim().toLowerCase();
+      return (
+        !needle ||
+        `${candidate.name || ""} ${candidate.phone || ""} ${
+          candidate.technology || ""
+        } ${candidate.email || ""}`
+          .toLowerCase()
+          .includes(needle)
+      );
+    },
+  );
   const availableMailboxCandidates = candidates;
   const names = Object.fromEntries(
     candidates.map((candidate) => [candidate.id, candidate.name]),
@@ -2235,22 +2464,9 @@ export default function RecruitmentMailPanelRedesign() {
       }),
     [events],
   );
-  const viewEmails = (row) => {
-    setCandidateId(row.candidate.id);
-    setTab("reviews");
-  };
   const selectStatusFilter = (group) => {
     setReviewStatusFilter((current) => (current === group ? "" : group));
     setTab("reviews");
-  };
-  const rescan = () => {
-    if (!candidateId) return;
-    run(() =>
-      request(`/api/candidates/${candidateId}/mailbox/rescan`, {
-        method: "POST",
-        body: JSON.stringify(range),
-      }),
-    );
   };
   const testOllama = (kind) =>
     run(async () => {
@@ -2266,19 +2482,47 @@ export default function RecruitmentMailPanelRedesign() {
             "Ollama test failed",
         );
     });
+  const makePrimaryNode = (node) =>
+    run(
+      async () => {
+        await request(
+          `/api/ai-recruitment/ollama/nodes/${node.id}/primary`,
+          { method: "POST", body: "{}" },
+        );
+        await refreshOllama(false);
+      },
+      { success: `${node.label} is now the primary AI node.` },
+    );
+  const unloadNodeModels = async (node) => {
+    const ok = await confirm({
+      title: `Unload models on ${node.label}?`,
+      message:
+        "This frees GPU/RAM but does not power off the laptop. Models reload automatically on the next request.",
+      confirmLabel: "Unload models",
+      tone: "warning",
+    });
+    if (!ok) return;
+    await run(
+      async () => {
+        await request(`/api/ai-recruitment/ollama/nodes/${node.id}/unload`, {
+          method: "POST",
+          body: "{}",
+        });
+        await refreshOllama(false);
+      },
+      { success: `Models unloaded from ${node.label}.` },
+    );
+  };
 
   return (
-    <main className="sot-page">
+    <main className="sot-page sot-mailboxes-page">
       <header className="sot-header">
         <div className="sot-title">
           <span className="sot-brand-avatar">AD</span>
           <div>
-            <span className="sot-page-eyebrow">AI MAIL OPERATIONS</span>
-            <h1>Mail &amp; Interview Monitoring</h1>
-            <p>
-              One inbox pipeline, separated into career outcomes and interview
-              scheduling.
-            </p>
+            <span className="sot-page-eyebrow">GMAIL OPERATIONS</span>
+            <h1>Candidate Mailboxes</h1>
+            <p>Connect and monitor candidate Gmail accounts.</p>
           </div>
         </div>
         <div className="sot-header-actions">
@@ -2297,30 +2541,34 @@ export default function RecruitmentMailPanelRedesign() {
               ))}
             </select>
           </label>
-          <span
-            className={`sot-ai-status is-${aiStatus?.status || "unknown"}`}
-            title={aiStatus?.error_message || "Local Ollama status"}
-          >
-            AI{" "}
-            {aiStatus?.status === "healthy"
-              ? "Available"
-              : human(
-                  aiStatus?.diagnostic_status ||
-                    aiStatus?.status ||
-                    "not checked",
-                )}
-          </span>
           <span>
-            Last updated: {updatedAt ? formatTime(updatedAt) : "Loading…"}
+            Last updated: {updatedAt
+              ? formatTime(updatedAt)
+              : <InlineLoader label="Loading data…" />}
           </span>
           <button
-            onClick={() => refreshOllama(true)}
-            disabled={busy || refreshingAi}
+            onClick={() => load({ showLoader: true })}
+            disabled={busy || refreshingAi || loading}
           >
-            ↻ Refresh
+            <ButtonContent loading={loading} loadingLabel="Refreshing">
+              ↻ Refresh
+            </ButtonContent>
           </button>
         </div>
       </header>
+      <AiNodeManager
+        nodes={aiNodes}
+        busy={busy}
+        refreshing={refreshingAi}
+        onRefresh={() => refreshOllama(true)}
+        onMakePrimary={makePrimaryNode}
+        onUnload={unloadNodeModels}
+      />
+      {loading && (
+        <div className="sot-page-loader">
+          <OverlayLoader label="Loading candidate mailboxes…" />
+        </div>
+      )}
       {message && <div className="sot-alert">{message}</div>}
       {notice && (
         <div className="sot-notice" role="status">
@@ -2328,60 +2576,6 @@ export default function RecruitmentMailPanelRedesign() {
           {notice}
         </div>
       )}
-      <section className="sot-health-strip" aria-label="Monitoring health">
-        <div>
-          <span
-            className={`sot-health-dot is-${aiStatus?.status || "unknown"}`}
-          />
-          <small>AI engine</small>
-          <strong>
-            {aiStatus?.status === "healthy" ? "Ready" : "Needs attention"}
-          </strong>
-        </div>
-        <div>
-          <span className="sot-health-dot is-healthy" />
-          <small>Connected Gmail</small>
-          <strong>
-            {
-              rows.filter((row) =>
-                ["CONNECTED", "SYNCING", "SYNC_QUEUED"].includes(row.uiStatus),
-              ).length
-            }{" "}
-            / {rows.length}
-          </strong>
-        </div>
-        <div>
-          <span
-            className={`sot-health-dot ${Number(metrics.needs_review || 0) ? "is-warning" : "is-healthy"}`}
-          />
-          <small>Review queue</small>
-          <strong>{metrics.needs_review || 0} pending</strong>
-        </div>
-        <div>
-          <span className="sot-health-dot is-healthy" />
-          <small>Interview bookings</small>
-          <strong>
-            {monitoringSummary.auto_booked_interviews || 0} automatic
-          </strong>
-        </div>
-      </section>
-      <nav className="sot-tabs">
-        {[
-          ["reviews", "Review Queue"],
-          ["selection", "Selection & Offers"],
-          ["interviews", "Interview Monitoring"],
-          ["overview", "Overview"],
-          ["mailboxes", "Mailboxes"],
-        ].map(([value, label]) => (
-          <button
-            key={value}
-            className={tab === value ? "active" : ""}
-            onClick={() => setTab(value)}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
       {tab === "overview" && (
         <>
           <MonitoringOverview
@@ -2485,9 +2679,9 @@ export default function RecruitmentMailPanelRedesign() {
           <section className="sot-content-card sot-mailbox-overview">
             <div className="sot-overview-head">
               <div>
-                <h2>Mailbox Overview</h2>
+                <h2>Candidate Gmail</h2>
                 <p>
-                  Candidate Gmail accounts monitored for important job outcomes.
+                  Link accounts and monitor important job outcomes.
                 </p>
               </div>
               <div className="sot-overview-actions">
@@ -2498,7 +2692,7 @@ export default function RecruitmentMailPanelRedesign() {
                   onClick={() => setShowAddMailbox((visible) => !visible)}
                   aria-expanded={showAddMailbox}
                 >
-                  {showAddMailbox ? "Close" : "+ Add candidate Gmail"}
+                  {showAddMailbox ? "Cancel" : "+ Add Gmail"}
                 </button>
               </div>
             </div>
@@ -2507,14 +2701,7 @@ export default function RecruitmentMailPanelRedesign() {
                 className="sot-add-mailbox-form"
                 onSubmit={connectNewMailbox}
               >
-                <div className="sot-add-mailbox-copy">
-                  <h3>Connect a candidate Gmail</h3>
-                  <span>
-                    Select a candidate and authorize their Gmail securely with
-                    Google. You can add multiple Gmail accounts for the same
-                    candidate.
-                  </span>
-                </div>
+                <h3>Connect Gmail</h3>
                 <label>
                   Candidate
                   <select
@@ -2563,7 +2750,7 @@ export default function RecruitmentMailPanelRedesign() {
               />
               <MailboxMetric
                 icon="✓"
-                label="Connected"
+                label="Monitoring Active"
                 value={
                   rows.filter((row) => row.uiStatus === "CONNECTED").length +
                   rows.filter((row) =>
@@ -2574,57 +2761,50 @@ export default function RecruitmentMailPanelRedesign() {
               />
               <MailboxMetric
                 icon="!"
-                label="Reconnect Required"
-                value={
-                  rows.filter((row) => row.uiStatus === "RECONNECT_REQUIRED")
-                    .length
-                }
-                tone="red"
-              />
-              <MailboxMetric
-                icon="◉"
-                label="Needs Review"
-                value={
-                  rows.filter(
-                    (row) => Number(row.stats.pending_reviews || 0) > 0,
-                  ).length
-                }
+                label="Pending Gmail"
+                value={pendingMailboxCandidates.length}
                 tone="amber"
               />
             </section>
-            <div className="sot-filter-row">
-              {[
-                ["ALL", "All"],
-                ["CONNECTED", "Connected"],
-                ["RELEVANT_EMAILS", "Relevant Emails"],
-                ["RECONNECT_REQUIRED", "Reconnect Required"],
-                ["NEEDS_REVIEW", "Needs Review"],
-              ].map(([value, label]) => (
-                <FilterButton
-                  key={value}
-                  active={mailboxFilter === value}
-                  onClick={() => setMailboxFilter(value)}
-                >
-                  {label}
-                </FilterButton>
-              ))}
+            <div
+              className="sot-mailbox-view-tabs"
+              role="tablist"
+              aria-label="Mailbox list"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mailboxListMode === "linked"}
+                className={mailboxListMode === "linked" ? "active" : ""}
+                onClick={() => setMailboxListMode("linked")}
+              >
+                Linked <span>{rows.length}</span>
+                <small>{activeMailboxCount} active</small>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mailboxListMode === "pending"}
+                className={mailboxListMode === "pending" ? "active" : ""}
+                onClick={() => setMailboxListMode("pending")}
+              >
+                Pending Gmail <span>{pendingMailboxCandidates.length}</span>
+              </button>
             </div>
-            <MailboxTable
-              rows={visibleRows}
-              busy={busy}
-              onView={viewEmails}
-              onAction={mailboxAction}
-            />
+            {mailboxListMode === "pending" ? (
+              <PendingMailboxTable
+                candidates={visiblePendingMailboxCandidates}
+                busy={busy}
+                onConnect={startPendingMailboxConnection}
+              />
+            ) : (
+              <MailboxTable
+                rows={visibleRows}
+                busy={busy}
+                onAction={mailboxAction}
+              />
+            )}
           </section>
-          <AdvancedToolsAccordion
-            rows={rows}
-            candidateId={candidateId}
-            onCandidate={setCandidateId}
-            range={range}
-            onRange={setRange}
-            onRescan={rescan}
-            busy={busy}
-          />
         </>
       )}
       {tab === "reviews" && (

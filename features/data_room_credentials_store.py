@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from threading import Lock
 
 from core.config import DATA_DIR
@@ -400,6 +402,11 @@ def delete_vault_item(section: str, item_id: str) -> dict | None:
         return None
     data[sec] = filtered
     _save(data)
+    if sec == "offer_letters":
+        try:
+            os.remove(_offer_letter_cache_path(rid))
+        except FileNotFoundError:
+            pass
     return get_credentials()
 
 
@@ -639,5 +646,74 @@ def save_offer_letter_pdf(item_id: str, data: bytes) -> dict:
     with open(tmp, "wb") as f:
         f.write(data)
     os.replace(tmp, cache)
-    return row
+    updated = update_vault_item(
+        "offer_letters",
+        item_id,
+        {
+            "has_pdf": True,
+            "uploaded_at": _now_iso(),
+            "size_kb": max(1, (len(data) + 1023) // 1024),
+        },
+    )
+    return find_offer_letter(item_id) if updated else row
+
+
+def _offer_slug(filename: str) -> str:
+    stem = Path(filename or "offer-letter").stem.casefold()
+    slug = re.sub(r"[^a-z0-9]+", "_", stem).strip("_")[:32] or "offer_letter"
+    existing = {
+        str(row.get("id") or "")
+        for row in get_credentials().get("offer_letters") or []
+        if isinstance(row, dict)
+    }
+    if slug not in existing:
+        return slug
+    while True:
+        candidate = f"{slug[:23]}_{uuid.uuid4().hex[:8]}"
+        if candidate not in existing:
+            return candidate
+
+
+def create_offer_letter_from_pdf(filename: str, pdf_data: bytes) -> dict:
+    """Persist a new PDF and create its editable, auto-filled catalog row."""
+    if not pdf_data:
+        raise ValueError("Empty upload")
+    if len(pdf_data) > _MAX_OFFER_PDF_BYTES:
+        raise ValueError(f"File too large (max {_MAX_OFFER_PDF_BYTES // (1024 * 1024)} MB)")
+    if not pdf_data.startswith(b"%PDF"):
+        raise ValueError("Only PDF offer letters are supported")
+
+    from features.offer_letter_extract import extract_offer_letter_fields
+
+    fields = extract_offer_letter_fields(pdf_data, filename)
+    item_id = _offer_slug(filename)
+    row = {
+        "id": item_id,
+        "filename": fields["filename"],
+        "candidate": fields["candidate"],
+        "company_name": fields["company_name"],
+        "date_modified": fields["date_modified"],
+        "size_kb": fields["size_kb"],
+        "drive_file_id": "",
+        "notes": fields["notes"],
+        "has_pdf": True,
+        "uploaded_at": _now_iso(),
+        "analysis_method": fields["analysis_method"],
+        "analysis_confidence": fields["analysis_confidence"],
+    }
+
+    os.makedirs(_OFFER_CACHE_DIR, exist_ok=True)
+    cache = _offer_letter_cache_path(item_id)
+    tmp = cache + ".tmp"
+    with open(tmp, "wb") as handle:
+        handle.write(pdf_data)
+    os.replace(tmp, cache)
+    _, error = create_vault_item("offer_letters", row)
+    if error:
+        try:
+            os.remove(cache)
+        except OSError:
+            pass
+        raise ValueError(error)
+    return find_offer_letter(item_id) or row
 

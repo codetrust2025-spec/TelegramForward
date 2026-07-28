@@ -99,10 +99,61 @@ def test_virtual_interview_invite_with_concrete_schedule_is_confirmed():
     assert route["status"] == "INTERVIEW_CONFIRMED"
     schedule = extract_interview_schedule(subject, body)
     assert schedule == {
-        "date": "2026-07-21", "time": "12:30 PM", "timezone": None,
+        "date": "2026-07-21", "time": "12:30 PM",
+        "end_time": None, "duration_minutes": None, "timezone": None,
         "mode": "Microsoft Teams", "round": None, "location": None,
         "meeting_link": "https://teams.microsoft.com/meet/428762767388459",
     }
+
+
+def test_schedule_preserves_explicit_hexaware_time_range():
+    schedule = extract_interview_schedule(
+        "Interview scheduled with Hexaware Technologies",
+        (
+            "You have a Video Interview scheduled with Hexaware Technologies "
+            "for Application Front end Lead and L2 Interview on "
+            "Wed 29 Jul 2026 09:45 AM - 10:30 AM (IST)"
+        ),
+    )
+    assert schedule["date"] == "2026-07-29"
+    assert schedule["time"] == "09:45 AM"
+    assert schedule["end_time"] == "10:30 AM"
+    assert schedule["duration_minutes"] == 45
+    assert schedule["timezone"] == "Asia/Kolkata"
+
+
+def test_schedule_extracts_apostrophe_two_digit_year():
+    schedule = extract_interview_schedule(
+        "KPMG L1 Interview",
+        "Date & Time: 7 Jul'26 (Tue) || 7:30 PM Microsoft Teams "
+        "https://teams.microsoft.com/meet/example",
+    )
+    assert schedule["date"] == "2026-07-07"
+    assert schedule["time"] == "07:30 PM"
+
+
+def test_schedule_extracts_indian_numeric_date():
+    schedule = extract_interview_schedule(
+        "L3 Interview | 03/07/2026",
+        "Please join the interview at 12:15 PM IST.",
+    )
+    assert schedule["date"] == "2026-07-03"
+    assert schedule["time"] == "12:15 PM"
+    assert schedule["timezone"] == "Asia/Kolkata"
+
+
+def test_tcs_interview_checklist_never_becomes_appointment_letter():
+    body = """We are delighted to invite you for a discussion. The interview will be video based using MS Teams.
+Interview Details: Date: 22nd July26 Time: 2:30 PM - 3 PM
+Link to join: https://teams.microsoft.com/meet/room
+Mandatory checklist: Mark sheet, last 3 month's payslip, Experience Letter/Relieving Letter/Appointment Letter of all your previous companies.
+"""
+    semantic=classify_context("TCS Interview_ 22nd July26",body,sender_email="hr@tcs.com")
+    routed=prefilter_decision("TCS Interview_ 22nd July26",body,sender_email="hr@tcs.com")
+    assert semantic["interview_event"]=="INTERVIEW_CONFIRMED"
+    assert semantic["is_historical_information"] is False
+    assert routed["status"]=="INTERVIEW_CONFIRMED"
+    assert all(item["meaning"]!="APPOINTMENT_LETTER_RECEIVED" for item in routed["evidence"])
 
 
 def test_virtual_interview_training_with_schedule_is_not_candidate_invite():
@@ -184,7 +235,8 @@ def test_ollama_recovery_reprocesses_idempotently(monkeypatch):
         "attachments": [],
     }
     monkeypatch.setattr("core.ai_gateway.health", lambda **_kwargs: {"endpoint_reachable": True, "model_available": True})
-    monkeypatch.setattr(worker_module.store, "retry_pending_messages", lambda **_kwargs: [row])
+    claimed = [row]
+    monkeypatch.setattr(worker_module.store, "claim_ai_messages", lambda **_kwargs: [claimed.pop(0)] if claimed else [])
     monkeypatch.setattr(worker_module.store, "stored_message", lambda *_args: {"processing_status": "EVENT_CREATED"})
     monkeypatch.setattr(worker_module.store, "schedule_ai_retry", lambda message_id, **kwargs: calls.append((message_id, kwargs)))
     monkeypatch.setattr(worker_module, "process_message", lambda *args, **kwargs: {"id": "same-event", "validation_status": "AUTO_VALIDATED"})
@@ -200,7 +252,8 @@ def test_ollama_recovery_backs_off_when_hidden_retry_remains_pending(monkeypatch
         "attachments": [],
     }
     monkeypatch.setattr("core.ai_gateway.health", lambda **_kwargs: {"endpoint_reachable": True, "model_available": True})
-    monkeypatch.setattr(worker_module.store, "retry_pending_messages", lambda **_kwargs: [row])
+    claimed = [row]
+    monkeypatch.setattr(worker_module.store, "claim_ai_messages", lambda **_kwargs: [claimed.pop(0)] if claimed else [])
     monkeypatch.setattr(worker_module.store, "stored_message", lambda *_args: {"processing_status": "AI_RETRY_PENDING"})
     monkeypatch.setattr(worker_module.store, "schedule_ai_retry", lambda message_id, **kwargs: calls.append((message_id, kwargs)))
     monkeypatch.setattr(worker_module, "process_message", lambda *args, **kwargs: None)

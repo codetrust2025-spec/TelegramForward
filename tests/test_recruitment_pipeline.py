@@ -243,7 +243,7 @@ def test_historical_false_positive_is_archived_from_all_consumers(monkeypatch):
     assert archived[0][1]["status"] == "IGNORED_NOT_OFFER_RELATED"
 
 
-def test_ai_failure_keeps_only_strong_evidence_for_manual_review(monkeypatch):
+def test_ai_failure_never_creates_keyword_derived_lifecycle_event(monkeypatch):
     statuses=[]; created=[]
     monkeypatch.setattr(agent.store,"insert_message",lambda *args:({"id":"stored-message","processing_status":"FILTERED"},True))
     monkeypatch.setattr(agent.store,"is_duplicate_content",lambda *args:False)
@@ -258,13 +258,9 @@ def test_ai_failure_keeps_only_strong_evidence_for_manual_review(monkeypatch):
         message("Congratulations and Next Steps", "Your date of joining will be 15th July 2026."),
         [],
     )
-    assert result["primary_status"] == "JOINING_CONFIRMED"
+    assert result is None
     assert statuses == ["AI_RETRY_PENDING"]
-    assert created[0][0][2]["requires_manual_review"] is True
-    assert created[0][0][2]["lifecycle_event"] == "NONE"
-    assert created[0][1]["model"] == "unavailable:runtimeerror"
-    assert created[0][0][2]["classification_source"] == "FALLBACK"
-    assert created[0][0][2]["ai_validation_status"] == "UNAVAILABLE"
+    assert created == []
 
 
 def test_ai_timeout_keeps_ambiguous_mail_hidden_for_background_retry(monkeypatch):

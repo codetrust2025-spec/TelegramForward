@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -97,6 +98,8 @@ const payloadFor = (url) => {
           name: "Test Candidate",
           phone: "9000000000",
           email: "test.candidate@gmail.com",
+          stage: "in_progress",
+          service_type: "profile_service",
         },
       ],
     };
@@ -276,7 +279,7 @@ describe("RecruitmentMailPanel", () => {
       screen.getByRole("button", { name: "Close Gmail form" }),
     ).toBeInTheDocument();
   });
-  it("refreshes Ollama health without reloading the page", async () => {
+  it("refreshes monitoring data without reloading the page", async () => {
     render(
       <ConfirmProvider>
         <RecruitmentMailPanel />
@@ -286,10 +289,10 @@ describe("RecruitmentMailPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /Refresh/ }));
     await waitFor(() =>
       expect(
-        fetch.mock.calls.some(([url]) =>
-          String(url).includes("/ollama/status?refresh=true&_="),
-        ),
-      ).toBe(true),
+        fetch.mock.calls.filter(([url]) =>
+          String(url).includes("/candidate-mailboxes/overview"),
+        ).length,
+      ).toBeGreaterThanOrEqual(2),
     );
     expect(screen.getByText(/Last updated:/)).not.toHaveTextContent("Loading");
   });
@@ -317,6 +320,78 @@ describe("RecruitmentMailPanel", () => {
       screen.getByRole("button", { name: "Connect Gmail" }),
     ).toBeDisabled();
   });
+  it("shows only in-progress profile candidates without a linked Gmail", async () => {
+    fetch.mockImplementation(async (url) => {
+      const path = String(url);
+      if (path.includes("/candidates?"))
+        return {
+          ok: true,
+          json: async () => ({
+            status: "ok",
+            candidates: [
+              {
+                id: "profile-pending",
+                name: "Pending Profile",
+                phone: "9111111111",
+                email: "pending@example.com",
+                stage: "in_progress",
+                service_type: "profile_service",
+              },
+              {
+                id: "round-wise",
+                name: "Round Wise Candidate",
+                stage: "in_progress",
+                service_type: "round_wise",
+              },
+              {
+                id: "completed-profile",
+                name: "Completed Profile",
+                stage: "completed",
+                service_type: "profile_service",
+              },
+            ],
+          }),
+        };
+      if (path.includes("/candidate-mailboxes/overview"))
+        return {
+          ok: true,
+          json: async () => ({ status: "ok", mailboxes: [] }),
+        };
+      return { ok: true, json: async () => payloadFor(path) };
+    });
+
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+    const pendingTab = await screen.findByRole("tab", {
+      name: "Pending Gmail 1",
+    });
+    fireEvent.click(pendingTab);
+
+    const pendingTable = screen.getByRole("table");
+    expect(within(pendingTable).getByText("Pending Profile")).toBeInTheDocument();
+    expect(
+      within(pendingTable).getByText("Profile in progress"),
+    ).toBeInTheDocument();
+    expect(
+      within(pendingTable).queryByText("Round Wise Candidate"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(pendingTable).queryByText("Completed Profile"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      within(pendingTable).getByRole("button", { name: "Link Gmail" }),
+    );
+    expect(screen.getByLabelText("Candidate Gmail owner")).toHaveValue(
+      "profile-pending",
+    );
+    expect(screen.getByLabelText("Gmail address")).toHaveValue(
+      "pending@example.com",
+    );
+  });
   it("autopopulates the selected candidate's saved email address", async () => {
     render(
       <ConfirmProvider>
@@ -335,13 +410,48 @@ describe("RecruitmentMailPanel", () => {
     );
     expect(screen.getByRole("button", { name: "Connect Gmail" })).toBeEnabled();
   });
-  it("filters mailboxes by relevant emails and review requirements", async () => {
+  it("keeps mailboxes attached to a legacy candidate alias visible", async () => {
+    fetch.mockImplementation(async (url) => {
+      const path = String(url);
+      if (path.includes("/candidate-mailboxes/overview"))
+        return {
+          ok: true,
+          json: async () => ({
+            status: "ok",
+            mailboxes: [
+              {
+                mailbox: {
+                  id: "mailbox-legacy",
+                  candidate_id: "legacy-candidate-row",
+                  canonical_candidate_id: "c1",
+                  email_address: "legacy-linked@gmail.com",
+                  connection_status: "CONNECTED",
+                  monitoring_enabled: true,
+                },
+                stats: { important_emails: 2, pending_reviews: 0 },
+              },
+            ],
+          }),
+        };
+      return { ok: true, json: async () => payloadFor(path) };
+    });
+
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Mailboxes" }));
+
+    expect(await screen.findByText("legacy-linked@gmail.com")).toBeInTheDocument();
+    expect(
+      screen.getByRole("cell", { name: /Test Candidate/ }),
+    ).toBeInTheDocument();
+  });
+  it("keeps mailbox administration separate from mail review reporting", async () => {
     fetch.mockImplementation(async (url, options = {}) => {
       const path = String(url);
-      if (
-        path.includes("/api/candidates/c1/mailbox") &&
-        (!options.method || options.method === "GET")
-      ) {
+      if (path.includes("/candidate-mailboxes/overview")) {
         return {
           ok: true,
           json: async () => ({
@@ -350,6 +460,7 @@ describe("RecruitmentMailPanel", () => {
               {
                 mailbox: {
                   id: "mailbox-relevant",
+                  candidate_id: "c1",
                   email_address: "relevant@gmail.com",
                   connection_status: "CONNECTED",
                   monitoring_enabled: true,
@@ -359,6 +470,7 @@ describe("RecruitmentMailPanel", () => {
               {
                 mailbox: {
                   id: "mailbox-review",
+                  candidate_id: "c1",
                   email_address: "review@gmail.com",
                   connection_status: "CONNECTED",
                   monitoring_enabled: true,
@@ -376,17 +488,20 @@ describe("RecruitmentMailPanel", () => {
         <RecruitmentMailPanel />
       </ConfirmProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Mailboxes" }));
     await screen.findByText("relevant@gmail.com");
     expect(screen.getByText("review@gmail.com")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Relevant Emails" }));
-    expect(screen.getByText("relevant@gmail.com")).toBeInTheDocument();
-    expect(screen.queryByText("review@gmail.com")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Needs Review" }));
-    expect(screen.queryByText("relevant@gmail.com")).not.toBeInTheDocument();
-    expect(screen.getByText("review@gmail.com")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("columnheader", { name: "Relevant Emails" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("columnheader", { name: "Needs Review" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "View Emails" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getAllByLabelText(/More actions for Test Candidate/),
+    ).toHaveLength(2);
   });
   it("shows action confirmation and live sync progress for a mailbox", async () => {
     let syncRequested = false;
@@ -399,23 +514,25 @@ describe("RecruitmentMailPanel", () => {
           json: async () => ({ status: "ok", job: { status: "QUEUED" } }),
         };
       }
-      if (
-        path.includes("/api/candidates/c1/mailbox") &&
-        (!options.method || options.method === "GET")
-      ) {
+      if (path.includes("/candidate-mailboxes/overview")) {
         return {
           ok: true,
           json: async () => ({
             status: "ok",
-            mailbox: {
-              id: "m1",
-              email_address: "candidate@gmail.com",
-              connection_status: "CONNECTED",
-              monitoring_enabled: true,
-            },
-            stats: {
-              latest_sync_status: syncRequested ? "QUEUED" : "COMPLETED",
-            },
+            mailboxes: [
+              {
+                mailbox: {
+                  id: "m1",
+                  candidate_id: "c1",
+                  email_address: "candidate@gmail.com",
+                  connection_status: "CONNECTED",
+                  monitoring_enabled: true,
+                },
+                stats: {
+                  latest_sync_status: syncRequested ? "QUEUED" : "COMPLETED",
+                },
+              },
+            ],
           }),
         };
       }

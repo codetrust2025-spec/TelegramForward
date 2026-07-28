@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import date, datetime
 from typing import Any
 
@@ -69,7 +70,7 @@ def _failure_review_result(message: dict[str, Any], exc: Exception) -> dict[str,
             "company": {"name": None, "domain": None},
             "job": {"title": None, "employment_type": None, "location": None},
             "recruiter": {"name": message.get("sender_name"), "email": message.get("sender_email")},
-            "interview": {key: None for key in ("date", "time", "timezone", "mode", "round", "location", "meeting_link")},
+            "interview": {key: None for key in ("date", "time", "end_time", "duration_minutes", "timezone", "mode", "round", "location", "meeting_link")},
             "offer": {"offer_detected": False, "offer_letter_detected": False,
                       "appointment_letter_detected": False, "offer_date": None,
                       "offered_ctc": None, "currency": None, "joining_date": None,
@@ -112,7 +113,7 @@ def _failure_review_result(message: dict[str, Any], exc: Exception) -> dict[str,
         "company": {"name": None, "domain": None},
         "job": {"title": None, "employment_type": None, "location": None},
         "recruiter": {"name": message.get("sender_name"), "email": message.get("sender_email")},
-        "interview": {key: None for key in ("date", "time", "timezone", "mode", "round", "location", "meeting_link")},
+        "interview": {key: None for key in ("date", "time", "end_time", "duration_minutes", "timezone", "mode", "round", "location", "meeting_link")},
         "offer": {"offer_detected": False, "offer_letter_detected": False,
                   "appointment_letter_detected": False, "offer_date": None,
                   "offered_ctc": None, "currency": None, "joining_date": None,
@@ -254,10 +255,13 @@ SCHEMA = {
         "company": {"type": "object", "properties": {"name": {"type": ["string", "null"]}, "domain": {"type": ["string", "null"]}}, "required": ["name", "domain"]},
         "job": {"type": "object", "properties": {"title": {"type": ["string", "null"]}, "employment_type": {"type": ["string", "null"]}, "location": {"type": ["string", "null"]}}, "required": ["title", "employment_type", "location"]},
         "recruiter": {"type": "object", "properties": {"name": {"type": ["string", "null"]}, "email": {"type": ["string", "null"]}}, "required": ["name", "email"]},
-        "interview": {"type": "object", "properties": {key: {"type": ["string", "null"]} for key in [
-            "date", "time", "timezone", "mode", "round", "location", "meeting_link",
-            "original_date", "original_time", "original_timezone",
-        ]}, "required": ["date", "time", "timezone", "mode", "round", "location", "meeting_link"]},
+        "interview": {"type": "object", "properties": {
+            **{key: {"type": ["string", "null"]} for key in [
+                "date", "time", "end_time", "timezone", "mode", "round", "location", "meeting_link",
+                "original_date", "original_time", "original_timezone",
+            ]},
+            "duration_minutes": {"type": ["integer", "null"], "minimum": 5, "maximum": 720},
+        }, "required": ["date", "time", "timezone", "mode", "round", "location", "meeting_link"]},
         "offer": {"type": "object", "properties": {
             "offer_detected": {"type": "boolean"}, "offer_letter_detected": {"type": "boolean"},
             "appointment_letter_detected": {"type": "boolean"}, "offer_date": {"type": ["string", "null"]},
@@ -317,6 +321,19 @@ def _matching_statuses(text: str) -> list[tuple[str, str]]:
                             "not be treated", "no guarantee of employment",
                         ))
                     ):
+                        continue
+                if status in {"APPOINTMENT_LETTER_RECEIVED", "OFFER_LETTER_RECEIVED"}:
+                    position = lowered.find(phrase)
+                    context = lowered[max(0, position - 240):position + len(phrase) + 240]
+                    requested_history = any(token in context for token in (
+                        "previous companies", "previous company", "mandatory checklist",
+                        "documents are required", "please upload", "please submit", "required documents",
+                    ))
+                    actual_outcome = any(token in context for token in (
+                        "attached", "we are pleased to appoint", "your appointment letter",
+                        "we are pleased to offer", "offer letter has been released",
+                    ))
+                    if requested_history and not actual_outcome:
                         continue
                 matches.append((status, phrase))
                 break
@@ -565,6 +582,71 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
     if errors:
         raise ValueError("invalid selection/offer JSON: " + errors[0].message)
     confidence = float(value["confidence"])
+    interview_statuses = {"INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED"}
+    proposed_status = str(value.get("status") or "").upper()
+    assertive_interview_status = str(context.get("interview_event") or "NONE").upper()
+    if proposed_status in interview_statuses or assertive_interview_status in interview_statuses:
+        # Ollama can return a correct interview event and schedule while also
+        # returning a contradictory generic workflow boolean or a speculative
+        # lifecycle status such as JOINING_CONFIRMED. The model must not veto
+        # or replace an assertive interview event recognized from the original
+        # source text.
+        safe_interview_status, _ = validate_interview_event(
+            assertive_interview_status
+            if assertive_interview_status in interview_statuses
+            else proposed_status,
+            context,
+        )
+        if safe_interview_status != "NONE":
+            source_schedule = extract_interview_schedule(
+                str((message or {}).get("subject") or ""),
+                str((message or {}).get("body") or ""),
+                sent_at=(message or {}).get("sent_at"),
+            )
+            interview = value.setdefault("interview", {})
+            # Canonicalize a model-supplied 24-hour time only when it describes
+            # the same minute as the explicit 12-hour source value. Missing or
+            # conflicting model fields still fail the normal safety checks.
+            model_time = str(interview.get("time") or "").strip()
+            source_time = str(source_schedule.get("time") or "").strip()
+            if model_time and source_time:
+                try:
+                    model_parsed = datetime.strptime(model_time, "%H:%M")
+                    source_parsed = datetime.strptime(source_time.upper(), "%I:%M %p")
+                    if (
+                        model_parsed.hour * 60 + model_parsed.minute
+                        == source_parsed.hour * 60 + source_parsed.minute
+                    ):
+                        interview["time"] = source_time
+                except ValueError:
+                    pass
+            model_timezone = str(interview.get("timezone") or "").strip()
+            source_timezone = str(source_schedule.get("timezone") or "").strip()
+            if (
+                model_timezone.upper() in {"IST", "ASIA/KOLKATA"}
+                and source_timezone == "Asia/Kolkata"
+            ):
+                interview["timezone"] = source_timezone
+            # The deterministic source parser reads an explicit visible range
+            # from the email body. Preserve it even if a model omitted the end.
+            source_end_time = str(source_schedule.get("end_time") or "").strip()
+            if source_end_time:
+                interview["end_time"] = source_end_time
+                interview["duration_minutes"] = source_schedule.get("duration_minutes")
+            classification = store._STATUS_CLASSIFICATION[safe_interview_status]
+            value.update(
+                status=safe_interview_status,
+                classification=classification,
+                candidate_status=store._CLASSIFICATION_STATUS[classification],
+                is_selection_or_offer_related=True,
+                should_create_review_record=True,
+                is_job_outcome=True,
+                is_current_event=True,
+                business_domain="INTERVIEW_TRACKING",
+                interview_event=safe_interview_status,
+                lifecycle_event="NONE",
+                ignore_reason=None,
+            )
     positive = bool(value["is_selection_or_offer_related"] and value["should_create_review_record"] and value["status"] in TRACKED_STATUSES)
     if not positive:
         value["status"] = "IGNORED_NOT_OFFER_RELATED"
@@ -574,7 +656,6 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         value["validation_status"] = "REJECTED"
         value["lifecycle_event"] = "NONE"
         return
-    interview_statuses = {"INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED"}
     if value["status"] in interview_statuses:
         safe_status, rejection_reason = validate_interview_event(value["status"], context)
     else:
@@ -695,6 +776,9 @@ date, 12-hour AM/PM time, and timezone. Use INTERVIEW_RESCHEDULED only when the
 message clearly changes an existing interview and includes the new schedule. Use
 INTERVIEW_CANCELLED only for an explicit cancellation. A shortlist without a
 schedule is INTERVIEW_SHORTLISTED or INTERVIEW_UPDATE and must never be confirmed.
+When an explicit interview end time or duration is present, return it as
+interview.end_time or interview.duration_minutes. Never replace a visible duration
+with a default value.
 For a reschedule or cancellation, preserve any stated prior schedule in
 interview.original_date, interview.original_time, and interview.original_timezone.
 Return IST as Asia/Kolkata. Never invent schedule, round, company, or meeting link.
@@ -767,7 +851,7 @@ def _manual_review_from_strong_context(
             str(message.get("subject") or ""), str(message.get("body") or ""),
             sent_at=message.get("sent_at"),
         ) if is_interview else
-        {key: None for key in ("date", "time", "timezone", "mode", "round", "location", "meeting_link")}
+        {key: None for key in ("date", "time", "end_time", "duration_minutes", "timezone", "mode", "round", "location", "meeting_link")}
     )
     return {
         "schema_version": "selection_offer_event_v1",
@@ -902,15 +986,33 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
         attachment_texts, message.get("thread_context"),
     ).get("context") or {}
     models = configured_models()
+    deadline = time.monotonic() + max(
+        20.0,
+        float(os.getenv("AI_JOB_TIMEOUT", os.getenv("AI_RECRUITMENT_JOB_TIMEOUT_SECONDS", "660"))),
+    )
+
+    def remaining_timeout() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 1:
+            raise AIGatewayError("Recruitment AI job deadline exceeded.", code="OLLAMA_REQUEST_TIMEOUT")
+        request_limit = max(
+            5.0,
+            float(os.getenv("OLLAMA_REQUEST_TIMEOUT", os.getenv("AI_RECRUITMENT_REQUEST_TIMEOUT_SECONDS", "300"))),
+        )
+        return min(request_limit, remaining)
 
     def request_model(
         *, messages: list[dict[str, Any]], model: str,
         max_retries: int | None = None, allow_fallback: bool = True,
+        workload: str = "recruitment_mail_classification",
     ):
         """Use the lightweight fallback when the configured runner cannot serve."""
         try:
             return chat_structured(
-                messages=messages, schema=SCHEMA, model=model, max_retries=max_retries
+                messages=messages, schema=SCHEMA, model=model, max_retries=max_retries,
+                timeout=remaining_timeout(),
+                deadline_monotonic=deadline,
+                workload=workload,
             )
         except AIGatewayError as exc:
             fallback = str(models.get("fallback") or "").strip()
@@ -925,7 +1027,10 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
                 model, fallback, exc.code,
             )
             return chat_structured(
-                messages=messages, schema=SCHEMA, model=fallback, max_retries=0
+                messages=messages, schema=SCHEMA, model=fallback, max_retries=0,
+                timeout=remaining_timeout(),
+                deadline_monotonic=deadline,
+                workload=f"{workload}_fallback",
             )
 
     try:
@@ -933,6 +1038,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
             messages=[{"role": "system", "content": CLASSIFIER_PROMPT}, {"role": "user", "content": _prompt_json(payload)}],
             model=models["primary"],
             max_retries=0,
+            workload="recruitment_mail_primary",
         )
         try:
             primary = parse_model_json(primary_response.content)
@@ -942,6 +1048,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
                 messages=[{"role": "system", "content": CLASSIFIER_PROMPT + " Return valid JSON only; no markdown or commentary."},
                           {"role": "user", "content": _prompt_json(payload)}],
                 model=primary_response.model, max_retries=0,
+                workload="recruitment_mail_primary_json_repair",
             )
             try:
                 primary = parse_model_json(repair_response.content)
@@ -958,6 +1065,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
                 model=models["validator"],
                 max_retries=0,
                 allow_fallback=False,
+                workload="recruitment_mail_validator",
             )
             try:
                 validator = parse_model_json(validator_response.content)
@@ -966,6 +1074,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
                     messages=[{"role": "system", "content": VALIDATOR_PROMPT + " Return valid JSON only; no markdown or commentary."},
                               {"role": "user", "content": _prompt_json({"source": payload, "primary_result": primary})}],
                     model=validator_response.model, max_retries=0, allow_fallback=False,
+                    workload="recruitment_mail_validator_json_repair",
                 )
                 try:
                     validator = parse_model_json(validator_response.content)
@@ -990,7 +1099,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
         raise AIGatewayError("AI semantic analysis failed.", code="OLLAMA_INTERNAL_ERROR") from exc
 
 
-def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment_texts: list[dict[str, str]] | None = None, *, reprocess: bool = False) -> dict[str, Any] | None:
+def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment_texts: list[dict[str, str]] | None = None, *, reprocess: bool = False, defer_ai: bool = False) -> dict[str, Any] | None:
     from services.mail_attachment_processor import extract_attachment
     decoded["body"] = clean_email(decoded.get("body") or "")
     decoded["message_hash"] = content_hash("|".join([decoded.get("sender_email") or "", decoded.get("subject") or "", str(decoded.get("sent_at"))]))
@@ -1008,7 +1117,10 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
         route = {"send_to_ai":True,"score":0.25,"reason":"CRITICAL_ATTACHMENT_EXTRACTION_FAILED","context":route.get("context") or {}}
     row, created = store.insert_message(mailbox, decoded, float(route["score"]))
     _publish("mail_received", candidate_id=mailbox.get("candidate_id"), gmail_message_id=decoded.get("provider_message_id"), processing_status="Email Received")
-    if not created and not reprocess:
+    # A crash can happen after the durable message insert but before it is put
+    # on the AI queue.  Resume only that transient state when Gmail retries;
+    # terminal/queued rows remain idempotent.
+    if not created and not reprocess and str(row.get("processing_status") or "").upper() != "FILTERED":
         return None
     previous_status=row.get("processing_status")
     if not reprocess and store.is_duplicate_content(mailbox["candidate_id"], row["id"], decoded["message_hash"], decoded["body_hash"]):
@@ -1017,7 +1129,16 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
     for attachment in processed:
         if attachment.get("checksum"):
             store.save_attachment(row["id"], attachment)
-    if not route["send_to_ai"]:
+    if str(decoded.get("message_direction") or "").upper() == "OUTBOUND":
+        if reprocess:
+            store.archive_event_for_message(row["id"], status="IGNORED_NOT_OFFER_RELATED", reason="OUTBOUND_MESSAGE")
+        store.mark_message_status(row["id"], "IGNORED_NOT_OFFER_RELATED", reason="OUTBOUND_MESSAGE")
+        if reprocess:
+            store.mark_reprocessed(row["id"], previous_status, "IGNORED_NOT_OFFER_RELATED", "MESSAGE_DIRECTION_CORRECTION")
+        return None
+    from services.calendar_invite_parser import trusted_interview_result
+    calendar_result = trusted_interview_result(decoded, safe)
+    if not route["send_to_ai"] and not calendar_result:
         if reprocess:
             store.archive_event_for_message(row["id"], status="IGNORED_NOT_OFFER_RELATED", reason=route["reason"])
         store.mark_message_status(row["id"], "IGNORED_NOT_OFFER_RELATED", reason=route["reason"])
@@ -1027,39 +1148,42 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
     if not reprocess and routed_status in OFFER_CASE_STATUSES and store.is_duplicate_offer_attachment(mailbox["candidate_id"], row["id"]):
         store.mark_message_status(row["id"], "DUPLICATE_OFFER_ATTACHMENT", reason="DUPLICATE_OFFER_ATTACHMENT")
         return None
-    try:
-        _publish("mail_ai_analyzing", candidate_id=mailbox.get("candidate_id"), gmail_message_id=decoded.get("provider_message_id"), processing_status="AI Analyzing")
-        result, model, duration = analyze(decoded, safe)
-    except Exception as exc:
-        # A model outage is not evidence that a message belongs in the review
-        # queue. Preserve only locally evidenced, high-value outcomes for a
-        # human decision. Everything else remains stored as AI_RETRY_PENDING
-        # and is retried by the recovery worker without creating a visible
-        # lifecycle event.
-        result = _manual_review_from_strong_context(
-            decoded, route.get("context") or {}, exc
-        ) or _failure_review_result(decoded, exc)
-        model = f"unavailable:{getattr(exc, 'code', type(exc).__name__).lower()}"
-        duration = 0
-        logger.warning("Recruitment email queued for semantic retry code=%s", getattr(exc, 'code', type(exc).__name__))
-        failure_code = getattr(exc, "code", None) or "OLLAMA_INTERNAL_ERROR"
-        store.mark_message_status(row["id"], "AI_RETRY_PENDING", reason=failure_code)
-        if (
-            result.get("primary_status") == "MANUAL_REVIEW_REQUIRED"
-            and not critical_attachment_failure
-        ):
-            # Unknown/ambiguous mail is not user-actionable while AI is down.
-            # Keep its analysis and retry state for recovery, but do not turn
-            # infrastructure failure into a false-positive review record.
-            try:
-                store.record_analysis(
-                    row["id"], mailbox["candidate_id"], result,
-                    model=model, processing_status="RETRY_PENDING",
-                    error_code=failure_code, error_message=str(exc),
-                )
-            except Exception:
-                logger.debug("Unable to persist hidden retry analysis", exc_info=True)
-            return None
+    if calendar_result:
+        result, model, duration = calendar_result, "rfc5545-authenticated", 0
+    elif defer_ai:
+        store.mark_message_status(row["id"], "AI_QUEUED", reason="DURABLE_AI_QUEUE")
+        _publish("mail_ai_queued", candidate_id=mailbox.get("candidate_id"), gmail_message_id=decoded.get("provider_message_id"), processing_status="AI Queued")
+        return None
+    else:
+        try:
+            _publish("mail_ai_analyzing", candidate_id=mailbox.get("candidate_id"), gmail_message_id=decoded.get("provider_message_id"), processing_status="AI Analyzing")
+            result, model, duration = analyze(decoded, safe)
+        except Exception as exc:
+            # Infrastructure failure is never evidence of a recruitment outcome.
+            # Persist only a neutral retry result; do not derive candidate,
+            # interview, payment, offer, or lifecycle state from keywords.
+            result = _failure_review_result(decoded, exc)
+            model = f"unavailable:{getattr(exc, 'code', type(exc).__name__).lower()}"
+            duration = 0
+            logger.warning("Recruitment email queued for semantic retry code=%s", getattr(exc, 'code', type(exc).__name__))
+            failure_code = getattr(exc, "code", None) or "OLLAMA_INTERNAL_ERROR"
+            store.mark_message_status(row["id"], "AI_RETRY_PENDING", reason=failure_code)
+            if (
+                result.get("primary_status") == "MANUAL_REVIEW_REQUIRED"
+                and not critical_attachment_failure
+            ):
+                # Unknown/ambiguous mail is not user-actionable while AI is down.
+                # Keep its analysis and retry state for recovery, but do not turn
+                # infrastructure failure into a false-positive review record.
+                try:
+                    store.record_analysis(
+                        row["id"], mailbox["candidate_id"], result,
+                        model=model, processing_status="RETRY_PENDING",
+                        error_code=failure_code, error_message=str(exc),
+                    )
+                except Exception:
+                    logger.debug("Unable to persist hidden retry analysis", exc_info=True)
+                return None
     if critical_attachment_failure and (not result.get("is_selection_or_offer_related") or not result.get("should_create_review_record")):
         result = _failure_review_result(decoded, RuntimeError("Critical employment attachment extraction failed"))
         result["reason"] = "A potentially important employment attachment could not be extracted"
@@ -1080,14 +1204,33 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
         result.update(primary_status="MANUAL_REVIEW_REQUIRED", status="MANUAL_REVIEW_REQUIRED",
                       classification="needs_review", candidate_status="Needs Review",
                       requires_manual_review=True, reason="The AI result lacks source-supported evidence")
+    if reprocess:
+        # Downstream booking must distinguish delayed historical recovery from
+        # a live message. This marker is persisted in the structured analysis
+        # so retries preserve the same safety decision.
+        result["_historical_reprocess"] = True
+        historical_classification = store.canonical_classification(result)
+        if historical_classification in {
+            "interview_confirmed", "interview_rescheduled",
+        }:
+            from services.interview_auto_booking import (
+                should_suppress_historical_notification,
+            )
+            result["_suppress_monitoring_notification"] = (
+                should_suppress_historical_notification(
+                    result, historical_classification,
+                )
+            )
     if store.is_duplicate_thread_status(mailbox["candidate_id"], row["id"], result["primary_status"]):
         store.mark_message_status(row["id"], "DUPLICATE_OFFER_EVENT", reason="DUPLICATE_THREAD_STATUS")
         return None
     event = (store.create_or_reprocess_event(mailbox["candidate_id"],row["id"],result,model=model,duration_ms=duration,reason="HISTORICAL_RULE_RESCAN") if reprocess else store.create_event(mailbox["candidate_id"], row["id"], result, model=model, duration_ms=duration))
     logger.info("Recruitment classification saved: event=%s source=%s", event.get("id"), result.get("classification_source", "OLLAMA"))
     if reprocess: store.mark_reprocessed(row["id"],previous_status,"EVENT_CREATED","HISTORICAL_RULE_RESCAN")
-    from services.recruitment_notifications import notify_detection
-    notify_detection(event)
+    suppress_notification = bool(result.get("_suppress_monitoring_notification"))
+    if not suppress_notification:
+        from services.recruitment_notifications import notify_detection
+        notify_detection(event)
     notification = event.get("notification") or {}
     common = {
         "notification_id": notification.get("id"), "candidate_id": event.get("candidate_id"),
@@ -1098,7 +1241,8 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
         "priority": notification.get("priority"),
     }
     _publish("mail_classified", **common)
-    _publish("mail_needs_review" if common["classification"] == "needs_review" else "important_mail_detected", **common)
+    if not suppress_notification:
+        _publish("mail_needs_review" if common["classification"] == "needs_review" else "important_mail_detected", **common)
     if event.get("candidate_status_updated"):
         _publish("candidate_status_updated", **common)
     if notification:

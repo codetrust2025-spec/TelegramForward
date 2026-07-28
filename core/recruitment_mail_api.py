@@ -8,6 +8,7 @@ from core import recruitment_mail_store as store
 from core.dashboard_access import operator_profile, require_fleet_admin, assert_candidate_row_access
 from core.ai_gateway import AIGatewayError, chat_structured, configured_models, health as ollama_health
 from core.ollama_status import snapshot as ollama_status_snapshot
+from core import ollama_nodes
 from features import candidate_store
 from services.gmail_mailbox_provider import authorization_url, exchange_code, encrypt_credentials, GmailMailboxProvider
 
@@ -44,6 +45,21 @@ def _identity_events(candidate_id:str,*,limit:int=100,offset:int=0):
     ordered=sorted(unique.values(),key=lambda event:str(event.get('created_at') or ''),reverse=True)
     return ordered[offset:offset+limit]
 
+def _node_status(node_id:str)->dict:
+    models=configured_models()
+    required=list(dict.fromkeys(filter(None,(models.get('text'),models.get('validator'),models.get('vision')))))
+    status=ollama_nodes.node_health(node_id,model=models['vision'])
+    installed=[str(name) for name in status.get('installed_models',[])]
+    availability={
+        model:any(name.removesuffix(':latest')==model.removesuffix(':latest') for name in installed)
+        for model in required
+    }
+    status['required_models']=availability
+    status['ready']=bool(status.get('endpoint_reachable')) and all(availability.values())
+    if status.get('endpoint_reachable') and not status['ready']:
+        status['status']='degraded'
+    return status
+
 def _renew_gmail_watch(mailbox:dict)->dict|None:
     topic=(os.getenv('GMAIL_PUBSUB_TOPIC') or '').strip()
     if not topic or not mailbox.get('credential_ciphertext'):return None
@@ -67,6 +83,24 @@ def install_recruitment_mail_routes(app):
           'interview_auto_booking_enabled':os.getenv('AI_INTERVIEW_AUTO_BOOKING_ENABLED','false').lower()=='true',
           'gmail_pubsub_configured':bool((os.getenv('GMAIL_PUBSUB_TOPIC') or '').strip() and (os.getenv('GMAIL_PUBSUB_VERIFICATION_TOKEN') or '').strip()),
           'offer_verification_enabled':offer_enabled(),'oauth_configured':oauth_configured()}
+    @app.get('/api/candidate-mailboxes/health')
+    async def candidate_mailbox_health(request:Request):
+        _guard();require_fleet_admin(request)
+        return {'status':'ok','mailboxes':await asyncio.to_thread(store.mailbox_health_rows),'checked_at':datetime.now(timezone.utc)}
+    @app.get('/api/candidate-mailboxes/overview')
+    async def candidate_mailbox_overview(request:Request):
+        _guard();require_fleet_admin(request)
+        rows=await asyncio.to_thread(store.mailbox_overview_rows)
+        # Persisted identity links can point at an older canonical row after
+        # profile candidates are collapsed again. Resolve against the current
+        # Candidates API representation so connected Gmail accounts never
+        # disappear from the mailbox roster.
+        for entry in rows:
+            mailbox=entry.get('mailbox') or entry
+            mailbox['canonical_candidate_id']=candidate_store.canonical_candidate_identity_id(
+                str(mailbox.get('candidate_id') or '')
+            )
+        return {'status':'ok','mailboxes':rows,'checked_at':datetime.now(timezone.utc)}
     @app.post('/api/gmail/pubsub/push')
     async def gmail_pubsub_push(request:Request):
         """Acknowledge a Gmail mailbox-change envelope and queue History API sync."""
@@ -101,6 +135,43 @@ def install_recruitment_mail_routes(app):
         _guard();require_fleet_admin(request)
         status = await __import__('asyncio').to_thread(ollama_health) if refresh else ollama_status_snapshot()
         return {'status':'ok','ollama':status,'models':configured_models()}
+    @app.get('/api/ai-recruitment/ollama/nodes')
+    async def ollama_node_statuses(request:Request):
+        _guard();require_fleet_admin(request)
+        nodes=await asyncio.gather(*[
+            asyncio.to_thread(_node_status,item['id'])
+            for item in ollama_nodes.configured_nodes()
+        ])
+        return {'status':'ok','primary_node':ollama_nodes.primary_node_id(),'nodes':nodes}
+    @app.post('/api/ai-recruitment/ollama/nodes/{node_id}/primary')
+    async def ollama_set_primary(node_id:str,request:Request):
+        _guard();require_fleet_admin(request)
+        try:status=await asyncio.to_thread(_node_status,node_id)
+        except ValueError as exc:raise HTTPException(404,'Unknown Ollama node') from exc
+        if not status.get('ready'):
+            raise HTTPException(409,'This node cannot become primary until it is online and all required models are installed.')
+        await asyncio.to_thread(ollama_nodes.set_primary_node,node_id)
+        status['primary']=True
+        return {'status':'ok','primary_node':node_id,'node':status}
+    @app.post('/api/ai-recruitment/ollama/nodes/{node_id}/unload')
+    async def ollama_unload_node(node_id:str,request:Request):
+        _guard();require_fleet_admin(request)
+        try:
+            health=await asyncio.to_thread(_node_status,node_id)
+            if not health.get('endpoint_reachable'):raise HTTPException(409,'The selected Ollama node is offline.')
+            configured=list(dict.fromkeys(filter(None,configured_models().values())))
+            loaded=[str(model) for model in health.get('loaded_models',[])]
+            models=[
+                model for model in configured
+                if any(name.removesuffix(':latest')==model.removesuffix(':latest') for name in loaded)
+            ]
+            results=[]
+            for model in models:
+                results.append(await asyncio.to_thread(ollama_nodes.unload_model,node_id,model=model))
+            refreshed=await asyncio.to_thread(_node_status,node_id)
+        except ValueError as exc:raise HTTPException(404,'Unknown Ollama node') from exc
+        except RuntimeError as exc:raise HTTPException(409,str(exc)) from exc
+        return {'status':'ok','node':refreshed,'models_unloaded':sum(1 for result in results if result.get('unloaded'))}
     @app.post('/api/ai-recruitment/ollama/test-connection')
     async def ollama_test_connection(request:Request):
         _guard();require_fleet_admin(request)
@@ -141,7 +212,7 @@ def install_recruitment_mail_routes(app):
         candidate_id=candidate_store.canonical_candidate_identity_id(candidate_id)
         email=str(body.get('email_address') or '').strip().lower()
         if '@' not in email:raise HTTPException(400,'Valid Gmail address required')
-        mb=store.upsert_mailbox(candidate_id,email,connection_status='AUTHORIZING');store.audit(actor=profile.get('username') or 'admin',role='admin',action='MAILBOX_CONNECT_STARTED',candidate_id=candidate_id,source_id=mb['id'],new={'email_address':email},source_ip=request.client.host if request.client else None)
+        mb=store.upsert_mailbox(candidate_id,email,identity_ids=_identity_ids(candidate_id),connection_status='AUTHORIZING');store.audit(actor=profile.get('username') or 'admin',role='admin',action='MAILBOX_CONNECT_STARTED',candidate_id=candidate_id,source_id=mb['id'],new={'email_address':email},source_ip=request.client.host if request.client else None)
         redirect=str(body.get('redirect_uri') or os.getenv('GOOGLE_OAUTH_REDIRECT_URI') or '').strip()
         if not redirect:raise HTTPException(503,'GOOGLE_OAUTH_REDIRECT_URI is not configured')
         return {'status':'ok','authorization_url':authorization_url(_state({'candidate_id':candidate_id,'email':email,'actor':profile.get('username'),'redirect_uri':redirect}),redirect)}
@@ -153,7 +224,11 @@ def install_recruitment_mail_routes(app):
         gmail_profile=GmailMailboxProvider(cipher).verify_connection();authorized=str(gmail_profile.get('emailAddress') or '').strip().lower()
         if authorized!=str(data['email']).strip().lower():raise HTTPException(400,'The authorized Gmail account does not match the selected mailbox address')
         candidate_id=candidate_store.canonical_candidate_identity_id(data['candidate_id'])
-        mb=store.upsert_mailbox(candidate_id,data['email'],connection_status='CONNECTED',credential_ciphertext=cipher);actor=data.get('actor') or 'admin';store.audit(actor=actor,role='admin',action='MAILBOX_CONNECTED',candidate_id=candidate_id,source_id=mb['id'],new={'email_address':data['email']})
+        identity_ids=_identity_ids(candidate_id)
+        mb=store.upsert_mailbox(candidate_id,data['email'],identity_ids=identity_ids,monitoring_enabled=True,connection_status='CONNECTED',credential_ciphertext=cipher)
+        mb=store.update_mailbox(mb['id'],{'connection_status':'CONNECTED','monitoring_enabled':True,'failed_sync_count':0,'last_error_code':None,'last_error_message':None,'next_sync_at':datetime.now(timezone.utc)})
+        store.supersede_duplicate_mailboxes(identity_ids,data['email'],mb['id'])
+        actor=data.get('actor') or 'admin';store.audit(actor=actor,role='admin',action='MAILBOX_CONNECTED',candidate_id=candidate_id,source_id=mb['id'],new={'email_address':data['email']})
         if os.getenv('GMAIL_PUBSUB_TOPIC'):
             try:mb=await asyncio.to_thread(_renew_gmail_watch,mb) or mb
             except Exception:logger.exception('Gmail watch registration failed mailbox_id=%s; polling fallback remains active',mb['id'])
@@ -305,7 +380,11 @@ def install_recruitment_mail_routes(app):
             decoded={'provider_message_id':context.get('provider_message_id'),'provider_thread_id':context.get('provider_thread_id'),
               'sender_name':context.get('sender_name'),'sender_email':context.get('sender_email'),'recipient_email':context.get('recipient_email'),
               'subject':context.get('subject'),'sent_at':context.get('sent_at'),'body':context.get('body_text') or '',
-              'html_body':context.get('html_body_text') or ''}
+              'html_body':context.get('html_body_text') or '',
+              'authentication_results':context.get('authentication_results'),
+              'received_spf':context.get('received_spf'),'rfc_message_id':context.get('rfc_message_id'),
+              'message_direction':context.get('message_direction'),'gmail_label_ids':context.get('gmail_label_ids'),
+              'to_metadata':context.get('to_metadata')}
             event=await asyncio.to_thread(process_message,mailbox,decoded,context.get('attachments') or [],reprocess=True)
             store.audit(actor=profile.get('username') or 'admin',role='admin',action='MAIL_AI_EVENT_RETRY',candidate_id=context.get('mailbox_candidate_id'),source_id=event_id,new={'result_event_id':event.get('id') if event else None})
             return {'status':'ok','event':event}
@@ -426,6 +505,14 @@ def install_recruitment_mail_routes(app):
         _guard();require_fleet_admin(request)
         return {'status':'ok','audit':await asyncio.to_thread(store.list_booking_audit,candidate_id=candidate_id,booking_id=booking_id,limit=limit)}
 
+    @app.post('/api/mail-monitoring/notifications/clear-all')
+    async def clear_all_mail_notifications(request:Request):
+        _guard();profile=require_fleet_admin(request)
+        reviewer=profile.get('username') or 'admin'
+        cleared=await asyncio.to_thread(store.clear_notifications,reviewer=reviewer)
+        await asyncio.to_thread(store.audit,actor=reviewer,role='admin',action='MAIL_NOTIFICATIONS_CLEARED',source_id='mail-monitoring',new={'cleared_count':cleared})
+        return {'status':'ok','cleared_count':cleared}
+
     @app.post('/api/mail-monitoring/notifications/{notification_id}/{action}')
     async def mail_notification_action(notification_id:str,action:str,request:Request,body:dict|None=None):
         _guard();profile=require_fleet_admin(request);body=body or {}
@@ -439,7 +526,11 @@ def install_recruitment_mail_routes(app):
             decoded={'provider_message_id':context.get('provider_message_id'),'provider_thread_id':context.get('provider_thread_id'),
               'sender_name':context.get('sender_name'),'sender_email':context.get('sender_email'),'recipient_email':context.get('recipient_email'),
               'subject':context.get('subject'),'sent_at':context.get('sent_at'),'body':context.get('body_text') or '',
-              'html_body':context.get('html_body_text') or ''}
+              'html_body':context.get('html_body_text') or '',
+              'authentication_results':context.get('authentication_results'),
+              'received_spf':context.get('received_spf'),'rfc_message_id':context.get('rfc_message_id'),
+              'message_direction':context.get('message_direction'),'gmail_label_ids':context.get('gmail_label_ids'),
+              'to_metadata':context.get('to_metadata')}
             event=await asyncio.to_thread(process_message,mailbox,decoded,context.get('attachments') or [],reprocess=True)
             store.audit(actor=profile.get('username') or 'admin',role='admin',action='MAIL_AI_RERUN',candidate_id=context.get('candidate_id'),source_id=notification_id,new={'event_id':event.get('id') if event else None})
             return {'status':'ok','event':event}

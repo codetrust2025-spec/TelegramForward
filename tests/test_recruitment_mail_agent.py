@@ -120,7 +120,79 @@ def test_interview_confidence_0_to_100_is_normalized_and_validated():
     assert row['classification']=='interview_confirmed'
 
 
-@pytest.mark.parametrize(("field","value","match"),[("date",None,"ISO date"),("time","15:00","12-hour time"),("timezone",None,"timezone")])
+def test_assertive_interview_overrides_contradictory_model_workflow_flag():
+    row=interview_result()
+    row.update(
+        should_create_review_record=False,
+        is_job_outcome=False,
+        is_current_event=False,
+        business_domain='SELECTION_TRACKING',
+    )
+    row['interview'].update(date='2026-07-28',time='14:00',timezone='IST')
+    row['evidence']=[{
+        'source':'EMAIL_BODY',
+        'meaning':'INTERVIEW_CONFIRMED',
+        'text':'Your interview is scheduled for 2026-07-28 02:00 PM IST.',
+    }]
+    message={
+        'subject':'Interview Invitation - Charan Reddy M S',
+        'body':'Hi, Charan Reddy M S! Your interview is scheduled for 2026-07-28 02:00 PM IST.',
+        'sender_email':'aitalentquest@hexaware.com',
+        'sent_at':datetime(2026,7,27,11,2,6,tzinfo=timezone.utc),
+    }
+
+    validate_result(row,message)
+
+    assert row['status']=='INTERVIEW_CONFIRMED'
+    assert row['classification']=='interview_confirmed'
+    assert row['should_create_review_record'] is True
+    assert row['is_job_outcome'] is True
+    assert row['business_domain']=='INTERVIEW_TRACKING'
+    assert row['interview']['date']=='2026-07-28'
+    assert row['interview']['time']=='02:00 PM'
+    assert row['interview']['timezone']=='Asia/Kolkata'
+    assert row['validation_status']=='AUTO_VALIDATED'
+
+
+def test_assertive_interview_overrides_speculative_joining_classification():
+    row=valid_result()
+    row.update(
+        status='JOINING_CONFIRMED',
+        classification='joining_confirmed',
+        candidate_status='Joining Confirmed',
+        lifecycle_event='JOINING_CONFIRMED',
+        interview_event='INTERVIEW_CONFIRMED',
+        business_domain='SELECTION_TRACKING',
+        should_create_review_record=False,
+        is_job_outcome=False,
+    )
+    row['interview'].update(date='2026-07-28',time='14:00',timezone='IST')
+    row['evidence']=[{
+        'source':'EMAIL_BODY',
+        'meaning':'INTERVIEW_CONFIRMED',
+        'text':'Your interview is scheduled for 2026-07-28 02:00 PM IST.',
+    }]
+    message={
+        'subject':'Interview Invitation - Charan Reddy M S',
+        'body':'Hi, Charan Reddy M S! Your interview is scheduled for 2026-07-28 02:00 PM IST.',
+        'sender_email':'aitalentquest@hexaware.com',
+        'sent_at':datetime(2026,7,27,11,2,6,tzinfo=timezone.utc),
+    }
+
+    validate_result(row,message)
+
+    assert row['status']=='INTERVIEW_CONFIRMED'
+    assert row['classification']=='interview_confirmed'
+    assert row['candidate_status']=='Interview Confirmed'
+    assert row['lifecycle_event']=='NONE'
+    assert row['business_domain']=='INTERVIEW_TRACKING'
+    assert row['should_create_review_record'] is True
+    assert row['interview']['date']=='2026-07-28'
+    assert row['interview']['time']=='02:00 PM'
+    assert row['interview']['timezone']=='Asia/Kolkata'
+
+
+@pytest.mark.parametrize(("field","value","match"),[("date",None,"ISO date"),("time","17:00","12-hour time"),("timezone",None,"timezone")])
 def test_confirmed_interview_requires_explicit_schedule(field,value,match):
     row=interview_result();row['interview'][field]=value
     message={'subject':'Technical interview','body':'Your interview is scheduled for July 20, 2026 at 03:00 PM IST.'}

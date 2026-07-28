@@ -41,7 +41,12 @@ class RecruitmentMailWorker:
     async def _run(self):
         while not self._stopping:
             try:
-                if os.getenv('AI_INTERVIEW_OFFER_TRACKING_ENABLED','false').lower()=='true' and os.getenv('AI_MAILBOX_SYNC_ENABLED','false').lower()=='true':
+                # A mailbox shown as "Monitoring Active" must always consume
+                # its durable sync queue.  Previously a separate environment
+                # flag could leave the UI active while every queued mail stayed
+                # unprocessed forever.  Keep one explicit feature switch, with
+                # tracking enabled by default for connected mailboxes.
+                if os.getenv('AI_INTERVIEW_OFFER_TRACKING_ENABLED', 'true').lower() != 'false':
                     await asyncio.to_thread(self.schedule_due)
                     self._jobs={task for task in self._jobs if not task.done()}
                     maximum=max(1,min(20,int(os.getenv('AI_MAIL_SYNC_MAX_CONCURRENCY','5'))))
@@ -100,17 +105,25 @@ class RecruitmentMailWorker:
             except Exception:
                 logger.exception('Gmail watch renewal failed mailbox_id=%s; polling fallback remains active',mailbox_id)
     def process_ai_recovery(self):
-        """Safely reprocess stored retry-pending messages when Ollama returns."""
+        """Process leased semantic work independently from Gmail ingestion."""
         from core.ai_gateway import health
         status=health(timeout=5)
         if not status.get('endpoint_reachable') or not status.get('model_available'):
             return
-        for row in store.retry_pending_messages(limit=max(1,min(20,int(os.getenv('AI_MAIL_AI_RETRY_BATCH_SIZE','10'))))):
+        maximum=max(1,min(20,int(os.getenv('AI_MAIL_AI_RETRY_BATCH_SIZE','3'))))
+        lease=max(60,min(900,int(os.getenv('AI_MAIL_AI_LEASE_SECONDS','150'))))
+        for _ in range(maximum):
+            claimed=store.claim_ai_messages(limit=1,lease_seconds=lease)
+            if not claimed:break
+            row=claimed[0]
             mailbox={'id':row['mailbox_id'],'candidate_id':row.get('mailbox_candidate_id') or row.get('candidate_id'),'email_address':row.get('email_address')}
             decoded={'provider_message_id':row.get('provider_message_id'),'provider_thread_id':row.get('provider_thread_id'),
               'sender_name':row.get('sender_name'),'sender_email':row.get('sender_email'),'recipient_email':row.get('recipient_email'),
               'subject':row.get('subject'),'sent_at':row.get('sent_at'),'body':row.get('body_text') or '',
-              'html_body':row.get('html_body_text') or ''}
+              'html_body':row.get('html_body_text') or '','authentication_results':row.get('authentication_results'),
+              'received_spf':row.get('received_spf'),'rfc_message_id':row.get('rfc_message_id'),
+              'message_direction':row.get('message_direction'),'gmail_label_ids':row.get('gmail_label_ids') or [],
+              'to_metadata':row.get('to_metadata') or []}
             try:
                 event=process_message(mailbox,decoded,row.get('attachments') or [],reprocess=True)
                 # A failed semantic retry can intentionally return no visible
@@ -173,7 +186,10 @@ class RecruitmentMailWorker:
                         logger.info('Thread context unavailable mailbox=%s message=%s',mailbox['id'],ref['id'])
                 attachments=([{**item,'text':item.get('extracted_text')} for item in store.attachments_for_message(stored['id'],include_text=True)] if stored and stored.get('body_text') else provider.fetch_attachments(raw))
                 try:
-                    event=(process_message(mailbox,decoded,attachments,reprocess=True) if historical else process_message(mailbox,decoded,attachments))
+                    # Gmail ingestion remains independent of remote inference.
+                    # Persist the message first, then let the bounded AI recovery
+                    # worker classify it with durable retries.
+                    event=process_message(mailbox,decoded,attachments,reprocess=historical,defer_ai=True)
                 except Exception as exc:
                     if ingestion:
                         store.finish_gmail_ingestion(ingestion['id'],status='QUEUED',error=exc,max_attempts=max(1,int(os.getenv('AI_MAIL_SYNC_MAX_RETRIES','5'))))

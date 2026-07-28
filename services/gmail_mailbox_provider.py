@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64, json, os, urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 from email.header import decode_header, make_header
-from email.utils import parseaddr, parsedate_to_datetime
+from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from typing import Any
 from services.mailbox_provider import MailboxProvider
 
@@ -153,5 +153,10 @@ def decode_gmail_message(raw:dict[str,Any],recipient:str)->dict[str,Any]:
     except Exception:sent=datetime.now(timezone.utc)
     subject=str(make_header(decode_header(headers.get('subject',''))))
     content=bodies(raw.get('payload') or {});plain='\n'.join(v for k,v in content if k=='text/plain');html_body='\n'.join(v for k,v in content if k=='text/html')
-    cc=[address.strip() for address in headers.get('cc','').split(',') if address.strip()]
-    return {"provider_message_id":raw['id'],"provider_thread_id":raw.get('threadId'),"sender_name":sender_name,"sender_email":sender_email,"recipient_email":recipient,"cc_metadata":cc,"subject":subject,"sent_at":sent,"body":plain or html_body,"html_body":html_body}
+    to_addresses=[address.lower() for _name,address in getaddresses([headers.get('to','')]) if address]
+    cc=[address.lower() for _name,address in getaddresses([headers.get('cc','')]) if address]
+    labels=[str(value).upper() for value in raw.get('labelIds') or []]
+    mailbox=str(recipient or '').strip().lower()
+    direction=('OUTBOUND' if ('SENT' in labels and 'INBOX' not in labels) or (sender_email.lower()==mailbox and mailbox not in to_addresses) else 'INBOUND')
+    return {"provider_message_id":raw['id'],"provider_thread_id":raw.get('threadId'),"sender_name":sender_name,"sender_email":sender_email,"recipient_email":recipient,"to_metadata":to_addresses,"cc_metadata":cc,"gmail_label_ids":labels,"message_direction":direction,"subject":subject,"sent_at":sent,"body":plain or html_body,"html_body":html_body,
+            "rfc_message_id":headers.get('message-id'),"authentication_results":headers.get('authentication-results'),"received_spf":headers.get('received-spf')}

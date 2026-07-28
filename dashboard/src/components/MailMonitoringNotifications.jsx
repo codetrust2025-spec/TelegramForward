@@ -6,21 +6,55 @@ import {
   playMailAlertSound,
   showMailAlertNotification,
 } from "../utils/mailAlertSound.js";
+import { formatIstDateTime, formatScheduleDateTime } from "../utils/istTime.js";
+import { useConfirm } from "../context/ConfirmContext.jsx";
+import { InlineLoader, OverlayLoader } from "../Loader.jsx";
 
-// Mail Monitoring Notifications track only auto interview slot booking and
-// job confirmed monitoring mails.
+// Important candidate employment outcomes and actionable interview activity.
 const TRACKED_CLASSIFICATIONS = [
   "job_selection_confirmed", "offer_received", "offer_accepted",
-  "joining_confirmed", "interview_confirmed", "interview_rescheduled",
+  "offer_declined", "offer_revoked", "joining_confirmed",
+  "joining_date_updated", "onboarding_started", "background_verification",
+  "document_verification", "compensation_confirmation",
+  "interview_shortlisted", "interview_confirmed", "interview_rescheduled",
+  "interview_cancelled", "candidate_rejected",
+];
+// Tracked categories for the compact notification-type filter.
+const JOB_CONFIRMED_CLASSIFICATIONS = [
+  "job_selection_confirmed", "offer_received", "offer_accepted",
+  "offer_declined", "offer_revoked", "joining_confirmed",
+  "joining_date_updated", "onboarding_started", "background_verification",
+  "document_verification", "compensation_confirmation", "candidate_rejected",
+];
+const AUTO_BOOKING_CLASSIFICATIONS = [
+  "interview_shortlisted", "interview_confirmed", "interview_rescheduled",
   "interview_cancelled",
 ];
-const TRACKED_CANDIDATE_STATUSES = ["Selected", "Offer Received", "Offer Accepted", "Joining Confirmed", "Interview Confirmed", "Interview Rescheduled", "Interview Cancelled"];
-// Tracked categories for quick-filter buttons
-const JOB_CONFIRMED_CLASSIFICATIONS = ["offer_received", "offer_accepted", "job_selection_confirmed"];
-const AUTO_BOOKING_CLASSIFICATIONS = ["interview_confirmed", "interview_rescheduled", "interview_cancelled"];
 const human = (value) => String(value || "").replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
-const when = (value) => value ? new Date(value).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" }) : "—";
+const when = (value) => formatIstDateTime(value, {
+  day: "numeric",
+  hour: "numeric",
+  second: undefined,
+});
 const confidence = (value) => `${Math.round(Number(value || 0) * 100)}%`;
+const plainEmailBody = (value) => {
+  const source = String(value || "");
+  if (!source || !/<[a-z][\s\S]*>/i.test(source) || typeof DOMParser === "undefined") return source;
+  return new DOMParser().parseFromString(source, "text/html").body.textContent || "";
+};
+
+export function mailStatusTone(item = {}) {
+  const status = [item.candidate_status, item.booking_status, item.classification]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (/automatically booked|auto booked|already booked|approved.*booked|joining confirmed|selection confirmed|offer accepted/.test(status)) return "success";
+  if (/processing failed|cancelled|rejected|failed/.test(status)) return "danger";
+  if (/booking blocked|blocked/.test(status)) return "warning";
+  if (/needs review|review required|pending review|review only/.test(status)) return "review";
+  if (/rescheduled|interview confirmed|offer received/.test(status)) return "info";
+  return "neutral";
+}
 
 async function request(path, options = {}) {
   const response = await fetch(`${API}${path}`, {
@@ -148,8 +182,8 @@ export function MailNotificationBell({ compact = false }) {
   };
   const unread = Number(summary.unread || 0);
   return <div className={`mail-bell${compact ? " mail-bell--compact" : ""}`} ref={wrap}>
-    <button type="button" className="mail-bell__button" aria-label={`${unread} unread mail monitoring notifications`} onClick={() => setOpen((value) => !value)}>
-      <span aria-hidden>🔔</span>{unread > 0 && <span className="mail-bell__count">{unread > 99 ? "99+" : unread}</span>}
+    <button type="button" className="mail-bell__button" aria-label={`${unread} unread mail monitoring notifications`} title="Mail monitoring alerts" onClick={() => setOpen((value) => !value)}>
+      <span aria-hidden>📧</span>{unread > 0 && <span className="mail-bell__count">{unread > 99 ? "99+" : unread}</span>}
     </button>
     {open && <div className="mail-bell__popover">
       <header><div><strong>Mail monitoring</strong><span className={`mail-live mail-live--${live.toLowerCase()}`}>{live}</span></div><button type="button" onClick={() => { setOpen(false); navigate("mail-notifications"); }}>View all</button></header>
@@ -177,12 +211,29 @@ function NotificationDetail({ item, onClose, onChanged }) {
     const params = new URLSearchParams(item.booking_id ? { booking_id: item.booking_id } : { candidate_id: item.candidate_id });
     const body = await request(`/api/mail-monitoring/booking-audit?${params}`);
     const rows = body.audit || [];
-    window.alert(rows.length ? rows.map((row) => `${when(row.created_at)} Â· ${row.booking_status}${row.failure_message ? ` Â· ${row.failure_message}` : ""}`).join("\n") : "No booking audit history found.");
+    window.alert(rows.length ? rows.map((row) => `${when(row.created_at)} — ${row.booking_status}${row.failure_message ? ` — ${row.failure_message}` : ""}`).join("\n") : "No booking audit history found.");
   };
+  const originalEmail = item.event_detail?.received_email;
   return <div className="mail-detail-backdrop" role="presentation" onClick={(event) => event.target === event.currentTarget && onClose()}>
     <section className="mail-detail" role="dialog" aria-modal="true" aria-label="Mail monitoring notification">
       <header><div><h3>{item.candidate_status || human(item.classification)}</h3><p>{item.candidate_name || "Candidate"} · {item.company_name || "Company unavailable"}</p></div><button type="button" onClick={onClose} aria-label="Close">×</button></header>
-      <dl><div><dt>Email</dt><dd>{item.email_subject || "No subject"}</dd></div><div><dt>From</dt><dd>{item.sender_name || item.sender_email || "Unknown"}</dd></div><div><dt>Received</dt><dd>{when(item.email_received_at)}</dd></div><div><dt>AI confidence</dt><dd>{confidence(item.ai_confidence)}</dd></div>{item.booking_status && <div><dt>Booking</dt><dd>{item.booking_status}</dd></div>}{item.interview_date && <div><dt>Interview</dt><dd>{item.interview_date} Â· {item.interview_time || "Time unavailable"} {item.interview_timezone || ""}</dd></div>}{item.interview_round && <div><dt>Round</dt><dd>{item.interview_round}</dd></div>}</dl>
+      <dl><div><dt>Email</dt><dd>{item.email_subject || "No subject"}</dd></div><div><dt>From</dt><dd>{item.sender_name || item.sender_email || "Unknown"}</dd></div><div><dt>Mail received</dt><dd>{when(item.email_received_at)}</dd></div><div><dt>Tool detected</dt><dd>{when(item.created_at)}</dd></div><div><dt>AI confidence</dt><dd>{confidence(item.ai_confidence)}</dd></div>{item.booking_status && <div><dt>Booking</dt><dd>{item.booking_status}</dd></div>}{item.interview_date && <div><dt>Interview</dt><dd>{formatScheduleDateTime(item.interview_date, item.interview_time, item.interview_timezone)}</dd></div>}{item.interview_round && <div><dt>Round</dt><dd>{item.interview_round}</dd></div>}</dl>
+      <section className="mail-detail__original" aria-label="Original email">
+        <strong>Original email</strong>
+        {item.detail_loading
+          ? <InlineLoader label="Loading original email…" />
+          : originalEmail
+            ? <>
+                <div className="mail-detail__email-meta">
+                  <span><b>From:</b> {originalEmail.sender_name || originalEmail.sender_email || "Unknown"}</span>
+                  <span><b>To:</b> {originalEmail.recipient_email || item.candidate_email || "Unknown"}</span>
+                  <span><b>Received:</b> {when(originalEmail.sent_at || item.email_received_at)}</span>
+                  <span><b>Subject:</b> {originalEmail.subject || item.email_subject || "(no subject)"}</span>
+                </div>
+                <pre>{plainEmailBody(originalEmail.body) || "This email has no text body."}</pre>
+              </>
+            : <p>{item.detail_error || "The original email body is unavailable."}</p>}
+      </section>
       <div className="mail-detail__copy"><strong>Summary</strong><p>{item.ai_summary || "No summary available."}</p><strong>Detection reason</strong><p>{item.ai_reason || "Contextual classification"}</p><strong>Recommended action</strong><p>{item.recommended_action || "Review the candidate and email before taking action."}</p></div>
       <label>Review note<textarea value={note} onChange={(event) => setNote(event.target.value)} maxLength={2000} /></label>
       <div className="mail-detail__correction"><select value={classification} onChange={(event) => setClassification(event.target.value)}>{TRACKED_CLASSIFICATIONS.map((value) => <option value={value} key={value}>{human(value)}</option>)}</select><input value={candidateStatus} onChange={(event) => setCandidateStatus(event.target.value)} maxLength={80} /></div>
@@ -204,54 +255,100 @@ function NotificationDetail({ item, onClose, onChanged }) {
 }
 
 export function MailMonitoringNotifications() {
+  const { confirm } = useConfirm();
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState({ new_offers: 0, selections: 0, joining_confirmations: 0, auto_booked_interviews: 0, needs_review: 0, unread: 0 });
   const [selected, setSelected] = useState(null);
+  const [clearing, setClearing] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
-  const [filters, setFilters] = useState({ search: "", candidate: "", company: "", classification: "", candidateStatus: "", priority: "", read: "", reviewed: "", min: "", max: "", from: "", to: "", sort: "newest" });
+  const [filters, setFilters] = useState({ search: "", classification: "", priority: "", read: "" });
   const query = useMemo(() => {
-    const params = new URLSearchParams({ limit: "20", offset: String(page * 20), sort: filters.sort });
-    for (const [key, value] of Object.entries({ search:filters.search,candidate_id:filters.candidate,company:filters.company,classification:filters.classification,candidate_status:filters.candidateStatus,priority:filters.priority,is_read:filters.read,is_reviewed:filters.reviewed,confidence_min:filters.min ? Number(filters.min)/100 : "",confidence_max:filters.max ? Number(filters.max)/100 : "",date_from:filters.from,date_to:filters.to })) if (value !== "") params.set(key, String(value));
+    const params = new URLSearchParams({ limit: "20", offset: String(page * 20), sort: "newest" });
+    for (const [key, value] of Object.entries({ search:filters.search,classification:filters.classification,priority:filters.priority,is_read:filters.read })) if (value !== "") params.set(key, String(value));
     return params.toString();
   }, [filters, page]);
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     try { const [list, counts] = await Promise.all([request(`/api/mail-monitoring/notifications?${query}`),request("/api/mail-monitoring/summary")]); setItems(list.notifications || []);setTotal(list.total || 0);setSummary(counts.summary || {}); } catch { /* retain last good state */ }
+    finally { if (!silent) setLoading(false); }
   }, [query]);
-  useMailLive((event) => ["notification_created","important_mail_detected","mail_needs_review","connected"].includes(event?.event) && load());
+  useMailLive((event) => ["notification_created","important_mail_detected","mail_needs_review","connected"].includes(event?.event) && load({ silent:true }));
   useEffect(() => { load(); }, [load]);
   const set = (key) => (event) => { setPage(0); setFilters((value) => ({ ...value, [key]: event.target.value })); };
-  const quick = (classification) => { setPage(0); setFilters((value) => ({ ...value, classification })); };
-  const act = async (item, action) => { await request(`/api/mail-monitoring/notifications/${item.id}/${action}`, { method:"POST", body:"{}" }); load(); };
+  const act = async (item, action) => { await request(`/api/mail-monitoring/notifications/${item.id}/${action}`, { method:"POST", body:"{}" }); load({ silent:true }); };
+  const openNotification = useCallback(async (item) => {
+    setSelected({ ...item, is_read: true, detail_loading: true, detail_error: "" });
+    if (!item.is_read) {
+      setItems((rows) => rows.map((row) => row.id === item.id ? { ...row, is_read: true } : row));
+      setSummary((value) => ({ ...value, unread: Math.max(0, Number(value.unread || 0) - 1) }));
+    }
+    const detailRequest = item.ai_recruitment_event_id
+      ? request(`/api/ai-recruitment/events/${item.ai_recruitment_event_id}`)
+      : Promise.resolve({ event: null });
+    try {
+      const [detail] = await Promise.all([
+        detailRequest,
+        item.is_read
+          ? Promise.resolve()
+          : request(`/api/mail-monitoring/notifications/${item.id}/read`, { method:"POST", body:"{}" }),
+      ]);
+      setSelected((current) => current?.id === item.id
+        ? { ...current, detail_loading: false, event_detail: detail.event || null }
+        : current);
+    } catch (error) {
+      setSelected((current) => current?.id === item.id
+        ? { ...current, detail_loading: false, detail_error: error.message || "Unable to load the original email." }
+        : current);
+    } finally {
+      load({ silent:true });
+    }
+  }, [load]);
+  const clearAll = async () => {
+    const count=summary.visible_total ?? total;
+    const confirmed = await confirm({
+      title: "Clear all mail notifications?",
+      message: `Remove all ${count} notifications from this list across every filter?`,
+      confirmLabel: "Clear notifications",
+      cancelLabel: "Keep notifications",
+      variant: "danger",
+      kept: ["Email evidence", "Booking audits", "Candidate history"],
+    });
+    if (!confirmed) return;
+    setClearing(true);
+    try {
+      await request("/api/mail-monitoring/notifications/clear-all", { method:"POST", body:"{}" });
+      setSelected(null);setPage(0);await load();
+    } finally { setClearing(false); }
+  };
   return <section className="mail-monitoring-page">
-    <header className="mail-monitoring-page__head"><div><p className="mail-eyebrow">AI MAIL MONITORING</p><h1>Mail Monitoring Notifications</h1><p>Persistent candidate job-status alerts with live delivery and administrator review.</p></div><span className="mail-live mail-live--live">Live</span></header>
-    <div className="mail-summary">
-      <button onClick={() => quick("offer_received")}><strong>{summary.new_offers || 0}</strong><span>New offers</span></button>
-      <button onClick={() => quick("job_selection_confirmed")}><strong>{summary.selections || 0}</strong><span>Selections</span></button>
-      <button onClick={() => quick("joining_confirmed")}><strong>{summary.joining_confirmations || 0}</strong><span>Joining confirmations</span></button>
-      <button onClick={() => quick("interview_confirmed")}><strong>{summary.auto_booked_interviews || 0}</strong><span>Auto-booked interviews</span></button>
-      <button onClick={() => setFilters((value) => ({ ...value, priority:"review_required" }))}><strong>{summary.needs_review || 0}</strong><span>Needs review</span></button>
-      <button onClick={() => setFilters((value) => ({ ...value, read:"false" }))}><strong>{summary.unread || 0}</strong><span>Unread alerts</span></button>
+    <header className="mail-monitoring-page__head"><div><p className="mail-eyebrow">AI MAIL MONITORING</p><h1>Mail Monitoring Notifications</h1><p>Persistent candidate job-status alerts with live delivery and administrator review.</p></div><div className="mail-monitoring-page__actions"><button type="button" className="mail-clear-all" disabled={!(summary.visible_total ?? total) || clearing} onClick={clearAll}>{clearing ? "Clearing…" : "Clear all notifications"}</button><span className="mail-live mail-live--live">Live</span></div></header>
+    <div className="mail-summary mail-summary--compact">
+      <button onClick={() => { setPage(0);setFilters({ search:"", classification:"", priority:"", read:"" }); }}><strong>{summary.visible_total || 0}</strong><span>All</span></button>
+      <button onClick={() => { setPage(0);setFilters((value) => ({ ...value, priority:"review_required", read:"" })); }}><strong>{summary.needs_review || 0}</strong><span>Needs review</span></button>
+      <button onClick={() => { setPage(0);setFilters((value) => ({ ...value, read:"false", priority:"" })); }}><strong>{summary.unread || 0}</strong><span>Unread</span></button>
     </div>
-    <div className="mail-filters">
+    <div className="mail-filters mail-filters--compact">
       <input aria-label="Search notifications" placeholder="Search candidate, email, company or subject" value={filters.search} onChange={set("search")} />
-      <input aria-label="Candidate filter" placeholder="Candidate ID" value={filters.candidate} onChange={set("candidate")} />
-      <input aria-label="Company filter" placeholder="Company" value={filters.company} onChange={set("company")} />
-      <select aria-label="Classification filter" value={filters.classification} onChange={set("classification")}><option value="">All tracked classifications</option>{TRACKED_CLASSIFICATIONS.map((value) => <option value={value} key={value}>{human(value)}</option>)}</select>
-      <select aria-label="Candidate status filter" value={filters.candidateStatus} onChange={set("candidateStatus")}><option value="">All candidate statuses</option>{TRACKED_CANDIDATE_STATUSES.map((value) => <option value={value} key={value}>{value}</option>)}</select>
-      <select aria-label="Priority filter" value={filters.priority} onChange={set("priority")}><option value="">All priorities</option><option value="high">High</option><option value="medium">Medium</option><option value="review_required">Review required</option><option value="informational">Informational</option></select>
-      <select aria-label="Read filter" value={filters.read} onChange={set("read")}><option value="">Read & unread</option><option value="false">Unread</option><option value="true">Read</option></select>
-      <select aria-label="Review filter" value={filters.reviewed} onChange={set("reviewed")}><option value="">All review states</option><option value="false">Pending review</option><option value="true">Reviewed</option></select>
-      <input aria-label="Minimum confidence" type="number" min="0" max="100" placeholder="Min confidence %" value={filters.min} onChange={set("min")} />
-      <input aria-label="Maximum confidence" type="number" min="0" max="100" placeholder="Max confidence %" value={filters.max} onChange={set("max")} />
-      <input aria-label="From date" type="date" value={filters.from} onChange={set("from")} /><input aria-label="To date" type="date" value={filters.to} onChange={set("to")} />
-      <select aria-label="Sort" value={filters.sort} onChange={set("sort")}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select>
+      <select aria-label="Classification filter" value={filters.classification} onChange={set("classification")}><option value="">All notification types</option>{TRACKED_CLASSIFICATIONS.map((value) => <option value={value} key={value}>{human(value)}</option>)}</select>
     </div>
-    <div className="mail-table-wrap"><table className="mail-table"><thead><tr><th>Candidate</th><th>Company</th><th>Detected status</th><th>Email subject</th><th>Confidence</th><th>Received</th><th>Review</th><th>Action</th></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} className={item.is_read ? "" : "is-unread"}><td><strong>{item.candidate_name || "Candidate"}</strong><small>{item.candidate_email || ""}</small></td><td>{item.company_name || "—"}<small>{item.job_role || ""}</small></td><td><span className={`mail-priority mail-priority--${item.priority}`}>{item.candidate_status || human(item.classification)}</span></td><td>{item.email_subject || "(no subject)"}</td><td>{confidence(item.ai_confidence)}</td><td>{when(item.email_received_at || item.created_at)}</td><td>{item.is_reviewed ? "Reviewed" : "Pending"}</td><td><button onClick={() => setSelected(item)}>Open</button><button onClick={() => act(item,item.is_read ? "unread" : "read")}>{item.is_read ? "Unread" : "Read"}</button><button onClick={() => act(item,"dismiss")}>Dismiss</button></td></tr>)}
-      {!items.length && <tr><td colSpan={8} className="mail-empty">No notifications match these filters.</td></tr>}
+    <div className={`mail-table-wrap${loading ? " is-loading" : ""}`}>{loading && <OverlayLoader label="Loading notifications…" />}<table className="mail-table"><thead><tr><th>Candidate</th><th>Company</th><th>Detected status</th><th>Email subject</th><th>Confidence</th><th>Mail received</th><th>Tool detected</th><th>Review</th><th>Action</th></tr></thead><tbody>
+      {items.map((item) => <tr
+        key={item.id}
+        className={`${item.is_read ? "" : "is-unread"} mail-notification-row`}
+        tabIndex={0}
+        aria-label={`Open email notification: ${item.email_subject || "no subject"}`}
+        onClick={() => openNotification(item)}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget || !["Enter", " "].includes(event.key)) return;
+          event.preventDefault();
+          openNotification(item);
+        }}
+      ><td><strong>{item.candidate_name || "Candidate"}</strong><small>{item.candidate_email || ""}</small></td><td>{item.company_name || "—"}<small>{item.job_role || ""}</small></td><td><span className={`mail-status mail-status--${mailStatusTone(item)}`}>{item.candidate_status || human(item.classification)}</span></td><td>{item.email_subject || "(no subject)"}</td><td>{confidence(item.ai_confidence)}</td><td>{when(item.email_received_at)}</td><td>{when(item.created_at)}</td><td>{item.is_reviewed ? "Reviewed" : "Pending"}</td><td onClick={(event) => event.stopPropagation()}><button onClick={() => openNotification(item)}>Open</button><button onClick={() => act(item,item.is_read ? "unread" : "read")}>{item.is_read ? "Unread" : "Read"}</button><button onClick={() => act(item,"dismiss")}>Dismiss</button></td></tr>)}
+      {!loading && !items.length && <tr><td colSpan={9} className="mail-empty">No notifications match these filters.</td></tr>}
     </tbody></table></div>
-    <footer className="mail-pagination"><span>{total} notifications</span><button disabled={page===0} onClick={() => setPage((value) => value-1)}>Previous</button><span>Page {page+1}</span><button disabled={(page+1)*20>=total} onClick={() => setPage((value) => value+1)}>Next</button></footer>
+    {total > 20 && <footer className="mail-pagination"><span>{total} notifications</span><button disabled={page===0} onClick={() => setPage((value) => value-1)}>Previous</button><span>Page {page+1}</span><button disabled={(page+1)*20>=total} onClick={() => setPage((value) => value+1)}>Next</button></footer>}
     {selected && <NotificationDetail item={selected} onClose={() => setSelected(null)} onChanged={load} />}
   </section>;
 }

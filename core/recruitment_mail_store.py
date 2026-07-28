@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,8 +33,22 @@ CANONICAL_CLASSIFICATIONS = {
 # notifications.
 TRACKED_NOTIFICATION_CLASSIFICATIONS = {
     "job_selection_confirmed", "offer_received", "offer_accepted",
-    "joining_confirmed", "interview_confirmed", "interview_rescheduled",
-    "interview_cancelled",
+    "offer_declined", "offer_revoked", "joining_confirmed",
+    "joining_date_updated", "onboarding_started", "background_verification",
+    "document_verification", "compensation_confirmation",
+    "interview_shortlisted", "interview_confirmed", "interview_rescheduled",
+    "interview_cancelled", "candidate_rejected",
+}
+IMPORTANT_ALERT_EVIDENCE_MEANINGS = {
+    "SELECTED", "FINAL_SELECTION_CONFIRMED", "JOB_SELECTION_CONFIRMED",
+    "OFFER_INDICATION", "OFFER_IN_PROGRESS", "OFFER_APPROVED",
+    "OFFER_LETTER_RECEIVED", "APPOINTMENT_LETTER_RECEIVED",
+    "OFFER_RECEIVED", "OFFER_ACCEPTED", "OFFER_DECLINED", "OFFER_REVOKED",
+    "JOINING_CONFIRMED", "JOINING_DATE_UPDATED", "POST_SELECTION_ONBOARDING",
+    "ONBOARDING_STARTED", "BACKGROUND_VERIFICATION", "DOCUMENT_VERIFICATION",
+    "COMPENSATION_CONFIRMATION", "INTERVIEW_SHORTLISTED",
+    "INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED",
+    "CANDIDATE_REJECTED",
 }
 
 _STATUS_CLASSIFICATION = {
@@ -167,9 +182,9 @@ def mailbox_for_candidates(candidate_ids: list[str]) -> dict[str, Any] | None:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT * FROM candidate_mailboxes WHERE candidate_id=ANY(%s)
-               ORDER BY monitoring_enabled DESC,
+               ORDER BY (connection_status='CONNECTED') DESC,
+                        monitoring_enabled DESC,
                         (credential_ciphertext IS NOT NULL) DESC,
-                        (connection_status='CONNECTED') DESC,
                         last_successful_sync_at DESC NULLS LAST,
                         updated_at DESC LIMIT 1""",
             (ids,),
@@ -186,9 +201,9 @@ def mailboxes_for_candidates(candidate_ids: list[str]) -> list[dict[str, Any]]:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT * FROM candidate_mailboxes WHERE candidate_id=ANY(%s)
-               ORDER BY monitoring_enabled DESC,
+               ORDER BY (connection_status='CONNECTED') DESC,
+                        monitoring_enabled DESC,
                         (credential_ciphertext IS NOT NULL) DESC,
-                        (connection_status='CONNECTED') DESC,
                         last_successful_sync_at DESC NULLS LAST,
                         updated_at DESC""",
             (ids,),
@@ -204,6 +219,40 @@ def mailboxes_for_candidates(candidate_ids: list[str]) -> list[dict[str, Any]]:
             seen.add(key)
         unique.append(row)
     return unique
+
+
+def mailbox_health_rows() -> list[dict[str, Any]]:
+    """Return credential-free mailbox state for lightweight health polling."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT m.id,m.candidate_id,
+                      COALESCE(l.canonical_candidate_id,m.candidate_id)
+                        AS canonical_candidate_id,
+                      m.email_address,m.connection_status,
+                      m.monitoring_enabled,m.last_error_code,m.last_error_message,
+                      m.last_successful_sync_at,m.updated_at
+               FROM candidate_mailboxes m
+               LEFT JOIN candidate_identity_links l
+                 ON l.alias_candidate_id=m.candidate_id
+               WHERE m.credential_ciphertext IS NOT NULL
+                 AND m.connection_status <> 'SUPERSEDED'
+               ORDER BY m.updated_at DESC""",
+        )
+        return _rows(cur)
+
+
+def mailbox_overview_rows() -> list[dict[str, Any]]:
+    """Return every active mailbox and its counters without exposing credentials.
+
+    This is intentionally a bulk operation for the dashboard.  The old client
+    loaded up to 500 candidates and then called the single-candidate mailbox
+    endpoint once per candidate, which made the initial render depend on
+    hundreds of HTTP round trips.
+    """
+    return [
+        {"mailbox": mailbox, "stats": mailbox_stats(str(mailbox["id"]))}
+        for mailbox in mailbox_health_rows()
+    ]
 
 
 def mailbox_by_id(mailbox_id: str) -> dict[str, Any] | None:
@@ -228,6 +277,7 @@ def mailbox_by_email(email_address: str) -> dict[str, Any] | None:
 
 def upsert_mailbox(candidate_id: str, email: str, **fields: Any) -> dict[str, Any]:
     mailbox_id = fields.pop("id", None) or _id()
+    supplied_identity_ids = fields.pop("identity_ids", None)
     email = str(email or "").strip().lower()
     with get_connection() as conn, conn.cursor() as cur:
         # Reconnecting through a legacy candidate alias must reuse the Gmail
@@ -243,12 +293,14 @@ def upsert_mailbox(candidate_id: str, email: str, **fields: Any) -> dict[str, An
             (canonical_id,),
         )
         identity_ids = {canonical_id, str(candidate_id), *(str(value[0]) for value in cur.fetchall())}
+        if supplied_identity_ids:
+            identity_ids.update(str(value) for value in supplied_identity_ids if value)
         cur.execute(
             """SELECT * FROM candidate_mailboxes
                WHERE candidate_id=ANY(%s) AND lower(email_address)=lower(%s)
-               ORDER BY monitoring_enabled DESC,
+               ORDER BY (connection_status='CONNECTED') DESC,
+                        monitoring_enabled DESC,
                         (credential_ciphertext IS NOT NULL) DESC,
-                        (connection_status='CONNECTED') DESC,
                         last_successful_sync_at DESC NULLS LAST,
                         updated_at DESC LIMIT 1 FOR UPDATE""",
             (list(identity_ids), email),
@@ -256,12 +308,12 @@ def upsert_mailbox(candidate_id: str, email: str, **fields: Any) -> dict[str, An
         existing = _rows(cur)
         if existing:
             cur.execute(
-                """UPDATE candidate_mailboxes SET monitoring_enabled=%s,
+                """UPDATE candidate_mailboxes SET monitoring_enabled=COALESCE(%s,monitoring_enabled),
                      connection_status=%s,
                      credential_ciphertext=COALESCE(%s,credential_ciphertext),
                      updated_at=now() WHERE id=%s RETURNING *""",
                 (
-                    bool(fields.get("monitoring_enabled", False)),
+                    fields.get("monitoring_enabled"),
                     fields.get("connection_status", "PENDING"),
                     fields.get("credential_ciphertext"),
                     existing[0]["id"],
@@ -282,6 +334,30 @@ def upsert_mailbox(candidate_id: str, email: str, **fields: Any) -> dict[str, An
             cur.execute("""INSERT INTO recruitment_review_flags(id,candidate_id,flag_type,severity,details,created_at)
               VALUES(%s,%s,'POSSIBLE_DUPLICATE_CANDIDATE','HIGH',%s::jsonb,now()) ON CONFLICT(candidate_id,event_id,flag_type) DO NOTHING""",(_id(),candidate_id,json.dumps({'matching_candidate_id':duplicate[0],'reason':'same_mailbox_email'})))
         return row
+
+
+def supersede_duplicate_mailboxes(
+    candidate_ids: list[str], email_address: str, keep_mailbox_id: str,
+) -> int:
+    """Disable stale copies of one mailbox across legacy rows for the same person."""
+    ids = [str(value) for value in candidate_ids if value]
+    if not ids:
+        return 0
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE candidate_mailboxes
+               SET monitoring_enabled=false,
+                   connection_status='SUPERSEDED',
+                   next_sync_at=NULL,
+                   last_error_code=NULL,
+                   last_error_message=NULL,
+                   updated_at=now()
+               WHERE candidate_id=ANY(%s)
+                 AND lower(email_address)=lower(%s)
+                 AND id<>%s""",
+            (ids, str(email_address or "").strip(), keep_mailbox_id),
+        )
+        return int(cur.rowcount or 0)
 
 
 def update_mailbox(mailbox_id: str, values: dict[str, Any]) -> dict[str, Any]:
@@ -342,12 +418,14 @@ def stage_gmail_messages(
 
 def claim_gmail_ingestion(mailbox_id: str, *, limit: int) -> list[dict[str, Any]]:
     """Claim a bounded durable batch, recovering rows abandoned by a crash."""
+    lease_minutes = max(1, min(30, int(os.getenv("AI_MAIL_INGESTION_LEASE_MINUTES", "5"))))
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE gmail_message_ingestion_queue SET status='QUEUED',started_at=NULL,updated_at=now(),
                  last_error_message='Recovered after interrupted processing'
-               WHERE mailbox_id=%s AND status='RUNNING' AND updated_at<now()-interval '30 minutes'""",
-            (mailbox_id,),
+               WHERE mailbox_id=%s AND status='RUNNING'
+                 AND updated_at<now()-(%s||' minutes')::interval""",
+            (mailbox_id, lease_minutes),
         )
         cur.execute(
             """SELECT id FROM gmail_message_ingestion_queue
@@ -480,14 +558,21 @@ def insert_message(mailbox: dict[str,Any], message: dict[str,Any], score: float)
     mid=_id()
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""INSERT INTO mailbox_messages(id,mailbox_id,candidate_id,provider_message_id,provider_thread_id,sender_name,sender_email,
-          recipient_email,subject,sent_at,message_hash,body_hash,recruitment_relevance_score,processing_status,body_text,html_body_text,created_at,updated_at)
-          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'FILTERED',%s,%s,now(),now())
+          recipient_email,subject,sent_at,message_hash,body_hash,recruitment_relevance_score,processing_status,body_text,html_body_text,
+          authentication_results,received_spf,rfc_message_id,message_direction,gmail_label_ids,to_metadata,created_at,updated_at)
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'FILTERED',%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,now(),now())
           ON CONFLICT(mailbox_id,provider_message_id) DO UPDATE SET
             body_text=COALESCE(mailbox_messages.body_text,EXCLUDED.body_text),
             html_body_text=COALESCE(mailbox_messages.html_body_text,EXCLUDED.html_body_text),
+            authentication_results=COALESCE(EXCLUDED.authentication_results,mailbox_messages.authentication_results),
+            received_spf=COALESCE(EXCLUDED.received_spf,mailbox_messages.received_spf),
+            rfc_message_id=COALESCE(EXCLUDED.rfc_message_id,mailbox_messages.rfc_message_id),
+            message_direction=COALESCE(EXCLUDED.message_direction,mailbox_messages.message_direction),
+            gmail_label_ids=CASE WHEN EXCLUDED.gmail_label_ids<>'[]'::jsonb THEN EXCLUDED.gmail_label_ids ELSE mailbox_messages.gmail_label_ids END,
+            to_metadata=CASE WHEN EXCLUDED.to_metadata<>'[]'::jsonb THEN EXCLUDED.to_metadata ELSE mailbox_messages.to_metadata END,
             recruitment_relevance_score=GREATEST(COALESCE(mailbox_messages.recruitment_relevance_score,0),EXCLUDED.recruitment_relevance_score),updated_at=now()
           RETURNING *, (xmax = 0) AS was_created""",
-          (mid,mailbox['id'],mailbox['candidate_id'],message['provider_message_id'],message.get('provider_thread_id'),message.get('sender_name'),message.get('sender_email'),message.get('recipient_email'),message.get('subject'),message.get('sent_at'),message['message_hash'],message['body_hash'],score,message.get('body'),message.get('html_body')))
+          (mid,mailbox['id'],mailbox['candidate_id'],message['provider_message_id'],message.get('provider_thread_id'),message.get('sender_name'),message.get('sender_email'),message.get('recipient_email'),message.get('subject'),message.get('sent_at'),message['message_hash'],message['body_hash'],score,message.get('body'),message.get('html_body'),message.get('authentication_results'),message.get('received_spf'),message.get('rfc_message_id'),message.get('message_direction'),json.dumps(message.get('gmail_label_ids') or []),json.dumps(message.get('to_metadata') or [])))
         rows=_rows(cur) if cur.description else []
     if not rows:return {},False
     row=rows[0];created=bool(row.pop('was_created',False));return row,created
@@ -508,12 +593,35 @@ def stored_message(mailbox_id: str, provider_message_id: str) -> dict[str, Any] 
     return rows[0] if rows else None
 
 
+def claim_ai_messages(limit: int = 1, *, lease_seconds: int = 150) -> list[dict[str, Any]]:
+    """Lease queued semantic work so crashes/timeouts cannot lose or duplicate it."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""UPDATE mailbox_messages SET processing_status='AI_QUEUED',ai_lease_expires_at=NULL,
+              updated_at=now(),ai_last_error_code='LEASE_EXPIRED'
+            WHERE processing_status='AI_RUNNING' AND ai_lease_expires_at<now()""")
+        cur.execute("""SELECT id FROM mailbox_messages
+          WHERE processing_status IN ('AI_QUEUED','AI_RETRY_PENDING')
+            AND COALESCE(ai_retry_after,now())<=now()
+          ORDER BY sent_at ASC,id FOR UPDATE SKIP LOCKED LIMIT %s""",(max(1,min(limit,20)),))
+        ids=[row[0] for row in cur.fetchall()]
+        if not ids:return []
+        cur.execute("""UPDATE mailbox_messages m SET processing_status='AI_RUNNING',
+              ai_lease_expires_at=now()+(%s||' seconds')::interval,updated_at=now()
+            FROM candidate_mailboxes b WHERE m.id=ANY(%s) AND b.id=m.mailbox_id
+            RETURNING m.*,b.email_address,b.candidate_id AS mailbox_candidate_id""",
+            (max(30,min(int(lease_seconds),900)),ids))
+        rows=_rows(cur)
+    for row in rows:
+        row['attachments']=[{**item,'text':item.get('extracted_text') or ''} for item in attachments_for_message(row['id'],include_text=True)]
+    return rows
+
+
 def retry_pending_messages(limit: int = 20) -> list[dict[str, Any]]:
-    """Return stored messages awaiting semantic AI recovery processing."""
+    """Compatibility read used by diagnostics; workers should claim leases."""
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""SELECT m.*,b.email_address,b.candidate_id AS mailbox_candidate_id
           FROM mailbox_messages m JOIN candidate_mailboxes b ON b.id=m.mailbox_id
-          WHERE m.processing_status='AI_RETRY_PENDING'
+          WHERE m.processing_status IN ('AI_QUEUED','AI_RETRY_PENDING')
             AND COALESCE(m.ai_retry_after,now())<=now()
           ORDER BY m.sent_at ASC LIMIT %s""",(max(1,min(limit,100)),))
         rows=_rows(cur)
@@ -525,10 +633,11 @@ def retry_pending_messages(limit: int = 20) -> list[dict[str, Any]]:
 def schedule_ai_retry(message_id: str, *, succeeded: bool) -> None:
     with get_connection() as conn, conn.cursor() as cur:
         if succeeded:
-            cur.execute("UPDATE mailbox_messages SET ai_retry_after=NULL,updated_at=now() WHERE id=%s",(message_id,))
+            cur.execute("UPDATE mailbox_messages SET ai_retry_after=NULL,ai_lease_expires_at=NULL,ai_last_error_code=NULL,updated_at=now() WHERE id=%s",(message_id,))
         else:
             cur.execute("""UPDATE mailbox_messages SET ai_retry_count=ai_retry_count+1,
               ai_retry_after=now()+(LEAST(360,POWER(2,LEAST(ai_retry_count+1,8)))||' minutes')::interval,
+              processing_status='AI_RETRY_PENDING',ai_lease_expires_at=NULL,
               updated_at=now() WHERE id=%s""",(message_id,))
 
 
@@ -548,8 +657,9 @@ def mark_message_status(message_id:str,status:str,*,reason:str|None=None,cleanup
     with get_connection() as conn,conn.cursor() as cur:
         cur.execute("""UPDATE mailbox_messages SET processing_status=%s,ignore_reason=%s,
           ignored_at=CASE WHEN %s LIKE 'IGNORED%%' THEN now() ELSE ignored_at END,
-          cleanup_version=COALESCE(%s,cleanup_version),semantic_classifier_version='v3',updated_at=now() WHERE id=%s""",
-          (status,reason,status,cleanup_version,message_id))
+          cleanup_version=COALESCE(%s,cleanup_version),semantic_classifier_version='v3',
+          ai_lease_expires_at=CASE WHEN %s='AI_RUNNING' THEN ai_lease_expires_at ELSE NULL END,updated_at=now() WHERE id=%s""",
+          (status,reason,status,cleanup_version,status,message_id))
 
 
 def is_duplicate_offer_attachment(candidate_id:str,message_id:str)->bool:
@@ -588,10 +698,16 @@ def save_attachment(message_id: str, attachment: dict[str, Any]) -> dict[str, An
     aid = _id()
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""INSERT INTO mailbox_attachment_cache(checksum,mime_type,size,extracted_text,extraction_method,attachment_type,created_at,updated_at)
-          VALUES(%s,%s,%s,%s,%s,%s,now(),now()) ON CONFLICT(checksum) DO UPDATE SET extracted_text=COALESCE(mailbox_attachment_cache.extracted_text,EXCLUDED.extracted_text),updated_at=now()""",
+          VALUES(%s,%s,%s,%s,%s,%s,now(),now()) ON CONFLICT(checksum) DO UPDATE SET
+          extracted_text=CASE WHEN length(COALESCE(EXCLUDED.extracted_text,''))>0 THEN EXCLUDED.extracted_text ELSE mailbox_attachment_cache.extracted_text END,
+          extraction_method=CASE WHEN length(COALESCE(EXCLUDED.extracted_text,''))>0 THEN EXCLUDED.extraction_method ELSE mailbox_attachment_cache.extraction_method END,
+          attachment_type=CASE WHEN length(COALESCE(EXCLUDED.extracted_text,''))>0 THEN EXCLUDED.attachment_type ELSE mailbox_attachment_cache.attachment_type END,
+          updated_at=now()""",
           (attachment['checksum'],attachment.get('mime_type'),attachment.get('size'),attachment.get('text'),attachment.get('extraction_method'),attachment.get('attachment_type')))
         cur.execute("""INSERT INTO mailbox_attachments(id,mailbox_message_id,filename,mime_type,size,checksum,attachment_type,extraction_status,extracted_text_reference,created_at)
-          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,now()) ON CONFLICT(mailbox_message_id,checksum) DO UPDATE SET filename=EXCLUDED.filename RETURNING *""",
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,now()) ON CONFLICT(mailbox_message_id,checksum) DO UPDATE SET
+          filename=EXCLUDED.filename,mime_type=EXCLUDED.mime_type,size=EXCLUDED.size,
+          attachment_type=EXCLUDED.attachment_type,extraction_status=EXCLUDED.extraction_status RETURNING *""",
           (aid,message_id,attachment.get('filename'),attachment.get('mime_type'),attachment.get('size'),attachment['checksum'],attachment.get('attachment_type'),attachment.get('extraction_status'),attachment['checksum']))
         return _rows(cur)[0]
 
@@ -729,6 +845,10 @@ def archive_event_for_message(message_id: str, *, status: str, reason: str, resu
           WHERE id=%s RETURNING *""", (status, structured, reason, previous["id"]))
         archived = _rows(cur)[0]
         cur.execute("UPDATE offer_verification_cases SET verification_status='IGNORED',updated_at=now() WHERE ai_recruitment_event_id=%s", (previous["id"],))
+        cur.execute("""UPDATE mail_monitoring_notifications SET dismissed_at=COALESCE(dismissed_at,now()),
+          is_reviewed=true,reviewed_at=COALESCE(reviewed_at,now()),reviewed_by=COALESCE(reviewed_by,'system'),
+          review_notes=COALESCE(review_notes,%s),is_false_detection=true,updated_at=now()
+          WHERE ai_recruitment_event_id=%s""", (f"Automatically archived: {reason}", previous["id"]))
         # Preserve administrator-confirmed history; remove only unconfirmed AI
         # history that was generated by the now-archived false positive.
         cur.execute("DELETE FROM candidate_status_history WHERE source_id=%s AND confirmed_status IS NULL", (previous["id"],))
@@ -878,8 +998,18 @@ def mailbox_stats(mailbox_id:str)->dict[str,Any]:
           count(*) FILTER(WHERE e.primary_status IN('SELECTED','FINAL_SELECTION_CONFIRMED') AND {predicate}) selection_events,
           count(*) FILTER(WHERE e.primary_status IN('OFFER_INDICATION','OFFER_IN_PROGRESS','OFFER_APPROVED','OFFER_LETTER_RECEIVED','APPOINTMENT_LETTER_RECEIVED','OFFER_ACCEPTED') AND {predicate}) offer_events,
           count(*) FILTER(WHERE e.primary_status='OFFER_LETTER_RECEIVED' AND {predicate}) offer_letters,
-          count(*) FILTER(WHERE e.review_status='PENDING' AND {predicate}) pending_reviews
-          FROM mailbox_messages m LEFT JOIN ai_recruitment_events e ON e.mailbox_message_id=m.id WHERE m.mailbox_id=%s""",params*5+[mailbox_id]);names=[d.name for d in cur.description];stats=dict(zip(names,cur.fetchone()))
+          0::bigint pending_reviews
+          FROM mailbox_messages m LEFT JOIN ai_recruitment_events e ON e.mailbox_message_id=m.id WHERE m.mailbox_id=%s""",params*4+[mailbox_id]);names=[d.name for d in cur.description];stats=dict(zip(names,cur.fetchone()))
+        # The mailbox card and Mail Alerts must use the same review queue.
+        # Counting legacy PENDING events here made fully validated and
+        # historical emails appear as work even though no alert existed.
+        cur.execute("""SELECT count(*) FROM mail_monitoring_notifications
+          WHERE gmail_account_id=%s
+            AND priority='review_required'
+            AND NOT is_reviewed
+            AND dismissed_at IS NULL
+            AND COALESCE(booking_status,'') <> 'Historical Skipped'""",(mailbox_id,))
+        stats['pending_reviews']=int(cur.fetchone()[0])
         cur.execute("""SELECT id,status,job_type,created_at,started_at,completed_at,
           messages_fetched,messages_processed,events_detected,error_message
           FROM mailbox_sync_jobs WHERE mailbox_id=%s ORDER BY created_at DESC LIMIT 1""",(mailbox_id,))
@@ -1133,6 +1263,87 @@ def notification_is_tracked(classification: str) -> bool:
     return classification in TRACKED_NOTIFICATION_CLASSIFICATIONS
 
 
+def should_route_to_mail_alert(
+    event: dict[str, Any],
+    analysis: dict[str, Any],
+    *,
+    source: dict[str, Any] | None = None,
+    today: date | None = None,
+) -> bool:
+    """Return whether a persisted event belongs on the Mail Alerts screen.
+
+    Pending-review infrastructure failures are not useful by themselves.  The
+    source still needs strong employment evidence, and interview alerts must
+    refer to a current or future schedule.  This keeps historical interviews
+    and the old Ollama-timeout false positives out of the administrator queue.
+    """
+    structured = event.get("structured_result") or {}
+    if isinstance(structured, str):
+        structured = json.loads(structured)
+    if structured.get("_suppress_monitoring_notification"):
+        return False
+
+    classification = canonical_classification(
+        analysis,
+        str(event.get("primary_status") or ""),
+    )
+    if not notification_is_tracked(classification):
+        return False
+
+    evidence = structured.get("evidence") or []
+    meanings = {
+        str(item.get("meaning") or "").strip().upper()
+        for item in evidence
+        if isinstance(item, dict)
+    }
+    expected_meanings = {
+        key
+        for key, value in _STATUS_CLASSIFICATION.items()
+        if value == classification
+    }
+    expected_meanings.add(classification.upper())
+
+    requires_review = bool(
+        event.get("requires_manual_review")
+        or structured.get("requires_manual_review")
+        or str(event.get("validation_status") or "").upper()
+        in {"NEEDS_REVIEW", "RETRY_PENDING"}
+    )
+    if requires_review and not (
+        meanings.intersection(expected_meanings)
+        or meanings.intersection(IMPORTANT_ALERT_EVIDENCE_MEANINGS)
+    ):
+        return False
+
+    if classification.startswith("interview_"):
+        interview = structured.get("interview") or {}
+        raw_date = str(interview.get("date") or event.get("interview_date") or "").strip()
+        try:
+            scheduled_date = date.fromisoformat(raw_date)
+        except ValueError:
+            return classification == "interview_cancelled"
+        if scheduled_date < (today or date.today()):
+            return False
+
+        # A trusted calendar event is authoritative.  For fallback-only rows,
+        # also demand an explicit interview subject so newsletter dates/links
+        # cannot become interview alerts during an AI outage.
+        source_name = str(structured.get("classification_source") or "").upper()
+        if requires_review and source_name not in {
+            "ICALENDAR_VERIFIED",
+            "CALENDAR_VERIFIED",
+        }:
+            subject = str((source or {}).get("subject") or event.get("subject") or "")
+            subject_text = subject.casefold()
+            if not any(
+                cue in subject_text
+                for cue in ("interview", "technical screening", "screening round")
+            ):
+                return False
+
+    return True
+
+
 def create_monitoring_notification(event: dict[str, Any], analysis: dict[str, Any]) -> dict[str, Any]:
     """Create a user-facing notification only for tracked classifications.
     
@@ -1146,15 +1357,7 @@ def create_monitoring_notification(event: dict[str, Any], analysis: dict[str, An
         structured = json.loads(structured)
     classification = str(analysis["classification"])
     candidate_status = str(analysis.get("candidate_status") or _CLASSIFICATION_STATUS[classification])
-    
-    # Skip notification creation for non-tracked classifications.
-    # Candidate status, offer verification, and analysis are still persisted
-    # but no user-facing notification is created.
-    if not notification_is_tracked(classification):
-        return {}
-    
-    name, email = _candidate_snapshot(str(event["candidate_id"]), structured)
-    notification_id = _id()
+
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""SELECT m.provider_message_id,m.provider_thread_id,m.subject,m.sender_name,m.sender_email,m.sent_at,m.mailbox_id,m.recipient_email
           FROM mailbox_messages m WHERE m.id=%s""", (message_id,))
@@ -1162,6 +1365,21 @@ def create_monitoring_notification(event: dict[str, Any], analysis: dict[str, An
         if not source:
             raise ValueError("Mailbox message not found for notification")
         provider_id,thread_id,subject,sender_name,sender_email,sent_at,mailbox_id,recipient_email = source
+        source_row = {
+            "provider_message_id": provider_id,
+            "provider_thread_id": thread_id,
+            "subject": subject,
+            "sender_name": sender_name,
+            "sender_email": sender_email,
+            "sent_at": sent_at,
+            "mailbox_id": mailbox_id,
+            "recipient_email": recipient_email,
+        }
+        if not should_route_to_mail_alert(event, analysis, source=source_row):
+            return {}
+
+        name, email = _candidate_snapshot(str(event["candidate_id"]), structured)
+        notification_id = _id()
         company = structured.get("company") or {}
         job = structured.get("job") or {}
         confidence = float(event.get("confidence") or analysis.get("confidence") or 0)
@@ -1245,7 +1463,10 @@ def list_realtime_events(*, after_id: str | None = None, limit: int = 100) -> li
 
 def list_notifications(*, filters: dict[str, Any] | None = None, limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
     filters = filters or {}
-    where: list[str] = ["dismissed_at IS NULL"]
+    where: list[str] = [
+        "dismissed_at IS NULL",
+        "COALESCE(booking_status,'') <> 'Historical Skipped'",
+    ]
     params: list[Any] = []
     exact = {"candidate_id", "candidate_status", "priority"}
     # When no specific classification filter is provided, default to tracked
@@ -1287,7 +1508,8 @@ def list_notifications(*, filters: dict[str, Any] | None = None, limit: int = 50
 
 def notification_summary() -> dict[str, Any]:
     with get_connection() as conn, conn.cursor() as cur:
-        cur.execute("""SELECT count(*) FILTER(WHERE NOT is_read AND dismissed_at IS NULL) unread,
+        cur.execute("""SELECT count(*) FILTER(WHERE dismissed_at IS NULL) visible_total,
+          count(*) FILTER(WHERE NOT is_read AND dismissed_at IS NULL) unread,
           count(*) FILTER(WHERE classification='offer_received' AND dismissed_at IS NULL) new_offers,
           count(*) FILTER(WHERE classification='job_selection_confirmed' AND dismissed_at IS NULL) selections,
           count(*) FILTER(WHERE classification='joining_confirmed' AND dismissed_at IS NULL) joining_confirmations,
@@ -1296,9 +1518,20 @@ def notification_summary() -> dict[str, Any]:
           count(*) FILTER(WHERE priority='review_required' AND NOT is_reviewed AND dismissed_at IS NULL) needs_review,
           count(*) FILTER(WHERE classification IN ('offer_received','offer_accepted','job_selection_confirmed') AND dismissed_at IS NULL) job_confirmed_count,
           count(*) FILTER(WHERE classification IN ('interview_confirmed','interview_rescheduled','interview_cancelled') AND dismissed_at IS NULL) interview_booking_count
-          FROM mail_monitoring_notifications""")
+          FROM mail_monitoring_notifications
+          WHERE COALESCE(booking_status,'') <> 'Historical Skipped'""")
         names = [d.name for d in cur.description]
         return dict(zip(names, cur.fetchone()))
+
+
+def clear_notifications(*, reviewer: str) -> int:
+    """Dismiss every currently visible notification without deleting evidence."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""UPDATE mail_monitoring_notifications SET
+          dismissed_at=now(),is_read=true,read_at=COALESCE(read_at,now()),updated_at=now()
+          WHERE dismissed_at IS NULL RETURNING id""")
+        cleared = len(cur.fetchall())
+    return cleared
 
 
 def update_notification(notification_id: str, action: str, *, reviewer: str, notes: str = "", changes: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1464,8 +1697,15 @@ def attach_booking_to_notification(
     notification_id: str, *, audit_id: str, booking_id: str | None,
     booking_status: str, result: dict[str, Any], priority: str | None = None,
     display_status: str | None = None, detail: str | None = None,
+    schedule: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     interview = result.get("interview") or {}
+    # A successful booking is always stored in the operational Asia/Kolkata
+    # timezone. Notifications must display that same normalized schedule,
+    # rather than the calendar provider's equivalent source-timezone value.
+    display_date = (schedule or {}).get("date") or interview.get("date") or None
+    display_time = (schedule or {}).get("time") or interview.get("time")
+    display_timezone = "Asia/Kolkata" if schedule else interview.get("timezone")
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE mail_monitoring_notifications SET notification_type='interview_booking',
@@ -1476,7 +1716,7 @@ def attach_booking_to_notification(
               recommended_action=COALESCE(%s,recommended_action),updated_at=now()
               WHERE id=%s RETURNING *""",
             (booking_id, audit_id, booking_status, interview.get("round"),
-             interview.get("date") or None, interview.get("time"), interview.get("timezone"),
+             display_date, display_time, display_timezone,
              interview.get("mode"), interview.get("meeting_link"), priority,
              display_status, detail, notification_id),
         )

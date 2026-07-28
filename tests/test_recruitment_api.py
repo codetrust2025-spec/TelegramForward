@@ -14,6 +14,14 @@ def test_dashboard_query_does_not_use_reserved_day_alias():
     assert "created_at::date day" not in source
     assert "created_at::date AS event_day" in source
 
+def test_mail_reprocess_paths_preserve_trust_metadata():
+    source = Path("core/recruitment_mail_api.py").read_text(encoding="utf-8")
+    for field in (
+        "authentication_results", "received_spf", "rfc_message_id",
+        "message_direction", "gmail_label_ids", "to_metadata",
+    ):
+        assert source.count(f"'{field}':context.get('{field}')") >= 2
+
 def app_client(monkeypatch):
     monkeypatch.delenv('DASHBOARD_PASSWORD',raising=False)
     app=FastAPI();install_recruitment_mail_routes(app);return TestClient(app)
@@ -71,6 +79,43 @@ def test_mailbox_api_resolves_authenticated_legacy_candidate_id(monkeypatch):
     body=response.json()
     assert body['mailbox']['email_address']=='akhil@example.com'
     assert 'credential_ciphertext' not in body['mailbox']
+
+
+def test_mailbox_health_api_returns_credential_free_status(monkeypatch):
+    monkeypatch.setenv('AI_INTERVIEW_OFFER_TRACKING_ENABLED','true')
+    monkeypatch.setattr(recruitment_mail_api.store,'mailbox_health_rows',lambda:[{
+        'id':'mailbox-2','candidate_id':'current','email_address':'akhil@example.com',
+        'connection_status':'ERROR','last_error_code':'INVALID_GRANT',
+    }])
+
+    response=app_client(monkeypatch).get('/api/candidate-mailboxes/health')
+
+    assert response.status_code==200
+    assert response.json()['mailboxes'][0]['connection_status']=='ERROR'
+    assert 'credential_ciphertext' not in response.json()['mailboxes'][0]
+
+
+def test_mailbox_overview_api_returns_bulk_mailboxes_with_stats(monkeypatch):
+    monkeypatch.setenv('AI_INTERVIEW_OFFER_TRACKING_ENABLED','true')
+    monkeypatch.setattr(recruitment_mail_api.store,'mailbox_overview_rows',lambda:[{
+        'mailbox': {
+            'id':'mailbox-2','candidate_id':'legacy',
+            'email_address':'akhil@example.com','connection_status':'CONNECTED',
+        },
+        'stats': {'important_emails':3,'latest_sync_status':'COMPLETED'},
+    }])
+    monkeypatch.setattr(
+        recruitment_mail_api.candidate_store,
+        'canonical_candidate_identity_id',
+        lambda candidate_id: 'current' if candidate_id == 'legacy' else candidate_id,
+    )
+
+    response=app_client(monkeypatch).get('/api/candidate-mailboxes/overview')
+
+    assert response.status_code==200
+    assert response.json()['mailboxes'][0]['stats']['important_emails']==3
+    assert response.json()['mailboxes'][0]['mailbox']['canonical_candidate_id']=='current'
+    assert 'credential_ciphertext' not in response.json()['mailboxes'][0]['mailbox']
 
 
 def test_notification_list_and_summary_are_persistent_api_fallbacks(monkeypatch):

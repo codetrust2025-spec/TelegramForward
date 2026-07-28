@@ -18,6 +18,20 @@ def test_decode_gmail_message():
     assert row['sender_email']==sender
     assert 'interview is scheduled' in row['body']
 
+
+def test_decode_distinguishes_inbox_from_candidate_sent_reply():
+    mailbox='candidate@test.invalid'
+    sent={'id':'sent1','labelIds':['SENT'],'payload':{'headers':[
+        {'name':'From','value':mailbox},{'name':'To','value':'recruiter@company.test'}
+    ],'mimeType':'text/plain','body':{}}}
+    incoming={'id':'in1','labelIds':['INBOX'],'payload':{'headers':[
+        {'name':'From','value':'recruiter@company.test'},{'name':'To','value':mailbox}
+    ],'mimeType':'text/plain','body':{}}}
+    assert decode_gmail_message(sent,mailbox)['message_direction']=='OUTBOUND'
+    decoded=decode_gmail_message(incoming,mailbox)
+    assert decoded['message_direction']=='INBOUND'
+    assert decoded['to_metadata']==[mailbox]
+
 def test_decode_uses_html_when_plain_text_is_missing():
     encoded=base64.urlsafe_b64encode(b'<p>Interview <strong>confirmed</strong></p>').decode().rstrip('=')
     raw={'id':'m2','payload':{'headers':[{'name':'From','value':'Recruiter'},{'name':'Cc','value':'first@test.invalid, second@test.invalid'}],'mimeType':'text/html','body':{'data':encoded}}}
