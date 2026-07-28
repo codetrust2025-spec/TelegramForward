@@ -10,7 +10,7 @@ import os
 import shutil
 from datetime import datetime
 
-from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -3155,6 +3155,7 @@ async def candidates_bootstrap(
 @app.get("/candidates/pending-works")
 async def candidates_pending_works(
     request: Request,
+    response: Response,
     month: str | None = Query(default=None),
     reference: str | None = Query(default=None),
 ):
@@ -3163,6 +3164,8 @@ async def candidates_pending_works(
 
     reference = handler_reference_scope(request, reference)
     payload = candidate_store.pending_works(month=month, reference=reference)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
     return {"status": "ok", **payload}
 
 
@@ -3394,6 +3397,7 @@ async def candidates_interviews_slots_update(cid: str, request: Request, body: d
             time_end=b.get("time_end") or "",
             notes=b.get("notes") or "",
             interview_round=b.get("interview_round") or "",
+            technology=b.get("technology"),
         )
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
@@ -3428,6 +3432,13 @@ async def candidates_slot_screenshot(cid: str, request: Request):
         raise HTTPException(status_code=404, detail="Candidate not found")
     assert_candidate_row_access(request, existing)
     form = await request.form()
+    attachment_type = form.get("attachment_type")
+    try:
+        from features.candidate_attachments import AttachmentType, parse_attachment_type
+        if parse_attachment_type(attachment_type) != AttachmentType.SLOT_SCREENSHOT_PROOF:
+            raise ValueError("slot-screenshot requires attachment_type=slot_screenshot_proof")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     upload = form.get("file")
     if upload is None or not isinstance(upload, UploadFile):
         raise HTTPException(status_code=400, detail="file is required")
@@ -3526,6 +3537,7 @@ async def candidates_create(request: Request, body: dict):
     if not (body.get("name") or "").strip():
         return {"status": "error", "message": "Name is required"}
     try:
+        body["ctc_percentage"] = candidate_store.validate_profile_ctc_percentage(body)
         row = candidate_store.create_candidate(body)
     except ValueError as exc:
         return {"status": "error", "message": str(exc), "duplicate_candidate": "already exists" in str(exc).lower()}
@@ -3542,7 +3554,12 @@ async def candidates_update(cid: str, request: Request, body: dict):
         return {"status": "error", "message": "Candidate not found"}
     assert_candidate_row_access(request, existing)
     try:
-        row = candidate_store.update_candidate(cid, prepare_candidate_body(request, body or {}))
+        prepared = prepare_candidate_body(request, body or {})
+        prepared["ctc_percentage"] = candidate_store.validate_profile_ctc_percentage(
+            prepared,
+            existing=existing,
+        )
+        row = candidate_store.update_candidate(cid, prepared)
     except ValueError as exc:
         return {"status": "error", "message": str(exc), "duplicate_phone": "already belongs" in str(exc).lower()}
     if not row:
@@ -3766,6 +3783,28 @@ async def data_room_offer_letter_upload(
     return {"status": "ok", "offer_letter": row}
 
 
+@app.post("/data-room/offer-letters/upload-analyze")
+async def data_room_offer_letter_upload_analyze(
+    request: Request,
+    file: UploadFile = File(...),
+):
+    """Save a new offer-letter PDF and return editable extracted metadata."""
+    from core.dashboard_access import require_fleet_admin
+    from features import data_room_credentials_store as creds
+
+    require_fleet_admin(request)
+    try:
+        raw = await file.read()
+        row = creds.create_offer_letter_from_pdf(file.filename or "offer-letter.pdf", raw)
+    except (FileNotFoundError, ValueError) as exc:
+        return {"status": "error", "message": str(exc)}
+    return {
+        "status": "ok",
+        "offer_letter": row,
+        "message": "PDF saved and fields auto-filled. Review the values, then save.",
+    }
+
+
 @app.get("/data-room/{oid}")
 async def data_room_get(oid: str):
     from features import data_room_store
@@ -3815,6 +3854,7 @@ async def candidates_upload_proof(
     cid: str,
     file: UploadFile = File(...),
     note: str = Form(default=""),
+    attachment_type: str = Form(default=""),
 ):
     """Attach a payment screenshot (image) to a candidate.
 
@@ -3824,6 +3864,14 @@ async def candidates_upload_proof(
     """
     from core.dashboard_access import assert_candidate_row_access
     from features import candidate_store
+    from features.candidate_attachments import AttachmentType, parse_attachment_type
+    from fastapi import HTTPException
+
+    try:
+        if parse_attachment_type(attachment_type) != AttachmentType.PAYMENT_PROOF:
+            raise ValueError("Payment upload requires attachment_type=payment_proof")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     existing = candidate_store.get_candidate(cid)
     if not existing:
@@ -3833,29 +3881,34 @@ async def candidates_upload_proof(
     fraud_check = None
     try:
         raw = await file.read()
-        # Validate: must look like a payment screenshot
         try:
-            from features.payment_proof_validator import validate_payment_proof
-            # Admin candidate records support instalments and proofs uploaded
-            # after a received amount was already recorded. Validate that this
-            # is a payment receipt, but do not require one proof to equal the
-            # candidate's entire remaining balance.
-            is_valid, reason = validate_payment_proof(
-                raw, file.content_type or "", expected_amount=0
+            from features.payment_verification_engine import verify_payment_screenshot
+            expected = candidate_store.effective_expected_payment(existing)
+            paid = int(existing.get("payment") or 0)
+            ai_extraction = await asyncio.to_thread(
+                verify_payment_screenshot,
+                raw,
+                file.content_type or "image/jpeg",
+                source_module="candidate_payment_proof",
+                expected_amount=max(0, expected - paid),
+                entity_id=cid,
+                entity_name=existing.get("name") or "",
+                candidate_id=cid,
+                referrer_id=existing.get("reference") or "",
+                referrer_hint=existing.get("reference") or "",
+                purpose="candidate_payment",
+                payment_scope=(
+                    "ROUND"
+                    if existing.get("service_type") == "round_wise"
+                    else "PROFILE"
+                ),
             )
-            if not is_valid:
-                return {"status": "error", "message": reason}
-        except Exception:
-            pass
-        try:
-            from features.ollama_payment_extract import extract_payment_with_ollama, verify_payment_against_due
-            ai_result = await asyncio.to_thread(extract_payment_with_ollama, raw, file.content_type or "image/jpeg")
-            if ai_result and ai_result.get("is_payment_screenshot"):
-                expected = candidate_store.effective_expected_payment(existing)
-                paid = int(existing.get("payment") or 0)
-                ai_extraction = verify_payment_against_due(ai_result, max(0, expected - paid))
-        except Exception:
-            ai_extraction = None
+        except Exception as exc:
+            logger.exception("Central payment verification failed for candidate proof")
+            return {
+                "status": "error",
+                "message": f"Payment screenshot could not be verified: {exc}",
+            }
         from features.payment_fraud_detection import assess_payment_proof
         fraud_check = assess_payment_proof(raw, ai_extraction, candidate_id=cid, candidate_name=existing.get("name") or "")
         if fraud_check["decision"] == "rejected":
@@ -3865,10 +3918,27 @@ async def candidates_upload_proof(
             "sha256": fraud_check["sha256"], "utr_number": fraud_check.get("utr_number") or "",
             "transaction_id": (ai_extraction or {}).get("transaction_id") or "",
             "payment_status": (ai_extraction or {}).get("status") or "",
+            "company_payment_verified": bool((ai_extraction or {}).get("company_payment_verified")),
+            "booking_eligible": bool((ai_extraction or {}).get("booking_eligible")),
+            "verification_state": (ai_extraction or {}).get("verification_state") or "",
+            "receiver_name": (ai_extraction or {}).get("receiver_name") or "",
+            "receiver_upi_id": (ai_extraction or {}).get("receiver_upi_id") or "",
+            "receiver_phone": (ai_extraction or {}).get("receiver_phone") or "",
+            "verified_amount": int((ai_extraction or {}).get("amount") or 0),
+            "receiver_account": (ai_extraction or {}).get("receiver_account") or "",
+            "receiver_type": (ai_extraction or {}).get("receiver_type") or "unknown",
+            "ledger_entry_id": (ai_extraction or {}).get("ledger_entry_id") or "",
+            "ledger_action": (ai_extraction or {}).get("ledger_action") or "",
+            "ledger_status": (ai_extraction or {}).get("ledger_status") or "",
+            "payment_id": (ai_extraction or {}).get("payment_id") or "",
+            "evidence_id": (ai_extraction or {}).get("evidence_id") or "",
+            "entitlement_id": (ai_extraction or {}).get("entitlement_id") or "",
+            "payment_scope": (ai_extraction or {}).get("payment_scope") or "",
+            "source_module": "candidate_payment_proof",
             "fraud_decision": fraud_check["decision"], "fraud_reasons": fraud_check["reasons"],
             "fraud_warnings": fraud_check["warnings"], "fraud_checked_at": fraud_check["checked_at"],
         }
-        entry = candidate_store.add_proof(
+        entry = candidate_store.add_payment_proof(
             cid,
             data=raw,
             original_name=file.filename or "",
@@ -3881,15 +3951,16 @@ async def candidates_upload_proof(
     if entry is None:
         return {"status": "error", "message": "Candidate not found"}
     row = candidate_store.get_candidate(cid)
-    # Generate a plain-English confidence narrative for extracted payment data.
-    try:
-        from features.ollama_payment_extract import generate_payment_narrative
-        if ai_extraction:
-            expected = candidate_store.effective_expected_payment(existing)
-            paid = int(existing.get("payment") or 0)
-            ai_extraction["narrative"] = await asyncio.to_thread(generate_payment_narrative, ai_extraction, candidate_name=(existing.get("name") or ""), expected_amount=expected, received_amount=paid)
-    except Exception:
-        pass
+    # Keep the interactive request deterministic. Calling Ollama here used to
+    # hold the browser in "Uploading" for up to 30 minutes.
+    if ai_extraction:
+        amount = int(ai_extraction.get("amount") or 0)
+        status = str(ai_extraction.get("status") or "unknown")
+        ai_extraction["narrative"] = (
+            f"Ollama detected a payment of ₹{amount:,} with status {status}."
+            if amount
+            else "Payment proof saved; extracted details require manual review."
+        )
     resp = {"status": "ok", "proof": entry, "candidate": row}
     if ai_extraction:
         resp["ai_extraction"] = ai_extraction
@@ -3918,6 +3989,68 @@ async def candidates_serve_proof(cid: str, pid: str, request: Request):
     )
 
 
+@app.get("/candidates/{cid}/attachments/{attachment_type}/{attachment_id}")
+async def candidates_serve_typed_attachment(
+    cid: str, attachment_type: str, attachment_id: str, request: Request
+):
+    from fastapi import HTTPException
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store
+
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    assert_candidate_row_access(request, existing)
+    try:
+        hit = candidate_store.get_attachment(cid, attachment_id, attachment_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if hit is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    path, entry = hit
+    return FileResponse(
+        path,
+        media_type=entry.get("mime_type") or "application/octet-stream",
+        filename=entry.get("original_name") or entry.get("filename"),
+    )
+
+
+@app.post("/candidates/{cid}/profile-photo")
+async def candidates_upload_profile_photo(
+    request: Request,
+    cid: str,
+    file: UploadFile = File(...),
+    attachment_type: str = Form(default=""),
+):
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store
+    from features.candidate_attachments import AttachmentType, parse_attachment_type
+    from fastapi import HTTPException
+
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Candidate not found"}
+    assert_candidate_row_access(request, existing)
+    try:
+        if parse_attachment_type(attachment_type) != AttachmentType.PROFILE_PHOTO:
+            raise ValueError("Profile photo upload requires attachment_type=profile_photo")
+        entry = candidate_store.set_profile_photo(
+            cid,
+            data=await file.read(),
+            original_name=file.filename or "",
+            mime_type=file.content_type or "",
+            note="Candidate profile photo",
+            metadata={"source_module": "candidate_profile"},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "status": "ok",
+        "profile_photo": entry,
+        "candidate": candidate_store.get_candidate(cid),
+    }
+
+
 @app.delete("/candidates/{cid}/proofs/{pid}")
 async def candidates_delete_proof(cid: str, pid: str, request: Request):
     from core.dashboard_access import assert_candidate_row_access
@@ -3931,19 +4064,6 @@ async def candidates_delete_proof(cid: str, pid: str, request: Request):
     if not ok:
         return {"status": "error", "message": "Proof not found"}
     row = candidate_store.get_candidate(cid)
-    # Return merged proofs from all slot clones so the UI stays consistent
-    if row:
-        name_key = candidate_store._normalise_candidate_name_key(row.get("name") or "")
-        if name_key:
-            all_rows = [r for r in (candidate_store._load().get("candidates") or [])
-                        if candidate_store._normalise_candidate_name_key(r.get("name") or "") == name_key]
-            merged_proofs = {}
-            for r in all_rows:
-                for p in (r.get("proofs") or []):
-                    if p.get("id") and p["id"] not in merged_proofs:
-                        merged_proofs[p["id"]] = p
-            row = dict(row)
-            row["proofs"] = list(merged_proofs.values())
     return {"status": "ok", "candidate": row}
 
 
@@ -4119,7 +4239,117 @@ async def candidates_update_resume_note(cid: str, rid: str, body: dict, request:
     return {"status": "ok", "resume": entry}
 
 
-# ── Handler / reference expenses ────────────────────────────────────────────────
+# ── Referrer identities and payment accounts ───────────────────────────────────
+
+
+@app.get("/api/referrers", dependencies=[Depends(_require_fleet_admin)])
+@app.get("/referrers", dependencies=[Depends(_require_fleet_admin)])
+async def referrers_list():
+    from features.referrer_registry import list_payment_accounts, list_referrers
+
+    accounts = list_payment_accounts()
+    counts: dict[str, int] = {}
+    for account in accounts:
+        key = str(account.get("referrer_id") or "")
+        counts[key] = counts.get(key, 0) + 1
+    return {
+        "status": "ok",
+        "referrers": [
+            {**row, "payment_account_count": counts.get(str(row.get("id") or ""), 0)}
+            for row in list_referrers(include_inactive=True)
+        ],
+    }
+
+
+@app.get(
+    "/api/referrers/{referrer_id}/payment-accounts",
+    dependencies=[Depends(_require_fleet_admin)],
+)
+@app.get(
+    "/referrers/{referrer_id}/payment-accounts",
+    dependencies=[Depends(_require_fleet_admin)],
+)
+async def referrer_payment_accounts_list(referrer_id: str):
+    from features.referrer_registry import list_payment_accounts, resolve_referrer
+
+    referrer = resolve_referrer(referrer_id)
+    if referrer is None:
+        raise HTTPException(status_code=404, detail="Referrer not found")
+    return {
+        "status": "ok",
+        "referrer": referrer,
+        "accounts": list_payment_accounts(referrer_id=referrer["id"]),
+    }
+
+
+@app.post(
+    "/api/referrers/{referrer_id}/payment-accounts",
+    dependencies=[Depends(_require_fleet_admin)],
+)
+@app.post(
+    "/referrers/{referrer_id}/payment-accounts",
+    dependencies=[Depends(_require_fleet_admin)],
+)
+async def referrer_payment_account_add(
+    request: Request,
+    referrer_id: str,
+    body: dict = Body(...),
+):
+    from features.referrer_registry import add_payment_account
+
+    try:
+        account = add_payment_account(referrer_id, body, actor=_ops_by(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", "account": account}
+
+
+@app.patch(
+    "/api/referrer-payment-accounts/{account_id}",
+    dependencies=[Depends(_require_fleet_admin)],
+)
+@app.patch(
+    "/referrer-payment-accounts/{account_id}",
+    dependencies=[Depends(_require_fleet_admin)],
+)
+async def referrer_payment_account_update(
+    request: Request,
+    account_id: str,
+    body: dict = Body(...),
+):
+    from features.referrer_registry import update_payment_account
+
+    try:
+        account = update_payment_account(account_id, body, actor=_ops_by(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", "account": account}
+
+
+@app.delete(
+    "/api/referrer-payment-accounts/{account_id}",
+    dependencies=[Depends(_require_fleet_admin)],
+)
+@app.delete(
+    "/referrer-payment-accounts/{account_id}",
+    dependencies=[Depends(_require_fleet_admin)],
+)
+async def referrer_payment_account_delete(request: Request, account_id: str):
+    from features.referrer_registry import remove_unverified_payment_account
+
+    try:
+        removed = remove_unverified_payment_account(
+            account_id,
+            actor=_ops_by(request),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not removed:
+        raise HTTPException(status_code=404, detail="Payment account not found")
+    return {"status": "ok"}
+
+
+# ── Handler / reference expenses (legacy route names retained) ────────────────
 
 @app.get("/handler-expenses")
 async def handler_expenses_list(
@@ -4174,9 +4404,15 @@ async def handler_expenses_create(
     file: UploadFile = File(...),
 ):
     from features import handler_expenses
+    from features.referrer_registry import resolve_referrer
 
-    if not reference.strip():
-        return {"status": "error", "message": "Reference (handler name) is required"}
+    selected_referrer = resolve_referrer(reference)
+    if selected_referrer is None:
+        return {
+            "status": "error",
+            "message": "Select one registered referrer before logging a payout.",
+        }
+    canonical_reference = str(selected_referrer.get("name") or "").strip()
     if int(float(amount or 0)) <= 0:
         return {"status": "error", "message": "Amount must be greater than zero"}
 
@@ -4191,12 +4427,39 @@ async def handler_expenses_create(
         return {"status": "error", "message": "Only image files (jpg / png / webp / gif / heic) are allowed"}
 
     body = {
-        "reference": reference.strip(),
+        "reference": canonical_reference,
         "amount": int(float(amount)),
         "category": category,
         "note": note.strip(),
         "date": date,
     }
+    try:
+        from features.payment_verification_engine import verify_payment_screenshot
+        verification = await asyncio.to_thread(
+            verify_payment_screenshot,
+            raw,
+            mime or "image/jpeg",
+            source_module="handler_expense_create",
+            expected_amount=int(float(amount)),
+            entity_name=canonical_reference,
+            referrer_hint=canonical_reference,
+            referrer_id=str(selected_referrer.get("id") or ""),
+            purpose=(
+                "handler_payout"
+                if category.strip().lower() == "commission"
+                else "expense_reimbursement"
+            ),
+        )
+        if not verification.get("deterministic_verified"):
+            return {
+                "status": "error",
+                "message": " ".join(verification.get("deterministic_reasons") or [])
+                or "Payment screenshot could not be verified.",
+                "ai_extraction": verification,
+            }
+    except Exception as exc:
+        logger.exception("Central payment verification failed for handler expense")
+        return {"status": "error", "message": f"Payment screenshot could not be verified: {exc}"}
     row = handler_expenses.create_expense(body)
 
     # Attach the proof to the newly created expense
@@ -4278,14 +4541,35 @@ async def handler_expense_upload_proof(
 
     try:
         raw = await file.read()
-        # Validate: must look like a payment/transfer screenshot
-        try:
-            from features.payment_proof_validator import validate_handler_payout_proof
-            is_valid, reason = validate_handler_payout_proof(raw, file.content_type or "")
-            if not is_valid:
-                return {"status": "error", "message": reason}
-        except Exception:
-            pass
+        expense = next(
+            (row for row in handler_expenses.list_expenses() if row.get("id") == eid),
+            None,
+        )
+        if expense is None:
+            return {"status": "error", "message": "Expense not found"}
+        from features.payment_verification_engine import verify_payment_screenshot
+        verification = await asyncio.to_thread(
+            verify_payment_screenshot,
+            raw,
+            file.content_type or "image/jpeg",
+            source_module="handler_expense_proof",
+            expected_amount=int(expense.get("amount") or 0),
+            entity_id=eid,
+            entity_name=expense.get("reference") or "",
+            referrer_hint=expense.get("reference") or "",
+            purpose=(
+                "handler_payout"
+                if str(expense.get("category") or "").lower() == "commission"
+                else "expense_reimbursement"
+            ),
+        )
+        if not verification.get("deterministic_verified"):
+            return {
+                "status": "error",
+                "message": " ".join(verification.get("deterministic_reasons") or [])
+                or "Payment screenshot could not be verified.",
+                "ai_extraction": verification,
+            }
         entry = handler_expenses.add_proof(
             eid,
             data=raw,
@@ -4470,6 +4754,30 @@ if os.path.exists(STATIC_DIR):
     async def serve_index():
         return FileResponse(
             os.path.join(STATIC_DIR, "index.html"),
+            headers=_NO_CACHE,
+        )
+
+    @app.get("/oauth-home")
+    async def serve_oauth_home():
+        return FileResponse(
+            os.path.join(STATIC_DIR, "oauth-home.html"),
+            media_type="text/html",
+            headers=_NO_CACHE,
+        )
+
+    @app.get("/privacy")
+    async def serve_privacy_policy():
+        return FileResponse(
+            os.path.join(STATIC_DIR, "privacy.html"),
+            media_type="text/html",
+            headers=_NO_CACHE,
+        )
+
+    @app.get("/terms")
+    async def serve_terms_of_service():
+        return FileResponse(
+            os.path.join(STATIC_DIR, "terms.html"),
+            media_type="text/html",
             headers=_NO_CACHE,
         )
 

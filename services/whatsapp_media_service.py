@@ -135,12 +135,17 @@ def maybe_save_payment_proof_from_wa(
         from features import candidate_store
 
         ext = _ext_from_mime(mime)
-        entry = candidate_store.add_proof(
+        entry = candidate_store.add_payment_proof(
             str(cid),
             data=data,
             original_name=f"whatsapp_{int(user_id)}.{ext}",
             mime_type=mime,
             note=note[:200],
+            metadata={
+                "source_module": "whatsapp_payment",
+                "source_endpoint": "whatsapp_media_service",
+                "upload_context": f"{slot}:{int(user_id)}",
+            },
         )
         if entry:
             logger.info("WA image saved as candidate proof %s for lead %s:%s", cid, slot, user_id)

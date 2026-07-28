@@ -28,11 +28,16 @@ def assess_payment_proof(
     matches = []
     reasons = []
     for row in candidate_store._load().get("candidates") or []:
-        for proof in row.get("proofs") or []:
+        for proof in candidate_store.list_attachments(
+            str(row.get("id") or ""), "payment_proof"
+        ) or []:
             stored_digest = proof.get("sha256") or ""
             if not stored_digest and row.get("id") and proof.get("filename"):
                 try:
-                    path = os.path.join(candidate_store._proof_dir(row["id"]), proof["filename"])
+                    hit = candidate_store.get_attachment(
+                        str(row["id"]), str(proof.get("id") or ""), "payment_proof"
+                    )
+                    path = hit[0] if hit else ""
                     with open(path, "rb") as handle:
                         stored_digest = hashlib.sha256(handle.read()).hexdigest()
                 except OSError:

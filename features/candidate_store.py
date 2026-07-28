@@ -50,6 +50,12 @@ from datetime import datetime, timedelta, timezone
 from threading import Lock
 
 from core.config import DATA_DIR
+from features.candidate_attachments import (
+    ATTACHMENT_FIELDS,
+    AttachmentType,
+    parse_attachment_type,
+    partition_candidate_attachments,
+)
 
 _FILE = os.path.join(DATA_DIR, "candidates.json")
 # Each candidate gets its own folder under here so we never accidentally
@@ -602,7 +608,61 @@ def _new_id() -> str:
 
 
 def _empty() -> dict:
-    return {"candidates": [], "updated_at": None}
+    return {"candidates": [], "updated_at": None, "_snapshot_versions": {}}
+
+
+def _snapshot_versions(rows: list[dict]) -> dict[str, str]:
+    return {
+        str(row.get("id")): str(row.get("_store_updated_at") or "")
+        for row in rows
+        if isinstance(row, dict) and row.get("id")
+    }
+
+
+def _merge_candidate_snapshot(
+    current_rows: list[dict],
+    desired_rows: list[dict],
+    versions: dict[str, str],
+    *,
+    save_at: str,
+) -> list[dict]:
+    """Merge one stale-capable snapshot without losing concurrent row writes."""
+    desired_by_id = {
+        str(row.get("id")): row
+        for row in desired_rows
+        if isinstance(row, dict) and row.get("id")
+    }
+    current_ids: set[str] = set()
+    merged: list[dict] = []
+    for current in current_rows:
+        cid = str(current.get("id") or "")
+        if not cid:
+            merged.append(current)
+            continue
+        current_ids.add(cid)
+        expected = versions.get(cid)
+        current_version = str(current.get("_store_updated_at") or "")
+        desired = desired_by_id.get(cid)
+        if desired is None:
+            if expected is not None and current_version == expected:
+                continue
+            merged.append(current)
+            continue
+        if expected is not None and current_version == expected:
+            replacement = dict(desired)
+            replacement["_store_updated_at"] = save_at
+            merged.append(replacement)
+        else:
+            merged.append(current)
+    for cid, desired in desired_by_id.items():
+        if cid in current_ids:
+            continue
+        if cid in versions:
+            continue
+        replacement = dict(desired)
+        replacement["_store_updated_at"] = save_at
+        merged.append(replacement)
+    return merged
 
 
 def _load(*, force: bool = False) -> dict:
@@ -642,6 +702,7 @@ def _load(*, force: bool = False) -> dict:
                 except (OSError, json.JSONDecodeError):
                     data = _empty()
 
+    data["_snapshot_versions"] = _snapshot_versions(list(data.get("candidates") or []))
     _load_cache = data
     _load_cache_at = now
     return data
@@ -661,11 +722,34 @@ def _save(data: dict) -> None:
         pg_candidates_save(data)
         return
     os.makedirs(os.path.dirname(_FILE), exist_ok=True)
-    data["updated_at"] = _now_iso()
+    save_at = _now_iso()
+    desired_rows = list(data.get("candidates") or [])
+    versions = dict(data.get("_snapshot_versions") or {})
     with _lock:
+        current = _empty()
+        if os.path.exists(_FILE):
+            try:
+                with open(_FILE, encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    current = loaded
+            except (OSError, json.JSONDecodeError):
+                current = _empty()
+        stored = {
+            key: value
+            for key, value in data.items()
+            if key not in {"candidates", "_snapshot_versions"}
+        }
+        stored["candidates"] = _merge_candidate_snapshot(
+            list(current.get("candidates") or []),
+            desired_rows,
+            versions,
+            save_at=save_at,
+        )
+        stored["updated_at"] = save_at
         tmp = _FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(stored, f, ensure_ascii=False, indent=2)
         os.replace(tmp, _FILE)
 
 
@@ -830,6 +914,36 @@ def _normalise_service_type(raw, base: dict | None = None) -> str:
     return val if val in VALID_SERVICE_TYPES else "profile_service"
 
 
+def validate_profile_ctc_percentage(record: dict, *, existing: dict | None = None) -> float | str:
+    """Validate and normalize the mandatory profile-service CTC percentage."""
+    base = existing or {}
+    service_type = _normalise_service_type(record.get("service_type"), base)
+    if service_type != "profile_service":
+        return ""
+    raw = record.get("ctc_percentage", base.get("ctc_percentage", ""))
+    stage = _clean_str(record.get("stage", base.get("stage", ""))).lower().replace(" ", "_")
+    if stage == "dropped":
+        # Dropped candidates are historical closures. Preserve a valid existing
+        # percentage when available, but never block closure on this field.
+        for optional_raw in (raw, base.get("ctc_percentage", "")):
+            try:
+                optional_value = float(optional_raw)
+            except (TypeError, ValueError):
+                continue
+            if 0 < optional_value <= 100:
+                return int(optional_value) if optional_value.is_integer() else optional_value
+        return ""
+    if raw is None or str(raw).strip() == "":
+        raise ValueError("% on CTC is required for profile-service candidates.")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("% on CTC must be a valid number.") from exc
+    if value <= 0 or value > 100:
+        raise ValueError("% on CTC must be greater than 0 and not more than 100.")
+    return int(value) if value.is_integer() else value
+
+
 def _normalise_purpose(raw, base: dict | None = None) -> str:
     val = _clean_str(raw if raw is not None else (base or {}).get("purpose", "")).lower().replace(" ", "_")
     if val in VALID_PURPOSES:
@@ -892,6 +1006,15 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
     interview_scope = _normalise_interview_scope(record.get("interview_scope"), base)
     if service_type == "round_wise":
         consultancy = False
+    ctc_raw = record.get("ctc_percentage", base.get("ctc_percentage", ""))
+    try:
+        ctc_percentage = float(ctc_raw) if str(ctc_raw).strip() else ""
+        if isinstance(ctc_percentage, float) and ctc_percentage.is_integer():
+            ctc_percentage = int(ctc_percentage)
+    except (TypeError, ValueError):
+        ctc_percentage = ""
+    if service_type != "profile_service":
+        ctc_percentage = ""
 
     default_for_channel = baseline_for_service(
         service_type,
@@ -939,6 +1062,7 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         ),
         "consultancy":      consultancy,
         "bgv_certificates": bgv_certificates,
+        "ctc_percentage":   ctc_percentage,
         "service_type":     service_type,
         "interview_scope":  interview_scope if service_type == "round_wise" else "",
         "payment":          _coerce_payment(record.get("payment", base.get("payment"))),
@@ -965,6 +1089,11 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         "interview_booking_source": _clean_str(record.get("interview_booking_source", base.get("interview_booking_source"))).lower(),
         "telegram_slot":    _clean_str(record.get("telegram_slot", base.get("telegram_slot"))),
         "telegram_user_id": int(record.get("telegram_user_id") or base.get("telegram_user_id") or 0) or None,
+        "payment_proofs":   list(record.get("payment_proofs", base.get("payment_proofs")) or []),
+        "slot_screenshot_proofs": list(record.get("slot_screenshot_proofs", base.get("slot_screenshot_proofs")) or []),
+        "profile_photo":    record.get("profile_photo", base.get("profile_photo")) if isinstance(record.get("profile_photo", base.get("profile_photo")), dict) else None,
+        "attachment_review_queue": list(record.get("attachment_review_queue", base.get("attachment_review_queue")) or []),
+        "attachment_schema_version": int(base.get("attachment_schema_version") or 2),
         "proofs":           list(base.get("proofs") or []),
         "resumes":          list(base.get("resumes") or []),
         "created_at":       base.get("created_at") or _now_iso(),
@@ -1069,14 +1198,15 @@ def _with_computed(row: dict) -> dict:
     commissionable_expected = max(0, expected - (BGV_CERTIFICATES_PAYMENT if enriched["bgv_certificates"] else 0))
     enriched["handler_commission_max"] = (commissionable_expected * HANDLER_COMMISSION_PCT) // 100
     enriched["company_revenue"] = max(0, received - enriched["handler_commission"])
-    proofs = enriched.get("proofs") or []
-    # Separate payment proofs from slot screenshots for the Candidates table.
-    # Payment VIEW should only show payment screenshots, not interview slot images.
-    payment_proofs = [p for p in proofs if not _is_slot_screenshot_proof(p)]
-    enriched["proofs"] = payment_proofs
+    attachments = partition_candidate_attachments(enriched)
+    payment_proofs = attachments["payment_proofs"]
+    enriched.pop("proofs", None)
+    enriched["payment_proofs"] = payment_proofs
     enriched["proof_count"] = len(payment_proofs)
-    # Keep slot screenshots accessible separately (for Daily Ops / interview views)
-    enriched["slot_screenshot_proofs"] = [p for p in proofs if _is_slot_screenshot_proof(p)]
+    enriched["slot_screenshot_proofs"] = attachments["slot_screenshot_proofs"]
+    enriched["profile_photo"] = attachments["profile_photo"]
+    enriched["attachment_review_queue"] = attachments["attachment_review_queue"]
+    enriched["attachment_schema_version"] = 2
     resumes = enriched.get("resumes") or []
     enriched["resumes"] = resumes
     enriched["resume_count"] = len(resumes)
@@ -1343,33 +1473,27 @@ def _collapse_profile_candidates(rows: list[dict], *, month: str | None = None) 
             merged["resumes"] = list(all_resumes.values())
             merged["resume_count"] = len(all_resumes)
             merged["latest_resume"] = max(all_resumes.values(), key=lambda item: item.get("uploaded_at") or "")
-        # Merge proofs from all slot clones so they're visible regardless of which row wins
-        # Deduplicate by proof ID to avoid showing the same proof multiple times
-        # Exclude slot screenshots (they should appear separately, not in payment proofs)
+        # Merge each typed collection independently across legacy profile clones.
         all_proofs = {}
         slot_proofs = {}
         for r in group:
-            slot_ss_id = r.get("slot_screenshot_proof_id")
-            for item in (r.get("proofs") or []):
+            attachments = partition_candidate_attachments(r)
+            for item in attachments["payment_proofs"]:
                 pid = item.get("id")
-                if not pid or pid in all_proofs or pid in slot_proofs:
+                if not pid or pid in all_proofs:
                     continue
                 item = dict(item)
-                # Keep the physical owner of a proof that came from a legacy
-                # same-name slot clone. The edit form can then update/delete it
-                # through the correct candidate endpoint.
                 item.setdefault("candidate_id", r.get("id"))
-                # Identify slot screenshots by their note or by matching the slot_screenshot_proof_id
-                is_slot_ss = (
-                    pid == slot_ss_id
-                    or (item.get("note") or "").lower().startswith("interview slot screenshot")
-                )
-                if is_slot_ss:
-                    slot_proofs[pid] = item
-                else:
-                    all_proofs[pid] = item
+                all_proofs[pid] = item
+            for item in attachments["slot_screenshot_proofs"]:
+                pid = item.get("id")
+                if not pid or pid in slot_proofs:
+                    continue
+                item = dict(item)
+                item.setdefault("candidate_id", r.get("id"))
+                slot_proofs[pid] = item
         if all_proofs:
-            merged["proofs"] = list(all_proofs.values())
+            merged["payment_proofs"] = list(all_proofs.values())
             merged["proof_count"] = len(all_proofs)
         if slot_proofs:
             merged["slot_screenshot_proofs"] = list(slot_proofs.values())
@@ -1490,7 +1614,7 @@ def _merge_profile_rows_for_pending(rows: list[dict]) -> dict:
         key=lambda r: (
             int(r.get("payment") or 0),
             len(r.get("resumes") or []),
-            len(r.get("proofs") or []),
+            len(partition_candidate_attachments(r)["payment_proofs"]),
             (r.get("date") or ""),
         ),
     )
@@ -1731,7 +1855,7 @@ def _slim_slot_screenshot_proof(cid: str, proof: dict) -> dict:
     return {
         "id": pid,
         "candidate_id": cid,
-        "url": f"/candidates/{cid}/proofs/{pid}",
+        "url": f"/candidates/{cid}/attachments/slot_screenshot_proof/{pid}",
         "note": proof.get("note"),
         "uploaded_at": proof.get("uploaded_at"),
         "original_name": proof.get("original_name") or proof.get("filename"),
@@ -1742,13 +1866,13 @@ def _latest_slot_screenshot_proof(row: dict) -> dict | None:
     cid = str(row.get("id") or "")
     proof_id = _clean_str(row.get("slot_screenshot_proof_id"))
     if cid and proof_id:
-        hit = get_proof(cid, proof_id)
+        hit = get_attachment(
+            cid, proof_id, AttachmentType.SLOT_SCREENSHOT_PROOF
+        )
         if hit:
             _, entry = hit
-            if _is_slot_screenshot_proof(entry):
-                return _slim_slot_screenshot_proof(cid, entry)
-    proofs = row.get("proofs") or []
-    hits = [p for p in proofs if _is_slot_screenshot_proof(p)]
+            return _slim_slot_screenshot_proof(cid, entry)
+    hits = partition_candidate_attachments(row)["slot_screenshot_proofs"]
     if len(hits) == 1:
         return _slim_slot_screenshot_proof(cid, hits[0])
     return None
@@ -2128,6 +2252,170 @@ def candidate_id_for_slot_name(name: str) -> str | None:
     return str(cid) if cid else None
 
 
+def _round_wise_pending_payment_row(name: str) -> dict | None:
+    """Return the current unpaid, unbooked round ledger row for a name."""
+    canon = canonical_candidate_name(_clean_str(name))
+    key = _normalise_candidate_name_key(canon)
+    if not key:
+        return None
+    matches: list[dict] = []
+    for row in list_candidates(stage="all", month="all"):
+        if _normalise_candidate_name_key(row.get("name") or "") != key:
+            continue
+        if _normalise_service_type(row.get("service_type"), row) != "round_wise":
+            continue
+        computed = _with_computed(row)
+        if _candidate_has_confirmed_slot(computed):
+            continue
+        expected = effective_expected_payment(computed)
+        paid = int(computed.get("payment") or 0)
+        if max(0, expected - paid) <= 0:
+            continue
+        matches.append(computed)
+    if not matches:
+        return None
+    return max(matches, key=lambda row: _clean_str(row.get("created_at") or row.get("updated_at")))
+
+
+def round_wise_payment_due_for_name(name: str) -> int:
+    """Amount due for the next round, independent of old/profile balances."""
+    pending = _round_wise_pending_payment_row(name)
+    if pending:
+        return max(0, effective_expected_payment(pending) - int(pending.get("payment") or 0))
+    return baseline_for_service("round_wise")
+
+
+def _round_wise_identity_source(name: str, *, exclude_id: str = "") -> dict | None:
+    """Best existing same-name row from which a new round inherits identity."""
+    key = _normalise_candidate_name_key(canonical_candidate_name(_clean_str(name)))
+    if not key:
+        return None
+    matches = [
+        row
+        for row in list_candidates(stage="all", month="all")
+        if str(row.get("id") or "") != str(exclude_id or "")
+        and _normalise_candidate_name_key(row.get("name") or "") == key
+        and (
+            candidate_phone_identity(row.get("phone"))
+            or _clean_str(row.get("reference"))
+            or canonical_technology(row.get("technology")) not in {"", "Unspecified"}
+        )
+    ]
+    if not matches:
+        return None
+    return max(
+        matches,
+        key=lambda row: (
+            int(bool(candidate_phone_identity(row.get("phone"))))
+            + int(bool(_clean_str(row.get("reference"))))
+            + int(canonical_technology(row.get("technology")) not in {"", "Unspecified"}),
+            int(row.get("payment") or 0),
+            _clean_str(row.get("updated_at") or row.get("created_at")),
+        ),
+    )
+
+
+def ensure_round_wise_payment_row(
+    name: str,
+    *,
+    phone: str,
+    technology: str,
+    interview_round: str,
+    allow_incomplete: bool = False,
+) -> dict:
+    """Create/reuse the unpaid round row before payment verification.
+
+    First-time round-wise candidates are intentionally allowed on the public
+    booking form.  The payment engine and proof store therefore need a stable
+    candidate ID before either writes audit data.
+    """
+    canon = canonical_candidate_name(_clean_str(name))
+    if not canon:
+        raise ValueError("Enter your name")
+    phone_key = candidate_phone_identity(phone)
+    if not phone_key and not allow_incomplete:
+        raise ValueError("Enter a valid phone number")
+    tech = canonical_technology(_clean_str(technology))
+    if (not tech or tech == "Unspecified") and not allow_incomplete:
+        raise ValueError("Select the technology for this round")
+    round_label = normalise_interview_round(interview_round)
+    if not round_label and not allow_incomplete:
+        raise ValueError("Select the interview round")
+
+    pending = _round_wise_pending_payment_row(canon)
+    identity_source = _round_wise_identity_source(
+        canon,
+        exclude_id=str((pending or {}).get("id") or ""),
+    )
+    if not phone_key and identity_source:
+        inherited_phone = _clean_str(identity_source.get("phone"))
+        phone_key = candidate_phone_identity(inherited_phone)
+        if phone_key:
+            phone = inherited_phone
+    if (not tech or tech == "Unspecified") and identity_source:
+        inherited_tech = canonical_technology(identity_source.get("technology"))
+        if inherited_tech not in {"", "Unspecified"}:
+            tech = inherited_tech
+    inherited_reference = _clean_str((identity_source or {}).get("reference"))
+
+    if pending:
+        patch = {}
+        if phone_key and candidate_phone_identity(pending.get("phone")) != phone_key:
+            patch["phone"] = _clean_str(phone)
+        if tech and tech != "Unspecified" and canonical_technology(pending.get("technology")) != tech:
+            patch["technology"] = tech
+        if inherited_reference and not _clean_str(pending.get("reference")):
+            patch["reference"] = inherited_reference
+        if round_label and normalise_interview_round(pending.get("interview_round")) != round_label:
+            patch["interview_round"] = round_label
+        if patch:
+            pending = update_candidate(
+                str(pending["id"]),
+                patch,
+                allow_slot_without_rules=True,
+            ) or pending
+        return pending
+
+    return create_candidate(
+        {
+            "name": canon,
+            "phone": _clean_str(phone),
+            "technology": tech or "Unspecified",
+            "reference": inherited_reference,
+            "interview_round": round_label,
+            "service_type": "round_wise",
+            "interview_scope": "external",
+            "stage": "in_progress",
+            "task": "in_progress",
+            "payment": 0,
+            "expected_payment": baseline_for_service("round_wise"),
+            "slot_confirmed": False,
+        },
+        allow_slot_without_rules=True,
+    )
+
+
+def _payment_proof_owner_for_slot_name(
+    name: str,
+    payment_proof_id: str | None,
+) -> tuple[dict, tuple[Path, dict]] | None:
+    """Find a proof across every same-name ledger row, not only the display row."""
+    proof_id = _clean_str(payment_proof_id)
+    key = _normalise_candidate_name_key(canonical_candidate_name(_clean_str(name)))
+    if not proof_id or not key:
+        return None
+    for row in list_candidates(stage="all", month="all"):
+        if _normalise_candidate_name_key(row.get("name") or "") != key:
+            continue
+        cid = _clean_str(row.get("id"))
+        if not cid:
+            continue
+        hit = get_proof(cid, proof_id)
+        if hit:
+            return row, hit
+    return None
+
+
 def merged_balance_due_for_name(name: str, rows: list[dict] | None = None) -> int:
     """Outstanding balance once per profile — merged slot clones."""
     canon = canonical_candidate_name(_clean_str(name))
@@ -2168,32 +2456,74 @@ def slot_booking_payment_block_reason(
     name: str,
     *,
     payment_proof_id: str | None = None,
+    require_payment_proof: bool = False,
 ) -> str | None:
     """None if the candidate may book; else human-readable payment blocker."""
     due = merged_balance_due_for_name(name)
-    if due <= 0:
+    if due <= 0 and not require_payment_proof:
         return None
     canon = canonical_candidate_name(_clean_str(name))
-    # If candidate already has payment proofs on file, allow booking
-    cid = candidate_id_for_slot_name(name)
     if not payment_proof_id:
+        if require_payment_proof and due <= 0:
+            return "Upload a verified payment screenshot before booking this round."
         return (
             f"₹{due:,} payment is pending for {canon or name}. "
             "Upload your payment screenshot first, then book the interview slot."
         )
-    if not cid:
-        return "Candidate not found — contact your coordinator."
-    hit = get_proof(cid, payment_proof_id.strip())
-    if not hit:
+    owner = _payment_proof_owner_for_slot_name(name, payment_proof_id)
+    if not owner:
         return "Payment screenshot not found — upload it again before booking."
+    _owner_row, hit = owner
     _path, entry = hit
     if _is_slot_screenshot_proof(entry):
         return "Upload a payment screenshot — an interview invite cannot be used as payment proof."
+    from features.payment_verification_engine import stored_proof_is_booking_eligible
+    if not stored_proof_is_booking_eligible(entry):
+        return (
+            "This receipt is not a verified company or registered-referrer payment. "
+            "Upload a valid receipt or wait for authorized review."
+        )
     if not _proof_uploaded_recently(entry):
         return (
             "Your payment screenshot has expired — upload a fresh payment screenshot, "
             "then book the interview slot."
         )
+    return None
+
+
+def _idempotent_round_wise_duplicate(name: str, fraud_check: dict) -> dict | None:
+    """Reuse a recent verified proof for the same still-unbooked round."""
+    key = _normalise_candidate_name_key(canonical_candidate_name(_clean_str(name)))
+    if not key:
+        return None
+    rows_by_id = {
+        str(row.get("id") or ""): row
+        for row in (_load(force=True).get("candidates") or [])
+        if isinstance(row, dict) and row.get("id")
+    }
+    from features.payment_verification_engine import stored_proof_is_booking_eligible
+
+    for match in fraud_check.get("duplicate_matches") or []:
+        cid = str(match.get("candidate_id") or "")
+        proof_id = str(match.get("proof_id") or "")
+        row = rows_by_id.get(cid)
+        if not row or not proof_id:
+            continue
+        if _normalise_candidate_name_key(row.get("name") or "") != key:
+            continue
+        if _normalise_service_type(row.get("service_type"), row) != "round_wise":
+            continue
+        if _candidate_has_confirmed_slot(row):
+            continue
+        hit = get_proof(cid, proof_id)
+        if not hit:
+            continue
+        _path, proof = hit
+        if not stored_proof_is_booking_eligible(proof):
+            continue
+        if not _proof_uploaded_recently(proof):
+            continue
+        return {"candidate_id": cid, "row": row, "proof": proof}
     return None
 
 
@@ -2204,30 +2534,69 @@ def public_add_payment_proof_for_name(
     original_name: str,
     mime_type: str,
     note: str = "",
+    extraction: dict | None = None,
+    service_type: str = "",
 ) -> dict:
     """Attach a payment screenshot from the public submit-slot page.
     
-    Also auto-updates the received payment amount based on OCR detection.
+    Also updates the received amount after centralized Ollama verification.
     """
     canon = canonical_candidate_name(_clean_str(name))
     if not canon:
         raise ValueError("Enter your name")
-    due = merged_balance_due_for_name(canon)
+    is_round_wise = _normalise_service_type(service_type, {}) == "round_wise"
+    pending = _round_wise_pending_payment_row(canon) if is_round_wise else None
+    if is_round_wise:
+        cid = str((pending or {}).get("id") or "")
+        due = (
+            max(0, effective_expected_payment(pending) - int(pending.get("payment") or 0))
+            if pending
+            else baseline_for_service("round_wise")
+        )
+    else:
+        due = merged_balance_due_for_name(canon)
+        cid = candidate_id_for_slot_name(canon)
     if due <= 0:
         raise ValueError("No payment due — you can book your interview slot directly.")
-    cid = candidate_id_for_slot_name(canon)
     if not cid:
-        raise ValueError("Candidate not found — contact your coordinator.")
+        raise ValueError(
+            "Round-wise candidate details were not saved. "
+            "Re-enter the name, phone number, technology, and interview round."
+            if is_round_wise
+            else "Candidate not found — contact your coordinator."
+        )
+    engine_result = dict(extraction or {})
+    if (
+        engine_result.get("verification_engine")
+        not in {"central_payment_verification_v1", "central_payment_verification_v2"}
+        or not engine_result.get("booking_eligible")
+    ):
+        reasons = list(engine_result.get("deterministic_reasons") or [])
+        raise ValueError(
+            " ".join(reasons)
+            or "This receipt is not a verified payment to the company account."
+        )
     caption = _clean_str(note)[:200]
     if not caption:
         caption = f"Payment proof · ₹{due:,} due · submit-slot"
     from features.payment_fraud_detection import assess_payment_proof
-    fraud_check = assess_payment_proof(data, None, candidate_id=cid, candidate_name=canon)
+    fraud_check = assess_payment_proof(data, extraction, candidate_id=cid, candidate_name=canon)
     if fraud_check["decision"] == "rejected":
+        duplicate = _idempotent_round_wise_duplicate(canon, fraud_check) if is_round_wise else None
+        if duplicate:
+            return {
+                "candidate_id": duplicate["candidate_id"],
+                "proof_id": duplicate["proof"]["id"],
+                "proof": duplicate["proof"],
+                "balance_due": 0,
+                "fraud_check": {**fraud_check, "decision": "idempotent", "verified": True},
+                "name": canon,
+                "reused_existing_proof": True,
+            }
         match = (fraud_check.get("duplicate_matches") or [{}])[0]
         duplicate_name = match.get("candidate_name") or "another candidate"
         raise ValueError(f"Duplicate payment proof already used for {duplicate_name}.")
-    entry = add_proof(
+    entry = add_payment_proof(
         cid,
         data=data,
         original_name=original_name,
@@ -2239,6 +2608,31 @@ def public_add_payment_proof_for_name(
             "fraud_reasons": fraud_check["reasons"],
             "fraud_warnings": fraud_check["warnings"],
             "fraud_checked_at": fraud_check["checked_at"],
+            "utr_number": str(
+                engine_result.get("utr_number")
+                or engine_result.get("reference_number")
+                or engine_result.get("transaction_id")
+                or ""
+            ),
+            "transaction_id": str((extraction or {}).get("transaction_id") or ""),
+            "payment_status": engine_result.get("status") or "",
+            "company_payment_verified": bool(engine_result.get("company_payment_verified")),
+            "booking_eligible": bool(engine_result.get("booking_eligible")),
+            "verification_state": engine_result.get("verification_state") or "",
+            "receiver_name": engine_result.get("receiver_name") or "",
+            "receiver_upi_id": engine_result.get("receiver_upi_id") or "",
+            "receiver_phone": engine_result.get("receiver_phone") or "",
+            "receiver_account": engine_result.get("receiver_account") or "",
+            "receiver_type": engine_result.get("receiver_type") or "company",
+            "verified_amount": int(engine_result.get("amount") or 0),
+            "ledger_entry_id": engine_result.get("ledger_entry_id") or "",
+            "ledger_action": engine_result.get("ledger_action") or "",
+            "ledger_status": engine_result.get("ledger_status") or "",
+            "payment_id": engine_result.get("payment_id") or "",
+            "evidence_id": engine_result.get("evidence_id") or "",
+            "entitlement_id": engine_result.get("entitlement_id") or "",
+            "payment_scope": engine_result.get("payment_scope") or "",
+            "source_module": engine_result.get("source_module") or "",
         },
     )
     if entry is None:
@@ -2249,7 +2643,7 @@ def public_add_payment_proof_for_name(
         _auto_increment_payment_on_proof(cid, due)
     except Exception:
         pass  # Don't fail the upload if auto-update fails
-    new_due = merged_balance_due_for_name(canon)
+    new_due = 0 if is_round_wise else merged_balance_due_for_name(canon)
     return {
         "candidate_id": cid,
         "proof_id": entry["id"],
@@ -2908,7 +3302,14 @@ def get_candidate_detail(cid: str) -> dict | None:
 
 
 def candidate_identity_ids(cid: str) -> list[str]:
-    """Return legacy row ids linked by explicit profile, phone, or email identity."""
+    """Return every legacy row id belonging to one displayed candidate.
+
+    Mailboxes may have been connected before duplicate profile rows were
+    collapsed in the candidate list. Include exact canonical-name profile rows
+    as well as explicit, phone, email, and database identity links so all Gmail
+    accounts for that one person remain visible.
+    """
+    linked_ids = {str(cid)}
     try:
         from core.db.connection import get_connection, use_postgres
         if use_postgres():
@@ -2919,32 +3320,36 @@ def candidate_identity_ids(cid: str) -> list[str]:
                 if found:
                     cur.execute("""SELECT alias_candidate_id FROM candidate_identity_links
                       WHERE canonical_candidate_id=%s ORDER BY alias_candidate_id""",(str(found[0]),))
-                    aliases=[str(row[0]) for row in cur.fetchall()]
-                    if aliases:return aliases
+                    linked_ids.update(str(row[0]) for row in cur.fetchall())
     except Exception:
         pass
     rows = _load().get("candidates") or []
     source = next((row for row in rows if str(row.get("id")) == str(cid)), None)
     if not source:
-        return [str(cid)]
+        return sorted(linked_ids)
     phone_key = candidate_phone_identity(source.get("phone"))
     email_key = str(source.get("email") or "").strip().casefold()
     explicit = str(source.get("canonical_candidate_id") or source.get("profile_candidate_id") or "").strip()
-    aliases=[]
+    source_is_profile = _normalise_service_type(source.get("service_type"), source) != "round_wise"
+    source_name_key = _normalise_candidate_name_key(canonical_candidate_name(source.get("name") or ""))
     for row in rows:
         row_id=str(row.get("id") or "")
         if not row_id:continue
         row_phone=candidate_phone_identity(row.get("phone"))
         row_email=str(row.get("email") or "").strip().casefold()
         row_explicit=str(row.get("canonical_candidate_id") or row.get("profile_candidate_id") or "").strip()
+        row_is_profile = _normalise_service_type(row.get("service_type"), row) != "round_wise"
+        row_name_key = _normalise_candidate_name_key(canonical_candidate_name(row.get("name") or ""))
         if (
-            (phone_key and row_phone==phone_key)
+            row_id in linked_ids
+            or (phone_key and row_phone==phone_key)
             or (email_key and '@' in email_key and row_email==email_key)
             or (explicit and (row_id==explicit or row_explicit==explicit))
             or row_explicit==str(cid)
+            or (source_is_profile and row_is_profile and source_name_key and row_name_key==source_name_key)
         ):
-            aliases.append(row_id)
-    return aliases or [str(cid)]
+            linked_ids.add(row_id)
+    return sorted(linked_ids)
 
 
 def canonical_candidate_identity_id(cid: str) -> str:
@@ -2981,7 +3386,8 @@ def find_by_telegram(slot: str, user_id: int) -> dict | None:
 def create_candidate(record: dict, *, allow_slot_without_rules: bool = False) -> dict:
     data = _load()
     row = _normalise(record)
-    if not allow_slot_without_rules and _normalise_service_type(row.get("service_type"), row) != "round_wise":
+    is_dropped = row.get("stage") == "dropped"
+    if not is_dropped and not allow_slot_without_rules and _normalise_service_type(row.get("service_type"), row) != "round_wise":
         key = _normalise_candidate_name_key(row.get("name") or "")
         phone_key = candidate_phone_identity(row.get("phone"))
         duplicate = next(
@@ -3001,7 +3407,7 @@ def create_candidate(record: dict, *, allow_slot_without_rules: bool = False) ->
                 f"An active profile already exists for phone {row.get('phone') or row.get('name')}. "
                 f"Open and update {duplicate.get('name') or 'the existing candidate'} instead."
             )
-    if row.get("slot_confirmed") and not allow_slot_without_rules:
+    if not is_dropped and row.get("slot_confirmed") and not allow_slot_without_rules:
         reason = slot_confirm_block_reason(row)
         if reason:
             raise ValueError(reason)
@@ -3131,10 +3537,9 @@ def _duplicate_candidate_slot(
         "slots_group_posted": True,
         "interview_attendance_status": "",
         "interview_attended": False,
-        "proofs": [
-            p for p in (source.get("proofs") or [])
-            if not _is_slot_screenshot_proof(p)
-        ],
+        "payment_proofs": list(source.get("payment_proofs") or []),
+        "slot_screenshot_proofs": [],
+        "profile_photo": source.get("profile_photo"),
         "resumes": list(source.get("resumes") or []),
     }
     return create_candidate(record, allow_slot_without_rules=True)
@@ -3239,6 +3644,7 @@ def update_interview_slot(
     time_end: str = "",
     notes: str = "",
     interview_round: str = "",
+    technology: str | None = None,
     interview_attendee: str | None = None,
     interview_company: str | None = None,
     interview_role: str | None = None,
@@ -3270,6 +3676,11 @@ def update_interview_slot(
     }
     if notes is not None:
         patch["notes"] = sanitize_candidate_notes(_clean_str(notes))
+    if technology is not None:
+        tech = canonical_technology(_clean_str(technology))
+        if tech == "Unspecified":
+            raise ValueError("Interview technology is required")
+        patch["technology"] = tech
     if interview_attendee is not None:
         patch["interview_attendee"] = normalise_interview_attendee_name(interview_attendee)
     elif candidate_defaults_to_tool_attendee(existing.get("name") or ""):
@@ -3595,12 +4006,18 @@ def attach_public_slot_screenshot(
     if not cid or not data:
         return None
     caption = f"Interview slot screenshot · {source}"[:200]
-    entry = add_proof(
+    entry = add_slot_screenshot_proof(
         cid,
         data=data,
         original_name=original_name or "slot-screenshot.jpg",
         mime_type=mime_type or "image/jpeg",
         note=caption,
+        metadata={
+            "source_module": "slot_booking",
+            "source_endpoint": "/candidates/{cid}/slot-screenshot",
+            "upload_context": source,
+            "booking_id": cid,
+        },
     )
     if not entry:
         return None
@@ -3620,6 +4037,7 @@ def _finish_public_slot_import(
     action: str,
     *,
     technology: str = "",
+    phone: str = "",
     interview_round: str = "",
     slot_image: bytes | None = None,
     slot_image_name: str = "",
@@ -3631,6 +4049,13 @@ def _finish_public_slot_import(
         existing = row_candidate_technology(row) or (row.get("technology") or "")
         if not str(existing).strip() or str(existing).strip() in {"", "Unspecified"}:
             row = update_candidate(str(row["id"]), {"technology": tech}, allow_slot_without_rules=True)
+    normalized_phone = _clean_str(phone)
+    if normalized_phone and row.get("id"):
+        row = update_candidate(
+            str(row["id"]),
+            {"phone": normalized_phone},
+            allow_slot_without_rules=True,
+        )
     rnd = normalise_interview_round(interview_round)
     if rnd and row.get("id"):
         row = update_candidate(
@@ -3658,6 +4083,7 @@ def import_confirmed_interview_slot(
     time_end: str = "",
     notes: str = "",
     technology: str = "",
+    phone: str = "",
     interview_round: str = "",
     service_type: str = "round_wise",
     source: str = "public-upload",
@@ -3673,9 +4099,16 @@ def import_confirmed_interview_slot(
     if excluded_from_public_slot_booking(canon):
         raise ValueError(f"{canon} is no longer booking interview slots.")
 
-    pay_block = slot_booking_payment_block_reason(canon, payment_proof_id=payment_proof_id)
+    is_round_wise = _normalise_service_type(service_type, {}) == "round_wise"
+    pay_block = slot_booking_payment_block_reason(
+        canon,
+        payment_proof_id=payment_proof_id,
+        require_payment_proof=is_round_wise,
+    )
     if pay_block:
         due = merged_balance_due_for_name(canon)
+        if is_round_wise and due <= 0:
+            due = baseline_for_service("round_wise")
         raise PaymentDueError(name=canon, balance_due=due, needs_proof=not payment_proof_id)
 
     day = _clean_str(date)[:10]
@@ -3686,11 +4119,13 @@ def import_confirmed_interview_slot(
     _validate_interview_slot_times(slot_time, slot_end)
 
     tech = canonical_technology(_clean_str(technology))
+    normalized_phone = _clean_str(phone) if is_round_wise else ""
     rnd = normalise_interview_round(interview_round)
     if "Candidate" in source and not rnd:
         raise ValueError("Select the interview round (L1, L2, etc.)")
 
     rows = list_candidates(stage="all", month="all")
+    proof_owner = _payment_proof_owner_for_slot_name(canon, payment_proof_id)
     existing = _find_existing_slot_row(rows, canon, day, slot_time)
     if existing and _candidate_has_confirmed_slot(existing):
         patch: dict = {}
@@ -3705,6 +4140,7 @@ def import_confirmed_interview_slot(
             existing,
             "skip_exists" if not patch else "updated",
             technology=tech,
+            phone=normalized_phone,
             interview_round=rnd,
             slot_image=slot_image,
             slot_image_name=slot_image_name,
@@ -3721,6 +4157,31 @@ def import_confirmed_interview_slot(
 
     note = sanitize_candidate_notes(_clean_str(notes))
 
+    # A round-wise receipt belongs to one independent ledger row. Book that
+    # exact row so an older round or profile balance cannot be reused.
+    if is_round_wise and proof_owner:
+        paid_row, _proof = proof_owner
+        if not _candidate_has_confirmed_slot(paid_row):
+            row = assign_interview_slot(
+                candidate_id=paid_row["id"],
+                date=day,
+                time=slot_time,
+                time_end=slot_end,
+                notes=note,
+                interview_round=rnd,
+            )
+            return _finish_public_slot_import(
+                row,
+                "assigned_round_payment",
+                technology=tech,
+                phone=normalized_phone,
+                interview_round=rnd,
+                slot_image=slot_image,
+                slot_image_name=slot_image_name,
+                slot_image_mime=slot_image_mime,
+                source=source,
+            )
+
     if existing and not _candidate_has_confirmed_slot(existing):
         row = assign_interview_slot(
             candidate_id=existing["id"],
@@ -3734,6 +4195,7 @@ def import_confirmed_interview_slot(
             row,
             "assigned",
             technology=tech,
+            phone=normalized_phone,
             interview_round=rnd,
             slot_image=slot_image,
             slot_image_name=slot_image_name,
@@ -3755,6 +4217,7 @@ def import_confirmed_interview_slot(
             row,
             "assigned_profile",
             technology=tech,
+            phone=normalized_phone,
             interview_round=rnd,
             slot_image=slot_image,
             slot_image_name=slot_image_name,
@@ -3783,6 +4246,7 @@ def import_confirmed_interview_slot(
             row,
             "cloned",
             technology=tech,
+            phone=normalized_phone,
             interview_round=rnd,
             slot_image=slot_image,
             slot_image_name=slot_image_name,
@@ -3813,6 +4277,7 @@ def import_confirmed_interview_slot(
                 row,
                 "cloned",
                 technology=tech,
+                phone=normalized_phone,
                 interview_round=rnd,
                 slot_image=slot_image,
                 slot_image_name=slot_image_name,
@@ -3841,6 +4306,7 @@ def import_confirmed_interview_slot(
         new_candidate = create_candidate({
             "name": canon,
             "technology": auto_tech or "Unspecified",
+            "phone": normalized_phone,
             "reference": auto_ref,
             "stage": "in_progress",
             "service_type": service_type or "round_wise",
@@ -3858,6 +4324,7 @@ def import_confirmed_interview_slot(
             new_candidate,
             "auto_created",
             technology=auto_tech,
+            phone=normalized_phone,
             interview_round=rnd,
             slot_image=slot_image,
             slot_image_name=slot_image_name,
@@ -4083,9 +4550,10 @@ def update_candidate(
             }
             allowed_patch = {k: v for k, v in patch.items() if k in _ALLOWED_FIELDS}
             preview = _normalise(allowed_patch, existing=r)
+            is_dropped = preview.get("stage") == "dropped"
             phone_key = candidate_phone_identity(preview.get("phone"))
             name_key = _normalise_candidate_name_key(preview.get("name") or "")
-            if phone_key and _normalise_service_type(preview.get("service_type"), preview) != "round_wise":
+            if not is_dropped and phone_key and _normalise_service_type(preview.get("service_type"), preview) != "round_wise":
                 conflict = next(
                     (
                         other for other in rows
@@ -4106,7 +4574,7 @@ def update_candidate(
                     raise ValueError(
                         f"Phone {preview.get('phone')} already belongs to active candidate {conflict.get('name')}."
                     )
-            if preview.get("slot_confirmed") and not _coerce_bool(r.get("slot_confirmed")):
+            if not is_dropped and preview.get("slot_confirmed") and not _coerce_bool(r.get("slot_confirmed")):
                 if not allow_slot_without_rules:
                     reason = slot_confirm_block_reason(_with_computed(preview))
                     if reason:
@@ -4116,7 +4584,7 @@ def update_candidate(
             # Keep shared financial fields identical so list-page consolidation
             # cannot resurrect an older, higher value after an edit.
             shared_keys = {
-                "name", "phone", "email", "technology",
+                "name", "stage", "phone", "email", "technology",
                 "payment", "expected_payment", "follow_up", "reference",
                 "consultancy", "bgv_certificates", "ctc_percentage",
             }
@@ -4390,13 +4858,35 @@ def _carry_forward_balances(
     except Exception:
         pass
 
+    # Sponsored candidate payments received by a referrer are recovered from
+    # that referrer's future commission.
+    prior_recoveries: dict[str, int] = {}
+    try:
+        from features.payment_verification_engine import ledger_entries
+        for entry in ledger_entries(action="referrer_recovery"):
+            entry_month = str(entry.get("payment_date") or entry.get("created_at") or "")[:7]
+            if not entry_month or entry_month >= target_month or entry_month in ("2026-04", "2026-05"):
+                continue
+            key = _reference_key(entry.get("referrer") or entry.get("receiver_registry_name") or "")
+            if not key or (scope_key and key != scope_key):
+                continue
+            prior_recoveries[key] = prior_recoveries.get(key, 0) + int(entry.get("amount") or 0)
+    except Exception:
+        pass
+
     # Merge into result
-    all_keys = set(prior_commission.keys()) | set(prior_salary.keys()) | set(prior_paid.keys())
+    all_keys = (
+        set(prior_commission.keys())
+        | set(prior_salary.keys())
+        | set(prior_paid.keys())
+        | set(prior_recoveries.keys())
+    )
     result: dict[str, dict] = {}
     for key in all_keys:
         comm = prior_commission.get(key, 0)
         sal = prior_salary.get(key, 0)
         paid = prior_paid.get(key, 0)
+        recovery = prior_recoveries.get(key, 0)
         # For April & May 2026, prior months are considered settled
         # so don't carry anything forward from those months
         result[key] = {
@@ -4404,7 +4894,8 @@ def _carry_forward_balances(
             "prior_salary": sal,
             "prior_owed": comm + sal,
             "prior_paid": paid,
-            "prior_balance": (comm + sal) - paid,
+            "prior_recoveries": recovery,
+            "prior_balance": (comm + sal) - paid - recovery,
         }
     return result
 
@@ -4561,6 +5052,19 @@ def stats(
             if k == scope_key or _reference_matches_scope(v.get("name") or k, scope_key)
         }
 
+    try:
+        from features.payment_verification_engine import recovery_summary_by_referrer
+        recovery_summary = recovery_summary_by_referrer(
+            month=month if month and month != "all" else None,
+        )
+    except Exception:
+        recovery_summary = {}
+    if scope_key:
+        recovery_summary = {
+            k: v for k, v in recovery_summary.items()
+            if k == scope_key or _reference_matches_scope(v.get("name") or k, scope_key)
+        }
+
     # Join in the per-handler salary store. A handler can be on a hybrid
     # pay model: a fixed monthly salary (this) PLUS 50% commission on
     # their candidates' payments (computed above). Handlers with a
@@ -4606,6 +5110,9 @@ def stats(
     total_handler_commission    = 0
     total_handler_salary        = 0
     total_handler_paid_out      = 0
+    total_handler_recoveries    = 0
+    total_commission_already_received = 0
+    total_company_share_recoverable = 0
 
     # ── Carry-forward: compute cumulative balances from prior months ──
     carry_fwd: dict[str, dict] = {}
@@ -4643,11 +5150,19 @@ def stats(
         key = (p.get("ref_key") or _reference_key(p.get("name"))).strip().lower()
         exp_bucket    = expense_summary.get(key, {})
         salary_bucket = salary_summary.get(key, {})
+        recovery_bucket = recovery_summary.get(key, {})
 
         commission = int(p["auto_earnings_total"])
         salary     = int(salary_bucket.get("owed") or 0)
         owed       = commission + salary
         paid_out   = int(exp_bucket.get("total") or 0)
+        recoveries = int(recovery_bucket.get("total") or 0)
+        commission_already_received = int(
+            recovery_bucket.get("commission_already_received") or 0
+        )
+        company_share_recoverable = int(
+            recovery_bucket.get("recoverable_company_share") or 0
+        )
 
         # ── Carry-forward: only the NET BALANCE from prior months ──
         cf = carry_fwd.get(key, {})
@@ -4665,9 +5180,17 @@ def stats(
         # Paid out = THIS month's payouts only.
         p["paid_out_total"]    = paid_out
         p["paid_out_count"]    = int(exp_bucket.get("count") or 0)
+        p["recoveries_total"]  = recoveries
+        p["recoveries_count"]  = int(recovery_bucket.get("count") or 0)
+        p["commission_already_received_directly"] = commission_already_received
+        p["recoverable_company_share"] = company_share_recoverable
+        p["approved_expenses_total"] = paid_out
+        p["month_end_commission_payout"] = commission - recoveries - paid_out
 
-        # Balance = this month's (owed - paid) + carry-forward from prior months.
-        p["net_payable"]       = (owed - paid_out) + prior_balance
+        # Month-end payout = commission/salary - recoveries - approved expenses.
+        p["net_payable"]       = (owed - recoveries - paid_out) + prior_balance
+        p["cash_payout"]       = max(0, p["net_payable"])
+        p["carry_forward_receivable"] = max(0, -p["net_payable"])
         p["commission_pct"]    = HANDLER_COMMISSION_PCT
 
         # Carry-forward detail field so UI can show the breakdown.
@@ -4677,12 +5200,14 @@ def stats(
         if month in ("2026-04", "2026-05"):
             p["net_payable"] = 0
             p["prior_balance"] = 0
+            p["cash_payout"] = 0
+            p["carry_forward_receivable"] = 0
 
         # Backwards-compat aliases so older client bundles keep rendering
         # something sensible until the next refresh:
         p["earnings_total"]    = owed
-        p["deductions_total"]  = paid_out
-        p["net_earning"]       = (owed - paid_out) + prior_balance
+        p["deductions_total"]  = paid_out + recoveries
+        p["net_earning"]       = (owed - recoveries - paid_out) + prior_balance
         p["expenses_total"]    = paid_out
         p["expenses_count"]    = int(exp_bucket.get("count") or 0)
         p["net_completed"]     = int(p.get("revenue_completed") or 0) - paid_out
@@ -4696,7 +5221,15 @@ def stats(
             p["auto_earnings_total"] = 0
             p["paid_out_total"] = 0
             p["paid_out_count"] = 0
+            p["recoveries_total"] = 0
+            p["recoveries_count"] = 0
+            p["commission_already_received_directly"] = 0
+            p["recoverable_company_share"] = 0
+            p["approved_expenses_total"] = 0
+            p["month_end_commission_payout"] = 0
             p["net_payable"] = 0
+            p["cash_payout"] = 0
+            p["carry_forward_receivable"] = 0
             p["prior_balance"] = 0
             p["earnings_total"] = 0
             p["deductions_total"] = 0
@@ -4708,6 +5241,9 @@ def stats(
         total_handler_commission += commission
         total_handler_salary     += salary
         total_handler_paid_out   += paid_out
+        total_handler_recoveries += recoveries
+        total_commission_already_received += commission_already_received
+        total_company_share_recoverable += company_share_recoverable
 
     total_handler_auto_earnings = total_handler_commission + total_handler_salary
     # Sum of all handlers' prior balances for the global net payout
@@ -4759,10 +5295,27 @@ def stats(
         "handler_commission_total":     total_handler_commission,
         "handler_salary_total":         total_handler_salary,
         "handler_paid_out_total":       total_handler_paid_out,
-        "net_handler_payout":           (total_handler_auto_earnings - total_handler_paid_out) + total_prior_balance,
+        "handler_recoveries_total":      total_handler_recoveries,
+        "commission_already_received_directly_total": total_commission_already_received,
+        "recoverable_company_share_total": total_company_share_recoverable,
+        "handler_approved_expenses_total": total_handler_paid_out,
+        "month_end_commission_payout":   total_handler_commission - total_handler_recoveries - total_handler_paid_out,
+        "net_handler_payout":           (total_handler_auto_earnings - total_handler_recoveries - total_handler_paid_out) + total_prior_balance,
+        "handler_cash_payout": max(
+            0,
+            (total_handler_auto_earnings - total_handler_recoveries - total_handler_paid_out)
+            + total_prior_balance,
+        ),
+        "handler_carry_forward_receivable": max(
+            0,
+            -(
+                (total_handler_auto_earnings - total_handler_recoveries - total_handler_paid_out)
+                + total_prior_balance
+            ),
+        ),
         # Backwards-compat fields (older client builds expect these names).
         "handler_earnings_total":   total_handler_auto_earnings,
-        "handler_deductions_total": total_handler_paid_out,
+        "handler_deductions_total": total_handler_paid_out + total_handler_recoveries,
         "handler_expenses_total":   total_handler_paid_out,
         "net_completed":            completed_revenue - total_handler_paid_out,
         "month": month or "all",
@@ -4836,7 +5389,12 @@ def bootstrap_data(
         _all_rows=scoped_rows,
         _skip_pending_works=True,
     )
-    pw = _pending_works_core(_in_progress_rows(scoped_rows, None))
+    # Consolidate legacy profile clones before applying the active-stage filter.
+    # Otherwise an old in-progress clone keeps a newly dropped candidate in the
+    # Pending works banner.
+    pw = _pending_works_core(
+        _in_progress_rows(_collapse_profile_candidates(scoped_rows), None),
+    )
     stats_payload = _attach_pending_work_stats(stats_payload, pw)
 
     payload: dict = {
@@ -4851,7 +5409,9 @@ def bootstrap_data(
             _all_rows=all_rows,
             _skip_pending_works=True,
         )
-        pw_global = _pending_works_core(_in_progress_rows(all_rows, None))
+        pw_global = _pending_works_core(
+            _in_progress_rows(_collapse_profile_candidates(all_rows), None),
+        )
         payload["global_stats"] = _attach_pending_work_stats(global_stats, pw_global)
     return payload
 
@@ -4860,6 +5420,10 @@ def bootstrap_data(
 
 def _proof_dir(cid: str) -> str:
     return os.path.join(PROOFS_DIR, cid)
+
+
+def _attachment_dir(cid: str, attachment_type: AttachmentType) -> str:
+    return os.path.join(PROOFS_DIR, cid, attachment_type.value)
 
 
 def _ext_from_mime(mime: str, fallback_name: str = "") -> str:
@@ -4874,11 +5438,12 @@ def _ext_from_mime(mime: str, fallback_name: str = "") -> str:
     return ""
 
 
-def add_proof(cid: str, *, data: bytes, original_name: str, mime_type: str,
+def _store_typed_attachment(
+              cid: str, *, attachment_type: AttachmentType | str,
+              data: bytes, original_name: str, mime_type: str,
               note: str = "", metadata: dict | None = None) -> dict | None:
-    """Persist a payment screenshot for `cid`. Returns the new proof entry
-    (with its computed url path) or None when the candidate doesn't exist
-    or the upload is rejected (wrong mime, too big, empty)."""
+    """Persist one explicitly typed candidate attachment."""
+    kind = parse_attachment_type(attachment_type)
     if not data:
         raise ValueError("Empty upload")
     if len(data) > MAX_PROOF_BYTES:
@@ -4895,7 +5460,7 @@ def add_proof(cid: str, *, data: bytes, original_name: str, mime_type: str,
 
     pid = uuid.uuid4().hex[:12]
     filename = f"{pid}.{ext}"
-    folder = _proof_dir(cid)
+    folder = _attachment_dir(cid, kind)
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, filename)
     # Write atomically so we never serve a half-flushed screenshot.
@@ -4912,43 +5477,106 @@ def add_proof(cid: str, *, data: bytes, original_name: str, mime_type: str,
         "size":          len(data),
         "note":          _clean_str(note)[:200],
         "uploaded_at":   _now_iso(),
-        "url":           f"/candidates/{cid}/proofs/{pid}",
+        "attachment_type": kind.value,
+        "url":           f"/candidates/{cid}/attachments/{kind.value}/{pid}",
     }
     if metadata:
-        for key in ("sha256", "utr_number", "transaction_id", "payment_status", "fraud_decision", "fraud_reasons", "fraud_warnings", "fraud_checked_at"):
+        for key in (
+            "sha256", "utr_number", "transaction_id", "payment_status",
+            "fraud_decision", "fraud_reasons", "fraud_warnings", "fraud_checked_at",
+            "company_payment_verified", "receiver_name", "receiver_upi_id",
+            "receiver_phone", "verified_amount", "receiver_account",
+            "receiver_type", "ledger_entry_id", "ledger_action",
+            "ledger_status", "source_module", "booking_eligible",
+            "verification_state", "payment_id", "evidence_id",
+            "entitlement_id", "payment_scope",
+            "booking_id", "source_endpoint", "upload_context",
+        ):
             if key in metadata:
                 entry[key] = metadata[key]
-    proofs = list(rows[idx].get("proofs") or [])
-    proofs.append(entry)
-    rows[idx]["proofs"] = proofs
+    field = ATTACHMENT_FIELDS[kind]
+    if kind == AttachmentType.PROFILE_PHOTO:
+        rows[idx][field] = entry
+    else:
+        attachments = list(rows[idx].get(field) or [])
+        attachments.append(entry)
+        rows[idx][field] = attachments
+    rows[idx]["attachment_schema_version"] = 2
     rows[idx]["updated_at"] = _now_iso()
     cdata["candidates"] = rows
     _save(cdata)
     return entry
 
 
-def list_proofs(cid: str) -> list[dict] | None:
-    """Return the persisted proof list for `cid` or None if missing."""
+def add_proof(cid: str, *, attachment_type: AttachmentType | str | None = None,
+              data: bytes, original_name: str, mime_type: str,
+              note: str = "", metadata: dict | None = None) -> dict | None:
+    """Deprecated compatibility path. A valid explicit type is mandatory."""
+    return _store_typed_attachment(
+        cid,
+        attachment_type=parse_attachment_type(attachment_type),
+        data=data,
+        original_name=original_name,
+        mime_type=mime_type,
+        note=note,
+        metadata=metadata,
+    )
+
+
+def add_payment_proof(cid: str, **kwargs) -> dict | None:
+    return _store_typed_attachment(
+        cid, attachment_type=AttachmentType.PAYMENT_PROOF, **kwargs
+    )
+
+
+def add_slot_screenshot_proof(cid: str, **kwargs) -> dict | None:
+    return _store_typed_attachment(
+        cid, attachment_type=AttachmentType.SLOT_SCREENSHOT_PROOF, **kwargs
+    )
+
+
+def set_profile_photo(cid: str, **kwargs) -> dict | None:
+    return _store_typed_attachment(
+        cid, attachment_type=AttachmentType.PROFILE_PHOTO, **kwargs
+    )
+
+
+def list_attachments(cid: str, attachment_type: AttachmentType | str) -> list[dict] | None:
+    kind = parse_attachment_type(attachment_type)
     for r in _load().get("candidates") or []:
         if r.get("id") == cid:
-            return list(r.get("proofs") or [])
+            value = partition_candidate_attachments(r)[ATTACHMENT_FIELDS[kind]]
+            if kind == AttachmentType.PROFILE_PHOTO:
+                return [value] if value else []
+            return list(value or [])
     return None
 
 
-def get_proof(cid: str, pid: str) -> tuple[str, dict] | None:
+def list_proofs(cid: str) -> list[dict] | None:
+    return list_attachments(cid, AttachmentType.PAYMENT_PROOF)
+
+
+def get_attachment(cid: str, pid: str,
+                   attachment_type: AttachmentType | str) -> tuple[str, dict] | None:
     """Locate the proof's on-disk path + metadata for serving. Returns
     (absolute_path, entry) or None when either id doesn't resolve."""
+    kind = parse_attachment_type(attachment_type)
     for r in _load().get("candidates") or []:
         if r.get("id") != cid:
             continue
-        for p in (r.get("proofs") or []):
+        for p in list_attachments(cid, kind) or []:
             if p.get("id") == pid:
-                path = os.path.join(_proof_dir(cid), p["filename"])
+                folder = _proof_dir(cid) if p.get("legacy_storage") else _attachment_dir(cid, kind)
+                path = os.path.join(folder, p["filename"])
                 if not os.path.exists(path):
                     return None
                 return path, dict(p)
         return None
     return None
+
+
+def get_proof(cid: str, pid: str) -> tuple[str, dict] | None:
+    return get_attachment(cid, pid, AttachmentType.PAYMENT_PROOF)
 
 
 def delete_proof(cid: str, pid: str) -> bool:
@@ -4959,17 +5587,17 @@ def delete_proof(cid: str, pid: str) -> bool:
     # First try the exact row
     target_row = next((r for r in rows if r.get("id") == cid), None)
     if target_row:
-        proofs = list(target_row.get("proofs") or [])
+        proofs = list(target_row.get("payment_proofs") or [])
         for i, p in enumerate(proofs):
             if p.get("id") == pid:
-                path = os.path.join(_proof_dir(cid), p["filename"])
+                path = os.path.join(_attachment_dir(cid, AttachmentType.PAYMENT_PROOF), p["filename"])
                 try:
                     if os.path.exists(path):
                         os.remove(path)
                 except OSError:
                     pass
                 proofs.pop(i)
-                target_row["proofs"] = proofs
+                target_row["payment_proofs"] = proofs
                 target_row["updated_at"] = _now_iso()
                 cdata["candidates"] = rows
                 _save(cdata)
@@ -4982,17 +5610,17 @@ def delete_proof(cid: str, pid: str) -> bool:
                 continue
             if _normalise_candidate_name_key(r.get("name") or "") != name_key:
                 continue
-            proofs = list(r.get("proofs") or [])
+            proofs = list(r.get("payment_proofs") or [])
             for i, p in enumerate(proofs):
                 if p.get("id") == pid:
-                    path = os.path.join(_proof_dir(r["id"]), p["filename"])
+                    path = os.path.join(_attachment_dir(r["id"], AttachmentType.PAYMENT_PROOF), p["filename"])
                     try:
                         if os.path.exists(path):
                             os.remove(path)
                     except OSError:
                         pass
                     proofs.pop(i)
-                    r["proofs"] = proofs
+                    r["payment_proofs"] = proofs
                     r["updated_at"] = _now_iso()
                     cdata["candidates"] = rows
                     _save(cdata)
@@ -5007,7 +5635,7 @@ def update_proof_note(cid: str, pid: str, note: str) -> dict | None:
     for r in rows:
         if r.get("id") != cid:
             continue
-        for p in (r.get("proofs") or []):
+        for p in (r.get("payment_proofs") or []):
             if p.get("id") == pid:
                 p["note"] = _clean_str(note)[:200]
                 r["updated_at"] = _now_iso()

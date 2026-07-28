@@ -9,6 +9,8 @@ import io
 import re
 from typing import Optional
 
+from core.ocr_policy import ocr_enabled
+
 
 # Keywords that indicate a payment screenshot
 PAYMENT_KEYWORDS = {
@@ -217,6 +219,8 @@ def _extract_max_amount(text: str) -> float:
 
 def _extract_text(image_data: bytes, mime_type: str = "") -> Optional[str]:
     """Extract text from image using Tesseract OCR. Returns None if OCR unavailable."""
+    if not ocr_enabled():
+        return None
     try:
         from PIL import Image
         import pytesseract
