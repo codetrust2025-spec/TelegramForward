@@ -10,12 +10,17 @@ import { getSharedAudioContext } from './notificationSound.js'
 
 /** Candidate got picked — offer/selection/joining mails. */
 export const SELECTION_CLASSIFICATIONS = [
-  'job_selection_confirmed', 'offer_received', 'offer_accepted', 'joining_confirmed',
+  'job_selection_confirmed', 'offer_received', 'offer_accepted',
+  'offer_declined', 'offer_revoked', 'joining_confirmed',
+  'joining_date_updated', 'onboarding_started', 'background_verification',
+  'document_verification', 'compensation_confirmation',
+  'candidate_rejected',
 ]
 
 /** Interview slot movement — booked, moved or dropped. */
 export const INTERVIEW_BOOKING_CLASSIFICATIONS = [
-  'interview_confirmed', 'interview_rescheduled', 'interview_cancelled',
+  'interview_shortlisted', 'interview_confirmed', 'interview_rescheduled',
+  'interview_cancelled',
 ]
 
 const ALERT_CLASSIFICATIONS = new Set([
@@ -73,6 +78,30 @@ function klaxon(ctx, master, start, lowHz, highHz, dur) {
 }
 
 /**
+ * A fixed-pitch descending digital fault signal for expired Gmail credentials.
+ *
+ * This deliberately avoids the rising, sweeping sawtooth used for mail events:
+ * three short square-wave notes descend twice, with a clear pause between each
+ * group. Admins can therefore identify a broken mailbox without looking at the
+ * screen.
+ */
+function reconnectFaultPulse(ctx, master, start, frequency, dur = 0.16) {
+  const gain = ctx.createGain()
+  gain.gain.setValueAtTime(0.001, start)
+  gain.gain.exponentialRampToValueAtTime(0.7, start + 0.015)
+  gain.gain.setValueAtTime(0.7, start + dur - 0.025)
+  gain.gain.exponentialRampToValueAtTime(0.001, start + dur)
+  gain.connect(master)
+
+  const osc = ctx.createOscillator()
+  osc.type = 'square'
+  osc.frequency.setValueAtTime(frequency, start)
+  osc.connect(gain)
+  osc.start(start)
+  osc.stop(start + dur + 0.02)
+}
+
+/**
  * Play the alert. `urgent` (selections) gets an extra pair of sweeps.
  * Returns true when the sound was actually scheduled.
  */
@@ -108,6 +137,53 @@ export function playMailAlertSound({ eventId = null, urgent = false } = {}) {
   try {
     // Phones that ignore background audio still buzz.
     navigator.vibrate?.(urgent ? [300, 120, 300, 120, 300] : [250, 120, 250])
+  } catch {
+    /* not supported */
+  }
+  return true
+}
+
+/**
+ * Play the Gmail reconnect-required signal.
+ *
+ * Kept separate from `playMailAlertSound` so credential failures can never
+ * sound like a selection, offer or interview notification.
+ */
+export function playGmailReconnectAlertSound({ eventId = null } = {}) {
+  if (alreadyAlerted(eventId)) return false
+  const ctx = getSharedAudioContext()
+  if (!ctx) return false
+
+  const run = () => {
+    try {
+      const t0 = ctx.currentTime
+      const master = ctx.createGain()
+      master.gain.setValueAtTime(0.72, t0)
+      master.connect(ctx.destination)
+
+      const notes = [880, 440, 220]
+      for (const groupOffset of [0, 0.9]) {
+        notes.forEach((frequency, index) => {
+          reconnectFaultPulse(
+            ctx,
+            master,
+            t0 + groupOffset + index * 0.22,
+            frequency,
+          )
+        })
+      }
+      master.gain.setValueAtTime(0.72, t0 + 1.5)
+      master.gain.exponentialRampToValueAtTime(0.001, t0 + 1.62)
+    } catch {
+      /* audio is best-effort */
+    }
+  }
+
+  if (ctx.state === 'suspended') ctx.resume().then(run).catch(() => {})
+  else run()
+
+  try {
+    navigator.vibrate?.([500, 180, 120, 180, 500])
   } catch {
     /* not supported */
   }

@@ -230,9 +230,10 @@ export function DesktopHeader({
           type="button"
           className="desktop-header__icon-btn"
           aria-label="Inbox notifications"
+          title="Inbox notifications"
           onClick={onOpenInbox}
         >
-          🔔
+          <span aria-hidden>📥</span>
           {inboxUnreadTotal > 0 && (
             <span className="desktop-header__icon-badge">{inboxUnreadBadge}</span>
           )}

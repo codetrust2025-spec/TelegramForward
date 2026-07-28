@@ -89,6 +89,51 @@ export function formatIstDate(value, options = {}) {
   })
 }
 
+/**
+ * Format a calendar schedule whose date and clock time are already expressed
+ * in the supplied event timezone. The clock is not converted to another zone.
+ */
+export function formatScheduleDateTime(dateValue, timeValue, timeZone = '') {
+  const rawDate = String(dateValue || '').trim()
+  const dateMatch = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!dateMatch) return rawDate || '—'
+
+  const date = new Date(Date.UTC(
+    Number(dateMatch[1]),
+    Number(dateMatch[2]) - 1,
+    Number(dateMatch[3]),
+    12,
+  ))
+  const dateLabel = date.toLocaleDateString(IST_LOCALE, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
+
+  const rawTime = String(timeValue || '').trim()
+  const timeMatch = rawTime.match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i)
+  let timeLabel = ''
+  if (timeMatch) {
+    let hour = Number(timeMatch[1])
+    const minute = Number(timeMatch[2])
+    const period = String(timeMatch[3] || '').toUpperCase()
+    if (period === 'AM') hour %= 12
+    if (period === 'PM') hour = (hour % 12) + 12
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      timeLabel = new Date(Date.UTC(2000, 0, 1, hour, minute)).toLocaleTimeString(IST_LOCALE, {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+        timeZone: 'UTC',
+      })
+    }
+  }
+
+  const zoneLabel = timeZone === IST_TIMEZONE ? ' IST' : (timeZone ? ` (${timeZone})` : '')
+  return timeLabel ? `${dateLabel}, ${timeLabel}${zoneLabel}` : `${dateLabel}${zoneLabel}`
+}
+
 /** Short: Jun 3, 10:28 am (no year if same calendar year optional via caller) */
 export function formatIstShort(value) {
   const d = parseInstant(value)

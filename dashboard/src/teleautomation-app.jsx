@@ -37243,7 +37243,7 @@ function _Component29({
             }))} /></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Note</span><input className="cand-input" value={k.note} onChange={P => T(j => ({
               ...j,
               note: P.target.value
-            }))} placeholder="e.g. May commission ? taxi to client meeting" /></label><div className="cand-exp-form-actions cand-allexp-form-actions">{_ && <button type="button" className="cand-btn cand-btn--ghost" onClick={G}>Cancel edit</button>}<button type="submit" className="cand-btn cand-btn--primary" disabled={S}>{S ? "Saving?" : _ ? "Save changes" : "+ Log payout"}</button></div></form>{d && <div className="cand-modal-error">{d}</div>}<div className="cand-allexp-filters"><select className="cand-input cand-input--compact" value={h} onChange={P => x(P.target.value)} aria-label="Filter by handler"><option value="all">All handlers</option>{J.map(P => <option value={P} key={P}>{P}</option>)}</select><select className="cand-input cand-input--compact" value={v} onChange={P => g(P.target.value)} aria-label="Filter by month">{Z.map(P => <option value={P.value} key={P.value}>{P.label}</option>)}</select><select className="cand-input cand-input--compact" value={p} onChange={P => m(P.target.value)} aria-label="Filter by category"><option value="all">All categories</option>{B0.map(P => <option value={P.value} key={P.value}>{P.label}</option>)}</select>{(h !== "all" || v !== "all" || p !== "all") && <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => {
+            }))} placeholder="e.g. May commission ? taxi to client meeting" /></label><div className="cand-exp-form-actions cand-allexp-form-actions">{_ && <button type="button" className="cand-btn cand-btn--ghost" onClick={G}>Cancel edit</button>}<button type="submit" className="cand-btn cand-btn--primary" disabled={S}>{S ? "Saving?" : _ ? "Save changes" : "+ Log payout"}</button></div></form>{d && <div className="cand-modal-error">{d}</div>}<div className="cand-allexp-filters"><select className="cand-input cand-input--compact" value={h} onChange={P => x(P.target.value)} aria-label="Filter by handler"><option value="all">All Referrers</option>{J.map(P => <option value={P} key={P}>{P}</option>)}</select><select className="cand-input cand-input--compact" value={v} onChange={P => g(P.target.value)} aria-label="Filter by month">{Z.map(P => <option value={P.value} key={P.value}>{P.label}</option>)}</select><select className="cand-input cand-input--compact" value={p} onChange={P => m(P.target.value)} aria-label="Filter by category"><option value="all">All categories</option>{B0.map(P => <option value={P.value} key={P.value}>{P.label}</option>)}</select>{(h !== "all" || v !== "all" || p !== "all") && <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => {
             x("all");
             g("all");
             m("all");
@@ -38033,7 +38033,7 @@ function _Component35() {
     Ze.sort((Be, Xe) => Xe.count !== Be.count ? Xe.count - Be.count : Be.name.localeCompare(Xe.name));
     return [{
       value: "all",
-      label: "All handlers"
+      label: "All Referrers"
     }, ...Ze.map(Be => ({
       value: Be.name,
       label: Be.count > 0 ? `${Be.name} ? ${Be.count}` : Be.name

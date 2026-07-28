@@ -530,9 +530,10 @@ export function MobileApp({
               type="button"
               className="mobile-header__bell"
               aria-label={`${inboxUnreadTotal} inbox notifications`}
+              title="Inbox notifications"
               onClick={() => handleNav("inbox")}
             >
-              🔔
+              <span aria-hidden>📥</span>
               {inboxUnreadTotal > 0 && (
                 <span className="mobile-header__bell-badge">
                   {inboxUnreadBadge}

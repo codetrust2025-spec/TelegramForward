@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { isTrackedMailAlert, playMailAlertSound } from './mailAlertSound.js'
+import {
+  isTrackedMailAlert,
+  playGmailReconnectAlertSound,
+  playMailAlertSound,
+} from './mailAlertSound.js'
 
 // notificationSound.js caches the AudioContext for the whole module lifetime, so
 // the stub is installed once and this array is shared by every test.
@@ -51,5 +55,16 @@ describe('mail alert sound', () => {
     started.length = 0
     playMailAlertSound({ eventId: 'urgent', urgent: true })
     expect(started.length).toBeGreaterThan(normal)
+  })
+
+  it('uses a separate short fault pattern for Gmail reconnect alerts', () => {
+    playMailAlertSound({ eventId: 'mail-tone', urgent: true })
+    const mailOscillators = started.length
+    started.length = 0
+
+    expect(playGmailReconnectAlertSound({ eventId: 'reconnect-tone' })).toBe(true)
+    expect(started).toHaveLength(6)
+    expect(started.length).not.toBe(mailOscillators)
+    expect(playGmailReconnectAlertSound({ eventId: 'reconnect-tone' })).toBe(false)
   })
 })
