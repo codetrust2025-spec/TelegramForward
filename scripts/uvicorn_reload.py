@@ -24,6 +24,24 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
+# PM2 can retain stale environment values across restarts. These settings
+# control which inference host receives production AI traffic, so the checked
+# application .env is authoritative for them.
+try:
+    from dotenv import dotenv_values
+
+    _runtime_env = dotenv_values(os.path.join(ROOT, ".env"))
+    for _name in (
+        "OLLAMA_BASE_URL",
+        "OLLAMA_REMOTE_ENABLED",
+        "OLLAMA_EXPECT_REVERSE_SSH_TUNNEL",
+        "OLLAMA_INFERENCE_HOST_ID",
+    ):
+        if _runtime_env.get(_name):
+            os.environ[_name] = str(_runtime_env[_name])
+except Exception:
+    pass
+
 from core.auto_reload import (
     RELOAD_DIRS,
     RELOAD_EXCLUDES,

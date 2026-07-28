@@ -36,3 +36,5 @@ ta-login.txt
 ta-grep.txt
 ta-snippet.txt
 ek-sig.txt
+.codex-backups/
+*.zip
