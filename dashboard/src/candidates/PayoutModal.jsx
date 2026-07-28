@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react";
+import ReferrerPaymentAccounts, {
+  fetchReferrerRegistryJson,
+} from "./ReferrerPaymentAccounts.jsx";
 
 /**
  * Manage handler payouts — redesigned wide modal.
@@ -7,6 +10,39 @@ import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "rea
  */
 
 const ROWS_PER_PAGE = 7;
+
+function todayInputValue() {
+  const now = new Date();
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function currentMonthValue() {
+  return todayInputValue().slice(0, 7);
+}
+
+function formatMonthLabel(value) {
+  if (!/^\d{4}-\d{2}$/.test(String(value || ""))) return String(value || "");
+  const [year, month] = value.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-IN", {
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, 1)));
+}
+
+function isValidExpenseRecord(row) {
+  const status = String(row?.status || "").trim().toLowerCase();
+  const amount = Number(row?.amount);
+  return (
+    !["cancelled", "canceled", "deleted", "invalid", "rejected"].includes(status) &&
+    Number.isFinite(amount) &&
+    amount > 0
+  );
+}
 
 export default function PayoutModal({
   handlerNames = [],
@@ -28,27 +64,30 @@ export default function PayoutModal({
   const rR = formatDate;
 
   const [entries, setEntries] = useState([]);
-  const [months, setMonths] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filterHandler, setFilterHandler] = useState("all");
   const [filterMonth, setFilterMonth] = useState("all");
+  const [historyMonth, setHistoryMonth] = useState(currentMonthValue);
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(() => ({
-    reference: handlerNames[0] || "",
+    reference: "",
     amount: "",
     category: "commission",
     note: "",
-    date: new Date().toISOString().slice(0, 10),
+    date: todayInputValue(),
   }));
   const [saving, setSaving] = useState(false);
   const [proofFile, setProofFile] = useState(null);
   const proofInputRef = useRef(null);
   const [previewProof, setPreviewProof] = useState(null);
   const [page, setPage] = useState(0);
+  const [showPaymentAccounts, setShowPaymentAccounts] = useState(false);
+  const [success, setSuccess] = useState("");
   const [showCommBreakdown, setShowCommBreakdown] = useState(false);
   const [commCandidates, setCommCandidates] = useState(null);
   const [loadingComm, setLoadingComm] = useState(false);
+  const [referrerRecords, setReferrerRecords] = useState([]);
 
   // ── Data fetching ──
   const fetchData = useCallback(async () => {
@@ -60,7 +99,6 @@ export default function PayoutModal({
       const res = await (await fetch(`${ve}/handler-expenses?${params.toString()}`)).json();
       if (res.status === "ok") {
         setEntries(res.expenses || []);
-        setMonths(res.available_months || []);
       } else {
         setError(res.message || "Failed to load");
       }
@@ -74,6 +112,20 @@ export default function PayoutModal({
   useEffect(() => { fetchData(); }, [fetchData]);
 
   useEffect(() => {
+    let cancelled = false;
+    fetchReferrerRegistryJson(ve, "/referrers")
+      .then((payload) => {
+        if (!cancelled) {
+          setReferrerRecords(payload.referrers || []);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message || "Could not load referrers");
+      });
+    return () => { cancelled = true; };
+  }, [ve]);
+
+  useEffect(() => {
     const handler = (ev) => { if (ev.key === "Escape" && !editId) onClose?.(); };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -81,19 +133,25 @@ export default function PayoutModal({
 
   // ── Derived data ──
   const filtered = useMemo(() => {
+    if (filterHandler === "all") return [];
     let list = entries;
-    if (filterHandler !== "all") {
-      const lc = filterHandler.toLowerCase();
-      list = list.filter(r => (r.reference || "").toLowerCase() === lc);
-    }
+    const lc = filterHandler.toLowerCase();
+    list = list.filter(r => (r.reference || "").toLowerCase() === lc);
     return list;
   }, [entries, filterHandler]);
 
   // Fetch handler-specific stats when handler or period changes
   const [handlerStats, setHandlerStats] = useState(null);
+  const [handlerStatsLoading, setHandlerStatsLoading] = useState(false);
+  const [handlerStatsRevision, setHandlerStatsRevision] = useState(0);
   useEffect(() => {
-    if (filterHandler === "all") { setHandlerStats(null); return; }
+    if (filterHandler === "all") {
+      setHandlerStats(null);
+      setHandlerStatsLoading(false);
+      return;
+    }
     let cancelled = false;
+    setHandlerStatsLoading(true);
     const params = new URLSearchParams();
     if (filterMonth !== "all") params.set("month", filterMonth);
     params.set("reference", filterHandler);
@@ -107,19 +165,21 @@ export default function PayoutModal({
         const perf = perfs.find(p => (p.name || "").toLowerCase().trim() === lc || (p.ref_key || "").toLowerCase().trim() === lc);
         setHandlerStats(perf || null);
       })
-      .catch(() => {});
+      .catch(() => { if (!cancelled) setHandlerStats(null); })
+      .finally(() => { if (!cancelled) setHandlerStatsLoading(false); });
     return () => { cancelled = true; };
-  }, [filterHandler, filterMonth, ve]);
+  }, [filterHandler, filterMonth, ve, handlerStatsRevision]);
 
   const owed = useMemo(() => {
     // April & May 2026 are fully settled — no balance
     if (filterMonth === "2026-04" || filterMonth === "2026-05") return 0;
     // Use handler-specific stats fetched for this period
-    if (filterHandler !== "all" && handlerStats) {
+    if (filterHandler !== "all") {
+      if (!handlerStats) return 0;
       const net = Number(handlerStats.net_payable) || 0;
       return net + filtered.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     }
-    // Fallback to parent's ownedSummary for "All handlers"
+    // Fallback to parent's ownedSummary for the all-referrers view.
     return Number(ownedSummary?.owed) || 0;
   }, [ownedSummary, filterHandler, filterMonth, handlerStats, filtered]);
   const paidOut = useMemo(() => filtered.reduce((s, r) => s + (Number(r.amount) || 0), 0), [filtered]);
@@ -131,6 +191,20 @@ export default function PayoutModal({
     entries.forEach(r => { const n = (r.reference || "").trim(); if (n) map.set(n.toLowerCase(), n); });
     return [...map.values()].sort((a, b) => a.localeCompare(b));
   }, [entries, handlerNames]);
+  const referrerOptions = useMemo(() => {
+    if (referrerRecords.length) {
+      return referrerRecords
+        .filter((row) => row.is_active !== false)
+        .map((row) => ({ id: row.id, name: row.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
+    return allHandlers.map((name) => ({ id: name, name }));
+  }, [allHandlers, referrerRecords]);
+  const selectedReferrerId = filterHandler === "all"
+    ? "all"
+    : referrerOptions.find(
+      (row) => row.name.toLowerCase() === filterHandler.toLowerCase()
+    )?.id || filterHandler;
 
   // Keep handler selection valid after entries reload (case-insensitive match)
   useEffect(() => {
@@ -161,16 +235,37 @@ export default function PayoutModal({
   // Reset commission breakdown when handler changes
   useEffect(() => { setShowCommBreakdown(false); setCommCandidates(null); }, [filterHandler]);
 
-  const monthOptions = useMemo(() => [
-    { value: "all", label: "All time" },
-    ...months.map(m => ({ value: m.value, label: m.is_current ? `${m.label} · this month` : m.label }))
-  ], [months]);
+  const historyMonthOptions = useMemo(() => {
+    const values = new Set([currentMonthValue()]);
+    if (historyMonth !== "all") values.add(historyMonth);
+    filtered.forEach((row) => {
+      const value = String(row.date || "").slice(0, 7);
+      if (/^\d{4}-\d{2}$/.test(value)) values.add(value);
+    });
+    return [
+      ...[...values]
+        .sort((left, right) => right.localeCompare(left))
+        .map((value) => ({ value, label: formatMonthLabel(value) })),
+      { value: "all", label: "All months" },
+    ];
+  }, [filtered, historyMonth]);
+
+  const historyFiltered = useMemo(() => {
+    return filtered.filter((row) => (
+      isValidExpenseRecord(row) &&
+      (historyMonth === "all" || String(row.date || "").startsWith(historyMonth))
+    ));
+  }, [filtered, historyMonth]);
+  const historyTotal = useMemo(
+    () => historyFiltered.reduce((sum, row) => sum + Number(row.amount), 0),
+    [historyFiltered],
+  );
 
   // ── Pagination ──
-  const totalPages = Math.max(1, Math.ceil(filtered.length / ROWS_PER_PAGE));
-  const pagedRows = filtered.slice(page * ROWS_PER_PAGE, (page + 1) * ROWS_PER_PAGE);
+  const totalPages = Math.max(1, Math.ceil(historyFiltered.length / ROWS_PER_PAGE));
+  const pagedRows = historyFiltered.slice(page * ROWS_PER_PAGE, (page + 1) * ROWS_PER_PAGE);
   // Reset page when filters change
-  useEffect(() => { setPage(0); }, [filterHandler, filterMonth]);
+  useEffect(() => { setPage(0); }, [filterHandler, filterMonth, historyMonth]);
 
   // ── Form helpers ──
   function resetForm() {
@@ -178,12 +273,53 @@ export default function PayoutModal({
     setProofFile(null);
     if (proofInputRef.current) proofInputRef.current.value = "";
     setForm({
-      reference: filterHandler !== "all" ? filterHandler : allHandlers[0] || "",
+      reference: filterHandler !== "all" ? filterHandler : "",
       amount: "",
       category: "commission",
       note: "",
-      date: new Date().toISOString().slice(0, 10),
+      date: todayInputValue(),
     });
+  }
+
+  function hasUnsavedExpense() {
+    return Boolean(
+      editId ||
+      String(form.amount || "").trim() ||
+      String(form.note || "").trim() ||
+      proofFile
+    );
+  }
+
+  async function handleReferrerChange(value) {
+    const selected = referrerOptions.find((row) => row.id === value);
+    const nextName = selected?.name || "";
+    if (!nextName || nextName === filterHandler) return;
+
+    if (filterHandler !== "all" && hasUnsavedExpense()) {
+      const confirmationApi = window.__TA_CONFIRM_VALUE__?.confirm;
+      const confirmed = confirmationApi
+        ? await confirmationApi({
+          title: "Switch referrer?",
+          message: "Changing the referrer will clear the unsaved expense details. Continue?",
+          confirmLabel: "Switch referrer",
+        })
+        : window.confirm("Changing the referrer will clear the unsaved expense details. Continue?");
+      if (!confirmed) return;
+    }
+
+    setFilterHandler(nextName);
+    setEditId(null);
+    setProofFile(null);
+    if (proofInputRef.current) proofInputRef.current.value = "";
+    setForm({
+      reference: nextName,
+      amount: "",
+      category: "commission",
+      note: "",
+      date: todayInputValue(),
+    });
+    setError("");
+    setSuccess("");
   }
 
   function startEdit(row) {
@@ -194,17 +330,49 @@ export default function PayoutModal({
       amount: String(row.amount || ""),
       category: row.category || "other",
       note: row.note || "",
-      date: row.date || new Date().toISOString().slice(0, 10),
+      date: row.date || todayInputValue(),
     });
   }
 
   async function handleSubmit(ev) {
     ev?.preventDefault?.();
-    if (!form.reference.trim() && filterHandler === "all") { setError("Select a handler first"); return; }
-    const handlerRef = form.reference.trim() || filterHandler;
+    if (saving) return;
+    setSuccess("");
+    if (filterHandler === "all") {
+      setError("Select one referrer before saving an expense.");
+      return;
+    }
+    const selectedReferrer = referrerOptions.find(
+      (row) => row.name.toLowerCase() === filterHandler.toLowerCase(),
+    );
+    if (!selectedReferrer) {
+      setError("Selected referrer is not present in the current registry.");
+      return;
+    }
+    const handlerRef = selectedReferrer.name;
     const amt = Number(form.amount);
+    const previousAmount = editId
+      ? Number(entries.find((row) => row.id === editId)?.amount) || 0
+      : 0;
     if (!Number.isFinite(amt) || amt <= 0) { setError("Amount must be greater than zero"); return; }
+    const editableLimit = Math.max(0, balance) + (
+      editId ? Number(entries.find((row) => row.id === editId)?.amount) || 0 : 0
+    );
+    if (amt > editableLimit) {
+      setError(`Expense amount cannot exceed the current outstanding amount of ${Jc(editableLimit)}.`);
+      return;
+    }
     if (!editId && !proofFile) { setError("Payment screenshot is required"); return; }
+    const confirmationMessage = `${Jc(amt)} will be deducted from ${handlerRef}’s outstanding amount. Continue?`;
+    const confirmationApi = window.__TA_CONFIRM_VALUE__?.confirm;
+    const confirmed = confirmationApi
+      ? await confirmationApi({
+        title: editId ? "Save expense changes?" : "Save expense?",
+        message: confirmationMessage,
+        confirmLabel: editId ? "Save changes" : "Save expense",
+      })
+      : window.confirm(confirmationMessage);
+    if (!confirmed) return;
     setSaving(true);
     setError("");
     try {
@@ -235,8 +403,14 @@ export default function PayoutModal({
         res = await (await fetch(`${ve}/handler-expenses`, { method: "POST", body: fd })).json();
       }
       if (res.status !== "ok") { setError(res.message || "Save failed"); return; }
+      const deductionDelta = amt - previousAmount;
+      setHandlerStats((current) => current
+        ? { ...current, net_payable: (Number(current.net_payable) || 0) - deductionDelta }
+        : current);
       resetForm();
-      fetchData();
+      await fetchData();
+      setHandlerStatsRevision((revision) => revision + 1);
+      setSuccess(`Expense added successfully. ${Jc(amt)} was deducted from the amount owed.`);
       onChanged?.();
     } catch (err) { setError(err.message || "Network error"); }
     finally { setSaving(false); }
@@ -252,7 +426,14 @@ export default function PayoutModal({
     if (!ok) return;
     try {
       const res = await (await fetch(`${ve}/handler-expenses/${row.id}`, { method: "DELETE" })).json();
-      if (res.status === "ok") { fetchData(); onChanged?.(); }
+      if (res.status === "ok") {
+        setHandlerStats((current) => current
+          ? { ...current, net_payable: (Number(current.net_payable) || 0) + (Number(row.amount) || 0) }
+          : current);
+        fetchData();
+        setHandlerStatsRevision((revision) => revision + 1);
+        onChanged?.();
+      }
       else setError(res.message || "Delete failed");
     } catch (err) { setError(err.message || "Network error"); }
   }
@@ -260,160 +441,218 @@ export default function PayoutModal({
   function clearFilters() { setFilterHandler("all"); setFilterMonth("all"); }
   const filtersActive = filterHandler !== "all" || filterMonth !== "all";
 
-  // ── Render ──
+  const selectedName = filterHandler === "all" ? "" : filterHandler;
+  const currentOutstanding = Math.max(0, balance);
+
   return <Fragment>
     <div className="cand-modal-backdrop" onClick={ev => ev.target === ev.currentTarget && onClose?.()}>
-      <div className="payout-modal">
-        {/* ─── HEADER ─── */}
-        <header className="payout-modal__header">
-          <h3 className="payout-modal__title">Manage handler payouts</h3>
-          <span className="cand-payout-chunk"><strong>{filtered.length}</strong> entr{filtered.length === 1 ? "y" : "ies"}</span>
-          <span className="cand-payout-chunk cand-payout-chunk--earn" title="Auto-computed: 50% with shortfall penalty"><span className="cand-payout-pip" /> Owed (50%) <strong>{Jc(owed)}</strong></span>
-          <span className="cand-payout-chunk cand-payout-chunk--ded"><span className="cand-payout-pip" /> Paid out <strong>{Jc(paidOut)}</strong></span>
-          <span className={`cand-payout-chunk ${(filterMonth === "2026-04" || filterMonth === "2026-05") ? "cand-payout-chunk--net-zero" : balance > 0 ? "cand-payout-chunk--net-pos" : balance === 0 ? "cand-payout-chunk--net-zero" : "cand-payout-chunk--net-neg"}`}>
-            <span className="cand-payout-pip" />{(filterMonth === "2026-04" || filterMonth === "2026-05") ? "Settled " : balance > 0 ? "Still owe " : balance === 0 ? "Settled" : "Overpaid by "}<strong>{(filterMonth === "2026-04" || filterMonth === "2026-05") ? "" : balance === 0 ? "" : Jc(Math.abs(balance))}</strong>
-          </span>
-          {filtersActive && <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={clearFilters}>Clear filters</button>}
+      <div className="payout-modal payout-modal--expense">
+        <header className="payout-modal__header payout-modal__header--expense">
+          <div className="payout-modal__heading">
+            <h3 className="payout-modal__title">
+              {showPaymentAccounts ? "Manage payment accounts" : "Add Referrer Expense"}
+            </h3>
+            {!showPaymentAccounts && selectedName && (
+              <div className="payout-modal__summary">
+                <span>Referrer: <strong>{selectedName}</strong></span>
+                <span>Currently owed: <strong>{handlerStatsLoading ? "Loading…" : Jc(currentOutstanding)}</strong></span>
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            className="cand-btn cand-btn--ghost cand-btn--xs payout-modal__accounts-action"
+            onClick={() => setShowPaymentAccounts((value) => !value)}
+            disabled={filterHandler === "all"}
+            title={filterHandler === "all" ? "Select a referrer first" : undefined}
+          >
+            {showPaymentAccounts ? "Back to expense" : "Manage payment accounts"}
+          </button>
           <button type="button" className="cand-modal-close" onClick={onClose} aria-label="Close">×</button>
         </header>
 
-        {/* Owed explanation when handler selected */}
-        {filterHandler !== "all" && handlerStats && (() => {
-          const perf = handlerStats;
-          const salary = Number(perf.salary_total) || 0;
-          const commFromBackend = Number(perf.commission_total) || 0;
-          // Use actual candidate commission total if loaded, else backend value
-          const candidateCommTotal = commCandidates ? commCandidates.filter(c => Number(c.payment) > 0).reduce((s, c) => s + (Number(c.handler_commission) || 0), 0) : null;
-          const displayCommission = candidateCommTotal !== null ? candidateCommTotal : commFromBackend;
-          return <div className="payout-modal__owed-explain">
-            <span className="payout-modal__owed-item payout-modal__owed-item--clickable" onClick={() => setShowCommBreakdown(v => !v)}>
-              {showCommBreakdown ? "▾" : "▸"} Commission (50%): <strong>{Jc(displayCommission)}</strong>
-            </span>
-            {salary > 0 && <span className="payout-modal__owed-item">+ Salary: <strong>{Jc(salary)}</strong></span>}
-            <span className="payout-modal__owed-item payout-modal__owed-item--total">= Total owed: <strong>{Jc(owed)}</strong></span>
-            {showCommBreakdown && (
-              <div className="payout-modal__comm-breakdown">
-                {!commCandidates && !loadingComm && <span className="payout-modal__comm-loading">Click to load…</span>}
-                {loadingComm && <span className="payout-modal__comm-loading">Loading…</span>}
-                {commCandidates && (() => {
-                  const rows = commCandidates.filter(c => Number(c.payment) > 0);
-                  if (!rows.length) return <span className="payout-modal__comm-loading">No payments yet.</span>;
-                  const totalComm = rows.reduce((s, c) => s + (Number(c.handler_commission) || 0), 0);
-                  return <>
-                    {rows.map(c => {
-                      const received = Number(c.payment) || 0;
-                      const referral = Number(c.handler_commission) || 0;
-                      return <div className="payout-modal__comm-row" key={c.id}>
-                        <span className="payout-modal__comm-name">{c.name}</span>
-                        <span className="payout-modal__comm-detail">₹{received.toLocaleString("en-IN")} received</span>
-                        <strong className="payout-modal__comm-amount">₹{referral.toLocaleString("en-IN")}</strong>
-                      </div>;
-                    })}
-                    <div className="payout-modal__comm-row" style={{ borderTop: "1px solid rgba(99,102,241,.2)", paddingTop: 4, marginTop: 4 }}>
-                      <span className="payout-modal__comm-name"><strong>Total ({rows.length} candidates)</strong></span>
-                      <span className="payout-modal__comm-detail"></span>
-                      <strong className="payout-modal__comm-amount" style={{ color: "#38bdf8" }}>₹{totalComm.toLocaleString("en-IN")}</strong>
-                    </div>
-                  </>;
-                })()}
+        {showPaymentAccounts ? (
+          <div className="payout-modal__accounts-view">
+            <ReferrerPaymentAccounts apiBase={ve} referrerName={filterHandler} />
+          </div>
+        ) : (
+          <>
+            <form className="payout-modal__form-section" onSubmit={handleSubmit}>
+              <div className="payout-modal__expense-row payout-modal__expense-row--primary">
+                <label className="payout-modal__field">
+                  <span className="cand-field-label">Referrer *</span>
+                  <select
+                    className="cand-input payout-modal__input"
+                    value={selectedReferrerId}
+                    onChange={ev => handleReferrerChange(ev.target.value)}
+                    required
+                  >
+                    <option value="all" disabled>Select referrer</option>
+                    {referrerOptions.map(row => <option value={row.id} key={row.id}>{row.name}</option>)}
+                  </select>
+                </label>
+                <label className="payout-modal__field">
+                  <span className="cand-field-label">Expense amount (₹) *</span>
+                  <input
+                    className="cand-input payout-modal__input"
+                    type="number"
+                    min="1"
+                    step="1"
+                    max={editId
+                      ? currentOutstanding + (Number(entries.find((row) => row.id === editId)?.amount) || 0)
+                      : currentOutstanding || undefined}
+                    value={form.amount}
+                    onChange={ev => setForm(current => ({ ...current, amount: ev.target.value }))}
+                    placeholder="5000"
+                    disabled={filterHandler === "all"}
+                    required
+                  />
+                </label>
+                <label className="payout-modal__field">
+                  <span className="cand-field-label">Expense date *</span>
+                  <input
+                    className="cand-input payout-modal__input"
+                    type="date"
+                    value={form.date}
+                    onChange={ev => setForm(current => ({ ...current, date: ev.target.value }))}
+                    disabled={filterHandler === "all"}
+                    required
+                  />
+                </label>
+                <label className="payout-modal__field">
+                  <span className="cand-field-label">History month</span>
+                  <select
+                    className="cand-input payout-modal__input"
+                    value={historyMonth}
+                    onChange={(event) => setHistoryMonth(event.target.value)}
+                    aria-label="Filter expense history by month"
+                    disabled={filterHandler === "all"}
+                  >
+                    {historyMonthOptions.map((option) => (
+                      <option value={option.value} key={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
               </div>
-            )}
-          </div>;
-        })()}
 
-        {/* ─── FORM SECTION ─── */}
-        <form className="payout-modal__form-section" onSubmit={handleSubmit}>
-          {/* Row 1: Handler | Period | Date | Amount */}
-          <div className="payout-modal__row1">
-            <label className="payout-modal__field">
-              <span className="cand-field-label">Handler *</span>
-              <select className="cand-input payout-modal__input" value={filterHandler} onChange={ev => { setFilterHandler(ev.target.value); setForm(f => ({ ...f, reference: ev.target.value === "all" ? "" : ev.target.value })); }}>
-                <option value="all">All handlers</option>
-                {allHandlers.map(n => <option value={n} key={n}>{n}</option>)}
-              </select>
-            </label>
-            <label className="payout-modal__field">
-              <span className="cand-field-label">Period</span>
-              <select className="cand-input payout-modal__input" value={filterMonth} onChange={ev => setFilterMonth(ev.target.value)}>{monthOptions.map(m => <option value={m.value} key={m.value}>{m.label}</option>)}</select>
-            </label>
-            <label className="payout-modal__field">
-              <span className="cand-field-label">Date</span>
-              <input className="cand-input payout-modal__input" type="date" value={form.date} onChange={ev => setForm(f => ({ ...f, date: ev.target.value }))} />
-            </label>
-            <label className="payout-modal__field">
-              <span className="cand-field-label">Amount (₹) * <span className="cand-exp-kind-tag cand-exp-kind-tag--payout">subtracted from what's owed</span></span>
-              <input className="cand-input payout-modal__input" type="number" min="0" step="100" value={form.amount} onChange={ev => setForm(f => ({ ...f, amount: ev.target.value }))} placeholder="5000" required />
-            </label>
-          </div>
+              <div className="payout-modal__expense-row payout-modal__expense-row--secondary">
+                <label className="payout-modal__field payout-modal__note-field">
+                  <span className="cand-field-label">Note / reason</span>
+                  <input
+                    className="cand-input payout-modal__input"
+                    value={form.note}
+                    onChange={ev => setForm(current => ({ ...current, note: ev.target.value }))}
+                    placeholder="e.g. Interview expense, travel expense, refund or adjustment"
+                    disabled={filterHandler === "all"}
+                  />
+                </label>
+                <div
+                  className={`cand-payout-attach${proofFile ? " cand-payout-attach--done" : ""}`}
+                  onClick={() => {
+                    if (filterHandler !== "all") proofInputRef.current?.click();
+                  }}
+                  onKeyDown={ev => {
+                    if (
+                      filterHandler !== "all" &&
+                      (ev.key === "Enter" || ev.key === " ")
+                    ) proofInputRef.current?.click();
+                  }}
+                  role="button"
+                  tabIndex={filterHandler === "all" ? -1 : 0}
+                  aria-disabled={filterHandler === "all"}
+                  title={proofFile ? proofFile.name : editId ? "Attach new screenshot (optional)" : "Attach expense screenshot (required)"}
+                >
+                  <input
+                    ref={proofInputRef}
+                    type="file"
+                    accept="image/*"
+                    disabled={filterHandler === "all"}
+                    onChange={ev => {
+                      const file = ev.target.files?.[0];
+                      if (!file) return;
+                      if (!/^image\//.test(file.type || "")) { setError("Only image files allowed"); return; }
+                      if (file.size > 8 * 1024 * 1024) { setError("File too large (max 8 MB)"); return; }
+                      setProofFile(file);
+                      setError("");
+                    }}
+                    hidden
+                  />
+                  <span className="cand-payout-attach-icon">{proofFile ? "✓" : "📷"}</span>
+                  <span className="cand-payout-attach-text">
+                    {proofFile ? proofFile.name.slice(0, 24) : editId ? "Replace screenshot" : "Attach screenshot *"}
+                  </span>
+                </div>
+                {editId && <button type="button" className="cand-btn cand-btn--ghost" onClick={resetForm}>Cancel edit</button>}
+                <button
+                  type="submit"
+                  className="cand-btn cand-btn--primary payout-modal__save"
+                  disabled={saving || handlerStatsLoading || filterHandler === "all" || (!editId && !proofFile)}
+                >
+                  {saving ? "Saving…" : editId ? "Save changes" : "Save expense"}
+                </button>
+              </div>
 
-          {/* Row 2: Note (full width) */}
-          <div className="payout-modal__row2">
-            <label className="payout-modal__field payout-modal__row2-note" style={{ flex: 1 }}>
-              <span className="cand-field-label">Note</span>
-              <input className="cand-input payout-modal__input" value={form.note} onChange={ev => setForm(f => ({ ...f, note: ev.target.value }))} placeholder="e.g. June commission · shiva interview charge collected by handler" />
-            </label>
-          </div>
+              {error && <div className="cand-modal-error payout-modal__error" role="alert">{error}</div>}
+              {success && <div className="payout-modal__success" role="status">{success}</div>}
+            </form>
 
-          {/* Row 3: Attach + buttons */}
-          <div className="payout-modal__row3">
-            <div className={`cand-payout-attach${proofFile ? " cand-payout-attach--done" : ""}`} onClick={() => proofInputRef.current?.click()} role="button" tabIndex={0} title={proofFile ? proofFile.name : editId ? "Attach new screenshot (optional)" : "Attach payment screenshot (required)"}>
-              <input ref={proofInputRef} type="file" accept="image/*" onChange={ev => { const file = ev.target.files?.[0]; if (file) { if (!/^image\//.test(file.type || "")) { setError("Only image files allowed"); return; } if (file.size > 8 * 1024 * 1024) { setError("File too large (max 8 MB)"); return; } setProofFile(file); setError(""); } }} hidden />
-              <span className="cand-payout-attach-icon">{proofFile ? "✓" : "📷"}</span>
-              <span className="cand-payout-attach-text">{proofFile ? proofFile.name.slice(0, 20) : editId ? "Update screenshot" : "Attach screenshot *"}</span>
-            </div>
-            {editId && <button type="button" className="cand-btn cand-btn--ghost" onClick={resetForm}>Cancel edit</button>}
-            <button type="submit" className="cand-btn cand-btn--primary" disabled={saving || (!editId && !proofFile)}>{saving ? "Saving…" : editId ? "Save changes" : "+ Log payout"}</button>
-          </div>
-
-          {error && <div className="cand-modal-error payout-modal__error">{error}</div>}
-        </form>
-
-        {/* ─── TABLE ─── */}
-        <div className="payout-modal__table-area">
-          {loading ? <div className="cand-exp-empty">Loading…</div> : filtered.length === 0 ? (
-            <div className="cand-exp-empty">No entries match filters. <button type="button" className="cand-link" onClick={clearFilters}>Clear filters</button></div>
-          ) : (
-            <table className="payout-modal__table">
-              <thead><tr>
-                <th className="payout-col--handler">Handler</th>
-                <th className="payout-col--amount">Amount</th>
-                <th className="payout-col--date">Date</th>
-                <th className="payout-col--note">Note</th>
-                <th className="payout-col--proof">Proof</th>
-                <th className="payout-col--actions">Actions</th>
-              </tr></thead>
-              <tbody>
-                {pagedRows.map(row => (
-                  <tr className={`payout-modal__row${editId === row.id ? " payout-modal__row--editing" : ""}`} key={row.id}>
-                    <td className="payout-col--handler">{row.reference}</td>
-                    <td className="payout-col--amount">−{Jc(row.amount)}</td>
-                    <td className="payout-col--date">{rR(row.date)}</td>
-                    <td className="payout-col--note">{row.note || <em>—</em>}</td>
-                    <td className="payout-col--proof">
-                      {(row.proofs?.length > 0) ? <button type="button" className="cand-proof-thumb-btn" onClick={() => setPreviewProof(row.proofs[0])} title="View proof"><img src={`${ve}${row.proofs[0].url}`} alt="proof" className="cand-proof-thumb-img" loading="lazy" /></button> : <em>—</em>}
-                    </td>
-                    <td className="payout-col--actions">
-                      <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => startEdit(row)} title="Edit">✎</button>
-                      <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs cand-btn--danger-ghost" onClick={() => handleDelete(row)} title="Delete">🗑</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        {/* ─── FOOTER: Pagination + Close ─── */}
-        <footer className="payout-modal__footer">
-          {totalPages > 1 && (
-            <div className="payout-modal__pagination">
-              <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" disabled={page === 0} onClick={() => setPage(p => p - 1)}>← Previous</button>
-              <span className="payout-modal__page-info">Page {page + 1} of {totalPages}</span>
-              <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next →</button>
-            </div>
-          )}
-          <button type="button" className="cand-btn cand-btn--ghost" onClick={onClose}>Close</button>
-        </footer>
+            <section className="payout-modal__history" aria-labelledby="recent-expenses-title">
+              <div className="payout-modal__history-head">
+                <h4 id="recent-expenses-title">Recent expense history</h4>
+                <div className="payout-modal__history-summary">
+                  <span>{historyFiltered.length} entr{historyFiltered.length === 1 ? "y" : "ies"}</span>
+                  <strong>Total expenses: {Jc(historyTotal)}</strong>
+                </div>
+              </div>
+              <div className="payout-modal__table-area">
+                {filterHandler === "all" ? (
+                  <div className="cand-exp-empty">Select a referrer to view recent expenses.</div>
+                ) : loading ? <div className="cand-exp-empty">Loading…</div> : historyFiltered.length === 0 ? (
+                  <div className="cand-exp-empty">
+                    {historyMonth === "all"
+                      ? "No expenses found."
+                      : `No expenses found for ${formatMonthLabel(historyMonth)}.`}
+                  </div>
+                ) : (
+                  <table className="payout-modal__table">
+                    <thead><tr>
+                      <th className="payout-col--amount">Amount</th>
+                      <th className="payout-col--date">Date</th>
+                      <th className="payout-col--note">Note</th>
+                      <th className="payout-col--proof">Proof</th>
+                      <th className="payout-col--actions">Actions</th>
+                    </tr></thead>
+                    <tbody>
+                      {pagedRows.map(row => (
+                        <tr className={`payout-modal__row${editId === row.id ? " payout-modal__row--editing" : ""}`} key={row.id}>
+                          <td className="payout-col--amount payout-col--amount-positive">{Jc(row.amount)}</td>
+                          <td className="payout-col--date">{rR(row.date)}</td>
+                          <td className="payout-col--note">{row.note || <em>—</em>}</td>
+                          <td className="payout-col--proof">
+                            {(row.proofs?.length > 0)
+                              ? <button type="button" className="cand-link" onClick={() => setPreviewProof(row.proofs[0])}>View proof</button>
+                              : <em>—</em>}
+                          </td>
+                          <td className="payout-col--actions">
+                            <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={() => startEdit(row)} title="Edit">✎</button>
+                            <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs cand-btn--danger-ghost" onClick={() => handleDelete(row)} title="Delete">🗑</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              {totalPages > 1 && (
+                <div className="payout-modal__pagination">
+                  <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" disabled={page === 0} onClick={() => setPage(p => p - 1)}>← Previous</button>
+                  <span className="payout-modal__page-info">Page {page + 1} of {totalPages}</span>
+                  <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next →</button>
+                </div>
+              )}
+            </section>
+          </>
+        )}
       </div>
     </div>
 

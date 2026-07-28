@@ -18,6 +18,7 @@ import EarningsBreakdown from "./EarningsBreakdown.jsx";
 import "./EarningsBreakdown.css";
 import CompanyExpenditure from "./CompanyExpenditure.jsx";
 import "./CompanyExpenditure.css";
+import { normalizePaymentProofs } from "./paymentProofs.js";
 
 const w = React;
 const s = { Fragment: React.Fragment };
@@ -72,12 +73,32 @@ function Nx(e) {
   return fmtIstDt(e) === "—" ? "" : fmtIstDt(e);
 }
 const bx = 8388608;
+const PROOF_UPLOAD_STALL_MS = 20000;
+const PROOF_UPLOAD_TIMEOUT_MS = 120000;
 function proofCandidateId(proof, fallbackId) {
   if (proof?.candidate_id) return proof.candidate_id;
-  const match = String(proof?.url || "").match(/^\/candidates\/([^/]+)\/proofs\//);
+  const match = String(proof?.url || "").match(/^\/candidates\/([^/]+)\/(?:proofs|attachments\/payment_proof)\//);
   return match?.[1] || fallbackId;
 }
-function $8({ candidateId: e, proofs: t = [], onChange: r }) {
+function createProofUploadJob(file) {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    file,
+    previewUrl: URL.createObjectURL(file),
+    status: "selected",
+    progress: 0,
+    error: "",
+    slow: false,
+    proof: null,
+  };
+}
+export function PaymentProofUploader({
+  candidateId: e,
+  proofs: t = [],
+  onChange: r,
+  onBusyChange,
+  controlRef,
+}) {
   const [n, a] = w.useState(false);
   const [i, l] = w.useState("");
   const [c, o] = w.useState("");
@@ -86,10 +107,86 @@ function $8({ candidateId: e, proofs: t = [], onChange: r }) {
   const [x, v] = w.useState("");
   const [g, p] = w.useState(false);
   const [aiResult, setAiResult] = w.useState(null);
+  const [uploadJobs, setUploadJobs] = w.useState([]);
   const m = w.useRef(null);
+  const uploadRequestRef = w.useRef(null);
+  const stallTimerRef = w.useRef(null);
+  const mountedRef = w.useRef(true);
+  const cancelledJobsRef = w.useRef(new Set());
+  const previewUrlsRef = w.useRef(new Set());
   const _ = !e;
+  const updateJob = w.useCallback((jobId, patch) => {
+    if (!mountedRef.current) return;
+    setUploadJobs((jobs) =>
+      jobs.map((job) =>
+        job.id === jobId
+          ? { ...job, ...(typeof patch === "function" ? patch(job) : patch) }
+          : job,
+      ),
+    );
+  }, []);
+  const clearStallTimer = w.useCallback(() => {
+    if (stallTimerRef.current) {
+      window.clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
+  }, []);
+  const armStallTimer = w.useCallback(
+    (jobId) => {
+      clearStallTimer();
+      stallTimerRef.current = window.setTimeout(() => {
+        updateJob(jobId, { slow: true });
+      }, PROOF_UPLOAD_STALL_MS);
+    },
+    [clearStallTimer, updateJob],
+  );
+  const cancelJob = w.useCallback(
+    (jobId) => {
+      cancelledJobsRef.current.add(jobId);
+      const active = uploadRequestRef.current;
+      if (active?.jobId === jobId) active.xhr.abort();
+      updateJob(jobId, {
+        status: "cancelled",
+        error: "",
+        slow: false,
+      });
+    },
+    [updateJob],
+  );
+  const cancelAll = w.useCallback(() => {
+    uploadJobs.forEach((job) => cancelledJobsRef.current.add(job.id));
+    uploadRequestRef.current?.xhr?.abort();
+    setUploadJobs((jobs) =>
+      jobs.map((job) =>
+        ["selected", "uploading", "processing"].includes(job.status)
+          ? { ...job, status: "cancelled", slow: false }
+          : job,
+      ),
+    );
+    a(false);
+  }, [uploadJobs]);
+  w.useEffect(() => {
+    if (onBusyChange) onBusyChange(n);
+  }, [n, onBusyChange]);
+  w.useEffect(() => {
+    if (controlRef) controlRef.current = { cancelAll };
+    return () => {
+      if (controlRef) controlRef.current = null;
+    };
+  }, [cancelAll, controlRef]);
+  w.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearStallTimer();
+      uploadRequestRef.current?.xhr?.abort();
+      previewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      previewUrlsRef.current.clear();
+    };
+  }, [clearStallTimer]);
   const y = w.useCallback(
-    async (b, { clearNote = true } = {}) => {
+    async (job, { clearNote = true } = {}) => {
+      const b = job.file;
       if (!e) {
         return false;
       }
@@ -101,55 +198,137 @@ function $8({ candidateId: e, proofs: t = [], onChange: r }) {
         l("Only image files are allowed (jpg / png / webp / gif / heic)");
         return false;
       }
-      try {
+      updateJob(job.id, {
+        status: "uploading",
+        progress: 0,
+        error: "",
+        slow: false,
+      });
+      armStallTimer(job.id);
+      return new Promise((resolve) => {
         const A = new FormData();
         A.append("file", b);
+        A.append("attachment_type", "payment_proof");
         if (c.trim()) {
           A.append("note", c.trim());
         }
-        const L = await (
-          await fetch(`${ve}/candidates/${e}/proofs`, {
-            method: "POST",
-            body: A,
-          })
-        ).json();
-        if (L.status !== "ok") {
-          l(L.message || "Upload failed");
-          return false;
-        }
-        if (L.ai_extraction) {
-          setAiResult(L.ai_extraction);
-        }
-        if (L.candidate && r != null) {
-          r(L.candidate.proofs || []);
-        }
-        if (clearNote) {
-          o("");
-        }
-        return true;
-      } catch (A) {
-        l(A.message || "Network error");
-        return false;
-      }
+        const xhr = new XMLHttpRequest();
+        uploadRequestRef.current = { xhr, jobId: job.id };
+        xhr.open("POST", `${ve}/candidates/${e}/proofs`);
+        xhr.withCredentials = true;
+        xhr.timeout = PROOF_UPLOAD_TIMEOUT_MS;
+        xhr.upload.onprogress = (event) => {
+          if (!event.lengthComputable) return;
+          const progress = Math.min(
+            99,
+            Math.round((event.loaded * 100) / event.total),
+          );
+          updateJob(job.id, { status: "uploading", progress, slow: false });
+          armStallTimer(job.id);
+        };
+        xhr.upload.onload = () => {
+          updateJob(job.id, {
+            status: "processing",
+            progress: 100,
+            slow: false,
+          });
+          armStallTimer(job.id);
+        };
+        const finish = (status, details = {}) => {
+          clearStallTimer();
+          if (uploadRequestRef.current?.jobId === job.id) {
+            uploadRequestRef.current = null;
+          }
+          updateJob(job.id, { status, slow: false, ...details });
+          resolve(status === "success");
+        };
+        xhr.onload = () => {
+          let L = {};
+          try {
+            L = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+          } catch {
+            finish("error", {
+              error:
+                xhr.status === 504
+                  ? "The server timed out while saving the payment proof."
+                  : `Upload failed (${xhr.status || "invalid response"}).`,
+            });
+            return;
+          }
+          if (xhr.status < 200 || xhr.status >= 300 || L.status !== "ok") {
+            finish("error", {
+              error:
+                L.message ||
+                L.detail ||
+                `Unable to save payment proof (${xhr.status}).`,
+            });
+            return;
+          }
+          const nextProofs = normalizePaymentProofs(L.candidate);
+          const uploadedProof =
+            nextProofs.find(
+              (proof) =>
+                proof.original_name === b.name &&
+                (!proof.size || Number(proof.size) === Number(b.size)),
+            ) || nextProofs[nextProofs.length - 1] || null;
+          if (L.ai_extraction) setAiResult(L.ai_extraction);
+          if (L.candidate && r != null) r(nextProofs);
+          if (clearNote) o("");
+          l("");
+          finish("success", {
+            progress: 100,
+            proof: uploadedProof,
+            error: "",
+          });
+        };
+        xhr.onerror = () =>
+          finish("error", {
+            error: "Network connection lost. Please try again.",
+          });
+        xhr.ontimeout = () =>
+          finish("error", {
+            error: "Upload timed out before the payment proof was saved.",
+          });
+        xhr.onabort = () =>
+          finish("cancelled", {
+            error: "",
+          });
+        xhr.send(A);
+      });
     },
-    [e, r, c],
+    [armStallTimer, c, clearStallTimer, e, r, updateJob],
   );
   const M = w.useCallback(
     async (b) => {
-      if (!e || !b || b.length === 0) {
+      if (!e || n || !b || b.length === 0) {
         return;
       }
-      const A = Array.from(b).filter((O) => O && /^image\//.test(O.type || ""));
-      if (!A.length) {
+      const selectedFiles = Array.from(b);
+      const invalidFile = selectedFiles.find(
+        (file) => !file || !/^image\//.test(file.type || ""),
+      );
+      if (invalidFile) {
         l("Only image files are allowed (jpg / png / webp / gif / heic)");
         return;
       }
+      const oversizedFile = selectedFiles.find((file) => file.size > bx);
+      if (oversizedFile) {
+        l(`${oversizedFile.name} is larger than the ${bx / 1048576} MB limit.`);
+        return;
+      }
+      const jobs = selectedFiles.map(createProofUploadJob);
+      jobs.forEach((job) => previewUrlsRef.current.add(job.previewUrl));
       l("");
+      setUploadJobs((current) => [...current, ...jobs]);
       a(true);
       try {
-        for (let O = 0; O < A.length; O++) {
-          await y(A[O], {
-            clearNote: O === A.length - 1,
+        // Yield once so the selected-file card is painted before upload begins.
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        for (let O = 0; O < jobs.length; O++) {
+          const job = jobs[O];
+          if (cancelledJobsRef.current.has(job.id)) continue;
+          await y(job, {
+            clearNote: O === jobs.length - 1,
           });
         }
       } finally {
@@ -159,8 +338,77 @@ function $8({ candidateId: e, proofs: t = [], onChange: r }) {
         }
       }
     },
-    [e, y],
+    [e, n, y],
   );
+  const retryJob = w.useCallback(
+    async (job) => {
+      if (n || !job?.file) return;
+      cancelledJobsRef.current.delete(job.id);
+      a(true);
+      try {
+        // The request may time out after the backend has committed the file.
+        // Refresh before retrying so one screenshot cannot create two proofs.
+        try {
+          const response = await fetch(`${ve}/candidates/${e}`, {
+            credentials: "include",
+          });
+          const payload = await response.json();
+          if (response.ok && payload.status === "ok" && payload.candidate) {
+            const currentProofs = normalizePaymentProofs(payload.candidate);
+            const existing = currentProofs.find(
+              (proof) =>
+                proof.original_name === job.file.name &&
+                (!proof.size ||
+                  Number(proof.size) === Number(job.file.size)),
+            );
+            if (existing) {
+              if (r) r(currentProofs);
+              updateJob(job.id, {
+                status: "success",
+                progress: 100,
+                proof: existing,
+                error: "",
+                slow: false,
+              });
+              return;
+            }
+          }
+        } catch {
+          // If refresh is unavailable, continue with the normal retry path.
+        }
+        await y(job);
+      } finally {
+        a(false);
+      }
+    },
+    [e, n, r, updateJob, y],
+  );
+  const removeJob = w.useCallback(
+    (job) => {
+      if (["uploading", "processing"].includes(job.status)) cancelJob(job.id);
+      previewUrlsRef.current.delete(job.previewUrl);
+      URL.revokeObjectURL(job.previewUrl);
+      setUploadJobs((jobs) => jobs.filter((item) => item.id !== job.id));
+    },
+    [cancelJob],
+  );
+  const keepWaiting = w.useCallback(
+    (jobId) => {
+      updateJob(jobId, { slow: false });
+      armStallTimer(jobId);
+    },
+    [armStallTimer, updateJob],
+  );
+  function jobStatusText(job) {
+    if (job.status === "selected") return "File selected";
+    if (job.status === "uploading")
+      return `Uploading screenshot… ${job.progress}%`;
+    if (job.status === "processing") return "Processing screenshot…";
+    if (job.status === "success")
+      return "Screenshot uploaded successfully";
+    if (job.status === "cancelled") return "Upload cancelled";
+    return "Upload failed";
+  }
   function k(b) {
     var O;
     const A = (O = b.target.files) == null ? undefined : O;
@@ -196,7 +444,7 @@ function $8({ candidateId: e, proofs: t = [], onChange: r }) {
       ).json();
       if (L.status === "ok") {
         if (r != null) {
-          r(((A = L.candidate) == null ? undefined : A.proofs) || []);
+          r(normalizePaymentProofs((A = L.candidate) == null ? undefined : A));
         }
       } else {
         l(L.message || "Delete failed");
@@ -287,7 +535,8 @@ function $8({ candidateId: e, proofs: t = [], onChange: r }) {
             tabIndex={0}
             onKeyDown={(b) => {
               var A;
-              if (b.key === "Enter" || b.key === " ") {
+              if (!n && (b.key === "Enter" || b.key === " ")) {
+                b.preventDefault();
                 if ((A = m.current) != null) {
                   A.click();
                 }
@@ -307,16 +556,12 @@ function $8({ candidateId: e, proofs: t = [], onChange: r }) {
               📷
             </div>
             <div className="cand-proofs-drop-text">
-              {n ? (
-                <strong>Uploading…</strong>
-              ) : (
-                <s.Fragment>
-                  <strong>Click or drop screenshots</strong>
-                  <span className="cand-proofs-drop-sub">
-                    PNG · JPG · WebP · up to 8 MB each · select multiple
-                  </span>
-                </s.Fragment>
-              )}
+              <strong>
+                {n ? "Upload in progress" : "Upload payment screenshot"}
+              </strong>
+              <span className="cand-proofs-drop-sub">
+                PNG · JPG · WebP · up to 8 MB each · select multiple
+              </span>
             </div>
           </div>
           <input
@@ -326,6 +571,131 @@ function $8({ candidateId: e, proofs: t = [], onChange: r }) {
             onChange={(b) => o(b.target.value)}
             disabled={n}
           />
+          {uploadJobs.length > 0 && (
+            <div
+              className="cand-proof-upload-jobs"
+              aria-live="polite"
+              aria-label="Payment screenshot upload status"
+            >
+              {uploadJobs.map((job) => {
+                const active = ["selected", "uploading", "processing"].includes(
+                  job.status,
+                );
+                return (
+                  <article
+                    className={`cand-proof-upload-job cand-proof-upload-job--${job.status}`}
+                    key={job.id}
+                  >
+                    <img
+                      className="cand-proof-upload-preview"
+                      src={job.previewUrl}
+                      alt=""
+                    />
+                    <div className="cand-proof-upload-main">
+                      <div className="cand-proof-upload-head">
+                        <strong title={job.file.name}>{job.file.name}</strong>
+                        <span>{kx(job.file.size)}</span>
+                      </div>
+                      <div className="cand-proof-upload-state">
+                        {job.status === "processing" && (
+                          <span
+                            className="cand-proof-upload-spinner"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <span>{jobStatusText(job)}</span>
+                      </div>
+                      {job.status === "uploading" && (
+                        <div
+                          className="cand-proof-upload-progress"
+                          role="progressbar"
+                          aria-label={`Uploading ${job.file.name}`}
+                          aria-valuemin="0"
+                          aria-valuemax="100"
+                          aria-valuenow={job.progress}
+                        >
+                          <span style={{ width: `${job.progress}%` }} />
+                        </div>
+                      )}
+                      {job.status === "processing" && (
+                        <div
+                          className="cand-proof-upload-progress cand-proof-upload-progress--processing"
+                          role="progressbar"
+                          aria-label={`Processing ${job.file.name}`}
+                        >
+                          <span />
+                        </div>
+                      )}
+                      {job.error && (
+                        <div className="cand-proof-upload-error">{job.error}</div>
+                      )}
+                      {job.slow && active && (
+                        <div className="cand-proof-upload-slow">
+                          <span>This upload is taking longer than expected.</span>
+                          <button
+                            type="button"
+                            className="cand-proof-upload-link"
+                            onClick={() => keepWaiting(job.id)}
+                          >
+                            Keep waiting
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="cand-proof-upload-actions">
+                      {active && (
+                        <button
+                          type="button"
+                          className="cand-btn cand-btn--xs cand-btn--ghost"
+                          onClick={() => cancelJob(job.id)}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                      {["error", "cancelled"].includes(job.status) && (
+                        <button
+                          type="button"
+                          className="cand-btn cand-btn--xs cand-btn--primary"
+                          onClick={() => retryJob(job)}
+                          disabled={n}
+                        >
+                          Retry
+                        </button>
+                      )}
+                      {job.status === "success" && job.proof && (
+                        <button
+                          type="button"
+                          className="cand-btn cand-btn--xs cand-btn--ghost"
+                          onClick={() => d(job.proof)}
+                        >
+                          View
+                        </button>
+                      )}
+                      {job.status === "success" && (
+                        <button
+                          type="button"
+                          className="cand-btn cand-btn--xs cand-btn--ghost"
+                          onClick={() => m.current?.click()}
+                        >
+                          Replace
+                        </button>
+                      )}
+                      {!active && (
+                        <button
+                          type="button"
+                          className="cand-btn cand-btn--xs cand-btn--ghost"
+                          onClick={() => removeJob(job)}
+                          aria-label={`Dismiss ${job.file.name} status`}
+                        >
+                          Dismiss
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
         </s.Fragment>
       )}
       {i && <div className="cand-proofs-error">{i}</div>}
@@ -1573,6 +1943,7 @@ function X8({
   isAdmin: i = false,
   referenceOptions: refOpts = [],
 }) {
+  const { confirm: confirmModal } = nc();
   const [l, c] = w.useState(() => {
     if (e) {
       return K8(e);
@@ -1584,13 +1955,30 @@ function X8({
     return C;
   });
   const [o, u] = w.useState(() =>
-    Array.isArray(e == null ? undefined : e.proofs) ? e.proofs : [],
+    normalizePaymentProofs(e),
   );
   const [d, f] = w.useState(false);
   const [h, x] = w.useState("");
+  const [proofUploadBusy, setProofUploadBusy] = w.useState(false);
+  const proofUploadControl = w.useRef(null);
   const v = w.useRef(null);
+  const requestClose = w.useCallback(async () => {
+    if (proofUploadBusy) {
+      const leave = await confirmModal({
+        title: "Payment screenshot upload in progress",
+        message:
+          "Leaving now will cancel the active payment screenshot upload. Continue?",
+        confirmLabel: "Leave and cancel upload",
+        cancelLabel: "Continue upload",
+        variant: "warn",
+      });
+      if (!leave) return;
+      proofUploadControl.current?.cancelAll();
+    }
+    if (t) t();
+  }, [confirmModal, proofUploadBusy, t]);
   w.useEffect(() => {
-    u(Array.isArray(e == null ? undefined : e.proofs) ? e.proofs : []);
+    u(normalizePaymentProofs(e));
   }, [e == null ? undefined : e.id]);
   w.useEffect(() => {
     var C;
@@ -1600,16 +1988,20 @@ function X8({
   }, []);
   w.useEffect(() => {
     function C(Y) {
-      if (Y.key === "Escape") {
-        if (t != null) {
-          t();
-        }
+      if (
+        Y.key === "Escape" &&
+        !document.querySelector(".cand-proof-lightbox")
+      ) {
+        requestClose();
       }
     }
     document.addEventListener("keydown", C);
     return () => document.removeEventListener("keydown", C);
-  }, [t]);
+  }, [requestClose]);
   function g(C, Y) {
+    if (C === "stage" && Y === "dropped") {
+      x("");
+    }
     c((J) => ({
       ...J,
       [C]: Y,
@@ -1744,39 +2136,58 @@ function X8({
     if ((Y = C == null ? undefined : C.preventDefault) != null) {
       Y.call(C);
     }
+    if (proofUploadBusy) {
+      x("Wait for the payment screenshot upload to finish before saving.");
+      return;
+    }
     if (!l.name.trim()) {
       x("Name is required");
       return;
     }
-    if (!l.technology || !l.technology.trim()) {
-      x("Technology is required — select or type a tech stack.");
-      return;
-    }
-    if (!l.phone || !l.phone.trim() || l.phone.trim().length < 8) {
-      x("Phone number is required — enter a valid 10-digit number.");
-      return;
-    }
-    if (!l.reference || !l.reference.trim()) {
-      x("Reference is required — who referred this lead?");
-      return;
-    }
-    if (b && !l.follow_up.trim()) {
-      x(
-        `₹${S.toLocaleString("en-IN")} balance pending — add a short follow-up / remark before saving.`,
-      );
-      return;
-    }
-    if (l.slot_confirmed && A && !i) {
-      x(A);
-      return;
-    }
-    // Block save if payment > 0 and no proof uploaded (edit mode only — new candidates need ID first)
-    const paymentAmt = l.payment === "" ? 0 : Number(l.payment);
-    if (e && paymentAmt > 0 && (!o || o.length === 0)) {
-      x(
-        "Payment proof is required — upload a screenshot before saving when payment is recorded.",
-      );
-      return;
+    const isDropped = l.stage === "dropped";
+    if (!isDropped) {
+      if (!l.technology || !l.technology.trim()) {
+        x("Technology is required — select or type a tech stack.");
+        return;
+      }
+      if (!l.phone || !l.phone.trim() || l.phone.trim().length < 8) {
+        x("Phone number is required — enter a valid 10-digit number.");
+        return;
+      }
+      if (!l.reference || !l.reference.trim()) {
+        x("Reference is required — who referred this lead?");
+        return;
+      }
+      if (l.service_type === "profile_service") {
+        if (String(l.ctc_percentage).trim() === "") {
+          x("% on CTC is required for profile-service candidates.");
+          return;
+        }
+        const ctcPercentage = Number(l.ctc_percentage);
+        if (!Number.isFinite(ctcPercentage) || ctcPercentage <= 0 || ctcPercentage > 100) {
+          x("% on CTC must be greater than 0 and not more than 100.");
+          return;
+        }
+      }
+      if (b && !l.follow_up.trim()) {
+        x(
+          `₹${S.toLocaleString("en-IN")} balance pending — add a short follow-up / remark before saving.`,
+        );
+        return;
+      }
+      if (l.slot_confirmed && A && !i) {
+        x(A);
+        return;
+      }
+      // Active candidates with recorded payments require proof. Dropped records
+      // are historical closures and remain saveable without completion evidence.
+      const paymentAmt = l.payment === "" ? 0 : Number(l.payment);
+      if (e && paymentAmt > 0 && (!o || o.length === 0)) {
+        x(
+          "Payment proof is required — upload a screenshot before saving when payment is recorded.",
+        );
+        return;
+      }
     }
     f(true);
     x("");
@@ -1810,10 +2221,15 @@ function X8({
     <div
       className="cand-modal-backdrop"
       onClick={(C) =>
-        C.target === C.currentTarget && (t == null ? undefined : t())
+        C.target === C.currentTarget && requestClose()
       }
     >
-      <form className="cand-modal" onSubmit={M}>
+      <form
+        className="cand-modal"
+        onSubmit={M}
+        noValidate={l.stage === "dropped"}
+        aria-busy={d || proofUploadBusy}
+      >
         <header className="cand-modal-header">
           <h3 className="cand-modal-title">
             {e ? "Edit candidate" : "Add candidate"}
@@ -1821,7 +2237,7 @@ function X8({
           <button
             type="button"
             className="cand-modal-close"
-            onClick={t}
+            onClick={requestClose}
             aria-label="Close"
           >
             ×
@@ -1944,16 +2360,19 @@ function X8({
             </label>
             {l.service_type === "profile_service" && (
               <label className="cand-field">
-                <span className="cand-field-label">% on CTC</span>
+                <span className="cand-field-label">
+                  % on CTC{l.stage === "dropped" ? "" : " *"}
+                </span>
                 <input
                   className="cand-input"
                   type="number"
-                  min="0"
+                  min="0.01"
                   max="100"
-                  step="0.5"
+                  step="0.01"
                   value={l.ctc_percentage}
                   onChange={(C) => g("ctc_percentage", C.target.value)}
                   placeholder="e.g. 8.33"
+                  required={l.stage !== "dropped"}
                 />
               </label>
             )}
@@ -2141,10 +2560,12 @@ function X8({
               </label>
             )}
             <div className="cand-field">
-              <$8
+              <PaymentProofUploader
                 candidateId={e == null ? undefined : e.id}
                 proofs={o}
                 onChange={u}
+                onBusyChange={setProofUploadBusy}
+                controlRef={proofUploadControl}
               />
             </div>
           </div>
@@ -2154,7 +2575,7 @@ function X8({
           <button
             type="button"
             className="cand-btn cand-btn--ghost"
-            onClick={t}
+            onClick={requestClose}
             disabled={d}
           >
             Cancel
@@ -2162,9 +2583,20 @@ function X8({
           <button
             type="submit"
             className="cand-btn cand-btn--primary"
-            disabled={d}
+            disabled={d || proofUploadBusy}
+            title={
+              proofUploadBusy
+                ? "Wait for the payment screenshot upload to finish"
+                : undefined
+            }
           >
-            {d ? "Saving…" : e ? "Save changes" : "Add candidate"}
+            {d
+              ? "Saving…"
+              : proofUploadBusy
+                ? "Uploading proof…"
+                : e
+                  ? "Save changes"
+                  : "Add candidate"}
           </button>
         </footer>
       </form>
@@ -3588,9 +4020,74 @@ function Sx(e) {
     return "";
   }
 }
-function _Component31({ candidate: e, onClose: t, onEdit: r }) {
+function paymentProofAssetUrl(proof) {
+  const url = String(proof?.url || "").trim();
+  if (!url) return "";
+  return /^(?:https?:)?\/\//i.test(url) || /^data:/i.test(url) ? url : `${ve}${url}`;
+}
+export function PaymentProofsModal({ candidate: e, onClose: t, onEdit: r }) {
   const [n, a] = w.useState(null);
-  const i = Array.isArray(e == null ? undefined : e.proofs) ? e.proofs : [];
+  const [previewZoom, setPreviewZoom] = w.useState(1);
+  const candidateId = String(e?.id || e?.candidate_id || e?.candidateId || "");
+  const initialProofs = w.useMemo(() => normalizePaymentProofs(e), [e]);
+  const [candidate, setCandidate] = w.useState(e);
+  const [proofs, setProofs] = w.useState(initialProofs);
+  const [loading, setLoading] = w.useState(Boolean(candidateId));
+  const [loadError, setLoadError] = w.useState("");
+  const [reloadKey, setReloadKey] = w.useState(0);
+  const previewIndex = n ? proofs.findIndex((proof) => proof.id === n.id) : -1;
+  const showPreviewAt = w.useCallback(
+    (index) => {
+      if (!proofs.length) return;
+      const normalizedIndex = (index + proofs.length) % proofs.length;
+      a(proofs[normalizedIndex]);
+      setPreviewZoom(1);
+    },
+    [proofs],
+  );
+
+  w.useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    setCandidate(e);
+    setProofs(initialProofs);
+    setLoadError("");
+    if (!candidateId) {
+      setLoading(false);
+      setLoadError("Unable to load payment proofs. Please try again.");
+      return () => controller.abort();
+    }
+    setLoading(true);
+    fetch(`${ve}/candidates/${encodeURIComponent(candidateId)}`, {
+      credentials: "include",
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok || payload?.status !== "ok" || !payload?.candidate) {
+          throw new Error(payload?.message || `Request failed (${response.status})`);
+        }
+        return payload;
+      })
+      .then((payload) => {
+        if (!current) return;
+        setCandidate(payload.candidate);
+        setProofs(normalizePaymentProofs(payload));
+      })
+      .catch((error) => {
+        if (!current || error?.name === "AbortError") return;
+        setLoadError("Unable to load payment proofs. Please try again.");
+      })
+      .finally(() => {
+        if (current) setLoading(false);
+      });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [candidateId, e, initialProofs, reloadKey]);
+
   w.useEffect(() => {
     function u(d) {
       if (d.key === "Escape") {
@@ -3599,13 +4096,19 @@ function _Component31({ candidate: e, onClose: t, onEdit: r }) {
         } else if (t != null) {
           t();
         }
+      } else if (n && proofs.length > 1 && d.key === "ArrowLeft") {
+        d.preventDefault();
+        showPreviewAt(previewIndex - 1);
+      } else if (n && proofs.length > 1 && d.key === "ArrowRight") {
+        d.preventDefault();
+        showPreviewAt(previewIndex + 1);
       }
     }
     document.addEventListener("keydown", u);
     return () => document.removeEventListener("keydown", u);
-  }, [n, t]);
-  const l = Number(e == null ? undefined : e.expected_payment) || 20000;
-  const c = Number(e == null ? undefined : e.payment) || 0;
+  }, [n, previewIndex, proofs.length, showPreviewAt, t]);
+  const l = Number(candidate?.expected_payment) || 20000;
+  const c = Number(candidate?.payment) || 0;
   const o = Math.max(0, l - c);
   return (
     <div
@@ -3620,7 +4123,7 @@ function _Component31({ candidate: e, onClose: t, onEdit: r }) {
             <h3 className="cand-modal-title">
               Payment proofs ·{" "}
               <span className="cand-handler-name">
-                {e == null ? undefined : e.name}
+                {candidate?.name || e?.name}
               </span>
             </h3>
             <p className="cand-modal-sub cand-payout-bar">
@@ -3637,10 +4140,14 @@ function _Component31({ candidate: e, onClose: t, onEdit: r }) {
                   <strong>₹{o.toLocaleString("en-IN")}</strong>
                 </span>
               )}
-              <span className="cand-payout-chunk">
-                <strong>{i.length}</strong> screenshot
-                {i.length === 1 ? "" : "s"} on file
-              </span>
+              {loading && proofs.length === 0 ? (
+                <span className="cand-payout-chunk">Loading payment proofsâ€¦</span>
+              ) : (
+                <span className="cand-payout-chunk">
+                  <strong>{proofs.length}</strong> screenshot
+                  {proofs.length === 1 ? "" : "s"} on file
+                </span>
+              )}
             </p>
           </div>
           <button
@@ -3653,22 +4160,39 @@ function _Component31({ candidate: e, onClose: t, onEdit: r }) {
           </button>
         </header>
         <div className="cand-modal-body cand-modal-body--stack">
-          {i.length === 0 ? (
+          {loadError && (
+            <div className="cand-exp-empty">
+              <span>{loadError}</span>{" "}
+              <button
+                type="button"
+                className="cand-btn cand-btn--ghost cand-btn--xs"
+                onClick={() => setReloadKey((value) => value + 1)}
+              >
+                Retry
+              </button>
+            </div>
+          )}
+          {loading && proofs.length === 0 ? (
+            <div className="cand-exp-empty">Loading payment proofsâ€¦</div>
+          ) : !loadError && proofs.length === 0 ? (
             <div className="cand-exp-empty">
               No payment screenshots attached to this candidate yet.
             </div>
-          ) : (
+          ) : proofs.length > 0 ? (
             <ul className="cand-proofs-grid">
-              {i.map((u) => (
+              {proofs.map((u) => (
                 <li className="cand-proof-card" key={u.id}>
                   <button
                     type="button"
                     className="cand-proof-thumb"
-                    onClick={() => a(u)}
+                    onClick={() => {
+                      a(u);
+                      setPreviewZoom(1);
+                    }}
                     aria-label={`Preview ${u.note || "payment proof"}`}
                   >
                     <img
-                      src={`${ve}${u.url}`}
+                      src={paymentProofAssetUrl(u)}
                       alt={u.note || u.original_name || "payment proof"}
                       loading="lazy"
                     />
@@ -3683,7 +4207,7 @@ function _Component31({ candidate: e, onClose: t, onEdit: r }) {
                       <span>{jx(u.size)}</span>
                     </div>
                     <a
-                      href={`${ve}${u.url}`}
+                      href={paymentProofAssetUrl(u)}
                       download={u.original_name || u.filename}
                       className="cand-btn cand-btn--ghost cand-btn--xs cand-proof-download"
                       onClick={(d) => d.stopPropagation()}
@@ -3694,7 +4218,7 @@ function _Component31({ candidate: e, onClose: t, onEdit: r }) {
                 </li>
               ))}
             </ul>
-          )}
+          ) : null}
         </div>
         <footer className="cand-modal-footer">
           {r && (
@@ -3705,7 +4229,7 @@ function _Component31({ candidate: e, onClose: t, onEdit: r }) {
                 if (t != null) {
                   t();
                 }
-                r(e);
+                r(candidate || e);
               }}
               title="Open the full candidate edit form (lets you add or delete proofs)"
             >
@@ -3725,6 +4249,7 @@ function _Component31({ candidate: e, onClose: t, onEdit: r }) {
             className="cand-proof-lightbox"
             onClick={() => a(null)}
             role="dialog"
+            aria-modal="true"
             aria-label="Payment proof preview"
           >
             <button
@@ -3735,11 +4260,65 @@ function _Component31({ candidate: e, onClose: t, onEdit: r }) {
             >
               ×
             </button>
+            {proofs.length > 1 && (
+              <>
+                <button
+                  type="button"
+                  className="cand-proof-lightbox-nav cand-proof-lightbox-nav--prev"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    showPreviewAt(previewIndex - 1);
+                  }}
+                  aria-label="Previous payment proof"
+                >
+                  ‹
+                </button>
+                <button
+                  type="button"
+                  className="cand-proof-lightbox-nav cand-proof-lightbox-nav--next"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    showPreviewAt(previewIndex + 1);
+                  }}
+                  aria-label="Next payment proof"
+                >
+                  ›
+                </button>
+              </>
+            )}
             <img
-              src={`${ve}${n.url}`}
+              src={paymentProofAssetUrl(n)}
               alt={n.note || n.original_name}
               onClick={(u) => u.stopPropagation()}
+              style={{ transform: `scale(${previewZoom})` }}
             />
+            <div
+              className="cand-proof-lightbox-tools"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="cand-btn cand-btn--ghost cand-btn--xs"
+                onClick={() => setPreviewZoom((value) => Math.max(0.5, value - 0.25))}
+                aria-label="Zoom out"
+              >
+                −
+              </button>
+              <span>{Math.round(previewZoom * 100)}%</span>
+              <button
+                type="button"
+                className="cand-btn cand-btn--ghost cand-btn--xs"
+                onClick={() => setPreviewZoom((value) => Math.min(3, value + 0.25))}
+                aria-label="Zoom in"
+              >
+                +
+              </button>
+              {proofs.length > 1 && (
+                <span>
+                  {previewIndex + 1} / {proofs.length}
+                </span>
+              )}
+            </div>
             <div
               className="cand-proof-lightbox-caption"
               onClick={(u) => u.stopPropagation()}
@@ -3749,7 +4328,7 @@ function _Component31({ candidate: e, onClose: t, onEdit: r }) {
                 {Sx(n.uploaded_at)} · {jx(n.size)}
               </span>
               <a
-                href={`${ve}${n.url}`}
+                href={paymentProofAssetUrl(n)}
                 download={n.original_name || n.filename}
                 className="cand-btn cand-btn--ghost cand-btn--xs"
               >
@@ -3762,6 +4341,7 @@ function _Component31({ candidate: e, onClose: t, onEdit: r }) {
     </div>
   );
 }
+const _Component31 = PaymentProofsModal;
 function _Component32({
   open: e,
   title: t,
@@ -4432,8 +5012,7 @@ function _Component27({ row: e, onViewProofs: t }) {
   const a = Math.max(0, r - n);
   const i =
     e.payment_status || (n <= 0 ? "unpaid" : n >= r ? "paid" : "partial");
-  const l =
-    Number(e.proof_count) || (Array.isArray(e.proofs) ? e.proofs.length : 0);
+  const l = normalizePaymentProofs(e).length;
   const c =
     l > 0 ? (
       <button
@@ -4550,12 +5129,6 @@ function CandidatesPanelImpl() {
         "Enter the admin password to open the full earnings and payout board.",
     });
   };
-  const me = (ge) =>
-    re(() => G(true), {
-      title: "Edit handler payout",
-      message:
-        "Enter the admin password to log or edit payouts for this handler.",
-    });
   w.useEffect(() => {
     if (n && t) {
       S(t);
@@ -5156,7 +5729,7 @@ function CandidatesPanelImpl() {
     return [
       {
         value: "all",
-        label: "All handlers",
+        label: "All Referrers",
       },
       ...ge.map((Be) => ({
         value: Be.name,
@@ -5330,11 +5903,12 @@ function CandidatesPanelImpl() {
           month={m}
           onMonthChange={_}
           monthOptions={Le}
-          onEditPayout={a ? me : undefined}
+          onAddExpense={a ? ue : undefined}
           handlerView={n}
           handlerName={t}
           formatCurrency={Jc}
           apiBase={ve}
+          onViewPaymentProofs={(candidate) => Z(candidate)}
         />
       )}
       {x && <div className="cand-error">{x}</div>}

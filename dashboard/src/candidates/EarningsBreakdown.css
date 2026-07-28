@@ -54,6 +54,10 @@
   align-items: flex-end;
   flex-wrap: wrap;
 }
+.earn-add-expense {
+  min-height: 34px;
+  white-space: nowrap;
+}
 .earn-filter {
   display: flex;
   flex-direction: column;
@@ -137,6 +141,18 @@
 .earn-row { cursor: pointer; transition: background .12s; }
 .earn-row:hover { background: rgba(99,102,241,.06); }
 .earn-row--open { background: rgba(99,102,241,.08); }
+
+@media (max-width: 720px) {
+  .earn-header-right {
+    width: 100%;
+  }
+  .earn-filter {
+    flex: 1 1 140px;
+  }
+  .earn-add-expense {
+    flex: 1 1 130px;
+  }
+}
 
 /* Status badges */
 .earn-status {
@@ -252,15 +268,62 @@
   background: rgba(99,102,241,.25);
   border-color: rgba(99,102,241,.6);
 }
+.earn-breakdown-proof-btn:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+  background: rgba(99,102,241,.3);
+  border-color: #93c5fd;
+}
 .earn-breakdown-total {
   border-top: 2px solid rgba(99,102,241,.3);
   margin-top: 4px;
-  padding-top: 12px;
+  padding: 12px 14px;
   background: rgba(99,102,241,.06);
+  gap: 18px;
+  white-space: normal;
 }
-.earn-breakdown-amount--total {
-  font-size: 16px;
-  color: #38bdf8;
+.earn-breakdown-total-title {
+  flex: 1 1 150px;
+  color: var(--text, #eef2f7);
+}
+.earn-breakdown-summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1 1 620px;
+  gap: 0;
+  min-width: 0;
+}
+.earn-summary-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 16px;
+  border-left: 1px solid rgba(255,255,255,.1);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.earn-summary-label {
+  color: var(--text-dim, #7b8a9e);
+  font-size: 11px;
+  font-weight: 600;
+}
+.earn-summary-metric strong {
+  font-size: 14px;
+  font-weight: 800;
+}
+.earn-summary-opening strong { color: #7dd3fc; }
+.earn-summary-earnings strong { color: #4ade80; }
+.earn-summary-expenses strong { color: #fca5a5; }
+.earn-summary-balance--positive strong { color: #4ade80; }
+.earn-summary-balance--negative strong { color: #f87171; }
+.earn-summary-balance--zero strong { color: var(--text-muted, #a8b4c4); }
+.earn-summary-balance .earn-status {
+  margin-left: 2px;
+}
+.earn-breakdown-empty {
+  color: var(--text-dim, #7b8a9e);
+  font-style: italic;
 }
 .earn-detail-loading {
   font-size: 12px;
@@ -285,6 +348,15 @@
   .earn-header { flex-direction: column; }
   .earn-detail-grid { gap: 6px; }
   .earn-detail-card { min-width: 80px; padding: 6px 8px; }
+  .earn-breakdown-summary {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .earn-summary-metric {
+    flex: 1 1 145px;
+    padding: 0 10px;
+  }
 }
 
 /* Carry-forward indicator */

@@ -1,5 +1,6 @@
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo, useCallback, useEffect, Fragment } from "react";
 import "./EarningsBreakdown.css";
+import { normalizePaymentProofs } from "./paymentProofs.js";
 
 /**
  * Earnings Breakdown — replaces "Top Performers" tab.
@@ -11,11 +12,12 @@ export default function EarningsBreakdown({
   month,
   onMonthChange,
   monthOptions,
-  onEditPayout,
+  onAddExpense,
   handlerView = false,
   handlerName = null,
   formatCurrency,
   apiBase = "",
+  onViewPaymentProofs,
 }) {
   const fmt = formatCurrency || (v => {
     const n = Number(v) || 0;
@@ -35,25 +37,42 @@ export default function EarningsBreakdown({
   const [sortBy, setSortBy] = useState("net_payable");
   const [handlerCandidates, setHandlerCandidates] = useState({});
   const [loadingCandidates, setLoadingCandidates] = useState(null);
-  const [viewProof, setViewProof] = useState(null);
 
-  // Fetch candidates for a specific handler when expanded
-  async function toggleExpand(name) {
-    if (expanded === name) { setExpanded(null); return; }
-    setExpanded(name);
-    if (handlerCandidates[name]) return; // already loaded
-    setLoadingCandidates(name);
+  const candidateCacheKey = useCallback(
+    (name, selectedMonth = month) => `${selectedMonth || "all"}::${name}`,
+    [month],
+  );
+
+  // Fetch candidates for the expanded handler and selected month. The
+  // month-scoped key prevents records from a previous month being reused.
+  const loadHandlerCandidates = useCallback(async (name, selectedMonth = month) => {
+    const cacheKey = `${selectedMonth || "all"}::${name}`;
+    setLoadingCandidates(cacheKey);
     try {
       const params = new URLSearchParams();
-      if (month && month !== "all") params.set("month", month);
+      if (selectedMonth && selectedMonth !== "all") params.set("month", selectedMonth);
       params.set("reference", name);
       const res = await (await fetch(`${apiBase}/candidates?${params.toString()}`, { credentials: "include" })).json();
       if (res.status === "ok") {
-        setHandlerCandidates(prev => ({ ...prev, [name]: res.candidates || [] }));
+        setHandlerCandidates(prev => ({ ...prev, [cacheKey]: res.candidates || [] }));
       }
     } catch (e) { /* silent */ }
-    finally { setLoadingCandidates(null); }
+    finally {
+      setLoadingCandidates(current => current === cacheKey ? null : current);
+    }
+  }, [apiBase, month]);
+
+  // Fetch candidates for a specific handler when expanded.
+  function toggleExpand(name) {
+    if (expanded === name) { setExpanded(null); return; }
+    setExpanded(name);
   }
+
+  // Re-fetch the open handler whenever the selected month changes. Parent
+  // totals come from `stats`; candidate detail rows use this matching request.
+  useEffect(() => {
+    if (expanded) loadHandlerCandidates(expanded, month);
+  }, [expanded, month, loadHandlerCandidates]);
 
   const sorted = useMemo(() => {
     const list = [...performers];
@@ -94,8 +113,19 @@ export default function EarningsBreakdown({
     return (
       <section className="earn-section">
         <header className="earn-header">
-          <h3 className="earn-title">Earnings breakdown</h3>
-          {scopeLabel && <span className="earn-scope">{scopeLabel}</span>}
+          <div className="earn-header-left">
+            <h3 className="earn-title">Earnings breakdown</h3>
+            {scopeLabel && <span className="earn-scope">{scopeLabel}</span>}
+          </div>
+          {onAddExpense && (
+            <button
+              type="button"
+              className="cand-btn cand-btn--primary cand-btn--sm earn-add-expense"
+              onClick={onAddExpense}
+            >
+              Add expense
+            </button>
+          )}
         </header>
         <p className="earn-empty">No handler data for this period.</p>
       </section>
@@ -135,6 +165,15 @@ export default function EarningsBreakdown({
               <option value="count">Lead count</option>
             </select>
           </label>
+          {onAddExpense && (
+            <button
+              type="button"
+              className="cand-btn cand-btn--primary cand-btn--sm earn-add-expense"
+              onClick={onAddExpense}
+            >
+              Add expense
+            </button>
+          )}
         </div>
       </header>
 
@@ -153,7 +192,6 @@ export default function EarningsBreakdown({
               <th className="earn-th--money">Paid Out</th>
               <th className="earn-th--money">Balance</th>
               <th className="earn-th--status">Status</th>
-              <th className="earn-th--action"></th>
             </tr>
           </thead>
           <tbody>
@@ -166,6 +204,16 @@ export default function EarningsBreakdown({
               const priorBalance = Number(p.prior_balance) || 0;
               const status = getStatus(net);
               const isExpanded = expanded === p.name;
+              const cacheKey = candidateCacheKey(p.name);
+              const currentCandidates = handlerCandidates[cacheKey];
+              const isLoadingCandidates = loadingCandidates === cacheKey;
+              const showOpeningBalance = priorBalance !== 0 && month && month !== "all";
+              const signedCurrency = value => {
+                const numeric = Number(value) || 0;
+                if (numeric > 0) return `+${fmt(numeric)}`;
+                if (numeric < 0) return `−${fmt(Math.abs(numeric))}`;
+                return fmt(0);
+              };
 
               return (
                 <Fragment key={p.ref_key || p.name}>
@@ -192,52 +240,89 @@ export default function EarningsBreakdown({
                     <td className="earn-td--status">
                       <span className={`earn-status ${status.cls}`}>{status.label}</span>
                     </td>
-                    <td className="earn-td--action">
-                      {onEditPayout && <button type="button" className="cand-btn cand-btn--ghost cand-btn--xs" onClick={ev => { ev.stopPropagation(); onEditPayout(p); }} title="Manage payouts">Edit payouts</button>}
-                    </td>
                   </tr>
                   {isExpanded && (
                     <tr className="earn-detail-row">
-                      <td colSpan={11}>
+                      <td colSpan={10}>
                         <div className="earn-detail">
-                          {/* Carry-forward explanation */}
-                          {priorBalance !== 0 && month && month !== "all" && (
-                            <div className="earn-carry-fwd-detail">
-                              <span className="earn-carry-fwd-icon">{priorBalance > 0 ? "📋" : "💰"}</span>
-                              <span className="earn-carry-fwd-text">
-                                <strong>{priorBalance > 0 ? "Pending balance" : "Overpaid"} from previous months: {fmt(Math.abs(priorBalance))}</strong>
-                                <span className="earn-carry-fwd-sub"> — carried forward to {scopeLabel || month}</span>
-                              </span>
-                            </div>
-                          )}
-                          {loadingCandidates === p.name && <p className="earn-detail-loading">Loading…</p>}
-                          {handlerCandidates[p.name] && (() => {
-                            const rows = handlerCandidates[p.name].filter(c => Number(c.payment) > 0);
+                          {isLoadingCandidates && <p className="earn-detail-loading">Loading…</p>}
+                          {currentCandidates && (() => {
+                            const rows = currentCandidates.filter(c => Number(c.payment) > 0);
                             const pct = (p.commission_pct || 50) / 100;
-                            if (rows.length === 0 && !priorBalance) return <p className="earn-detail-loading">No payments received yet.</p>;
-                            if (rows.length === 0) return null; // carry-forward shown above is enough
-                            const totalComm = rows.reduce((s, c) => s + (Number(c.handler_commission) || Math.round((Number(c.payment) || 0) * pct)), 0);
                             return (
                               <ul className="earn-breakdown-list">
+                                {rows.length === 0 && (
+                                  <li className="earn-breakdown-item earn-breakdown-empty">
+                                    No candidate payments received in this period.
+                                  </li>
+                                )}
                                 {rows.map(c => {
                                   const received = Number(c.payment) || 0;
                                   const referral = Number(c.handler_commission) || Math.round(received * pct);
                                   const date = c.logged_date || c.date || "";
                                   const dateStr = date ? new Date(date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "";
+                                  const proofs = normalizePaymentProofs(c);
+                                  const reportedProofCount = Number(c.proof_count) || 0;
+                                  const availableProofCount = proofs.length || reportedProofCount;
                                   return (
                                     <li className="earn-breakdown-item" key={c.id}>
                                       <span className="earn-breakdown-desc">
                                         {c.name} · {fmt(received)} received – {fmt(referral)} referral
                                         {dateStr && <span className="earn-breakdown-date"> · {dateStr}</span>}
-                                        {((c.proofs && c.proofs.length > 0) || (c.slot_screenshot_proofs && c.slot_screenshot_proofs.length > 0) || c.proof_count > 0) && <button type="button" className="earn-breakdown-proof-btn" onClick={ev => { ev.stopPropagation(); const proof = (c.proofs && c.proofs[0]) || (c.slot_screenshot_proofs && c.slot_screenshot_proofs[0]); if (proof) setViewProof({ url: `${apiBase}${proof.url}`, name: c.name }); }} title="View payment proof">📷</button>}
+                                        {availableProofCount > 0 && onViewPaymentProofs && (
+                                          <button
+                                            type="button"
+                                            className="earn-breakdown-proof-btn"
+                                            onClick={(event) => {
+                                              event.preventDefault();
+                                              event.stopPropagation();
+                                              onViewPaymentProofs({
+                                                ...c,
+                                                id: c.id || c.candidate_id || c.candidateId,
+                                                name: c.name || c.candidate_name || "Candidate",
+                                                payment_proofs: proofs,
+                                              });
+                                            }}
+                                            title={
+                                              availableProofCount === 1
+                                                ? "View payment proof"
+                                                : `View ${availableProofCount} payment proofs`
+                                            }
+                                            aria-label={`View payment proofs for ${c.name || c.candidate_name || "candidate"}`}
+                                          >
+                                            📷
+                                          </button>
+                                        )}
                                       </span>
                                       <strong className="earn-breakdown-amount">{fmt(referral)}</strong>
                                     </li>
                                   );
                                 })}
                                 <li className="earn-breakdown-item earn-breakdown-total">
-                                  <span className="earn-breakdown-desc"><strong>Total ({rows.length} candidates)</strong></span>
-                                  <strong className="earn-breakdown-amount earn-breakdown-amount--total">{fmt(totalComm)}</strong>
+                                  <span className="earn-breakdown-total-title">
+                                    <strong>Total ({Number(p.count) || rows.length} candidates)</strong>
+                                  </span>
+                                  <span className="earn-breakdown-summary">
+                                    {showOpeningBalance && (
+                                      <span className="earn-summary-metric earn-summary-opening">
+                                        <span className="earn-summary-label">Opening balance</span>
+                                        <strong>{signedCurrency(priorBalance)}</strong>
+                                      </span>
+                                    )}
+                                    <span className="earn-summary-metric earn-summary-earnings">
+                                      <span className="earn-summary-label">Earnings</span>
+                                      <strong>{fmt(commission)}</strong>
+                                    </span>
+                                    <span className="earn-summary-metric earn-summary-expenses">
+                                      <span className="earn-summary-label">Expenses</span>
+                                      <strong>{paid > 0 ? `−${fmt(paid)}` : fmt(0)}</strong>
+                                    </span>
+                                    <span className={`earn-summary-metric earn-summary-balance ${net > 0 ? "earn-summary-balance--positive" : net < 0 ? "earn-summary-balance--negative" : "earn-summary-balance--zero"}`}>
+                                      <span className="earn-summary-label">{showOpeningBalance ? "Closing balance" : "Net balance"}</span>
+                                      <strong>{signedCurrency(net)}</strong>
+                                      <span className={`earn-status ${status.cls}`}>{status.label}</span>
+                                    </span>
+                                  </span>
                                 </li>
                               </ul>
                             );
@@ -262,17 +347,10 @@ export default function EarningsBreakdown({
               <td className="earn-td--money">{fmt(totals.paid)}</td>
               <td className={`earn-td--money ${totals.net > 0 ? "earn-green" : totals.net < 0 ? "earn-red" : "earn-settled"}`}><strong>{fmt(totals.net)}</strong></td>
               <td></td>
-              <td></td>
             </tr>
           </tfoot>
         </table>
       </div>
-      {/* Proof lightbox */}
-      {viewProof && <div className="cand-proof-lightbox" onClick={() => setViewProof(null)} style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, background: "rgba(0,0,0,.9)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-out" }}>
-        <img src={viewProof.url} alt={`Payment proof - ${viewProof.name}`} style={{ maxWidth: "90vw", maxHeight: "85vh", borderRadius: 10, boxShadow: "0 20px 60px rgba(0,0,0,.8)" }} onClick={ev => ev.stopPropagation()} />
-        <button type="button" onClick={() => setViewProof(null)} style={{ position: "absolute", top: 16, right: 20, width: 36, height: 36, borderRadius: "50%", background: "rgba(255,255,255,.15)", color: "#fff", border: "1px solid rgba(255,255,255,.2)", fontSize: 22, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
-        <p style={{ position: "absolute", bottom: 20, color: "#cbd5e1", fontSize: 13 }}>{viewProof.name}</p>
-      </div>}
     </section>
   );
 }

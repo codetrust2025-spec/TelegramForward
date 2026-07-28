@@ -6,6 +6,44 @@ const API_BASE = typeof window !== 'undefined' && window.location.port === '3000
   ? ''
   : (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.host}` : '')
 
+const TECHNOLOGY_OPTIONS = [
+  '.NET',
+  'Angular',
+  'Automation Testing',
+  'AWS Admin',
+  'AWS Cloud',
+  'AWS DevOps',
+  'Azure Admin',
+  'Azure DevOps',
+  'Business Analyst',
+  'Cloud',
+  'Cloud DevOps',
+  'Data Analyst',
+  'Data Engineer',
+  'Databricks',
+  'DevOps',
+  'ETL',
+  'Full Stack',
+  'Java Backend',
+  'ML Engineer',
+  'MERN stack',
+  'Node JS',
+  'Oracle Fusion (Func)',
+  'Oracle Fusion (Tech Con)',
+  'Power BI',
+  'Python',
+  'React JS',
+  'Salesforce',
+  'SAP BASIS',
+  'SAP HANA',
+  'SAP MM',
+  'SAP Sales',
+  'ServiceNow',
+  'Snowflake',
+  'SQL',
+  'Testing',
+]
+
 function formatFriendlyDate(iso) {
   if (!iso) return ''
   try {
@@ -23,6 +61,13 @@ function formatFriendlyTime(hhmm) {
   const d = new Date()
   d.setHours(h, m || 0, 0, 0)
   return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })
+}
+
+function formatElapsed(seconds) {
+  const safeSeconds = Math.max(0, Number(seconds) || 0)
+  const minutes = Math.floor(safeSeconds / 60)
+  const remainder = safeSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
 }
 
 /** Convert any time to 12-hour "hh:mm AM/PM" format */
@@ -184,12 +229,15 @@ function SlotCandidatePicker({ candidates, value, onChange, disabled }) {
 function PaymentAiResultCard({ ai }) {
   if (!ai) return null
   const verified = ai.verified
+  const referrerVerified = ai.verification_state === 'VERIFIED_REFERRER_PAYMENT'
   const amount = ai.amount ? `₹${Number(ai.amount).toLocaleString('en-IN')}` : null
   const utr = ai.utr_number || ai.reference_number || null
   const app = ai.payment_app || null
   const status = ai.status || 'unknown'
   const narrative = ai.narrative || ai.verification_result || null
   const confidence = ai.confidence_score || 0
+  const receiver = ai.receiver_registry_name || ai.receiver_name || null
+  const receiverUpi = ai.receiver_upi_id || null
 
   const borderColor = verified ? 'rgba(34,197,94,0.35)' : status === 'failed' ? 'rgba(239,68,68,0.35)' : 'rgba(251,191,36,0.35)'
   const bgColor = verified ? 'rgba(34,197,94,0.07)' : status === 'failed' ? 'rgba(239,68,68,0.06)' : 'rgba(251,191,36,0.06)'
@@ -201,7 +249,13 @@ function PaymentAiResultCard({ ai }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: narrative ? '6px' : 0 }}>
         <span style={{ fontWeight: 700, color: iconColor, fontSize: '14px' }}>{icon}</span>
         <span style={{ fontWeight: 600, color: 'rgba(226,232,240,0.9)' }}>
-          {verified ? 'Payment verified' : status === 'failed' ? 'Payment failed' : 'Payment needs review'}
+          {referrerVerified
+            ? 'Registered Referrer Payment Detected'
+            : verified
+              ? 'Company payment verified'
+              : status === 'failed'
+                ? 'Payment failed'
+                : 'Payment needs review'}
         </span>
         {confidence > 0 && (
           <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'rgba(148,163,184,0.7)' }}>
@@ -215,7 +269,14 @@ function PaymentAiResultCard({ ai }) {
         {app && <span>📱 {app}</span>}
         {ai.payment_date && <span>📅 {ai.payment_date}</span>}
         {ai.sender_name && <span>👤 {ai.sender_name}</span>}
+        {receiver && <span>Receiver: {receiver}</span>}
+        {receiverUpi && <span>UPI: {receiverUpi}</span>}
       </div>
+      {referrerVerified && (
+        <p style={{ margin: narrative ? '0 0 6px' : 0, color: 'rgba(134,239,172,0.95)', lineHeight: 1.45 }}>
+          Booking can continue. The company share is recorded for recovery in the referrer settlement ledger.
+        </p>
+      )}
       {narrative && (
         <p style={{ margin: 0, color: 'rgba(203,213,225,0.85)', fontStyle: 'italic', lineHeight: 1.45 }}>{narrative}</p>
       )}
@@ -231,6 +292,8 @@ export function SubmitSlotPage() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [parsing, setParsing] = useState(false)
+  const [parseElapsed, setParseElapsed] = useState(0)
+  const parseStartedAtRef = useRef(0)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [name, setName] = useState('')
@@ -248,6 +311,8 @@ export function SubmitSlotPage() {
   const [manualDate, setManualDate] = useState('')
   const [manualTime, setManualTime] = useState('')
   const [interviewRound, setInterviewRound] = useState('')
+  const [roundWiseTechnology, setRoundWiseTechnology] = useState('')
+  const [roundWisePhone, setRoundWisePhone] = useState('')
   const [serviceType, setServiceType] = useState('profile_service')
   const [showServiceDrop, setShowServiceDrop] = useState(false)
   const [triedSubmit, setTriedSubmit] = useState(false)
@@ -256,6 +321,8 @@ export function SubmitSlotPage() {
   const [userEditedFields, setUserEditedFields] = useState({})
   const [paymentAiResult, setPaymentAiResult] = useState(null)
   const [paymentAnalysing, setPaymentAnalysing] = useState(false)
+  const [paymentElapsed, setPaymentElapsed] = useState(0)
+  const paymentStartedAtRef = useRef(0)
 
   const effectiveName = name.trim()
   const selected = useMemo(() => {
@@ -273,15 +340,47 @@ export function SubmitSlotPage() {
     return null
   }, [parsedSlot, manualDate, manualTime, interviewRound])
 
-  const showManualSlotFields = Boolean(slotFile && !parsing && (!aiExtraction || aiExtraction.manual_fields_required || aiExtraction.confidence_score < 70))
-  const showPaymentCard = Boolean(selected?.needs_payment_proof || paymentDue)
+  const highConfidenceAiResult = Boolean(
+    aiExtraction
+    && Number(aiExtraction.confidence_score) >= 90
+    && (aiExtraction.interview_date || aiExtraction.date)
+    && (aiExtraction.start_time || aiExtraction.time)
+    && !aiExtraction.verification_conflict
+    && aiExtraction.looks_like_interview_invite !== false
+    && !aiExtraction.is_payment_screenshot
+  )
+  const showManualSlotFields = Boolean(slotFile && !parsing && !highConfidenceAiResult)
+  // Every round-wise booking must have a freshly verified payment receipt,
+  // including a first-time name that is not yet present in the roster.
+  const showPaymentCard = serviceType === 'round_wise' || Boolean(selected?.needs_payment_proof || paymentDue)
   const paymentBalanceDue = selected?.needs_payment_proof
     ? (selected.balance_due || 0)
-    : (paymentDue?.balance_due || 0)
+    : (paymentDue?.balance_due || (serviceType === 'round_wise' ? 5000 : 0))
   const needsPaymentProof = Boolean(showPaymentCard && !paymentProofId)
+  const roundWisePhoneDigits = roundWisePhone.replace(/\D/g, '')
+  const roundWisePhoneValid = serviceType !== 'round_wise'
+    || (roundWisePhoneDigits.length >= 10 && roundWisePhoneDigits.length <= 15)
 
   // A payment_due answer belongs to one name — drop it as soon as that changes.
   useEffect(() => { setPaymentDue(null) }, [effectiveName, serviceType])
+
+  useEffect(() => {
+    if (!parsing) return undefined
+    const startedAt = parseStartedAtRef.current || Date.now()
+    const timer = window.setInterval(() => {
+      setParseElapsed(Math.floor((Date.now() - startedAt) / 1000))
+    }, 250)
+    return () => window.clearInterval(timer)
+  }, [parsing])
+
+  useEffect(() => {
+    if (!paymentAnalysing) return undefined
+    const startedAt = paymentStartedAtRef.current || Date.now()
+    const timer = window.setInterval(() => {
+      setPaymentElapsed(Math.floor((Date.now() - startedAt) / 1000))
+    }, 250)
+    return () => window.clearInterval(timer)
+  }, [paymentAnalysing])
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -311,6 +410,9 @@ export function SubmitSlotPage() {
 
   async function parseScreenshot(file) {
     if (!file) { setParsedSlot(null); setAiExtraction(null); setAiBlocked(''); return }
+    const parseStartedAt = Date.now()
+    parseStartedAtRef.current = parseStartedAt
+    setParseElapsed(0)
     setParsing(true); setError(''); setSuccess(''); setAiExtraction(null); setAiBlocked('')
     try {
       // Try AI extraction first
@@ -336,48 +438,56 @@ export function SubmitSlotPage() {
           setParsing(false)
           return
         }
-        
-        // Auto-fill fields (only if user hasn't manually edited them)
-        const slot = {}
-        if (ext.interview_date && !userEditedFields.date) slot.date = ext.interview_date
-        if ((ext.start_time || ext.time) && !userEditedFields.time) slot.time = normalizeTo12h(ext.start_time || ext.time)
-        if ((ext.end_time || ext.time_end) && !userEditedFields.time_end) slot.time_end = normalizeTo12h(ext.end_time || ext.time_end)
-        if (ext.meeting_platform) slot.platform = ext.meeting_platform
-        if (ext.technology) slot.technology = ext.technology
-        if (ext.interview_round && !interviewRound && !userEditedFields.round) {
-          setInterviewRound(ext.interview_round)
-          slot.interview_round = ext.interview_round
+
+        // An error response still contains a data object with empty fields.
+        // Only stop here when AI returned the minimum usable booking fields;
+        // otherwise continue to the deterministic OCR endpoint below.
+        const aiDate = ext.interview_date || ext.date
+        const aiStartTime = ext.start_time || ext.time
+        const allowOllamaTestPrefill = ext.ollama_only_test === true
+        if (aiDate && aiStartTime && (ext.auto_booking_safe === true || allowOllamaTestPrefill)) {
+          // Auto-fill fields (only if user hasn't manually edited them)
+          const slot = {}
+          if (!userEditedFields.date) slot.date = aiDate
+          if (!userEditedFields.time) slot.time = normalizeTo12h(aiStartTime)
+          if ((ext.end_time || ext.time_end) && !userEditedFields.time_end) slot.time_end = normalizeTo12h(ext.end_time || ext.time_end)
+          if (ext.meeting_platform) slot.platform = ext.meeting_platform
+          if (ext.technology) slot.technology = ext.technology
+          if (ext.interview_round && !interviewRound && !userEditedFields.round) {
+            setInterviewRound(ext.interview_round)
+            slot.interview_round = ext.interview_round
+          }
+
+          console.log('[Invite extraction]', { raw: ext, mapped: slot })
+          setParsedSlot(slot)
+          if (!userEditedFields.date) setManualDate(aiDate)
+          if (!userEditedFields.time) setManualTime(normalizeTo12h(aiStartTime))
+          setParsing(false)
+          return
         }
-        
-        console.log('[Invite extraction]', { raw: ext, mapped: slot })
-        setParsedSlot(slot)
-        if (!userEditedFields.date) setManualDate(ext.interview_date || '')
-        if (!userEditedFields.time) setManualTime(normalizeTo12h(ext.start_time || ext.time || ''))
+
+        console.warn('[Invite extraction] automatic booking blocked; manual verification required', ext)
+        setParsedSlot(null)
         setParsing(false)
         return
       }
     } catch (e) {
-      console.warn('AI extraction failed, falling back to OCR:', e)
+      console.warn('AI extraction failed; automatic booking blocked:', e)
+      setParsedSlot(null)
+      setAiBlocked('AI verification is unavailable. Enter the interview date and time manually.')
+      setParsing(false)
+      return
+    } finally {
+      setParseElapsed(Math.max(1, Math.ceil((Date.now() - parseStartedAt) / 1000)))
+      setParsing(false)
     }
+
+    // No OCR-only fallback: a single source must never populate booking data.
+    setParsedSlot(null)
+    setAiBlocked('AI verification returned no result. Enter the interview date and time manually.')
+    setParsing(false)
+    return
     
-    // Fallback to existing OCR endpoint
-    try {
-      const fd2 = new FormData(); fd2.append('file', file)
-      const res2 = await fetch(`${API_BASE}/public/slots/parse-screenshot`, { method: 'POST', body: fd2 })
-      const data2 = await res2.json()
-      if (!res2.ok) { setParsedSlot(null); setError('Auto-read failed — enter date & time manually.'); return }
-      const slot = data2.slot || null
-      // Normalize all times to 12h format and fix wrong year
-      if (slot) {
-        if (slot.date) slot.date = fixPastYear(slot.date)
-        if (slot.time) slot.time = normalizeTo12h(slot.time)
-        if (slot.time_end) slot.time_end = normalizeTo12h(slot.time_end)
-      }
-      setParsedSlot(slot)
-      if (!interviewRound) setInterviewRound(slot?.interview_round || '')
-      setManualDate(''); setManualTime('')
-    } catch { setParsedSlot(null); setError('Network error while reading screenshot') }
-    finally { setParsing(false) }
   }
 
   async function onSlotFileChange(file) {
@@ -398,20 +508,38 @@ export function SubmitSlotPage() {
   async function uploadPaymentProof(file = null) {
     const proof = file || paymentFile
     if (!effectiveName || !proof) { setError('Enter your name and attach a payment screenshot first.'); return }
+    const paymentStartedAt = Date.now()
+    paymentStartedAtRef.current = paymentStartedAt
+    setPaymentElapsed(0)
     setBusy(true); setError(''); setSuccess(''); setPaymentAiResult(null); setPaymentAnalysing(true)
     try {
-      const fd = new FormData(); fd.append('name', effectiveName); fd.append('file', proof)
+      const fd = new FormData()
+      fd.append('name', effectiveName)
+      fd.append('service_type', serviceType)
+      fd.append('phone', roundWisePhone)
+      fd.append('technology', roundWiseTechnology)
+      fd.append('interview_round', interviewRound)
+      fd.append('file', proof)
       const res = await fetch(`${API_BASE}/public/slots/payment-proof`, { method: 'POST', body: fd })
       const data = await res.json()
       if (!res.ok) { setError(data.message || 'Payment upload failed'); return }
       setPaymentProofId(data.proof_id || ''); setPaymentFile(null)
-      setSuccess('Payment proof saved — you can confirm your slot.')
+      const verification = data.ai_extraction || {}
+      setSuccess(
+        verification.verification_state === 'VERIFIED_REFERRER_PAYMENT'
+          ? 'Registered referrer payment verified — commission already received and company share will be adjusted during settlement. You can confirm your slot.'
+          : 'Company payment verified — you can confirm your slot.'
+      )
       // Capture AI extraction result that backend already ran during upload
-      if (data.ai_extraction && data.ai_extraction.is_payment_screenshot) {
-        setPaymentAiResult(data.ai_extraction)
+      if (verification.is_payment_screenshot) {
+        setPaymentAiResult(verification)
       }
     } catch { setError('Network error — try again') }
-    finally { setBusy(false); setPaymentAnalysing(false) }
+    finally {
+      setPaymentElapsed(Math.max(1, Math.floor((Date.now() - paymentStartedAt) / 1000)))
+      setBusy(false)
+      setPaymentAnalysing(false)
+    }
   }
 
   const effectiveBookingDate = manualDate || parsedSlot?.date || ''
@@ -428,7 +556,14 @@ export function SubmitSlotPage() {
       setError('Please wait until invite reading is complete.')
       return
     }
-    if (!effectiveName || !slotFile || !interviewRound || needsPaymentProof) {
+    if (
+      !effectiveName
+      || !slotFile
+      || !interviewRound
+      || (serviceType === 'round_wise' && !roundWiseTechnology)
+      || !roundWisePhoneValid
+      || needsPaymentProof
+    ) {
       setTriedSubmit(true)
       setError('')
       return
@@ -446,7 +581,11 @@ export function SubmitSlotPage() {
       if (bookingSlot?.time) fd.append('time', bookingSlot.time)
       if (bookingSlot?.time_end) fd.append('time_end', bookingSlot.time_end)
       if (bookingSlot?.interview_round) fd.append('interview_round', bookingSlot.interview_round)
-      if (bookingSlot?.technology) fd.append('technology', bookingSlot.technology)
+      const technology = serviceType === 'round_wise'
+        ? roundWiseTechnology
+        : (bookingSlot?.technology || '')
+      if (technology) fd.append('technology', technology)
+      if (serviceType === 'round_wise') fd.append('phone', roundWisePhone.trim())
       if (paymentProofId) fd.append('payment_proof_id', paymentProofId)
       fd.append('file', slotFile)
       const res = await fetch(`${API_BASE}/public/slots/book`, { method: 'POST', body: fd })
@@ -462,7 +601,7 @@ export function SubmitSlotPage() {
         return
       }
       if (slotPreview) URL.revokeObjectURL(slotPreview)
-      setSlotFile(null); setSlotPreview(''); setParsedSlot(null); setManualDate(''); setManualTime(''); setInterviewRound(''); setServiceType('profile_service'); setPaymentProofId('')
+      setSlotFile(null); setSlotPreview(''); setParsedSlot(null); setManualDate(''); setManualTime(''); setInterviewRound(''); setRoundWiseTechnology(''); setRoundWisePhone(''); setServiceType('profile_service'); setPaymentProofId('')
       setName('')
       setTriedSubmit(false)
       setSuccess(`Slot confirmed for ${data.candidate?.name || effectiveName}.`)
@@ -597,8 +736,8 @@ export function SubmitSlotPage() {
                   </button>
                   {showServiceDrop && (
                     <ul className="sbs-dropdown">
-                      <li className={`sbs-dropdown__item${serviceType === "round_wise" ? " sbs-dropdown__item--active" : ""}`} onMouseDown={e => e.preventDefault()} onClick={e => { e.stopPropagation(); setServiceType("round_wise"); setShowServiceDrop(false); setName(""); setPaymentProofId(""); }}>Round-wise</li>
-                      <li className={`sbs-dropdown__item${serviceType === "profile_service" ? " sbs-dropdown__item--active" : ""}`} onMouseDown={e => e.preventDefault()} onClick={e => { e.stopPropagation(); setServiceType("profile_service"); setShowServiceDrop(false); setName(""); setPaymentProofId(""); }}>Profile service</li>
+                      <li className={`sbs-dropdown__item${serviceType === "round_wise" ? " sbs-dropdown__item--active" : ""}`} onMouseDown={e => e.preventDefault()} onClick={e => { e.stopPropagation(); setServiceType("round_wise"); setShowServiceDrop(false); setName(""); setPaymentProofId(""); setRoundWiseTechnology(""); setRoundWisePhone(""); }}>Round-wise</li>
+                      <li className={`sbs-dropdown__item${serviceType === "profile_service" ? " sbs-dropdown__item--active" : ""}`} onMouseDown={e => e.preventDefault()} onClick={e => { e.stopPropagation(); setServiceType("profile_service"); setShowServiceDrop(false); setName(""); setPaymentProofId(""); setRoundWiseTechnology(""); setRoundWisePhone(""); }}>Profile service</li>
                     </ul>
                   )}
                 </div>
@@ -627,27 +766,104 @@ export function SubmitSlotPage() {
                 {triedSubmit && !interviewRound && <span className="sbs-hint sbs-hint--warn">Required — select a round to confirm.</span>}
               </label>
 
+              {serviceType === 'round_wise' && (
+                <>
+                  <label className="sbs-field">
+                    <span className="sbs-label">Phone number <span className="sbs-required" aria-hidden="true">*</span></span>
+                    <input
+                      className={`sbs-input${triedSubmit && !roundWisePhoneValid ? ' sbs-input--required' : ''}`}
+                      type="tel"
+                      inputMode="tel"
+                      autoComplete="tel"
+                      value={roundWisePhone}
+                      onChange={e => setRoundWisePhone(e.target.value)}
+                      placeholder="Enter candidate phone number"
+                      disabled={busy || parsing}
+                      required
+                    />
+                    {triedSubmit && !roundWisePhoneValid
+                      ? <span className="sbs-hint sbs-hint--warn">Enter a valid phone number (10–15 digits).</span>
+                      : <span className="sbs-hint">Used only for this round-wise candidate record.</span>}
+                  </label>
+                  <label className="sbs-field">
+                    <span className="sbs-label">Technology <span className="sbs-required" aria-hidden="true">*</span></span>
+                    <div className={`sbs-select-wrap${triedSubmit && !roundWiseTechnology ? ' sbs-select-wrap--required' : ''}`}>
+                      <select
+                        className="sbs-select"
+                        value={roundWiseTechnology}
+                        onChange={e => setRoundWiseTechnology(e.target.value)}
+                        disabled={busy || parsing}
+                        required
+                      >
+                        <option value="">Select technology</option>
+                        {TECHNOLOGY_OPTIONS.map(technology => (
+                          <option key={technology} value={technology}>{technology}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {triedSubmit && !roundWiseTechnology && (
+                      <span className="sbs-hint sbs-hint--warn">Required — select the technology for this round.</span>
+                    )}
+                  </label>
+                </>
+              )}
+
               {showPaymentCard && (
                 <div className="sbs-pay-card">
                   <div className="sbs-pay-head"><span>Payment due</span><strong>₹{paymentBalanceDue.toLocaleString('en-IN')}</strong></div>
+                  <p className="sbs-hint">A successful payment to the official company account or an active verified registered referrer account is accepted. Unknown receivers are blocked.</p>
                   {paymentProofId ? (
                     <>
                       <p className="sbs-pay-ok">Payment proof on file ✓</p>
                       {paymentAiResult && (
                         <PaymentAiResultCard ai={paymentAiResult} />
                       )}
+                      {paymentElapsed > 0 && (
+                        <div className="sbs-status sbs-status--complete" role="status">
+                          <span>Payment AI reading completed</span>
+                          <span className="sbs-stopwatch" aria-label={`Payment AI reading time ${formatElapsed(paymentElapsed)}`}>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                              <circle cx="12" cy="13" r="8" />
+                              <path d="M12 9v4l2.5 1.5M9 2h6M12 2v3" strokeLinecap="round" />
+                            </svg>
+                            {formatElapsed(paymentElapsed)}
+                          </span>
+                        </div>
+                      )}
                     </>
                   ) : (
                     <>
                       <SubmitSlotFileDrop compact label="Payment screenshot" file={paymentFile} disabled={busy || parsing} busy={busy || paymentAnalysing} onFile={f => { setPaymentFile(f); setPaymentAiResult(null); if (f) uploadPaymentProof(f) }} />
-                      {paymentAnalysing
-                        ? <p className="sbs-pay-ok"><Spinner size={14} />&nbsp;Reading payment screenshot…</p>
-                        : paymentFile && (
+                      {paymentAnalysing ? (
+                        <div className="sbs-status sbs-status--loading">
+                          <Spinner size={14} />
+                          <span>Reading payment screenshot with AI…</span>
+                          <span className="sbs-stopwatch" aria-label={`Payment AI elapsed time ${formatElapsed(paymentElapsed)}`}>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                              <circle cx="12" cy="13" r="8" />
+                              <path d="M12 9v4l2.5 1.5M9 2h6M12 2v3" strokeLinecap="round" />
+                            </svg>
+                            {formatElapsed(paymentElapsed)}
+                          </span>
+                        </div>
+                      ) : paymentFile && (
                           /* Only reachable when the automatic upload failed. */
                           <button type="button" className="sbs-secondary-btn" disabled={busy || parsing} onClick={() => uploadPaymentProof()}>
                             Retry upload
                           </button>
                         )}
+                      {!paymentAnalysing && paymentElapsed > 0 && (
+                        <div className="sbs-status sbs-status--complete" role="status">
+                          <span>Payment AI reading completed</span>
+                          <span className="sbs-stopwatch" aria-label={`Payment AI reading time ${formatElapsed(paymentElapsed)}`}>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                              <circle cx="12" cy="13" r="8" />
+                              <path d="M12 9v4l2.5 1.5M9 2h6M12 2v3" strokeLinecap="round" />
+                            </svg>
+                            {formatElapsed(paymentElapsed)}
+                          </span>
+                        </div>
+                      )}
                       {triedSubmit && needsPaymentProof && <span className="sbs-hint sbs-hint--warn">Upload and save payment proof to confirm.</span>}
                     </>
                   )}
@@ -656,11 +872,35 @@ export function SubmitSlotPage() {
 
               <div className="sbs-field">
                 <span className="sbs-label">Interview invite screenshot</span>
-                <SubmitSlotFileDrop hint="Teams, Gmail, Calendar, or Zoom — date and time must be visible." file={slotFile} previewUrl={slotPreview} disabled={busy} busy={parsing} onFile={onSlotFileChange} />
+                <SubmitSlotFileDrop compact hint="Teams, Gmail, Calendar, or Zoom — date and time must be visible." file={slotFile} previewUrl={slotPreview} disabled={busy} busy={parsing} onFile={onSlotFileChange} />
                 {triedSubmit && !slotFile && <span className="sbs-hint sbs-hint--warn">Upload your interview invite screenshot to confirm.</span>}
               </div>
 
-              {parsing && <div className="sbs-status sbs-status--loading"><Spinner size={18} /><span>Reading invite with AI… this may take a few minutes</span></div>}
+              {parsing && (
+                <div className="sbs-status sbs-status--loading">
+                  <Spinner size={18} />
+                  <span>Reading invite with AI…</span>
+                  <span className="sbs-stopwatch" aria-label={`Elapsed time ${formatElapsed(parseElapsed)}`}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                      <circle cx="12" cy="13" r="8" />
+                      <path d="M12 9v4l2.5 1.5M9 2h6M12 2v3" strokeLinecap="round" />
+                    </svg>
+                    {formatElapsed(parseElapsed)}
+                  </span>
+                </div>
+              )}
+              {!parsing && slotFile && parseElapsed > 0 && (
+                <div className="sbs-status sbs-status--complete" role="status">
+                  <span>AI reading completed</span>
+                  <span className="sbs-stopwatch" aria-label={`AI reading time ${formatElapsed(parseElapsed)}`}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                      <circle cx="12" cy="13" r="8" />
+                      <path d="M12 9v4l2.5 1.5M9 2h6M12 2v3" strokeLinecap="round" />
+                    </svg>
+                    {formatElapsed(parseElapsed)}
+                  </span>
+                </div>
+              )}
 
               {aiBlocked && <div className="sbs-alert sbs-alert--error" role="alert">{aiBlocked}</div>}
 
@@ -708,7 +948,29 @@ export function SubmitSlotPage() {
 
               {showManualSlotFields && (
                 <div className="sbs-manual">
-                  <p className="sbs-manual__hint">{parsedSlot?.date ? 'Verify detected date & time — correct below if wrong.' : 'Include the date line in your screenshot or enter manually.'}</p>
+                  <p className="sbs-manual__hint">
+                    {aiExtraction?.verification_conflict
+                      ? 'Automatic booking was blocked because OCR and AI read different values. Check the invite and enter the correct date and start time.'
+                      : aiExtraction?.manual_fields_required
+                        ? 'Automatic verification could not safely confirm the date and time. Enter the values exactly as shown in the invite.'
+                        : parsedSlot?.date
+                          ? 'Verify detected date & time — correct below if wrong.'
+                          : 'Include the date line in your screenshot or enter manually.'}
+                  </p>
+                  {aiExtraction?.verification_conflict && (
+                    <div className="sbs-verification-conflict" role="status">
+                      <span>
+                        OCR: {aiExtraction.verification_conflict.ocr?.interview_date || 'date not found'}
+                        {' · '}
+                        {aiExtraction.verification_conflict.ocr?.start_time || 'time not found'}
+                      </span>
+                      <span>
+                        AI: {aiExtraction.verification_conflict.vision?.interview_date || 'date not found'}
+                        {' · '}
+                        {aiExtraction.verification_conflict.vision?.start_time || 'time not found'}
+                      </span>
+                    </div>
+                  )}
                   <div className="sbs-manual__grid">
                     <label className="sbs-field"><span className="sbs-label">Interview date</span><input className="sbs-input" type="date" value={manualDate || parsedSlot?.date || ''} onChange={e => { setManualDate(e.target.value); setUserEditedFields(f => ({...f, date: true})); }} disabled={busy || parsing} /></label>
                     <label className="sbs-field"><span className="sbs-label">Start time</span><input className="sbs-input" type="text" placeholder="e.g. 02:00 PM" value={normalizeTo12h(manualTime || parsedSlot?.time || '')} onChange={e => { setManualTime(e.target.value); setUserEditedFields(f => ({...f, time: true})); }} disabled={busy || parsing} /></label>
