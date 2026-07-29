@@ -30,6 +30,7 @@ logs/
 deploy_temp.bat
 naukri-platform/
 config/dashboard_handlers.yaml
+config/staff_directory.json
 data/internal/
 deploy-log.txt
 ta-login.txt

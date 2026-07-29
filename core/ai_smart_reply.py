@@ -2524,19 +2524,24 @@ _TECH_DETECT = (
     ("servicenow", "ServiceNow"), ("service now", "ServiceNow"),
 )
 
-THRILOK_PHONE = "9000000001"
-THRILOK_WHATSAPP = "https://wa.me/919000000001"
-# Senior data / Power BI / analytics handoff (Vani — not Karthik)
-VANI_PHONE = "+91 90323 88581"
-VANI_WHATSAPP = "https://wa.me/919000000002"
+# Staff contact details are loaded from the git-ignored staff directory
+# (config/staff_directory.json). Source keeps only role slugs — no real
+# names/numbers. See core/staff_directory.py and docs/STAFF_DIRECTORY.md.
+from core import staff_directory as _staff
+
+THRILOK_PHONE = _staff.phone("senior_tech")
+THRILOK_WHATSAPP = _staff.whatsapp("senior_tech")
+# Senior data / Power BI / analytics handoff (data_lead — not the persona)
+VANI_PHONE = _staff.phone("data_lead")
+VANI_WHATSAPP = _staff.whatsapp("data_lead")
 SATYA_PHONE = VANI_PHONE
 SATYA_WHATSAPP = VANI_WHATSAPP
-NIKHILA_PHONE = "+91 93906 47305"
-NIKHILA_WHATSAPP = "https://wa.me/919000000003"
-BHAVANA_PHONE = "+91 70327 55446"
-BHAVANA_WHATSAPP = "https://wa.me/919000000004"
-KALYAN_PHONE = "+91 88864 22592"
-KALYAN_WHATSAPP = "https://wa.me/919000000005"
+NIKHILA_PHONE = _staff.phone("react_lead_a")
+NIKHILA_WHATSAPP = _staff.whatsapp("react_lead_a")
+BHAVANA_PHONE = _staff.phone("react_lead_b")
+BHAVANA_WHATSAPP = _staff.whatsapp("react_lead_b")
+KALYAN_PHONE = _staff.phone("devops_lead")
+KALYAN_WHATSAPP = _staff.whatsapp("devops_lead")
 
 
 def _allowed_outbound_phone_tails() -> set[str]:
@@ -2970,9 +2975,9 @@ _HUMAN_OPERATOR_MARKERS = (
     "i can pass the test",
     "call me on this number",
     "call me on watsup",
-    "9000000002",
-    "9000000005",
-    "9000000006",
+    _staff.phone_digits("data_lead"),
+    _staff.phone_digits("devops_lead"),
+    _staff.phone_digits("operator_extra"),
     "ping me your number",
     "fyn i can support",
 )
@@ -3227,14 +3232,14 @@ def _interview_tech_team_label(
     if _stack_has_react(tech, history, user_text, qualification) and _stack_has_java(
         tech, history, user_text, qualification,
     ):
-        return "Bhavana (React) & Thirlok (Java)"
+        return f"{_staff.name('react_lead_b')} (React) & {_staff.name('senior_tech')} (Java)"
     if _is_data_analyst_domain(history, user_text, qualification):
-        return "Vani"
+        return _staff.name("data_lead")
     if _is_devops_domain(history, user_text, qualification):
-        return "Kalyan"
+        return _staff.name("devops_lead")
     if _stack_has_react(tech, history, user_text, qualification):
-        return "Nikhila / Bhavana"
-    return "Thirlok"
+        return f"{_staff.name('react_lead_a')} / {_staff.name('react_lead_b')}"
+    return _staff.name("senior_tech")
 
 
 def _interview_fully_qualified(facts: dict, history: list[dict] | None, user_text: str) -> bool:
@@ -4262,7 +4267,7 @@ def _user_pasted_outbound_marketing(user_text: str, history: list[dict] | None) 
             "fee after interview placement",
             "recruitment ha",
             "interview support. recruitment",
-            "9000000002",
+            _staff.phone_digits("data_lead"),
         )
         if m in blob
     )
@@ -4749,10 +4754,10 @@ def _recent_human_operator_hint(slot: str, user_id: int) -> str | None:
         if m.get("direction") != "out" or m.get("ai"):
             continue
         t = (m.get("text") or "").lower()
-        if "vani" in t and any(x in t for x in ("this is", "i am", "iam", "my number", "call me")):
-            return "Vani"
-        if "kalyan" in t and "this is" in t:
-            return "Kalyan"
+        if _staff.name("data_lead").lower() in t and any(x in t for x in ("this is", "i am", "iam", "my number", "call me")):
+            return _staff.name("data_lead")
+        if _staff.name("devops_lead").lower() in t and "this is" in t:
+            return _staff.name("devops_lead")
         if "pavan" in t and any(x in t for x in ("this is", "i am", "fyn")):
             return "Pavan"
     return None
@@ -4819,10 +4824,10 @@ def _availability_ping_reply(
     addr = _addr_prefix(lead, lang)
     if slot and user_id and _user_asks_which_operator(user_text):
         op = _recent_human_operator_hint(slot, int(user_id))
-        if op == "Vani":
-            return f"Yes {addr}👍 Vani from our team — use 9000000002 on WhatsApp 👍"
-        if op == "Kalyan":
-            return f"Yes {addr}👍 Kalyan from our team — WhatsApp 9000000005 👍"
+        if op == _staff.name("data_lead"):
+            return f"Yes {addr}👍 {_staff.name('data_lead')} from our team — use {_staff.phone_digits('data_lead')} on WhatsApp 👍"
+        if op == _staff.name("devops_lead"):
+            return f"Yes {addr}👍 {_staff.name('devops_lead')} from our team — WhatsApp {_staff.phone_digits('devops_lead')} 👍"
     if slot and user_id and _recent_human_operator_hint(slot, int(user_id)):
         op = _recent_human_operator_hint(slot, int(user_id))
         if op and lang == "english":
@@ -5459,7 +5464,7 @@ def _enforce_karthik_data_analyst_rules(
         or _user_ready_for_payment(user_text)
         or _interview_fully_qualified(known, history, user_text)
     ):
-        if "vani" not in lower and "9000000002" not in lower.replace(" ", ""):
+        if _staff.name("data_lead").lower() not in lower and _staff.phone_digits("data_lead") not in lower.replace(" ", ""):
             reason = "close_deal" if _user_asked_price_in_thread(history, user_text) else "process"
             return _vani_handoff_reply(reason=reason)
 

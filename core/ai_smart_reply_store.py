@@ -41,6 +41,7 @@ VALID_STAGES = {STAGE_GREETING, STAGE_QUALIFY, STAGE_VALUE, STAGE_CTA, STAGE_CLO
 
 
 from core.karthik_business_prompt import KARTHIK_BUSINESS_PROMPT
+from core import staff_directory as _staff
 
 _DEFAULT_BUSINESS_PROMPT = KARTHIK_BUSINESS_PROMPT
 
@@ -66,9 +67,9 @@ def _default_config() -> dict:
         # Persona name the AI uses when introducing itself. Operator can change
         # this from the UI to e.g. "Priya", "Raj" — affects what the assistant
         # says when asked "who are you" or in opening greetings.
-        "assistant_name": "Karthik",
+        "assistant_name": _staff.persona_name(),
         # CTA destination shared with serious leads.
-        "whatsapp_link": "https://wa.me/919000000001",
+        "whatsapp_link": _staff.whatsapp("senior_tech"),
         "whatsapp_label": "WhatsApp",
         # Business description injected into the system prompt.
         "business_prompt": _DEFAULT_BUSINESS_PROMPT,
@@ -80,7 +81,8 @@ def _default_config() -> dict:
         "work_hours_start": "09:00",
         "work_hours_end": "21:00",
         "work_hours_offline_message": "I'm currently offline. I'll reply in working hours.",
-        # UPI + QR used when leads ask how to pay.
+        # UPI + QR used when leads ask how to pay. Placeholder defaults only —
+        # the real values are set in the production config, never in the repo.
         "payment_upi_id": "company@upi",
         "payment_phone_number": "+919000000001",
         "payment_qr_path": "data/payment_qr.png",

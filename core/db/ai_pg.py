@@ -9,7 +9,21 @@ from core.db.connection import get_connection
 _TABLE = "ai_smart_reply_store"
 
 
+def ensure_table() -> None:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {_TABLE} (
+                    id TEXT PRIMARY KEY,
+                    payload JSONB NOT NULL DEFAULT '{{}}'::jsonb
+                )
+                """
+            )
+
+
 def pg_load() -> dict:
+    ensure_table()
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -31,6 +45,7 @@ def pg_load() -> dict:
 
 
 def pg_save(data: dict) -> None:
+    ensure_table()
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(

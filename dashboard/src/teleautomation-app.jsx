@@ -15,7 +15,7 @@ const K1 = window.location.port === "3000";
 const ve = K1 ? "" : `${window.location.protocol}//${window.location.host}`;
 const X1 = K1 ? `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws` : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
 const Fp = ["+91", "+1", "+44", "+971", "+61", "+65", "+60"];
-const Q2 = ["+916304215610", "+919000000001", "+919000000001", "+918919515419", "+919000000005", "+917893898866", "+917075074573"];
+const Q2 = ["+919000000001", "+919000000002", "+919000000003", "+919000000004", "+919000000005", "+919000000006", "+919000000007"];
 let Rp = false;
 function Z2() {
   if (Rp || typeof window === "undefined") {
@@ -33904,7 +33904,7 @@ function C8({
   const c = String((t == null ? undefined : t.username) || "").replace(/^@/, "");
   const o = t == null ? undefined : t.user_id;
   const u = String((t == null ? undefined : t.phone) || "").replace(/[^\d+]/g, "");
-  const d = "+91 9000000001";
+  const d = "+91 90000 00001"; // placeholder — real staff contact must come from backend staff-directory config, never hardcoded here
   const f = w.useMemo(() => `${r ? `Hi ${String(r).split(" ")[0]}` : "Hi"}! Could we hop on a quick 5-min call? You can reach us on ${d} (WhatsApp / phone), or just reply with a time that works for you.`, [r]);
   const [h, x] = w.useState(f);
   const [v, g] = w.useState("");

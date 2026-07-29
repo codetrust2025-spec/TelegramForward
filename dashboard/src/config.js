@@ -11,11 +11,13 @@ export const WS = isDevFrontend
   : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
 
 export const COUNTRY_CODES = ['+91', '+1', '+44', '+971', '+61', '+65', '+60']
+// Placeholder quick-pick numbers only — real account numbers must come from
+// backend/account config, never be hardcoded here.
 export const SAVED_PHONES = [
-  '+916304215610',
   '+919000000001',
-  '+919000000001',
-  '+918919515419',
+  '+919000000002',
+  '+919000000003',
+  '+919000000004',
   '+919000000005',
-  '+917075074573',
+  '+919000000006',
 ]

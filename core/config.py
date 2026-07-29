@@ -330,7 +330,9 @@ POST_JOIN_DELAY_MED_MAX = 80
 POST_JOIN_DELAY_LOW_MIN = 60
 POST_JOIN_DELAY_LOW_MAX = 120
 
-DEFAULT_MESSAGE = """🔥 Power BI Developer | Data Analyst
+from core import staff_directory as _staff
+
+DEFAULT_MESSAGE = f"""🔥 Power BI Developer | Data Analyst
 💼 Interview Support — Calls to Offer
 
 Still waiting for interview calls? 👇
@@ -346,5 +348,5 @@ Still waiting for interview calls? 👇
 
 ⚠️ Serious only
 
-📞 9000000002
-💬 https://wa.me/919000000002"""
+📞 {_staff.phone_digits('data_lead')}
+💬 {_staff.whatsapp('data_lead')}"""
