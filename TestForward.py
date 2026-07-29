@@ -2,9 +2,12 @@ from telethon import TelegramClient
 from telethon.errors import FloodWaitError, ChatWriteForbiddenError, UserBannedInChannelError, UsernameNotOccupiedError, UsernameInvalidError
 from telethon.tl.patched import MessageService
 import asyncio
+import os
 
-api_id = REMOVED_TELEGRAM_API_ID
-api_hash = 'REMOVED_TELEGRAM_API_HASH'
+# Telegram API credentials — set TELEGRAM_API_ID / TELEGRAM_API_HASH in the
+# environment (see .env.example). Get them from https://my.telegram.org.
+api_id = int(os.environ.get("TELEGRAM_API_ID", "0"))
+api_hash = os.environ.get("TELEGRAM_API_HASH", "")
 
 client = TelegramClient('session_name', api_id, api_hash)
 

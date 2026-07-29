@@ -7,9 +7,10 @@ import json
 import os
 
 # ─── ACCOUNT 2 CREDENTIALS ───────────────────────────────────────────────────
+# Set TELEGRAM_API_ID / TELEGRAM_API_HASH in the environment (see .env.example).
 # Get these from https://my.telegram.org → "API development tools"
-api_id   = REMOVED_TELEGRAM_API_ID
-api_hash = 'REMOVED_TELEGRAM_API_HASH'
+api_id   = int(os.environ.get("TELEGRAM_API_ID", "0"))
+api_hash = os.environ.get("TELEGRAM_API_HASH", "")
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Separate session file so Account 1 and Account 2 don't conflict

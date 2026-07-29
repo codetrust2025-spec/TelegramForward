@@ -9,10 +9,13 @@ from telethon.errors import (
     UsernameNotOccupiedError, UsernameInvalidError,
     ChatWriteForbiddenError, UserNotParticipantError
 )
+import os
 import time
 
-API_ID = REMOVED_TELEGRAM_API_ID
-API_HASH = 'REMOVED_TELEGRAM_API_HASH'
+# Telegram API credentials — set TELEGRAM_API_ID / TELEGRAM_API_HASH in the
+# environment (see .env.example). Get them from https://my.telegram.org.
+API_ID = int(os.environ.get("TELEGRAM_API_ID", "0"))
+API_HASH = os.environ.get("TELEGRAM_API_HASH", "")
 
 TARGET_GROUPS = [
     'AWSDevopsfree', 'AWS_Certified_DevOps_Pro', 'Angularjobsupport',
