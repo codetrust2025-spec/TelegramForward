@@ -1256,6 +1256,33 @@ async def referrer_payment_account_delete(request: Request, account_id: str):
 
 
 
+# --- domain routers (extracted; Wave A) --- registered BEFORE the SPA catch-all
+from api.routers.accounts import router as accounts_router
+app.include_router(accounts_router)
+from api.routers.ai import router as ai_router
+app.include_router(ai_router)
+from api.routers.auth import router as auth_router
+app.include_router(auth_router)
+from api.routers.candidates import router as candidates_router
+app.include_router(candidates_router)
+from api.routers.crm import router as crm_router
+app.include_router(crm_router)
+from api.routers.data_room import router as data_room_router
+app.include_router(data_room_router)
+from api.routers.expenses import router as expenses_router
+app.include_router(expenses_router)
+from api.routers.fleet import router as fleet_router
+app.include_router(fleet_router)
+from api.routers.forwarding import router as forwarding_router
+app.include_router(forwarding_router)
+from api.routers.groups import router as groups_router
+app.include_router(groups_router)
+from api.routers.inbox import router as inbox_router
+app.include_router(inbox_router)
+from api.routers.stats import router as stats_router
+app.include_router(stats_router)
+
+
 # ── Frontend (production) ───────────────────────────────────────────────────────
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -1320,30 +1347,3 @@ if os.path.exists(STATIC_DIR):
             os.path.join(STATIC_DIR, "index.html"),
             headers=_NO_CACHE,
         )
-
-
-# --- domain routers (extracted; Wave A) ---
-from api.routers.accounts import router as accounts_router
-app.include_router(accounts_router)
-from api.routers.ai import router as ai_router
-app.include_router(ai_router)
-from api.routers.auth import router as auth_router
-app.include_router(auth_router)
-from api.routers.candidates import router as candidates_router
-app.include_router(candidates_router)
-from api.routers.crm import router as crm_router
-app.include_router(crm_router)
-from api.routers.data_room import router as data_room_router
-app.include_router(data_room_router)
-from api.routers.expenses import router as expenses_router
-app.include_router(expenses_router)
-from api.routers.fleet import router as fleet_router
-app.include_router(fleet_router)
-from api.routers.forwarding import router as forwarding_router
-app.include_router(forwarding_router)
-from api.routers.groups import router as groups_router
-app.include_router(groups_router)
-from api.routers.inbox import router as inbox_router
-app.include_router(inbox_router)
-from api.routers.stats import router as stats_router
-app.include_router(stats_router)
