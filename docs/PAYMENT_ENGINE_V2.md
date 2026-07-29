@@ -38,8 +38,8 @@ existing source of truth is the canonicalized `candidate.reference` data
 exposed by `candidate_store.reference_dropdown_names()`. The compatibility
 registry in `features/referrer_registry.py` materializes stable IDs and aliases
 for those records without replacing the legacy field or creating a second
-Referrer One record. The currently resolved names are Charan, Referrer One,
-Ravinder, Thrilok and Venugopal.
+second referrer record. The resolved names come from your existing candidate
+reference data (shown here as generic placeholders, not real people).
 
 ## Current flow
 
@@ -91,14 +91,14 @@ required. Partial/suffix account matching is not used. Active duplicate
 ownership is returned by `receiver_registry_conflicts()` and blocks automatic
 authorization.
 
-Example verified Referrer One row:
+Example verified referrer row (placeholder data):
 
 ```json
 {
-  "id": "referrer-pawan-kalyan",
+  "id": "referrer-sample",
   "owner_type": "REFERRER",
-  "referrer_id": "referrer-pavan-kalyan",
-  "account_holder_name": "Referrer One",
+  "referrer_id": "referrer-sample",
+  "account_holder_name": "SAMPLE REFERRER",
   "upi_id": "referrer@upi",
   "verification_status": "VERIFIED",
   "is_active": true,
@@ -106,10 +106,9 @@ Example verified Referrer One row:
 }
 ```
 
-The account-holder aliases `Referrer One` and `Referrer One` resolve to
-the one existing `Referrer One` compatibility ID. Exact normalized
-`referrer@upi` matching is authoritative; the payment amount is not
-part of receiver classification.
+The account-holder aliases (e.g. `Sample Referrer`) resolve to the one existing
+referrer compatibility ID. Exact normalized `referrer@upi` matching is
+authoritative; the payment amount is not part of receiver classification.
 
 Fresh installations bootstrap the confirmed mapping from the tracked
 `config/referrers.seed.json` and

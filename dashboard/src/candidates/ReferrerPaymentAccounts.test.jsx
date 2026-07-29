@@ -18,6 +18,9 @@ function response(body) {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  // restoreAllMocks does not undo vi.stubGlobal — unstub so the fetch stub
+  // never leaks into other test files sharing the worker.
+  vi.unstubAllGlobals();
 });
 
 
@@ -35,7 +38,7 @@ describe("referrer payment accounts", () => {
           status: "ok",
           referrers: [{
             id: "referrer-pavan-kalyan",
-            name: "Referrer One",
+            name: "Sample Referrer",
             aliases: [],
           }],
         });
@@ -46,7 +49,7 @@ describe("referrer payment accounts", () => {
     render(
       <ReferrerPaymentAccounts
         apiBase="https://teleautomation.online"
-        referrerName="Referrer One"
+        referrerName="Sample Referrer"
       />,
     );
 
@@ -66,8 +69,8 @@ describe("referrer payment accounts", () => {
           status: "ok",
           referrers: [{
             id: "referrer-pavan-kalyan",
-            name: "Referrer One",
-            aliases: ["Referrer One", "Referrer One"],
+            name: "Sample Referrer",
+            aliases: ["Sample Referrer", "SAMPLE REFERRER"],
           }],
         });
       }
@@ -76,7 +79,7 @@ describe("referrer payment accounts", () => {
         accounts: [{
           id: "receiver-pavan",
           referrer_id: "referrer-pavan-kalyan",
-          account_holder_name: "Referrer One",
+          account_holder_name: "SAMPLE REFERRER",
           masked_upi_id: "pa***********@okaxis",
           provider_name: "UPI",
           verification_status: "VERIFIED",
@@ -91,11 +94,11 @@ describe("referrer payment accounts", () => {
     render(
       <ReferrerPaymentAccounts
         apiBase="/api"
-        referrerName="Referrer One"
+        referrerName="Sample Referrer"
       />,
     );
 
-    expect(await screen.findByText("Referrer One")).toBeInTheDocument();
+    expect(await screen.findByText("SAMPLE REFERRER")).toBeInTheDocument();
     expect(screen.getByText(/pa\*+@okaxis/)).toBeInTheDocument();
     expect(screen.queryByText("referrer@upi")).not.toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith(
@@ -111,8 +114,8 @@ describe("referrer payment accounts", () => {
           status: "ok",
           referrers: [{
             id: "referrer-pavan-kalyan",
-            name: "Referrer One",
-            aliases: ["Referrer One"],
+            name: "Sample Referrer",
+            aliases: ["Sample Referrer"],
           }],
         });
       }
@@ -121,7 +124,7 @@ describe("referrer payment accounts", () => {
           status: "ok",
           stats: {
             top_performers: [{
-              name: "Referrer One",
+              name: "Sample Referrer",
               net_payable: 4500,
             }],
           },
@@ -136,7 +139,7 @@ describe("referrer payment accounts", () => {
 
     render(
       <PayoutModal
-        handlerNames={["Referrer One"]}
+        handlerNames={["Sample Referrer"]}
         topPerformers={[]}
         ownedSummary={{}}
         onClose={() => {}}
@@ -151,7 +154,7 @@ describe("referrer payment accounts", () => {
 
     expect(screen.getByRole("heading", { name: "Add Referrer Expense" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("option", {
-      name: "Referrer One",
+      name: "Sample Referrer",
     })).toHaveValue("referrer-pavan-kalyan"));
     expect(screen.getByRole("combobox", { name: "Referrer *" })).toHaveValue("all");
     expect(screen.getByLabelText("Expense amount (₹) *")).toBeDisabled();
@@ -178,7 +181,7 @@ describe("referrer payment accounts", () => {
           status: "ok",
           referrers: [{
             id: "referrer-pavan-kalyan",
-            name: "Referrer One",
+            name: "Sample Referrer",
             aliases: [],
           }],
         });
@@ -187,7 +190,7 @@ describe("referrer payment accounts", () => {
         return response({
           status: "ok",
           stats: {
-            top_performers: [{ name: "Referrer One", net_payable: 4500 }],
+            top_performers: [{ name: "Sample Referrer", net_payable: 4500 }],
           },
         });
       }
@@ -200,7 +203,7 @@ describe("referrer payment accounts", () => {
 
     render(
       <PayoutModal
-        handlerNames={["Referrer One"]}
+        handlerNames={["Sample Referrer"]}
         ownedSummary={{}}
         onClose={() => {}}
         onChanged={() => {}}
@@ -213,7 +216,7 @@ describe("referrer payment accounts", () => {
     );
 
     await waitFor(() => expect(screen.getByRole("option", {
-      name: "Referrer One",
+      name: "Sample Referrer",
     })).toBeInTheDocument());
     fireEvent.change(screen.getByRole("combobox", { name: "Referrer *" }), {
       target: { value: "referrer-pavan-kalyan" },
@@ -232,10 +235,10 @@ describe("referrer payment accounts", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save expense" }));
 
     await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.objectContaining({
-      message: "₹1000 will be deducted from Referrer One’s outstanding amount. Continue?",
+      message: "₹1000 will be deducted from Sample Referrer’s outstanding amount. Continue?",
     })));
     await waitFor(() => expect(submittedBody).toBeInstanceOf(FormData));
-    expect(submittedBody.get("reference")).toBe("Referrer One");
+    expect(submittedBody.get("reference")).toBe("Sample Referrer");
     expect(submittedBody.get("amount")).toBe("1000");
     expect(submittedBody.get("note")).toBe("Interview expense");
     expect(screen.getByText(
@@ -252,7 +255,7 @@ describe("referrer payment accounts", () => {
           top_performers: [
             { name: "Venugopal", count: 2, net_payable: 10000 },
             { name: "Thrilok", count: 2, net_payable: -4000 },
-            { name: "Referrer One", count: 1, net_payable: -1500 },
+            { name: "Sample Referrer", count: 1, net_payable: -1500 },
           ],
         }}
         month="2026-07"
@@ -296,7 +299,7 @@ describe("referrer payment accounts", () => {
       <EarningsBreakdown
         stats={{
           top_performers: [{
-            name: "Referrer One",
+            name: "Sample Referrer",
             count: 5,
             commission_total: 36000,
             auto_earnings_total: 36000,
@@ -310,7 +313,7 @@ describe("referrer payment accounts", () => {
       />,
     );
 
-    fireEvent.click(screen.getByText("Referrer One"));
+    fireEvent.click(screen.getByText("Sample Referrer"));
     await waitFor(() => expect(container.querySelector(".earn-breakdown-total")).toBeTruthy());
 
     const summary = within(container.querySelector(".earn-breakdown-total"));
@@ -328,7 +331,7 @@ describe("referrer payment accounts", () => {
       <EarningsBreakdown
         stats={{
           top_performers: [{
-            name: "Referrer One",
+            name: "Sample Referrer",
             count: 5,
             commission_total: 36000,
             auto_earnings_total: 36000,
@@ -343,7 +346,7 @@ describe("referrer payment accounts", () => {
     );
 
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(
-      "/api/candidates?month=2026-08&reference=Pavan+Kalyan",
+      "/api/candidates?month=2026-08&reference=Sample+Referrer",
       { credentials: "include" },
     ));
     const refreshedSummary = within(container.querySelector(".earn-breakdown-total"));
@@ -363,13 +366,13 @@ describe("referrer payment accounts", () => {
         return response({
           status: "ok",
           referrers: [
-            { id: "referrer-pavan", name: "Referrer One" },
+            { id: "referrer-pavan", name: "Sample Referrer" },
             { id: "referrer-thrilok", name: "Thrilok" },
           ],
         });
       }
       if (String(url).includes("/candidates/stats?")) {
-        const name = String(url).includes("Thrilok") ? "Thrilok" : "Referrer One";
+        const name = String(url).includes("Thrilok") ? "Thrilok" : "Sample Referrer";
         return response({
           status: "ok",
           stats: { top_performers: [{ name, net_payable: 5000 }] },
@@ -380,7 +383,7 @@ describe("referrer payment accounts", () => {
 
     render(
       <PayoutModal
-        handlerNames={["Referrer One", "Thrilok"]}
+        handlerNames={["Sample Referrer", "Thrilok"]}
         ownedSummary={{}}
         onClose={() => {}}
         apiBase="/api"
@@ -393,7 +396,7 @@ describe("referrer payment accounts", () => {
 
     const referrer = screen.getByRole("combobox", { name: "Referrer *" });
     await waitFor(() => expect(screen.getByRole("option", {
-      name: "Referrer One",
+      name: "Sample Referrer",
     })).toBeInTheDocument());
     fireEvent.change(referrer, { target: { value: "referrer-pavan" } });
     await waitFor(() => expect(screen.getByLabelText("Expense amount (₹) *")).not.toBeDisabled());
@@ -417,14 +420,14 @@ describe("referrer payment accounts", () => {
       if (String(url).endsWith("/referrers")) {
         return response({
           status: "ok",
-          referrers: [{ id: "referrer-pavan", name: "Referrer One" }],
+          referrers: [{ id: "referrer-pavan", name: "Sample Referrer" }],
         });
       }
       if (String(url).includes("/candidates/stats?")) {
         return response({
           status: "ok",
           stats: {
-            top_performers: [{ name: "Referrer One", net_payable: 10000 }],
+            top_performers: [{ name: "Sample Referrer", net_payable: 10000 }],
           },
         });
       }
@@ -433,7 +436,7 @@ describe("referrer payment accounts", () => {
         expenses: [
           {
             id: "expense-jul",
-            reference: "Referrer One",
+            reference: "Sample Referrer",
             amount: 1000,
             date: "2026-07-28",
             note: "July expense",
@@ -441,7 +444,7 @@ describe("referrer payment accounts", () => {
           },
           {
             id: "expense-jun",
-            reference: "Referrer One",
+            reference: "Sample Referrer",
             amount: 500,
             date: "2026-06-30",
             note: "June expense",
@@ -449,7 +452,7 @@ describe("referrer payment accounts", () => {
           },
           {
             id: "expense-invalid",
-            reference: "Referrer One",
+            reference: "Sample Referrer",
             amount: 900,
             date: "2026-07-27",
             note: "Invalid expense",
@@ -466,7 +469,7 @@ describe("referrer payment accounts", () => {
 
     render(
       <PayoutModal
-        handlerNames={["Referrer One"]}
+        handlerNames={["Sample Referrer"]}
         ownedSummary={{}}
         onClose={() => {}}
         apiBase="/api"
@@ -478,7 +481,7 @@ describe("referrer payment accounts", () => {
     );
 
     await waitFor(() => expect(screen.getByRole("option", {
-      name: "Referrer One",
+      name: "Sample Referrer",
     })).toBeInTheDocument());
     fireEvent.change(screen.getByRole("combobox", { name: "Referrer *" }), {
       target: { value: "referrer-pavan" },

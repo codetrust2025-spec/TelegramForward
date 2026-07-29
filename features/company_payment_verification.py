@@ -13,8 +13,10 @@ from typing import Any, Iterable
 
 
 SUCCESS_STATUSES = {"success", "successful", "completed", "complete", "paid"}
-DEFAULT_COMPANY_UPI_ID = "company@upi"
-DEFAULT_COMPANY_PHONE_NUMBER = "8639074573"
+# Real values are configured in production via the smart-reply config / env;
+# these are placeholder fallbacks only (never commit real payment identifiers).
+DEFAULT_COMPANY_UPI_ID = os.environ.get("COMPANY_UPI_ID", "company@upi")
+DEFAULT_COMPANY_PHONE_NUMBER = os.environ.get("COMPANY_PAYMENT_PHONE", "9000000001")
 
 
 def _normalise_upi(value: Any) -> str:
