@@ -108,8 +108,22 @@ def ssh_connect(password: str):
     import paramiko
 
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(HOST, username="root", password=password, timeout=30)
+    client.load_system_host_keys()
+    known = os.path.join(str(REPO), ".ssh", "known_hosts")
+    if os.path.exists(known):
+        client.load_host_keys(known)
+    # Verify the host key by default (prevents MITM). Set
+    # VPS_SSH_ALLOW_UNKNOWN_HOST=1 only for a deliberate first-time key capture.
+    if os.environ.get("VPS_SSH_ALLOW_UNKNOWN_HOST") == "1":
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    else:
+        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    client.connect(
+        HOST,
+        username=os.environ.get("VPS_USER", "root"),
+        password=password,
+        timeout=30,
+    )
     return client
 
 
