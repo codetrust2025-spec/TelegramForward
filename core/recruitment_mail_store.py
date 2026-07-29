@@ -662,15 +662,24 @@ def mark_message_status(message_id:str,status:str,*,reason:str|None=None,cleanup
           (status,reason,status,cleanup_version,status,message_id))
 
 
+# Only genuine offer documents identify a duplicate OFFER. Recurring documents
+# such as a resume, or a new interview invite, must never suppress a distinct
+# event just because the same file was attached to an earlier email.
+_OFFER_DOCUMENT_TYPES = ("OFFER_LETTER", "APPOINTMENT_LETTER", "JOINING_LETTER", "COMPENSATION_BREAKUP")
+
+
 def is_duplicate_offer_attachment(candidate_id:str,message_id:str)->bool:
-    """True when a checksum already belongs to a visible event for this candidate."""
+    """True when an OFFER-document checksum already belongs to a visible event for
+    this candidate (scoped to offer documents so a recurring resume or a new
+    interview invitation never suppresses a distinct event)."""
     with get_connection() as conn,conn.cursor() as cur:
         cur.execute("""SELECT 1 FROM mailbox_attachments current_attachment
           JOIN mailbox_attachments previous_attachment ON previous_attachment.checksum=current_attachment.checksum
             AND previous_attachment.mailbox_message_id<>current_attachment.mailbox_message_id
           JOIN ai_recruitment_events e ON e.mailbox_message_id=previous_attachment.mailbox_message_id
           WHERE current_attachment.mailbox_message_id=%s AND e.candidate_id=%s
-            AND e.review_status NOT IN('FALSE_POSITIVE','DUPLICATE') LIMIT 1""",(message_id,candidate_id))
+            AND current_attachment.attachment_type = ANY(%s)
+            AND e.review_status NOT IN('FALSE_POSITIVE','DUPLICATE') LIMIT 1""",(message_id,candidate_id,list(_OFFER_DOCUMENT_TYPES)))
         return cur.fetchone() is not None
 
 
