@@ -553,454 +553,56 @@ async def _start_all_background(one_shot: bool = False) -> None:
         _start_all_task = None
 
 
-@app.post("/start", dependencies=[Depends(_require_fleet_admin)])
-async def start_all():
-    """Queue start for every logged-in account; return immediately for UI responsiveness."""
-    global _start_all_task
-    if _start_all_task is not None and not _start_all_task.done():
-        return {"status": "queued", "accounts": [], "message": "Start all already in progress"}
-    if not any(registry.get_runtime(slot).has_login() for slot in ACCOUNTS):
-        return {"status": "error", "accounts": [], "message": "No logged-in accounts"}
-    _start_all_task = asyncio.create_task(_start_all_background(one_shot=False))
-    return {"status": "queued", "accounts": [], "message": "Starting logged-in accounts in background"}
 
 
-@app.post("/start-test", dependencies=[Depends(_require_fleet_admin)])
-async def start_test_all():
-    global _start_all_task
-    if _start_all_task is not None and not _start_all_task.done():
-        return {"status": "queued", "accounts": [], "message": "Start all already in progress"}
-    if not any(registry.get_runtime(slot).has_login() for slot in ACCOUNTS):
-        return {"status": "error", "accounts": [], "message": "No logged-in accounts"}
-    _start_all_task = asyncio.create_task(_start_all_background(one_shot=True))
-    return {"status": "queued", "accounts": [], "message": "Starting one test cycle in background"}
 
 
-@app.post("/stop", dependencies=[Depends(_require_fleet_admin)])
-async def stop_all():
-    registry.stop_all()
-    await _push_state()
-    return {"status": "stopped", **registry.build_ui_state()}
 
 
-@app.post("/account/{slot}/start", dependencies=[Depends(_require_fleet_admin)])
-async def start_account(
-    slot: str,
-    one_shot: bool = Query(False),
-    feature: str = Query(""),
-):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    campaign = forwarding = None
-    feat = (feature or "").strip().lower()
-    if feat == "campaign":
-        campaign = True
-    elif feat == "forwarding":
-        forwarding = True
-    elif feat and feat not in ("all", "both"):
-        return {"status": "error", "message": "feature must be campaign, forwarding, or empty"}
-    from core.account_shutdown import is_shutdown_active, shutdown_info_for_ui
-
-    if is_shutdown_active(slot):
-        info = shutdown_info_for_ui(slot) or {}
-        return {
-            "status": "error",
-            "message": "Account is on shutdown list (no posts for 6+ hours). Clear shutdown to start.",
-            "shutdown": info,
-        }
-    if not await registry.start_account(
-        slot,
-        one_shot=one_shot,
-        campaign=campaign,
-        forwarding=forwarding,
-    ):
-        w = registry.get_worker(slot)
-        if not w.state.account_info:
-            return {"status": "error", "message": f"{slot} not logged in"}
-        if not (w.state.campaign_running or w.state.forwarding_running):
-            from core.posting_mode import load_posting_mode
-
-            cfg = load_posting_mode(slot)
-            if not cfg.campaign_enabled and not cfg.forwarding_enabled:
-                return {"status": "error", "message": "Enable campaign or forwarding first"}
-        return {"status": "already_running"}
-    await _push_state()
-    return {"status": "started", "slot": slot, "feature": feat or "all"}
 
 
-@app.post("/account/{slot}/shutdown", dependencies=[Depends(_require_fleet_admin)])
-async def put_account_shutdown(slot: str):
-    """Manually move an account to the shutdown (rest) list and stop it."""
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core.account_shutdown import put_on_shutdown_list
-    from core.worker_persistence import mark_stopped
-
-    w = registry.get_worker(slot)
-    if not w.state.account_info:
-        return {"status": "error", "message": f"{slot} not logged in"}
-    was_running = bool(w.state.running)
-    put_on_shutdown_list(slot, reason="manual", was_running=was_running)
-    try:
-        await registry.stop_account(slot)
-    except Exception:
-        pass
-    mark_stopped(slot)
-    await _push_state()
-    return {"status": "ok", "slot": slot, **registry.build_ui_state()}
 
 
-@app.post("/account/{slot}/shutdown/clear", dependencies=[Depends(_require_fleet_admin)])
-async def clear_account_shutdown(slot: str):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core.account_shutdown import clear_shutdown
-
-    if not clear_shutdown(slot):
-        return {"status": "not_found", "slot": slot}
-    await _push_state()
-    return {"status": "ok", "slot": slot, **registry.build_ui_state()}
 
 
-@app.post("/account/shutdown/clear-all", dependencies=[Depends(_require_fleet_admin)])
-@app.post("/shutdown/clear-all", dependencies=[Depends(_require_fleet_admin)])
-async def clear_all_shutdowns_route(body: dict | None = None):
-    """Return all accounts to Campaign/Forwarding tabs; optional stats reset for shutdown test cycle."""
-    from core.account_shutdown import clear_all_shutdowns
-
-    payload = body or {}
-    cleared = clear_all_shutdowns()
-    if payload.get("reset_stats") and cleared:
-        from core.join_cycle import daily_join_count_for_reset
-        from core.send_stats import invalidate_cache
-        from core.stats_reset import StatsResetDebounced, set_reset_timestamp
-
-        for slot in cleared:
-            if slot not in ACCOUNTS:
-                continue
-            try:
-                set_reset_timestamp(
-                    account_id=slot,
-                    join_baselines={slot: daily_join_count_for_reset(slot)},
-                )
-            except StatsResetDebounced:
-                pass
-            invalidate_cache(slot)
-    await _push_state()
-    return {
-        "status": "ok",
-        "cleared": cleared,
-        "cleared_count": len(cleared),
-        "reset_stats": bool(payload.get("reset_stats")),
-        **registry.build_ui_state(),
-    }
 
 
-@app.post("/account/{slot}/stop", dependencies=[Depends(_require_fleet_admin)])
-async def stop_account(slot: str, feature: str = Query("")):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    feat = (feature or "").strip().lower()
-    campaign = forwarding = None
-    if feat == "campaign":
-        campaign = False
-    elif feat == "forwarding":
-        forwarding = False
-    elif feat and feat not in ("all", "both"):
-        return {"status": "error", "message": "feature must be campaign, forwarding, or empty"}
-    await registry.stop_account(slot, campaign=campaign, forwarding=forwarding)
-    await _push_state()
-    return {"status": "stopped", "slot": slot, "feature": feat or "all", **registry.build_ui_state()}
 
 
-@app.post("/account/{slot}/display-name")
-async def set_account_display_name(slot: str, body: dict):
-    """Set dashboard profile label for one account (does not change Telegram)."""
-    if slot not in ACCOUNTS:
-        return {"success": False, "error": "Invalid slot"}
-    payload = body or {}
-    display_name = str(payload.get("display_name") or "").strip()
-    if not display_name:
-        return {"success": False, "error": "Display name cannot be empty"}
-    if len(display_name) > 48:
-        return {"success": False, "error": "Display name too long (max 48 characters)"}
-
-    info = load_account_info(slot)
-    if not info or not info.get("phone"):
-        return {"success": False, "error": "Account not logged in"}
-
-    save_account_info(slot, {**info, "display_name": display_name})
-    w = registry.get_worker(slot)
-    refreshed = load_account_info(slot)
-    if refreshed:
-        w.state.account_info = refreshed
-    await _push_state()
-    return {"success": True, "account_info": w.state.account_info}
 
 
-@app.get("/account/{slot}/posting-mode")
-async def get_posting_mode(slot: str):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core.posting_mode import load_posting_mode
-
-    return {"status": "ok", **load_posting_mode(slot).to_dict(slot)}
 
 
-@app.post("/account/{slot}/posting-mode")
-async def set_posting_mode_endpoint(slot: str, body: dict):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core.posting_mode import set_posting_mode
-
-    payload = body or {}
-    mode = str(payload.get("mode") or "").strip()
-    forward_source_type = payload.get("forward_source_type")
-    if forward_source_type is None:
-        forward_source_type = payload.get("source_type")
-    forward_dispatch = payload.get("forward_dispatch")
-    campaign_enabled = payload.get("campaign_enabled")
-    forwarding_enabled = payload.get("forwarding_enabled")
-    if (
-        not mode
-        and forward_source_type is None
-        and forward_dispatch is None
-        and campaign_enabled is None
-        and forwarding_enabled is None
-    ):
-        return {
-            "status": "error",
-            "message": "mode, campaign_enabled, forwarding_enabled, forward_source_type, or forward_dispatch required",
-        }
-    try:
-        cfg = set_posting_mode(
-            slot,
-            mode,
-            forward_source_type=forward_source_type,
-            forward_dispatch=forward_dispatch,
-            campaign_enabled=campaign_enabled,
-            forwarding_enabled=forwarding_enabled,
-        )
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
-    w = registry.get_worker(slot)
-    w._sync_posting_mode_ui()
-    await _push_state()
-    return {"status": "ok", **cfg.to_dict(slot)}
 
 
-@app.post("/account/{slot}/forwarding/source")
-async def set_forwarding_source_endpoint(slot: str, body: dict):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core.posting_mode import set_forwarding_source
-
-    w = registry.get_worker(slot)
-    if w.state.running:
-        return {
-            "status": "error",
-            "message": "Stop the worker before changing forward source",
-        }
-    payload = body or {}
-    try:
-        cfg = set_forwarding_source(
-            slot,
-            source_url=payload.get("source_url"),
-            source_peer=payload.get("source_peer"),
-            source_message_id=payload.get("source_message_id"),
-        )
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
-    w._sync_posting_mode_ui()
-    await _push_state()
-    return {"status": "ok", **cfg.to_dict(slot)}
 
 
 def _worker_running(slot: str) -> bool:
     return bool(registry.get_worker(slot).state.running)
 
 
-@app.get("/forward-message/settings")
-async def forward_message_settings_get():
-    from services.forward_message_service import forward_message_service
-
-    return {"status": "ok", "settings": forward_message_service.get_settings()}
 
 
-@app.post("/forward-message/settings")
-async def forward_message_settings_post(body: dict):
-    from services.forward_message_service import forward_message_service
-
-    try:
-        settings = forward_message_service.save_settings(body or {})
-        return {"status": "ok", "settings": settings}
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
 
 
-@app.get("/account/{slot}/forward-message/groups")
-async def forward_message_groups(slot: str, force_refresh: bool = False):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from services.forward_message_service import forward_message_service
-
-    try:
-        payload = await forward_message_service.list_joined_groups(
-            slot, force_refresh=bool(force_refresh)
-        )
-        return {"status": "ok", **payload}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
-@app.post("/account/{slot}/forward-message/preview")
-async def forward_message_preview(slot: str, body: dict):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from services.forward_message_service import forward_message_service
-
-    payload = body or {}
-    try:
-        job = await forward_message_service.resolve_source(
-            slot,
-            source_url=str(payload.get("source_url") or "").strip(),
-            source_peer=str(payload.get("source_peer") or "").strip(),
-            source_message_id=int(payload.get("source_message_id") or 0),
-            worker_running=_worker_running(slot),
-        )
-        return {"status": "ok", "job": job}
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
-@app.get("/account/{slot}/forward-message/job")
-async def forward_message_job_status(slot: str):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from services.forward_message_service import forward_message_service
-
-    return {"status": "ok", "job": forward_message_service.job_dict(slot)}
 
 
-@app.post("/account/{slot}/forward-message/start", dependencies=[Depends(_require_fleet_admin)])
-async def forward_message_start(slot: str, body: dict):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from services.forward_message_service import forward_message_service
-
-    payload = body or {}
-    target_ids = payload.get("target_ids") or payload.get("targets") or []
-    try:
-        batch_size = payload.get("batch_size")
-        job = await forward_message_service.start_job(
-            slot,
-            source_url=str(payload.get("source_url") or "").strip(),
-            source_peer=str(payload.get("source_peer") or "").strip(),
-            source_message_id=int(payload.get("source_message_id") or 0),
-            target_ids=target_ids,
-            batch_size=int(batch_size) if batch_size is not None else None,
-            worker_running=_worker_running(slot),
-            use_posting_mode_source=bool(payload.get("use_posting_mode_source", True)),
-            human_pace=bool(payload.get("human_pace", True)),
-        )
-        await _push_state()
-        return {"status": "ok", "job": job}
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
-@app.get("/account/{slot}/forward-cycle/selection")
-async def forward_cycle_selection_get(slot: str):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core.posting_mode import load_posting_mode
-
-    cfg = load_posting_mode(slot)
-    return {
-        "status": "ok",
-        "target_ids": list(cfg.forwarding.forward_selected_target_ids or []),
-        "forward_dispatch": cfg.forwarding.forward_dispatch,
-    }
 
 
-@app.get("/account/{slot}/forward-intelligence")
-async def forward_intelligence_stats(slot: str):
-    """Get forwarding intelligence statistics and adaptive timing info"""
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    
-    try:
-        from core.forward_intelligence import load_forward_intelligence
-        
-        intel = load_forward_intelligence(slot)
-        stats = intel.get_stats()
-        
-        # Add next tick prediction
-        health_score = ACCOUNTS[slot].get("health_score", 100.0)
-        next_interval = intel.compute_next_tick_interval(health_score)
-        should_skip, skip_reason = intel.should_skip_tick(health_score)
-        
-        return {
-            "status": "ok",
-            "intelligence": {
-                "stats": stats,
-                "next_tick_interval_seconds": next_interval,
-                "next_tick_interval_minutes": round(next_interval / 60, 1),
-                "should_skip_next": should_skip,
-                "skip_reason": skip_reason if should_skip else None,
-                "dead_peers_sample": list(intel.get_dead_peer_set())[:20],  # First 20
-            }
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
-@app.post("/account/{slot}/forward-cycle/selection")
-async def forward_cycle_selection_save(slot: str, body: dict):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core.posting_mode import save_forward_selection
-
-    ids = (body or {}).get("target_ids") or (body or {}).get("targets") or []
-    cfg = save_forward_selection(slot, ids)
-    await _push_state()
-    return {
-        "status": "ok",
-        "target_ids": list(cfg.forwarding.forward_selected_target_ids or []),
-    }
 
 
-@app.post("/account/{slot}/forward-message/cancel")
-async def forward_message_cancel(slot: str):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from services.forward_message_service import forward_message_service
-
-    job = await forward_message_service.cancel_job(slot)
-    await _push_state()
-    return {"status": "ok", "job": job}
 
 
-@app.post("/account/{slot}/restart")
-async def restart_account(slot: str):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    ok = await manager.restart_account(slot)
-    await _push_state()
-    return {"status": "restarted" if ok else "error", "slot": slot, **registry.build_ui_state()}
 
 
-@app.post("/account/{slot}/clear-logs")
-async def clear_account_logs(slot: str):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    await registry.clear_logs(slot)
-    await _push_state()
-    return {"status": "cleared", "slot": slot, **registry.build_ui_state()}
 
 
 @app.get("/state")
@@ -1008,32 +610,10 @@ async def get_state(request: Request):
     return registry.build_ui_state()
 
 
-@app.get("/account/{slot}/status")
-async def account_status(slot: str):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    return {"status": "ok", **manager.get_status(slot)}
 
 
-@app.get("/metrics")
-async def fleet_metrics():
-    from core.fleet_rate_coordinator import fleet_rate_coordinator
-    from core.observability.account_metrics import metrics_store
-
-    return {
-        "status": "ok",
-        "metrics": metrics_store.all_snapshots(),
-        "fleet_rate": fleet_rate_coordinator.snapshot(),
-    }
 
 
-@app.get("/metrics/{slot}")
-async def account_metrics(slot: str):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core.observability.account_metrics import metrics_store
-
-    return {"status": "ok", "metrics": metrics_store.snapshot(slot)}
 
 
 @app.get("/alerts")
@@ -1043,32 +623,10 @@ async def fleet_alerts(limit: int = Query(50, ge=1, le=200)):
     return {"status": "ok", "alerts": alert_store.recent(limit=limit)}
 
 
-@app.get("/stats/daily")
-async def get_daily_stats():
-    from core.daily_stats import refresh_daily_stats
-
-    daily_stats, auto_reset = await asyncio.to_thread(
-        refresh_daily_stats, list(ACCOUNTS)
-    )
-    if auto_reset:
-        if auto_reset.scope == "global":
-            registry.reset_stats_display_counters(None)
-        else:
-            for slot in auto_reset.account_ids:
-                registry.reset_stats_display_counters(slot)
-    return {"status": "ok", "daily_stats": daily_stats}
 
 
-@app.post("/stats/reset", dependencies=[Depends(_require_fleet_admin)])
-async def reset_stats(payload: dict | None = None):
-    """Reset daily stat counters and live tick display from now. Chats/logs are kept."""
-    return await _perform_stats_reset(payload or {})
 
 
-@app.post("/stats/reset-24h")
-async def reset_daily_stats_24h():
-    """Alias for global stats reset (backward compatible)."""
-    return await _perform_stats_reset({})
 
 
 async def _perform_stats_reset(payload: dict):
@@ -1149,66 +707,10 @@ async def _perform_stats_reset(payload: dict):
     }
 
 
-@app.post("/accounts/restore-sessions")
-async def restore_sessions():
-    """
-    Re-read Telethon .session files and rebuild account_info for every slot.
-    No OTP needed when session files are valid. Safe to call after deploy/restart.
-    """
-    info = await registry.refresh_all_info()
-    restored = [s for s, v in info.items() if v and v.get("phone")]
-    await _push_state()
-    return {
-        "success": True,
-        "restored": restored,
-        "count": len(restored),
-        "message": (
-            f"Restored {len(restored)} account(s) from session files"
-            if restored
-            else "No valid sessions found — log in with OTP for each account"
-        ),
-    }
 
 
-@app.get("/accounts")
-async def list_accounts():
-    """Account slots configured on this server (use for dashboard before WebSocket connects)."""
-    from core.config import ACCOUNTS as _accounts, ACCOUNT_SLOTS as _slots
-    from core.account_info_store import load_account_info
-    from core.subscription_accounts import compute_subscription_slots, enrich_account_info
-
-    info_map = {
-        s: enrich_account_info(s, load_account_info(s))
-        for s in _accounts
-    }
-
-    return {
-        "account_slots": list(_slots),
-        "subscription_slots": compute_subscription_slots(info_map),
-        "count": len(_slots),
-        "code_version": CODE_VERSION,
-    }
 
 
-@app.post("/accounts/provision-slot")
-async def provision_account_slot():
-    """Add account11+ when all existing slots are logged in."""
-    from core.config import ACCOUNT_SLOTS, provision_next_account_slot, sync_accounts_bindings
-
-    slot = provision_next_account_slot()
-    sync_accounts_bindings()
-    _sync_login_state_slots()
-    registry.register_new_slot(slot)
-    login_state.setdefault(slot, {"phone": None, "phone_code_hash": None})
-    registry.active_account = slot
-    await _push_state()
-    return {
-        "status": "ok",
-        "slot": slot,
-        "account_slots": list(ACCOUNT_SLOTS),
-        "message": f"Added {slot} — log in with phone + OTP below.",
-        **registry.build_ui_state(),
-    }
 
 
 @app.get("/health")
@@ -1218,203 +720,16 @@ async def health():
 
 # ── Groups (API-only writes to master list) ─────────────────────────────────
 
-@app.get("/groups")
-async def get_groups():
-    groups = load_master_groups()
-    return {"groups": groups, "total": len(groups)}
 
 
-@app.get("/groups/removed")
-async def get_removed_groups():
-    invalid, blocked = set(), set()
-    for slot in ACCOUNTS:
-        inv, blk = load_account_dead(slot)
-        invalid |= inv
-        blocked |= blk
-    return {"invalid": sorted(invalid), "blocked": sorted(blocked)}
 
 
-@app.get("/groups/lists")
-async def get_group_lists(slot: str | None = None):
-    """
-    Per-account dead (invalid/blocked) and good (active) group lists.
-    cycle_success = groups that succeeded in the current/last worker cycle.
-    """
-    target = slot if slot in ACCOUNTS else registry.active_account
-    if target not in ACCOUNTS:
-        target = ACCOUNT_SLOTS[0]
-
-    lists = build_group_lists(target)
-    w = registry.get_worker(target)
-    st = w.state
-    cycle_success = list(st.success_list)
-    cycle_failed = [
-        {"group": x.get("group", ""), "reason": x.get("reason", "")}
-        for x in st.failed_list
-        if isinstance(x, dict)
-    ]
-
-    return {
-        **lists,
-        "cycle_success": cycle_success,
-        "cycle_success_count": len(cycle_success),
-        "cycle_failed": cycle_failed,
-        "cycle_failed_count": len(cycle_failed),
-    }
 
 
-@app.get("/groups/health")
-async def get_group_health(slot: str | None = None):
-    """
-    Live classification of one account's assigned groups into:
-      healthy, cooling (recently_processed), risky (risky_until), blocked, invalid.
-    Always reads fresh from disk (group_intelligence + dead lists + master).
-    """
-    from core.groups_store import build_group_health
-
-    target = slot if slot in ACCOUNTS else registry.active_account
-    if target not in ACCOUNTS:
-        target = ACCOUNT_SLOTS[0]
-    return build_group_health(target)
 
 
-@app.get("/groups/total-list")
-async def get_total_joined_list():
-    """
-    Aggregate the joined groups/channels from every logged-in account into a
-    single deduped list. Each entry includes which accounts have it joined.
-
-    Strategy: try a string-session scan first (no contention with the running
-    worker). If that fails (no string session), fall back to a worker-session
-    scan after the worker briefly releases the file lock.
-    """
-    from core.account_info_store import load_account_info
-    from core.dm_string_session import run_with_string_session
-    from core.group_assignment import active_slots
-    from core.telegram_client import release_session, run_group_operation
-    from features.telegram_joined_stats import fetch_joined_dialog_details
-
-    actives = active_slots()
-    aggregated: dict[int, dict] = {}
-    per_account: dict[str, dict] = {}
-    started_at = datetime.now()
-
-    for slot in actives:
-        info = load_account_info(slot) or {}
-        account_label = (info.get("name") or info.get("username") or info.get("phone") or slot)
-        per_account[slot] = {
-            "label": account_label,
-            "count": 0,
-            "error": None,
-            "elapsed_ms": 0,
-        }
-        slot_started = datetime.now()
-
-        async def _op(client):
-            return await fetch_joined_dialog_details(client)
-
-        details: list[dict] | None = None
-        try:
-            scan = await asyncio.wait_for(
-                run_with_string_session(slot, fetch_joined_dialog_details, attempts=2),
-                timeout=200,
-            )
-            if isinstance(scan, dict):
-                details = list(scan.get("targets") or [])
-            elif isinstance(scan, list):
-                details = scan
-        except Exception as e_ss:
-            try:
-                await release_session(slot, wait=1.5)
-                scan = await asyncio.wait_for(
-                    run_group_operation(slot, _op, attempts=2),
-                    timeout=200,
-                )
-                if isinstance(scan, dict):
-                    details = list(scan.get("targets") or [])
-                elif isinstance(scan, list):
-                    details = scan
-            except Exception as e_w:
-                per_account[slot]["error"] = f"string:{type(e_ss).__name__}; worker:{type(e_w).__name__}: {e_w}"
-            finally:
-                try:
-                    await release_session(slot, wait=0.3)
-                except Exception:
-                    pass
-
-        per_account[slot]["elapsed_ms"] = int((datetime.now() - slot_started).total_seconds() * 1000)
-        if not details:
-            continue
-        per_account[slot]["count"] = len(details)
-        for d in details:
-            ent_id = d.get("id")
-            if not isinstance(ent_id, int):
-                continue
-            existing = aggregated.get(ent_id)
-            if existing is None:
-                aggregated[ent_id] = {
-                    "id": ent_id,
-                    "type": d.get("type") or "",
-                    "name": d.get("name") or "",
-                    "username": d.get("username") or "",
-                    "link": d.get("link") or "",
-                    "members": d.get("members"),
-                    "accounts": [slot],
-                }
-            else:
-                if slot not in existing["accounts"]:
-                    existing["accounts"].append(slot)
-                if not existing.get("name") and d.get("name"):
-                    existing["name"] = d["name"]
-                if not existing.get("username") and d.get("username"):
-                    existing["username"] = d["username"]
-                if not existing.get("link") and d.get("link"):
-                    existing["link"] = d["link"]
-                if existing.get("members") is None and isinstance(d.get("members"), int):
-                    existing["members"] = d["members"]
-
-    items = sorted(aggregated.values(), key=lambda x: (x.get("type") or "", (x.get("name") or "").lower()))
-    groups_count = sum(1 for x in items if x.get("type") == "group")
-    channels_count = sum(1 for x in items if x.get("type") == "channel")
-    return {
-        "generated_at": started_at.strftime("%Y-%m-%d %H:%M:%S"),
-        "logged_in_accounts": actives,
-        "per_account": per_account,
-        "totals": {
-            "unique": len(items),
-            "groups": groups_count,
-            "channels": channels_count,
-        },
-        "items": items,
-    }
 
 
-@app.get("/groups/health-summary")
-async def get_group_health_summary():
-    """Fleet-wide rollup of group health across all logged-in accounts."""
-    from core.group_assignment import active_slots
-    from core.groups_store import build_group_health
-
-    totals = {"healthy": 0, "cooling": 0, "risky": 0, "blocked": 0, "invalid": 0, "assigned": 0}
-    per_slot = []
-    actives = active_slots()
-    for slot in ACCOUNT_SLOTS:
-        snap = build_group_health(slot)
-        c = snap.get("counts", {})
-        for k in totals:
-            totals[k] += int(c.get(k, 0))
-        per_slot.append({
-            "slot": slot,
-            "logged_in": slot in actives,
-            "counts": c,
-        })
-    healthy_pct = round(totals["healthy"] / totals["assigned"] * 100, 1) if totals["assigned"] else 0.0
-    return {
-        "totals": totals,
-        "healthy_pct": healthy_pct,
-        "logged_in_accounts": len(actives),
-        "per_slot": per_slot,
-    }
 
 
 def _parse_uploaded_groups(raw: list) -> tuple[list[str], int]:
@@ -1435,290 +750,34 @@ def _parse_uploaded_groups(raw: list) -> tuple[list[str], int]:
     return uploaded, skipped_invalid_format
 
 
-@app.post("/groups/update")
-async def update_groups(payload: dict):
-    raw = payload.get("groups", [])
-    mode = (str(payload.get("mode") or "merge")).strip().lower()
-    if mode not in ("merge", "replace"):
-        mode = "merge"
-
-    uploaded, skipped_invalid_format = _parse_uploaded_groups(raw)
-    if not uploaded:
-        return {
-            "success": False,
-            "error": "No valid groups found",
-            "skipped_invalid_format": skipped_invalid_format,
-            "mode": mode,
-        }
-
-    ensure_invalid_registry_backfill()
-    try:
-        master = load_master_groups(strict=True)
-    except ValueError as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "skipped_invalid_format": skipped_invalid_format,
-            "mode": mode,
-        }
-    all_dead = collect_all_dead_for_upload()
-    previous_total = len(master)
-    old_set = set(master)
-
-    skipped_dead = 0
-    if mode == "replace":
-        merged = []
-        seen_keys: set[str] = set()
-        for g in uploaded:
-            key = _normalize_group_name(g)
-            if key in all_dead:
-                skipped_dead += 1
-                continue
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-            merged.append(g)
-
-        backup_path = None
-        if master:
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = os.path.join(
-                DATA_DIR, f"groups_list_backup_{len(master)}_{ts}.json"
-            )
-            try:
-                with open(backup_path, "w", encoding="utf-8") as f:
-                    json.dump(master, f, indent=2)
-            except Exception:
-                backup_path = None
-
-        save_master_groups(merged)
-        new_set = set(merged)
-        await _push_state()
-        return {
-            "success": True,
-            "mode": "replace",
-            "total": len(merged),
-            "previous_total": previous_total,
-            "removed_from_old": len(old_set - new_set),
-            "kept_from_old": len(old_set & new_set),
-            "added_new": len(new_set - old_set),
-            "already_existed": 0,
-            "skipped_invalid_format": skipped_invalid_format,
-            "skipped_dead": skipped_dead,
-            "backup_path": backup_path,
-            "groups": merged,
-        }
-
-    merged = list(master)
-    existing_norm = {_normalize_group_name(g): g for g in master}
-    added = 0
-    for g in uploaded:
-        if _normalize_group_name(g) in all_dead:
-            skipped_dead += 1
-            continue
-        key = _normalize_group_name(g)
-        if key in existing_norm:
-            continue
-        merged.append(g)
-        existing_norm[key] = g
-        added += 1
-
-    save_master_groups(merged)
-    await _push_state()
-    return {
-        "success": True,
-        "mode": "merge",
-        "total": len(merged),
-        "previous_total": previous_total,
-        "removed_from_old": 0,
-        "added_new": added,
-        "already_existed": len(uploaded) - added - skipped_dead,
-        "skipped_invalid_format": skipped_invalid_format,
-        "skipped_dead": skipped_dead,
-        "groups": merged,
-    }
 
 
 # ── Fleet defaults (global forward link / campaign message) ───────────────────
 
-@app.get("/fleet/defaults")
-async def fleet_defaults_get():
-    from core.fleet_defaults import get_fleet_defaults
-
-    return {"status": "ok", **get_fleet_defaults()}
 
 
-@app.post("/fleet/defaults")
-async def fleet_defaults_post(body: dict | None = None):
-    from core.fleet_defaults import get_fleet_defaults, save_fleet_defaults
-
-    payload = body or {}
-    saved = save_fleet_defaults(
-        forward_source_url=payload.get("forward_source_url"),
-        campaign_message=payload.get("campaign_message"),
-    )
-    if payload.get("campaign_message"):
-        from core.message_store import save_message
-
-        save_message(str(payload.get("campaign_message") or "").strip())
-    await _push_state()
-    return {"status": "ok", **saved}
 
 
-@app.post("/fleet/apply-forwarding")
-async def fleet_apply_forwarding(body: dict | None = None):
-    """Enable forwarding + optional t.me link on all logged-in accounts (skips running)."""
-    from services.fleet_setup_service import apply_forwarding_bulk
-
-    payload = body or {}
-    result = apply_forwarding_bulk(
-        registry=registry,
-        source_url=payload.get("source_url"),
-        use_saved_default=bool(payload.get("use_saved_default")),
-        forward_dispatch=str(payload.get("forward_dispatch") or "auto"),
-    )
-    await _push_state()
-    return {"status": "ok", **result, **registry.build_ui_state()}
 
 
-@app.post("/fleet/apply-campaign")
-async def fleet_apply_campaign(body: dict | None = None):
-    """Enable campaign + optional message on all logged-in accounts (skips running)."""
-    from services.fleet_setup_service import apply_campaign_bulk
-
-    payload = body or {}
-    result = apply_campaign_bulk(
-        registry=registry,
-        message=payload.get("message"),
-        use_saved_default=bool(payload.get("use_saved_default")),
-    )
-    await _push_state()
-    return {"status": "ok", **result, **registry.build_ui_state()}
 
 
-@app.post("/fleet/apply-source-url")
-async def fleet_apply_source_url(body: dict | None = None):
-    """Apply t.me post link to logged-in accounts without changing mode (skips running)."""
-    from services.fleet_setup_service import apply_forward_source_only
-
-    payload = body or {}
-    result = apply_forward_source_only(
-        registry=registry,
-        source_url=payload.get("source_url"),
-        use_saved_default=bool(payload.get("use_saved_default")),
-    )
-    await _push_state()
-    return {"status": "ok", **result}
 
 
 # ── Message ───────────────────────────────────────────────────────────────────
 
-@app.get("/message")
-async def get_message(slot: str | None = None):
-    if slot and slot in ACCOUNTS:
-        return {
-            "message": load_message_for_account(slot),
-            "slot": slot,
-            "rewrite_enabled": MESSAGE_REWRITE_ENABLED,
-        }
-    return {"message": load_message(), "rewrite_enabled": MESSAGE_REWRITE_ENABLED}
 
 
-@app.get("/message/preview")
-async def message_preview(slot: str, cycle: int = 1):
-    if slot not in ACCOUNTS:
-        return {"success": False, "error": "Invalid slot"}
-    return {"success": True, **preview_cycle_message(slot, max(1, cycle))}
 
 
-@app.post("/message")
-async def update_message(payload: dict):
-    text = payload.get("message", "").strip()
-    slot = payload.get("slot")
-    if not text:
-        return {"success": False, "error": "Message cannot be empty"}
-    if slot and slot in ACCOUNTS:
-        save_message_for_account(slot, text)
-    else:
-        save_message(text)
-    await _push_state()
-    return {"success": True, "slot": slot}
 
 
 # ── Account UI helpers ────────────────────────────────────────────────────────
 
-@app.post("/account/switch")
-async def switch_account(payload: dict):
-    slot = payload.get("slot")
-    if slot not in ACCOUNTS:
-        return {"success": False, "error": "Invalid slot"}
-    registry.active_account = slot
-    await _push_state()
-    return {"success": True, "active_account": slot}
 
 
-@app.get("/account/status")
-async def account_status():
-    info = await registry.refresh_all_info()
-    return {
-        "active_account": registry.active_account,
-        "account_info": info,
-    }
 
 
-@app.post("/account/refresh-joined")
-async def refresh_joined_counts(payload: dict = {}):
-    """Scan Telegram dialogs and store joined group/channel counts for one account."""
-    slot = (payload.get("slot") or registry.active_account or "").strip()
-    if slot not in ACCOUNTS:
-        return {"success": False, "error": "Invalid slot"}
-    w = registry.get_worker(slot)
-    if not w.state.account_info and not load_account_info(slot):
-        return {"success": False, "error": f"{slot} not logged in"}
-    try:
-        was_running = w.state.running
-        base_info = w.state.account_info or load_account_info(slot) or {}
-
-        async def _run_refresh() -> None:
-            result = await registry.refresh_joined_counts(slot)
-            if result:
-                await _push_state()
-
-        if was_running:
-            asyncio.create_task(_run_refresh())
-            info = base_info
-        else:
-            info = await registry.refresh_joined_counts(slot)
-            if info:
-                await _push_state()
-
-        if not info:
-            return {"success": False, "error": "Could not read joined counts"}
-        has_counts = info.get("joined_total") is not None
-        resp = {
-            "success": True,
-            "slot": slot,
-            "joined_groups": info.get("joined_groups", 0),
-            "joined_channels": info.get("joined_channels", 0),
-            "joined_total": info.get("joined_total", 0),
-            "joined_updated_at": info.get("joined_updated_at", ""),
-        }
-        if was_running:
-            resp["queued"] = True
-            resp["message"] = (
-                "Background scan started — On Telegram count updates live via WebSocket"
-            )
-        elif not has_counts:
-            resp["queued"] = True
-            resp["message"] = "Scan in progress — count appears shortly"
-        if info.get("joined_scan_partial"):
-            resp["partial"] = True
-            resp["partial_reason"] = info.get("joined_scan_partial_reason") or (
-                "Group count may be incomplete — scan timed out; try again"
-            )
-        return resp
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
 
 # ── Login (per-slot isolated state) ───────────────────────────────────────────
@@ -1736,1211 +795,94 @@ def _duplicate_phone_login_response(phone: str, slot: str) -> dict | None:
     }
 
 
-@app.post("/login/send-otp")
-async def send_otp(payload: dict):
-    phone = payload.get("phone", "").strip()
-    slot = payload.get("slot", "account1")
-    if not phone:
-        return {"success": False, "error": "Phone number required"}
-    _sync_login_state_slots()
-    if not _slot_valid(slot):
-        return {
-            "success": False,
-            "error": f"Unknown account slot “{slot}”. Refresh the page, or add the slot again from Accounts.",
-        }
-    dup = _duplicate_phone_login_response(phone, slot)
-    if dup:
-        return dup
-    try:
-        await asyncio.wait_for(_prepare_login_slot(slot), timeout=45.0)
-
-        async def _send_code():
-            c = await telegram_client.get_login_client(slot)
-            return await c.send_code_request(phone)
-
-        result = await asyncio.wait_for(
-            telegram_client.run_login_with_retry(slot, _send_code),
-            timeout=55.0,
-        )
-        client = await telegram_client.get_login_client(slot)
-        session_string = ""
-        try:
-            session_string = client.session.save() or ""
-        except Exception:
-            pass
-        if session_string:
-            telegram_client.remember_login_session_string(slot, session_string)
-        pending = {
-            "phone": phone,
-            "phone_code_hash": result.phone_code_hash,
-        }
-        login_state[slot] = pending
-        save_pending(
-            slot,
-            phone,
-            result.phone_code_hash,
-            session_string=session_string or None,
-        )
-        return {"success": True}
-    except asyncio.TimeoutError:
-        clear_pending(slot)
-        await telegram_client.finalize_login_exclusive(slot)
-        return {
-            "success": False,
-            "error": "Telegram login timed out. Wait 10 seconds, then tap Send OTP again.",
-        }
-    except Exception as e:
-        clear_pending(slot)
-        await telegram_client.finalize_login_exclusive(slot)
-        err = str(e)
-        if "database is locked" in err.lower():
-            err = "Session file was busy. Wait 10 seconds, then tap Send OTP again."
-        elif "flood" in err.lower() or "wait" in err.lower() and "seconds" in err.lower():
-            err = f"Telegram rate limit: {err}. Try again later or use a different number."
-        return {"success": False, "error": err}
 
 
-@app.post("/login/verify-otp")
-async def verify_otp(payload: dict):
-    code = payload.get("code", "").strip()
-    slot = (payload.get("slot") or "").strip()
-    _sync_login_state_slots()
-    if not _slot_valid(slot):
-        return {"success": False, "error": "Invalid account slot — refresh the page and try again"}
-
-    ls = _get_login_pending(slot)
-    if not ls:
-        return {
-            "success": False,
-            "error": (
-                "Login session expired (server reloaded). "
-                "Tap ← Back, send OTP again, then verify within a few minutes."
-            ),
-        }
-
-    phone = ls.get("phone")
-    phone_code_hash = ls.get("phone_code_hash")
-    if not all([code, phone, phone_code_hash]):
-        return {"success": False, "error": "Missing login state — send OTP again"}
-    dup = _duplicate_phone_login_response(phone, slot)
-    if dup:
-        return dup
-    try:
-        async def _sign_in() -> None:
-            client = await telegram_client.get_login_client(slot)
-            await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
-
-        await telegram_client.run_login_with_retry(slot, _sign_in)
-
-        client = await telegram_client.get_login_client(slot)
-        if not await client.is_user_authorized():
-            clear_pending(slot)
-            await telegram_client.finalize_login_exclusive(slot)
-            return {"success": False, "error": "Sign-in failed — send OTP again"}
-
-        async def _get_me():
-            c = await telegram_client.get_login_client(slot)
-            return await c.get_me()
-
-        me = await telegram_client.run_login_with_retry(slot, _get_me)
-        me_phone = str(getattr(me, "phone", None) or phone or "")
-        dup_me = _duplicate_phone_login_response(me_phone, slot)
-        if dup_me:
-            clear_pending(slot)
-            await telegram_client.finalize_login_exclusive(slot)
-            return dup_me
-        await telegram_client.commit_login_session(slot)
-        from core.account_info_store import build_info_from_me
-
-        from core.subscription_accounts import enrich_account_info
-
-        info = enrich_account_info(slot, build_info_from_me(me))
-        login_state[slot] = {"phone": None, "phone_code_hash": None}
-        clear_pending(slot)
-
-        worker_started = await registry.complete_login(slot, info)
-
-        workspace_mode = str(payload.get("workspace_mode") or "").strip().lower()
-        if workspace_mode in ("forwarding", "forward"):
-            from core.posting_mode import set_posting_mode
-
-            set_posting_mode(
-                slot,
-                "forwarding",
-                forward_dispatch="auto",
-                campaign_enabled=False,
-                forwarding_enabled=True,
-            )
-            w = registry.get_worker(slot)
-            w._sync_posting_mode_ui()
-        elif workspace_mode in ("campaign",):
-            from core.posting_mode import set_posting_mode
-
-            set_posting_mode(
-                slot,
-                "campaign",
-                campaign_enabled=True,
-                forwarding_enabled=False,
-            )
-            w = registry.get_worker(slot)
-            w._sync_posting_mode_ui()
-
-        await _push_state()
-
-        async def _scan_joined_background() -> None:
-            try:
-                await registry.refresh_joined_counts(slot)
-                await _push_state()
-            except Exception:
-                pass
-
-        asyncio.create_task(_scan_joined_background())
-
-        return {
-            "success": True,
-            "name": info["name"],
-            "phone": info["phone"],
-            "slot": slot,
-            "worker_started": worker_started,
-        }
-    except Exception as e:
-        await telegram_client.finalize_login_exclusive(slot)
-        err = str(e)
-        if "database is locked" in err.lower():
-            err = (
-                "Telegram session file is busy (another account task was using it). "
-                "Wait 10 seconds, tap ← Back, send OTP again, then verify."
-            )
-        return {"success": False, "error": err}
 
 
-@app.post("/login/logout")
-async def logout(payload: dict = {}):
-    slot = (payload.get("slot") or registry.active_account or "").strip()
-    if slot not in ACCOUNTS:
-        return {"success": False, "error": "Invalid slot"}
-    login_state.setdefault(slot, {"phone": None, "phone_code_hash": None})
-    try:
-        await registry.logout_account(slot)
-        login_state[slot] = {"phone": None, "phone_code_hash": None}
-        await _push_state()
-        return {"success": True, "slot": slot}
-    except Exception as e:
-        try:
-            await registry.logout_account(slot)
-            login_state[slot] = {"phone": None, "phone_code_hash": None}
-            await _push_state()
-        except Exception:
-            pass
-        return {"success": False, "error": str(e)}
 
 
 # ── DM Inbox (private chats only — independent of forwarding workers) ─────────
 
-@app.post("/inbox/listeners/refresh")
-async def inbox_ensure_listeners():
-    """Re-attach Telethon DM listeners (after reload or if live messages stop)."""
-    from services.dm_inbox_service import bootstrap_listeners
-
-    await bootstrap_listeners(force=True)
-    return {"status": "ok", "message": "DM listeners re-attached"}
-
-
-@app.post("/inbox/{slot}/sync/{user_id}")
-async def inbox_force_sync(slot: str, user_id: int):
-    """Pull latest messages from Telegram for one chat (bypasses UI)."""
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core.dm_store import get_messages
-    from services.dm_inbox_service import sync_conversation_from_telegram
-
-    added = await sync_conversation_from_telegram(slot, user_id, limit=200)
-    return {
-        "status": "ok",
-        "added": len(added),
-        "messages": get_messages(slot, user_id),
-    }
-
-
-@app.get("/inbox")
-async def inbox_all(
-    slot: str | None = Query(None),
-    combined: bool = Query(False),
-    sync: bool = Query(False),
-):
-    from services import dm_inbox_service
-
-    if sync:
-        for s in ACCOUNTS:
-            try:
-                await dm_inbox_service.sync_stored_conversations(s)
-            except Exception:
-                pass
-
-    if slot:
-        if slot not in ACCOUNTS:
-            return {"status": "error", "message": "Invalid slot"}
-        return {"status": "ok", **dm_inbox_service.build_slot_payload(slot)}
-    if combined:
-        return {
-            "status": "ok",
-            "combined": True,
-            "conversations": dm_inbox_service.get_combined_conversations(),
-        }
-    return {"status": "ok", **dm_inbox_service.build_all_inboxes()}
-
-
-@app.get("/inbox/{slot}/messages/{user_id}")
-async def inbox_messages(
-    slot: str,
-    user_id: int,
-    sync: bool = Query(True),
-):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    import asyncio
-
-    from core.dm_store import get_messages
-    from services import dm_inbox_service
-
-    from core.dm_store import load_inbox
-
-    messages = get_messages(slot, user_id)
-    if sync:
-        try:
-            await dm_inbox_service.sync_read_receipts(slot, user_id)
-        except Exception:
-            pass
-        try:
-            await asyncio.wait_for(
-                dm_inbox_service.sync_conversation_from_telegram(
-                    slot, user_id, limit=dm_inbox_service.INBOX_INITIAL_SYNC_LIMIT
-                ),
-                timeout=30.0,
-            )
-            messages = get_messages(slot, user_id)
-        except asyncio.TimeoutError:
-            pass
-        except Exception:
-            pass
-        # Only auto-mark-read on the explicit sync path. The fast (sync=0) path
-        # is a passive preview; the front-end calls POST /inbox/{slot}/read/{user_id}
-        # once the user has actually viewed the chat.
-        key = str(user_id)
-        had_unread = int(
-            load_inbox(slot).get("conversations", {}).get(key, {}).get("unread_count") or 0
-        ) > 0
-        if had_unread:
-            await dm_inbox_service.mark_read(slot, user_id)
-    return {"status": "ok", "slot": slot, "user_id": user_id, "messages": messages}
-
-
-@app.post("/inbox/{slot}/messages/{user_id}/older")
-async def inbox_messages_older(
-    slot: str,
-    user_id: int,
-    before_id: int = Query(..., description="Oldest telegram message id already stored"),
-    limit: int = Query(100, ge=10, le=200),
-):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core.dm_store import get_messages
-    from services import dm_inbox_service
-
-    if before_id <= 0:
-        return {"status": "error", "message": "Invalid before_id"}
-    try:
-        meta = await dm_inbox_service.sync_older_messages_from_telegram(
-            slot,
-            user_id,
-            before_telegram_id=before_id,
-            limit=limit,
-        )
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-    return {
-        "status": "ok",
-        "slot": slot,
-        "user_id": user_id,
-        "messages": get_messages(slot, user_id),
-        **meta,
-    }
-
-
-@app.get("/inbox/{slot}/messages/{user_id}/export")
-async def inbox_export_chat(
-    slot: str,
-    user_id: int,
-    format: str = Query("txt", alias="format"),
-):
-    """Download one stored conversation (txt, csv, or json)."""
-    from fastapi import HTTPException
-    from fastapi.responses import Response
-
-    if slot not in ACCOUNTS:
-        raise HTTPException(status_code=404, detail="Invalid slot")
-    from features.inbox_export import export_conversation
-
-    try:
-        body, mime, filename = export_conversation(slot, int(user_id), format)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
-    return Response(
-        content=body,
-        media_type=mime,
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-        },
-    )
-
-
-@app.get("/inbox/{slot}/media/{user_id}/{message_id}")
-async def inbox_media(slot: str, user_id: int, message_id: int):
-    from fastapi import HTTPException
-
-    if slot not in ACCOUNTS:
-        raise HTTPException(status_code=404, detail="Invalid slot")
-    from services import dm_inbox_service
-
-    hit = await dm_inbox_service.ensure_inbox_media_file(slot, int(user_id), int(message_id))
-    if not hit:
-        raise HTTPException(status_code=404, detail="Media not found")
-    path, mime = hit
-    from core.dm_media import mime_for_cached_file
-
-    return FileResponse(path, media_type=mime_for_cached_file(path) or mime)
-
-
-@app.post("/inbox/{slot}/reply")
-async def inbox_reply(slot: str, body: dict, request: Request):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    user_id = body.get("user_id")
-    text = body.get("text") or body.get("message") or ""
-    # Track who composed this outbound message: "manual" (operator typed
-    # from scratch) or "ai_approved" (operator clicked Suggest, then Send).
-    # Other values are ignored and fall back to "manual" so callers can't
-    # spoof exotic provenance.
-    sent_by_raw = (body.get("sent_by") or "manual").strip().lower()
-    sent_by = sent_by_raw if sent_by_raw in {"manual", "ai_approved"} else "manual"
-    from core import dashboard_auth_vps as dashboard_auth
-
-    operator_name = (
-        dashboard_auth.username_from_request_cookies(dict(request.cookies))
-        or (body.get("operator_name") or "").strip()
-        or "Operator"
-    )
-    if user_id is None:
-        return {"status": "error", "message": "user_id required"}
-    channel = (body.get("channel") or "").strip().lower()
-    if channel == "whatsapp":
-        try:
-            from services.whatsapp_dispatch import dispatch_lead_reply
-            from services.crm_service import enrich_conversation, get_lead
-
-            result = await dispatch_lead_reply(
-                slot,
-                int(user_id),
-                str(text),
-                sent_by=sent_by,
-                channel="whatsapp",
-            )
-            conv = result.get("conversation") or {}
-            uid = int(user_id)
-            summary = enrich_conversation(
-                slot,
-                {
-                    "user_id": uid,
-                    "username": conv.get("username") or "",
-                    "name": conv.get("name") or "",
-                    "last_message": conv.get("last_message") or "",
-                    "last_message_at": conv.get("last_message_at"),
-                    "unread_count": conv.get("unread_count") or 0,
-                    "phone_e164": conv.get("phone_e164"),
-                    "channels": conv.get("channels"),
-                    "whatsapp_linked": conv.get("whatsapp_linked"),
-                },
-            ) if conv else enrich_conversation(
-                slot,
-                {"user_id": uid, "username": "", "name": "", "unread_count": 0},
-            )
-            lead = get_lead(slot, uid)
-            return {
-                "status": "ok",
-                "message": result.get("message"),
-                "conversation": summary,
-                "lead": lead,
-                "channel": "whatsapp",
-            }
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-    reply_to_raw = body.get("reply_to_message_id") or body.get("reply_to")
-    reply_to_message_id = None
-    if reply_to_raw is not None:
-        try:
-            rid = int(reply_to_raw)
-            if rid > 0:
-                reply_to_message_id = rid
-        except (TypeError, ValueError):
-            pass
-    try:
-        from messaging.message_router import message_router
-
-        result = await message_router.enqueue_dm_send(
-            slot,
-            int(user_id),
-            str(text),
-            wait=True,
-            sent_by=sent_by,
-            operator_name=operator_name,
-            reply_to_message_id=reply_to_message_id,
-        )
-        from services.crm_service import enrich_conversation, get_lead
-
-        conv = result.get("conversation") or {}
-        uid = int(user_id)
-        summary = enrich_conversation(
-            slot,
-            {
-                "user_id": uid,
-                "username": conv.get("username") or "",
-                "name": conv.get("name") or "",
-                "last_message": conv.get("last_message") or "",
-                "last_message_at": conv.get("last_message_at"),
-                "unread_count": conv.get("unread_count") or 0,
-            },
-        )
-        lead = get_lead(slot, uid)
-        return {
-            "status": "ok",
-            "message": result.get("message"),
-            "conversation": summary,
-            "lead": lead,
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-@app.post("/inbox/{slot}/reply-media")
-async def inbox_reply_media(
-    slot: str,
-    request: Request,
-    user_id: int = Form(...),
-    file: UploadFile = File(...),
-    caption: str = Form(""),
-    reply_to_message_id: str = Form(""),
-):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core.config import STATE_DIR
-    from core.dm_media import OUTBOUND_UPLOAD_MAX_BYTES
-    from core import dashboard_auth_vps as dashboard_auth
-
-    operator_name = (
-        dashboard_auth.username_from_request_cookies(dict(request.cookies))
-        or "Operator"
-    )
-    reply_to_id = None
-    if reply_to_message_id:
-        try:
-            rid = int(str(reply_to_message_id).strip())
-            if rid > 0:
-                reply_to_id = rid
-        except (TypeError, ValueError):
-            pass
-
-    upload_dir = os.path.join(STATE_DIR, slot, "outbound_uploads")
-    os.makedirs(upload_dir, exist_ok=True)
-    safe_name = os.path.basename(file.filename or "upload").replace("..", "_")
-    temp_path = os.path.join(upload_dir, f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}")
-
-    total = 0
-    try:
-        with open(temp_path, "wb") as out:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > OUTBOUND_UPLOAD_MAX_BYTES:
-                    raise ValueError("Attachment too large (max 25 MB)")
-                out.write(chunk)
-    except Exception as e:
-        try:
-            if os.path.isfile(temp_path):
-                os.remove(temp_path)
-        except OSError:
-            pass
-        return {"status": "error", "message": str(e)}
-
-    try:
-        from messaging.message_router import message_router
-        from services.crm_service import enrich_conversation, get_lead
-
-        result = await message_router.enqueue_dm_send_media(
-            slot,
-            int(user_id),
-            temp_path,
-            caption=str(caption or ""),
-            filename=safe_name,
-            content_type=file.content_type or "",
-            wait=True,
-            sent_by="manual",
-            operator_name=operator_name,
-            reply_to_message_id=reply_to_id,
-        )
-        conv = result.get("conversation") or {}
-        uid = int(user_id)
-        summary = enrich_conversation(
-            slot,
-            {
-                "user_id": uid,
-                "username": conv.get("username") or "",
-                "name": conv.get("name") or "",
-                "last_message": conv.get("last_message") or "",
-                "last_message_at": conv.get("last_message_at"),
-                "unread_count": conv.get("unread_count") or 0,
-            },
-        )
-        lead = get_lead(slot, uid)
-        return {
-            "status": "ok",
-            "message": result.get("message"),
-            "conversation": summary,
-            "lead": lead,
-        }
-    except Exception as e:
-        try:
-            if os.path.isfile(temp_path):
-                os.remove(temp_path)
-        except OSError:
-            pass
-        return {"status": "error", "message": str(e)}
-
-
-@app.get("/ai/smart-reply/config")
-async def ai_smart_reply_get_config():
-    from core import ai_smart_reply
-    from core.ai_smart_reply_store import get_config
-
-    return {
-        "status": "ok",
-        "config": get_config(),
-        "health": ai_smart_reply.health(),
-    }
-
-
-@app.post("/ai/smart-reply/config")
-async def ai_smart_reply_update_config(body: dict):
-    from core import ai_smart_reply
-    from core.ai_smart_reply_store import update_config
-
-    patch = {k: v for k, v in (body or {}).items() if v is not None}
-    cfg = update_config(**patch)
-    return {
-        "status": "ok",
-        "config": cfg,
-        "health": ai_smart_reply.health(),
-    }
-
-
-@app.get("/ai/smart-reply/preset/economy")
-async def ai_smart_reply_economy_preset_preview():
-    from core.karthik_economy_preset import economy_preset_preview
-
-    return {
-        "status": "ok",
-        "preview": economy_preset_preview(replace_business_prompt=True),
-        "estimated_monthly_usd": "15-22",
-    }
-
-
-@app.post("/ai/smart-reply/preset/economy")
-async def ai_smart_reply_apply_economy_preset(body: dict | None = None):
-    from core import ai_smart_reply
-    from core.karthik_economy_preset import apply_economy_preset
-
-    body = body or {}
-    replace_prompt = body.get("replace_business_prompt", True)
-    if isinstance(replace_prompt, str):
-        replace_prompt = replace_prompt.strip().lower() in {"1", "true", "yes"}
-    cfg = apply_economy_preset(replace_business_prompt=bool(replace_prompt))
-    return {
-        "status": "ok",
-        "config": cfg,
-        "health": ai_smart_reply.health(),
-        "message": "Economy preset applied — lower caps, group rewrite off, compact master prompt.",
-    }
-
-
-@app.post("/ai/smart-reply/preset/standard-caps")
-async def ai_smart_reply_apply_standard_caps_preset():
-    from core import ai_smart_reply
-    from core.karthik_economy_preset import apply_standard_caps_preset
-
-    cfg = apply_standard_caps_preset()
-    return {
-        "status": "ok",
-        "config": cfg,
-        "health": ai_smart_reply.health(),
-        "message": "Standard caps restored (master prompt unchanged).",
-    }
-
-
-@app.post("/ai/smart-reply/catch-up")
-async def ai_smart_reply_catch_up(body: dict | None = None):
-    """Enqueue Karthik replies for all waiting inbound chats (after outages)."""
-    from core import ai_smart_reply
-
-    if not ai_smart_reply.is_enabled():
-        return {"status": "error", "message": "AI disabled or API key missing"}
-    body = body or {}
-    slot = (body.get("slot") or "").strip() or None
-    if slot and slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    max_replies = int(body.get("max_replies") or 25)
-    result = await ai_smart_reply.catch_up_pending_replies(
-        slot=slot,
-        force=bool(body.get("force", True)),
-        max_replies=max_replies,
-    )
-    return {"status": "ok", **result}
-
-
-@app.post("/ai/smart-reply/leads/{slot}/{user_id}/toggle")
-async def ai_smart_reply_lead_toggle(slot: str, user_id: int, body: dict):
-    """Enable / disable AI auto-reply for a single lead, or reset its stage."""
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core import ai_smart_reply
-    from core.ai_smart_reply_store import (
-        STAGE_GREETING,
-        get_lead_state,
-        update_lead_state,
-    )
-
-    if "enabled" in (body or {}):
-        enabled = bool(body.get("enabled"))
-        if enabled:
-            state = ai_smart_reply.enable_for_lead(slot, int(user_id))
-        else:
-            state = ai_smart_reply.disable_for_lead(slot, int(user_id), reason="ui_toggle")
-        return {"status": "ok", "lead_state": state}
-
-    if body.get("reset_stage"):
-        state = update_lead_state(slot, int(user_id), stage=STAGE_GREETING, qualification={}, escalated=False)
-        return {"status": "ok", "lead_state": state}
-
-    return {"status": "ok", "lead_state": get_lead_state(slot, int(user_id))}
-
-
-@app.get("/ai/smart-reply/leads/{slot}/{user_id}")
-async def ai_smart_reply_lead_state(slot: str, user_id: int):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core.ai_smart_reply_store import get_lead_state
-
-    return {"status": "ok", "lead_state": get_lead_state(slot, int(user_id))}
-
-
-@app.post("/ai/smart-reply/assess")
-async def ai_smart_reply_assess():
-    """Run Karthik through the knowledge assessment battery and persist
-    the resulting scorecard.
-
-    Heavy-ish operation: it issues ~8 LLM calls. Run when the operator
-    edits the business prompt or wants to re-verify Karthik. Returns
-    the same scorecard payload that's persisted under
-    config.last_assessment.
-    """
-    from core import ai_assessment
-    from core.ai_smart_reply_store import get_config, save_assessment
-
-    cfg = get_config()
-    try:
-        result = await ai_assessment.run_assessment(cfg)
-    except Exception as e:
-        return {"status": "error", "message": f"Assessment failed: {e}"}
-
-    if result.get("status") == "ok":
-        save_assessment(result)
-    return result
-
-
-@app.get("/ai/smart-reply/assessment")
-async def ai_smart_reply_get_assessment():
-    """Return the last persisted assessment scorecard plus the current
-    gate state (`approved`/`override`/`blocked`) so the UI can render
-    the right banner without doing the policy math itself."""
-    from core.ai_smart_reply_store import get_config, is_assessment_approved
-
-    cfg = get_config()
-    last = cfg.get("last_assessment")
-    return {
-        "status":              "ok",
-        "approved":            is_assessment_approved(),
-        "require_assessment":  cfg.get("require_assessment", True),
-        "manual_approval_at":  cfg.get("manual_approval_at"),
-        "last_assessment":     last,
-    }
-
-
-@app.post("/ai/smart-reply/manual-approval")
-async def ai_smart_reply_set_manual_approval(body: dict):
-    """Operator override. `approved=true` lets AI suggestions run even
-    when the last assessment was inconclusive. `approved=false` revokes
-    the override and re-engages the gate."""
-    from core.ai_smart_reply_store import is_assessment_approved, set_manual_approval
-
-    approved = bool(body.get("approved"))
-    cfg = set_manual_approval(approved=approved)
-    return {
-        "status":             "ok",
-        "approved":           is_assessment_approved(),
-        "manual_approval_at": cfg.get("manual_approval_at"),
-    }
-
-
-@app.post("/inbox/{slot}/ai-reply")
-@app.post("/inbox/{slot}/ai-suggestion")
-async def inbox_ai_suggestion(slot: str, body: dict):
-    """Generate an AI draft reply for the latest inbound message — but DO
-    NOT send it. The frontend fills the reply composer with the draft so
-    the operator can review, edit, and click Send themselves.
-
-    Both `/ai-reply` and `/ai-suggestion` route here; `/ai-reply` is kept
-    as an alias so older clients keep working — they too will now only
-    get a suggestion back, never an automatic send.
-
-    Response shape:
-        {
-          "status": "ok",
-          "text":   "<draft>",
-          "stage":  "...",
-          "confidence": 0.82,
-          "ai": True
-        }
-    """
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    user_id = body.get("user_id")
-    if user_id is None:
-        return {"status": "error", "message": "user_id required"}
-    from core import ai_smart_reply
-    from core.dm_store import load_inbox
-
-    conv = (load_inbox(slot).get("conversations") or {}).get(str(int(user_id))) or {}
-    msgs = list(conv.get("messages") or [])
-    last_in = next((m for m in reversed(msgs) if m.get("direction") == "in"), None)
-    if not last_in:
-        return {"status": "error", "message": "No inbound message in this chat"}
-    if not ai_smart_reply.is_enabled():
-        return {"status": "error", "message": "AI smart-reply is disabled or API key missing"}
-
-    res = await ai_smart_reply.generate_suggestion(
-        slot,
-        int(user_id),
-        user_message_id=last_in.get("id"),
-        user_text=last_in.get("text") or "",
-    )
-    if not res.get("ok"):
-        return {"status": "error", "message": res.get("error") or res.get("reason") or "ai_failed", **res}
-    return {"status": "ok", **res}
-
-
-@app.post("/inbox/{slot}/send-location")
-async def inbox_send_location(slot: str, body: dict):
-    """Send a geo location pin to a DM recipient from the given account slot.
-
-    Body: { user_id: int, latitude: float, longitude: float, accuracy?: float }
-    """
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    user_id = body.get("user_id")
-    latitude = body.get("latitude")
-    longitude = body.get("longitude")
-    accuracy = body.get("accuracy")
-    if user_id is None:
-        return {"status": "error", "message": "user_id required"}
-    if latitude is None or longitude is None:
-        return {"status": "error", "message": "latitude and longitude required"}
-    try:
-        from messaging.message_router import message_router
-
-        result = await message_router.enqueue_dm_send_location(
-            slot,
-            int(user_id),
-            float(latitude),
-            float(longitude),
-            accuracy=float(accuracy) if accuracy is not None else None,
-            wait=True,
-        )
-        from services.crm_service import enrich_conversation, get_lead
-
-        conv = result.get("conversation") or {}
-        uid = int(user_id)
-        summary = enrich_conversation(
-            slot,
-            {
-                "user_id": uid,
-                "username": conv.get("username") or "",
-                "name": conv.get("name") or "",
-                "last_message": conv.get("last_message") or "",
-                "last_message_at": conv.get("last_message_at"),
-                "unread_count": conv.get("unread_count") or 0,
-            },
-        )
-        lead = get_lead(slot, uid)
-        return {
-            "status": "ok",
-            "message": result.get("message"),
-            "conversation": summary,
-            "lead": lead,
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-@app.patch("/inbox/{slot}/messages/{user_id}/{message_id}")
-async def inbox_edit_message(slot: str, user_id: int, message_id: int, body: dict):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    text = body.get("text") or body.get("message") or ""
-    if not str(text).strip():
-        return {"status": "error", "message": "text required"}
-    try:
-        from services import dm_inbox_service
-
-        result = await dm_inbox_service.run_dm_edit(
-            slot, int(user_id), int(message_id), str(text),
-        )
-        return {
-            "status": "ok",
-            "message": result.get("message"),
-            "conversation": result.get("conversation"),
-            "unchanged": bool(result.get("unchanged")),
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-@app.delete("/inbox/{slot}/messages/{user_id}/{message_id}")
-async def inbox_delete_message(slot: str, user_id: int, message_id: int):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    try:
-        from services import dm_inbox_service
-
-        result = await dm_inbox_service.run_dm_delete_message(
-            slot, int(user_id), int(message_id),
-        )
-        return {
-            "status": "ok",
-            "message_id": result.get("message_id"),
-            "conversation": result.get("conversation"),
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
-@app.post("/inbox/{slot}/read/{user_id}")
-async def inbox_mark_read(slot: str, user_id: int):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from services import crm_service, dm_inbox_service
-
-    uid = int(user_id)
-    await dm_inbox_service.mark_read(slot, uid)
-    lead = crm_service.get_lead(slot, uid)
-    return {
-        "status": "ok",
-        "slot": slot,
-        "user_id": uid,
-        "lead": lead,
-        "crm": crm_service.build_crm_payload() if lead else None,
-    }
-
-
-@app.get("/inbox/delete-config")
-async def inbox_delete_config():
-    """Whether chat delete requires INBOX_DELETE_PASSWORD on the server."""
-    pwd = (os.environ.get("INBOX_DELETE_PASSWORD") or "").strip()
-    return {"status": "ok", "requires_password": bool(pwd)}
-
-
-@app.delete("/inbox/{slot}/conversation/{user_id}")
-async def inbox_delete_conversation(
-    slot: str,
-    user_id: int,
-    body: dict | None = Body(default=None),
-):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    expected = (os.environ.get("INBOX_DELETE_PASSWORD") or "").strip()
-    if expected:
-        got = ""
-        if isinstance(body, dict):
-            got = str(body.get("password") or "").strip()
-        if got != expected:
-            from fastapi import HTTPException
-
-            raise HTTPException(status_code=403, detail="Incorrect delete password")
-    from services import dm_inbox_service
-
-    result = await dm_inbox_service.delete_conversation(slot, int(user_id))
-    if result.get("status") != "ok":
-        return result
-    from services import call_service
-
-    try:
-        await broadcast.broadcast({
-            "type": "crm",
-            "event": "lead_deleted",
-            "slot": slot,
-            "user_id": int(user_id),
-            "crm": call_service.build_crm_payload(),
-        })
-    except Exception:
-        pass
-    return result
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # ── CRM (lead management on top of inbox) ─────────────────────────────────────
 
-@app.get("/crm/state")
-async def crm_state():
-    from services import crm_service
-
-    crm_service.sync_leads_from_inbox()
-    return {"status": "ok", **crm_service.build_crm_payload()}
 
 
-@app.get("/crm/leads/{slot}/{user_id}")
-async def crm_get_lead(slot: str, user_id: int):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from services import crm_service
-
-    lead = crm_service.get_lead_detail(slot, user_id)
-    if not lead:
-        return {"status": "error", "message": "Lead not found"}
-    return {"status": "ok", "lead": lead}
 
 
-@app.patch("/crm/leads/{slot}/{user_id}")
-async def crm_patch_lead(slot: str, user_id: int, body: dict):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from services import crm_service
-
-    kwargs = {}
-    if "status" in body:
-        kwargs["status"] = body.get("status")
-    if "notes" in body:
-        kwargs["notes"] = body.get("notes")
-    if "reminder_timestamp" in body:
-        kwargs["reminder_timestamp"] = body.get("reminder_timestamp")
-        kwargs["_has_reminder"] = True
-    if body.get("mark_handled"):
-        kwargs["mark_handled"] = True
-    lead = await crm_service.update_lead(slot, int(user_id), **kwargs)
-    return {"status": "ok", "lead": lead, "crm": crm_service.build_crm_payload()}
 
 
-@app.post("/crm/leads/{slot}/{user_id}/link-phone")
-async def crm_link_phone(slot: str, user_id: int, body: dict):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    phone = body.get("phone") or body.get("phone_e164") or ""
-    from core.contact_link_store import link_phone
-    from core.dm_store import load_inbox, save_inbox
-    from services.crm_service import enrich_conversation
-
-    link = link_phone(slot, int(user_id), str(phone), linked_by="manual")
-    if not link:
-        return {"status": "error", "message": "Invalid phone number"}
-
-    data = load_inbox(slot)
-    key = str(int(user_id))
-    conv = (data.get("conversations") or {}).get(key)
-    if conv:
-        conv["phone_e164"] = link["phone_e164"]
-        channels = set(conv.get("channels") or [])
-        channels.update({"telegram", "whatsapp"})
-        conv["channels"] = sorted(channels)
-        data["conversations"][key] = conv
-        save_inbox(slot, data)
-        summary = enrich_conversation(
-            slot,
-            {
-                "user_id": int(user_id),
-                "username": conv.get("username") or "",
-                "name": conv.get("name") or "",
-                "last_message": conv.get("last_message") or "",
-                "last_message_at": conv.get("last_message_at"),
-                "unread_count": conv.get("unread_count") or 0,
-                "phone_e164": link["phone_e164"],
-                "channels": conv.get("channels"),
-            },
-        )
-    else:
-        summary = enrich_conversation(
-            slot,
-            {
-                "user_id": int(user_id),
-                "phone_e164": link["phone_e164"],
-                "channels": ["telegram", "whatsapp"],
-            },
-        )
-
-    return {"status": "ok", "link": link, "conversation": summary}
 
 
-@app.post("/crm/leads/{slot}/{user_id}/mark-handled")
-async def crm_mark_handled(slot: str, user_id: int):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from services import crm_service
-
-    try:
-        lead = await crm_service.mark_reply_handled(slot, int(user_id))
-        return {"status": "ok", "lead": lead, "crm": crm_service.build_crm_payload()}
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
 
 
-@app.post("/crm/leads/{slot}/{user_id}/follow-up")
-async def crm_follow_up(slot: str, user_id: int, body: dict):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from services import crm_service
-
-    hours = body.get("hours")
-    if hours is None and body.get("preset") == "tomorrow":
-        hours = 24.0
-    elif hours is None:
-        hours = 2.0
-    lead = await crm_service.set_follow_up(slot, int(user_id), hours=float(hours))
-    return {"status": "ok", "lead": lead, "crm": crm_service.build_crm_payload()}
 
 
-@app.get("/crm/call-now/options")
-async def crm_call_now_options(
-    account_id: str = Query(..., alias="account_id"),
-    user_id: int = Query(...),
-):
-    if account_id not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid account_id"}
-    from services import call_service
-
-    contact = call_service.resolve_contact(account_id, int(user_id))
-    return {
-        "status": "ok",
-        "contact": contact,
-        "options": call_service.build_live_call_options(contact),
-    }
 
 
-@app.post("/crm/call-now")
-async def crm_call_now(body: dict):
-    slot = body.get("account_id") or body.get("slot")
-    user_id = body.get("user_id")
-    if not slot or slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid account_id"}
-    if user_id is None:
-        return {"status": "error", "message": "user_id required"}
-    call_type = body.get("call_type") or "telegram"
-    send_message = body.get("send_message", True)
-    from services import call_service, crm_service as _crm
-
-    try:
-        result = await call_service.initiate_live_call(
-            slot,
-            int(user_id),
-            call_type=str(call_type),
-            send_message=bool(send_message),
-        )
-        lead = _crm.get_lead_detail(slot, int(user_id))
-        return {
-            "status": "ok",
-            **result,
-            "lead": lead,
-            "crm": _crm.build_crm_payload(),
-        }
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
-@app.post("/crm/karthik/block-spam-chats")
-async def crm_karthik_block_spam_chats(body: dict | None = None):
-    """Karthik spam guard: scan inbox threads and block solicitation/scam chats."""
-    body = body or {}
-    slot = body.get("account_id") or body.get("slot")
-    from services import crm_service
-    from services.spam_guard_service import scan_inbox_and_block_spam
-
-    if slot is not None and slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    result = await scan_inbox_and_block_spam(slot=slot)
-    return {"status": "ok", "crm": crm_service.build_crm_payload(), **result}
 
 
-@app.post("/inbox/{slot}/karthik/block-spam/{user_id}")
-async def inbox_karthik_block_spam(slot: str, user_id: int):
-    """Block the open chat as spam (Karthik guard / operator)."""
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from services import crm_service
-    from services.spam_guard_service import block_chat_as_spam
-
-    result = await block_chat_as_spam(slot, int(user_id))
-    return {"status": "ok", "crm": crm_service.build_crm_payload(), **result}
 
 
-@app.get("/inbox/{slot}/karthik/spam-check/{user_id}")
-async def inbox_karthik_spam_check(slot: str, user_id: int):
-    """Classify whether a stored thread looks like inbound spam."""
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from core.dm_store import load_inbox
-    from services.spam_guard_service import classify_conversation_spam
-
-    conv = (load_inbox(slot).get("conversations") or {}).get(str(int(user_id))) or {}
-    verdict = classify_conversation_spam(slot, conv)
-    return {"status": "ok", "slot": slot, "user_id": int(user_id), **verdict}
 
 
-@app.post("/crm/unblock")
-async def crm_unblock(body: dict):
-    slot = body.get("account_id") or body.get("slot")
-    user_id = body.get("user_id")
-    if not slot or slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid account_id"}
-    if user_id is None:
-        return {"status": "error", "message": "user_id required"}
-    from services import block_service, crm_service as _crm
-
-    try:
-        result = await block_service.unblock_lead(slot, int(user_id))
-        lead = result["lead"]
-        await _crm.broadcast_crm_update(slot, int(user_id), lead)
-        return {"status": "ok", "lead": lead, "crm": _crm.build_crm_payload()}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
-@app.post("/crm/schedule-call")
-async def crm_schedule_call_body(body: dict):
-    """Schedule a call (flat payload: account_id, user_id, scheduled_time, call_type, notes)."""
-    slot = body.get("account_id") or body.get("slot")
-    user_id = body.get("user_id")
-    if not slot or slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid account_id"}
-    if user_id is None:
-        return {"status": "error", "message": "user_id required"}
-    return await _crm_schedule_call_impl(slot, int(user_id), body)
 
 
 async def _crm_schedule_call_impl(slot: str, user_id: int, body: dict):
@@ -2965,150 +907,26 @@ async def _crm_schedule_call_impl(slot: str, user_id: int, body: dict):
         return {"status": "error", "message": str(e)}
 
 
-@app.post("/crm/leads/{slot}/{user_id}/calls")
-async def crm_schedule_call(slot: str, user_id: int, body: dict):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    return await _crm_schedule_call_impl(slot, int(user_id), body)
 
 
-@app.post("/crm/leads/{slot}/{user_id}/calls/complete")
-async def crm_complete_call(slot: str, user_id: int, body: dict):
-    if slot not in ACCOUNTS:
-        return {"status": "error", "message": "Invalid slot"}
-    from services import call_service, crm_service
-
-    outcome = body.get("outcome_status") or body.get("status")
-    call = await call_service.complete_lead_call(
-        slot, int(user_id), outcome_status=outcome
-    )
-    lead = crm_service.get_lead_detail(slot, int(user_id))
-    return {"status": "ok", "call": call, "lead": lead, "crm": crm_service.build_crm_payload()}
 
 
-@app.get("/login/status")
-async def login_status():
-    slot = registry.active_account
-    if slot:
-        info = registry.get_worker(slot).state.account_info
-        if info:
-            return {
-                "logged_in": True,
-                "name": info["name"],
-                "username": info.get("username", ""),
-                "phone": info["phone"],
-                "slot": slot,
-            }
-    return {"logged_in": False}
 
 
-@app.post("/ai/knowledge/query")
-async def knowledge_assistant_query(request: Request, body: dict):
-    """Read-only, allowlisted natural-language queries over operational data."""
-    question = str((body or {}).get("question") or "").strip()
-    if not question:
-        return {"status": "error", "message": "Question is required"}
-    if len(question) > 500:
-        return {"status": "error", "message": "Question is too long"}
-    from core.dashboard_access import handler_reference_scope
-    from core.knowledge_assistant import answer_question
-    reference = handler_reference_scope(request, None)
-    return await asyncio.to_thread(
-        answer_question, question, reference=reference,
-        session_id=str((body or {}).get("session_id") or "") or None,
-    )
 
 
-@app.delete("/ai/knowledge/session/{session_id}")
-async def knowledge_assistant_session_end(session_id: str):
-    from core.knowledge_assistant import end_session
-    return {"status": "ok", "ended": end_session(session_id)}
 
 
 # ── Candidates / Profiles tracker ───────────────────────────────────────────
 # Replaces the old "Profiles list update Form" Google Sheet. All CRUD happens
 # from the dashboard's Candidates tab and persists to data/candidates.json.
 
-@app.get("/candidates")
-async def candidates_list(
-    request: Request,
-    stage: str | None = Query(default=None),
-    task: str | None = Query(default=None),
-    search: str | None = Query(default=None),
-    month: str | None = Query(default=None),
-    pending_only: bool = Query(default=False),
-    reference: str | None = Query(default=None),
-    service_type: str | None = Query(default=None),
-    ai_filter: str | None = Query(default=None),
-):
-    from core.dashboard_access import handler_reference_scope
-    from features import candidate_store
-
-    reference = handler_reference_scope(request, reference)
-    rows = candidate_store.list_candidates(
-        stage=stage, task=task, search=search, month=month,
-        pending_only=pending_only, reference=reference, service_type=service_type,
-    )
-    if ai_filter and os.getenv("AI_INTERVIEW_OFFER_TRACKING_ENABLED", "false").lower() == "true":
-        from core.recruitment_mail_store import candidate_filter_ids
-        allowed = candidate_filter_ids(ai_filter)
-        rows = [row for row in rows if str(row.get("id")) in allowed]
-    return {"status": "ok", "candidates": rows, "count": len(rows)}
 
 
-@app.get("/candidates/stats")
-async def candidates_stats(
-    request: Request,
-    month: str | None = Query(default=None),
-    reference: str | None = Query(default=None),
-    service_type: str | None = Query(default=None),
-):
-    from core.dashboard_access import handler_payout_reference_scope
-    from features import candidate_store
-
-    # Earnings and payout totals must never expose another handler's figures.
-    reference = handler_payout_reference_scope(request, reference)
-    return {"status": "ok", "stats": candidate_store.stats(month=month, reference=reference, service_type=service_type)}
 
 
-@app.get("/candidates/roster")
-async def candidates_active_roster(
-    request: Request,
-    month: str | None = Query(default=None),
-    reference: str | None = Query(default=None),
-):
-    """Active (in_progress) candidates with technology grouping."""
-    from core.dashboard_access import handler_reference_scope
-    from features import candidate_store
-
-    reference = handler_reference_scope(request, reference)
-    roster = candidate_store.active_roster(month=month, reference=reference)
-    return {"status": "ok", **roster}
 
 
-@app.get("/candidates/roster.csv")
-async def candidates_active_roster_csv(
-    request: Request,
-    month: str | None = Query(default=None),
-    reference: str | None = Query(default=None),
-):
-    """Download active candidates as CSV (name, tech, contact, payment, etc.)."""
-    from fastapi.responses import Response
-
-    from core.dashboard_access import handler_reference_scope
-    from features import candidate_store
-
-    reference = handler_reference_scope(request, reference)
-    roster = candidate_store.active_roster(month=month, reference=reference)
-    csv_text = candidate_store.roster_csv_rows(roster.get("candidates") or [])
-    filename = "active_candidates.csv"
-    if month and month != "all":
-        filename = f"active_candidates_{month}.csv"
-    return Response(
-        content="\ufeff" + csv_text,
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
 
 
 def _viewer_reference(request: Request) -> str | None:
@@ -3125,461 +943,42 @@ def _ops_by(request: Request) -> str:
     return (profile.get("reference") or profile.get("username") or "dashboard").strip()[:120]
 
 
-@app.get("/candidates/bootstrap")
-async def candidates_bootstrap(
-    request: Request,
-    stage: str | None = Query(default=None),
-    task: str | None = Query(default=None),
-    search: str | None = Query(default=None),
-    month: str | None = Query(default=None),
-    pending_only: bool = Query(default=False),
-    reference: str | None = Query(default=None),
-    include_global_stats: bool = Query(default=False),
-):
-    from core.dashboard_access import handler_reference_scope
-    from features import candidate_store
-
-    reference = handler_reference_scope(request, reference)
-    payload = candidate_store.bootstrap_data(
-        stage=stage,
-        task=task,
-        search=search,
-        month=month,
-        pending_only=pending_only,
-        reference=reference,
-        include_global_stats=include_global_stats,
-    )
-    return {"status": "ok", **payload}
 
 
-@app.get("/candidates/pending-works")
-async def candidates_pending_works(
-    request: Request,
-    response: Response,
-    month: str | None = Query(default=None),
-    reference: str | None = Query(default=None),
-):
-    from core.dashboard_access import handler_reference_scope
-    from features import candidate_store
-
-    reference = handler_reference_scope(request, reference)
-    payload = candidate_store.pending_works(month=month, reference=reference)
-    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    return {"status": "ok", **payload}
 
 
-@app.get("/ai/daily-briefing")
-async def daily_ai_briefing_get(request: Request):
-    """Return today's cached, authorized, strictly read-only briefing."""
-    from core.daily_briefing import get_briefing
-
-    payload = await asyncio.to_thread(get_briefing, reference=_viewer_reference(request))
-    return {"status": "ok", "briefing": payload}
 
 
-@app.post("/ai/daily-briefing/refresh")
-async def daily_ai_briefing_refresh(request: Request):
-    """Recalculate today's briefing without modifying operational records."""
-    from core.daily_briefing import get_briefing
-
-    payload = await asyncio.to_thread(
-        get_briefing, reference=_viewer_reference(request), refresh=True,
-    )
-    return {"status": "ok", "message": "Briefing updated", "briefing": payload}
 
 
-@app.get("/candidates/interviews/daily")
-async def candidates_interviews_daily(
-    request: Request,
-    date: str | None = Query(default=None),
-    attendee: str | None = Query(default=None),
-    search: str | None = Query(default=None),
-    channel: str | None = Query(default=None),
-    round: str | None = Query(default=None),
-    technology: str | None = Query(default=None),
-):
-    from fastapi import HTTPException
-
-    from features import candidate_store
-
-    day = (date or "").strip()[:10]
-    if len(day) != 10:
-        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
-    viewer = _viewer_reference(request)
-    try:
-        payload = candidate_store.daily_interview_roster(
-            day,
-            viewer_reference=viewer,
-            filter_attendee=attendee,
-            filter_search=search,
-            filter_channel=channel,
-            filter_round=round,
-            filter_technology=technology,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"status": "ok", **payload}
 
 
-@app.get("/candidates/interviews/monitor")
-async def candidates_interviews_monitor(
-    request: Request,
-    from_date: str | None = Query(default=None, alias="from"),
-    to_date: str | None = Query(default=None, alias="to"),
-    attendee: str | None = Query(default=None),
-    search: str | None = Query(default=None),
-    channel: str | None = Query(default=None),
-    round: str | None = Query(default=None),
-    technology: str | None = Query(default=None),
-    upcoming_only: bool = Query(default=False),
-):
-    from fastapi import HTTPException
-
-    from features import candidate_store
-
-    start = (from_date or "").strip()[:10]
-    end = (to_date or "").strip()[:10]
-    if len(start) != 10 or len(end) != 10:
-        raise HTTPException(status_code=400, detail="from and to must be YYYY-MM-DD")
-    viewer = _viewer_reference(request)
-    try:
-        payload = candidate_store.interview_monitor(
-            start,
-            end,
-            viewer_reference=viewer,
-            filter_attendee=attendee,
-            filter_search=search,
-            filter_channel=channel,
-            filter_round=round,
-            filter_technology=technology,
-            upcoming_only=upcoming_only,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"status": "ok", **payload}
 
 
-@app.get("/candidates/interviews/upcoming")
-async def candidates_interviews_upcoming(
-    request: Request,
-    days: int = Query(default=14),
-    search: str | None = Query(default=None),
-    attendee: str | None = Query(default=None),
-    channel: str | None = Query(default=None),
-    include_today: bool = Query(default=True),
-    phase: str | None = Query(default=None),
-    lookback_days: int = Query(default=30),
-):
-    from features import candidate_store
-
-    viewer = _viewer_reference(request)
-    payload = candidate_store.interview_upcoming(
-        days=days,
-        filter_search=search,
-        filter_attendee=attendee,
-        filter_channel=channel,
-        viewer_reference=viewer,
-        include_today_pending=include_today,
-        phase=phase,
-        lookback_days=lookback_days,
-    )
-    return {"status": "ok", **payload}
 
 
-@app.get("/candidates/interviews/global")
-async def candidates_interviews_global(
-    request: Request,
-    from_date: str | None = Query(default=None, alias="from"),
-    to_date: str | None = Query(default=None, alias="to"),
-    attendee: str | None = Query(default=None),
-    search: str | None = Query(default=None),
-    channel: str | None = Query(default=None),
-    round: str | None = Query(default=None),
-    technology: str | None = Query(default=None),
-    upcoming_only: bool = Query(default=False),
-):
-    from fastapi import HTTPException
-
-    from features import candidate_store
-
-    start = (from_date or "").strip()[:10]
-    end = (to_date or "").strip()[:10]
-    if len(start) != 10 or len(end) != 10:
-        raise HTTPException(status_code=400, detail="from and to must be YYYY-MM-DD")
-    viewer = _viewer_reference(request)
-    try:
-        payload = candidate_store.interview_global_summary(
-            start,
-            end,
-            viewer_reference=viewer,
-            filter_attendee=attendee,
-            filter_search=search,
-            filter_channel=channel,
-            filter_round=round,
-            filter_technology=technology,
-            upcoming_only=upcoming_only,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"status": "ok", **payload}
 
 
-@app.get("/candidates/interviews/filter-options")
-async def candidates_interviews_filter_options(
-    request: Request,
-    from_date: str | None = Query(default=None, alias="from"),
-    to_date: str | None = Query(default=None, alias="to"),
-    channel: str | None = Query(default=None),
-    attendee: str | None = Query(default=None),
-):
-    from features import candidate_store
-
-    viewer = _viewer_reference(request)
-    options = candidate_store.interview_candidate_filter_options(
-        from_date=from_date,
-        to_date=to_date,
-        channel=channel,
-        viewer_reference=viewer,
-        filter_attendee=attendee,
-    )
-    return {"status": "ok", "options": options}
 
 
-@app.post("/candidates/interviews/slots")
-async def candidates_interviews_slots_create(request: Request, body: dict):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    b = body or {}
-    candidate_id = (b.get("candidate_id") or "").strip()
-    date = (b.get("date") or "").strip()
-    time = (b.get("time") or "").strip()
-    time_end = (b.get("time_end") or "").strip()
-    notes = (b.get("notes") or "").strip()
-    interview_round = (b.get("interview_round") or "").strip()
-    try:
-        if not candidate_id:
-            raise ValueError("Select an existing candidate before booking an interview slot")
-        existing = candidate_store.get_candidate(candidate_id)
-        if not existing:
-            raise ValueError("Candidate not found")
-        assert_candidate_row_access(request, existing)
-        row = candidate_store.assign_interview_slot(
-            candidate_id=candidate_id,
-            date=date,
-            time=time,
-            time_end=time_end,
-            notes=notes,
-            interview_round=interview_round,
-        )
-    except ValueError as exc:
-        return {"status": "error", "message": str(exc)}
-    return {"status": "ok", "candidate": row}
 
 
-@app.patch("/candidates/interviews/slots/{cid}")
-async def candidates_interviews_slots_update(cid: str, request: Request, body: dict):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Candidate not found"}
-    assert_candidate_row_access(request, existing)
-    b = body or {}
-    target_id = (b.get("candidate_id") or cid).strip() or cid
-    try:
-        row = candidate_store.update_interview_slot(
-            candidate_id=target_id,
-            date=b.get("date") or "",
-            time=b.get("time") or "",
-            time_end=b.get("time_end") or "",
-            notes=b.get("notes") or "",
-            interview_round=b.get("interview_round") or "",
-            technology=b.get("technology"),
-        )
-    except ValueError as exc:
-        return {"status": "error", "message": str(exc)}
-    return {"status": "ok", "candidate": row}
 
 
-@app.delete("/candidates/interviews/slots/{cid}")
-async def candidates_interviews_slots_delete(cid: str, request: Request):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Candidate not found"}
-    assert_candidate_row_access(request, existing)
-    try:
-        row = candidate_store.cancel_interview_slot(candidate_id=cid)
-    except ValueError as exc:
-        return {"status": "error", "message": str(exc)}
-    return {"status": "ok", "candidate": row}
 
 
-@app.post("/candidates/{cid}/slot-screenshot")
-async def candidates_slot_screenshot(cid: str, request: Request):
-    from fastapi import HTTPException, UploadFile
-
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Candidate not found")
-    assert_candidate_row_access(request, existing)
-    form = await request.form()
-    attachment_type = form.get("attachment_type")
-    try:
-        from features.candidate_attachments import AttachmentType, parse_attachment_type
-        if parse_attachment_type(attachment_type) != AttachmentType.SLOT_SCREENSHOT_PROOF:
-            raise ValueError("slot-screenshot requires attachment_type=slot_screenshot_proof")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    upload = form.get("file")
-    if upload is None or not isinstance(upload, UploadFile):
-        raise HTTPException(status_code=400, detail="file is required")
-    data = await upload.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty file")
-    entry = candidate_store.attach_public_slot_screenshot(
-        cid,
-        data=data,
-        original_name=upload.filename or "slot-screenshot.jpg",
-        mime_type=upload.content_type or "image/jpeg",
-        source="dashboard-upload",
-    )
-    if not entry:
-        raise HTTPException(status_code=400, detail="Screenshot upload failed")
-    row = candidate_store.get_candidate(cid) or existing
-    return {"status": "ok", "proof": entry, "candidate": row}
 
 
-@app.post("/candidates/{cid}/interview-attendance")
-async def candidates_interview_attendance(cid: str, request: Request, body: dict):
-    from core.dashboard_access import assert_candidate_row_access, operator_profile
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Candidate not found"}
-    assert_candidate_row_access(request, existing)
-    b = body or {}
-    profile = operator_profile(request)
-    role = (profile.get("role") or "").strip().lower()
-    allow_future = role in {"admin", "handler"}
-    try:
-        row = candidate_store.set_interview_attendance(
-            cid,
-            status=b.get("status") or "",
-            remark=b.get("remark") or "",
-            attended=b.get("attended"),
-            attendee=b.get("attendee"),
-            by=_ops_by(request),
-            allow_future=allow_future,
-        )
-    except ValueError as exc:
-        return {"status": "error", "message": str(exc)}
-    if not row:
-        return {"status": "error", "message": "Candidate not found"}
-    return {"status": "ok", "candidate": row}
 
 
-@app.patch("/candidates/{cid}/interview-attendee")
-async def candidates_interview_attendee(cid: str, request: Request, body: dict):
-    """Change the assigned interview attendee without changing attendance."""
-    from fastapi import HTTPException
-    from core.dashboard_access import assert_candidate_row_access
-    from core.dashboard_access import operator_profile
-    from features import candidate_store
-
-    if (operator_profile(request).get("role") or "").strip().lower() != "admin":
-        raise HTTPException(status_code=403, detail="Only an admin can reassign an interview attendee")
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Candidate not found"}
-    assert_candidate_row_access(request, existing)
-    try:
-        row = candidate_store.set_interview_attendee(
-            cid,
-            attendee=(body or {}).get("attendee") or "",
-            by=_ops_by(request),
-        )
-    except ValueError as exc:
-        return {"status": "error", "message": str(exc)}
-    if not row:
-        return {"status": "error", "message": "Candidate not found"}
-    return {"status": "ok", "candidate": row}
 
 
-@app.get("/candidates/{cid}")
-async def candidates_get(cid: str, request: Request):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    row = candidate_store.get_candidate_detail(cid)
-    if not row:
-        return {"status": "error", "message": "Candidate not found"}
-    assert_candidate_row_access(request, row)
-    return {"status": "ok", "candidate": row}
 
 
-@app.post("/candidates")
-async def candidates_create(request: Request, body: dict):
-    from core.dashboard_access import prepare_candidate_body
-    from features import candidate_store
-
-    body = prepare_candidate_body(request, body)
-    if not (body.get("name") or "").strip():
-        return {"status": "error", "message": "Name is required"}
-    try:
-        body["ctc_percentage"] = candidate_store.validate_profile_ctc_percentage(body)
-        row = candidate_store.create_candidate(body)
-    except ValueError as exc:
-        return {"status": "error", "message": str(exc), "duplicate_candidate": "already exists" in str(exc).lower()}
-    return {"status": "ok", "candidate": row}
 
 
-@app.patch("/candidates/{cid}")
-async def candidates_update(cid: str, request: Request, body: dict):
-    from core.dashboard_access import assert_candidate_row_access, prepare_candidate_body
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Candidate not found"}
-    assert_candidate_row_access(request, existing)
-    try:
-        prepared = prepare_candidate_body(request, body or {})
-        prepared["ctc_percentage"] = candidate_store.validate_profile_ctc_percentage(
-            prepared,
-            existing=existing,
-        )
-        row = candidate_store.update_candidate(cid, prepared)
-    except ValueError as exc:
-        return {"status": "error", "message": str(exc), "duplicate_phone": "already belongs" in str(exc).lower()}
-    if not row:
-        return {"status": "error", "message": "Candidate not found"}
-    return {"status": "ok", "candidate": row}
 
 
-@app.delete("/candidates/{cid}")
-async def candidates_delete(cid: str, request: Request):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Candidate not found"}
-    assert_candidate_row_access(request, existing)
-    ok = candidate_store.delete_candidate(cid)
-    if not ok:
-        return {"status": "error", "message": "Candidate not found"}
-    return {"status": "ok"}
 
 
 # ── Data room (business opportunities & partners) ─────────────────────────────
@@ -3591,496 +990,54 @@ def _data_room_admin_only(request: Request) -> bool:
     return dashboard_auth.is_admin_profile(profile)
 
 
-@app.get("/data-room")
-async def data_room_list(
-    status: str | None = Query(default=None),
-    opportunity_type: str | None = Query(default=None),
-    query: str | None = Query(default=None),
-):
-    from features import data_room_store
-
-    rows = data_room_store.list_opportunities(
-        status=status,
-        opportunity_type=opportunity_type,
-        query=query,
-    )
-    return {
-        "status": "ok",
-        "opportunities": rows,
-        "count": len(rows),
-        "stats": data_room_store.stats_summary(),
-    }
 
 
-@app.get("/data-room/stats")
-async def data_room_stats():
-    from features import data_room_store
-
-    return {"status": "ok", "stats": data_room_store.stats_summary()}
 
 
-@app.get("/data-room/credentials")
-async def data_room_credentials(request: Request):
-    """Credentials section of the data room (admin only; not partner leads)."""
-    from fastapi import HTTPException
-
-    from features import data_room_credentials_store
-
-    if not _data_room_admin_only(request):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return {"status": "ok", "credentials": data_room_credentials_store.get_credentials()}
 
 
-@app.patch("/data-room/credentials/handlers/{username}")
-async def data_room_update_handler(username: str, body: dict, request: Request):
-    from core.dashboard_access import require_fleet_admin
-    from features import data_room_credentials_store as creds
-
-    require_fleet_admin(request)
-    updated, err = creds.update_handler_login(username, body or {})
-    if err:
-        return {"status": "error", "message": err}
-    if not updated:
-        return {"status": "error", "message": "Handler not found"}
-    return {"status": "ok", "credentials": updated}
 
 
-@app.post("/data-room/credentials/handlers")
-async def data_room_create_handler(body: dict, request: Request):
-    from core.dashboard_access import require_fleet_admin
-    from features import data_room_credentials_store as creds
-
-    require_fleet_admin(request)
-    updated, err = creds.create_handler_login(body or {})
-    if err:
-        return {"status": "error", "message": err}
-    return {"status": "ok", "credentials": updated}
 
 
-@app.delete("/data-room/credentials/handlers/{username}")
-async def data_room_delete_handler(username: str, request: Request):
-    from core.dashboard_access import require_fleet_admin
-    from features import data_room_credentials_store as creds
-
-    require_fleet_admin(request)
-    updated, err = creds.delete_handler_login(username)
-    if err:
-        return {"status": "error", "message": err}
-    return {"status": "ok", "credentials": updated}
 
 
-@app.patch("/data-room/credentials/admin")
-async def data_room_update_admin(body: dict, request: Request):
-    from core.dashboard_access import require_fleet_admin
-    from features import data_room_credentials_store as creds
-
-    require_fleet_admin(request)
-    updated, err = creds.update_admin_login(body or {})
-    if err:
-        return {"status": "error", "message": err}
-    return {"status": "ok", "credentials": updated}
 
 
-@app.patch("/data-room/credentials/vault/{section}/{item_id}")
-async def data_room_update_vault_item(section: str, item_id: str, body: dict, request: Request):
-    from core.dashboard_access import require_fleet_admin
-    from features import data_room_credentials_store as creds
-
-    require_fleet_admin(request)
-    updated = creds.update_vault_item(section, item_id, body or {})
-    if not updated:
-        return {"status": "error", "message": "Vault entry not found"}
-    return {"status": "ok", "credentials": updated}
 
 
-@app.post("/data-room/credentials/vault/{section}")
-async def data_room_create_vault_item(section: str, body: dict, request: Request):
-    from core.dashboard_access import require_fleet_admin
-    from features import data_room_credentials_store as creds
-
-    require_fleet_admin(request)
-    updated, err = creds.create_vault_item(section, body or {})
-    if err:
-        return {"status": "error", "message": err}
-    return {"status": "ok", "credentials": updated}
 
 
-@app.delete("/data-room/credentials/vault/{section}/{item_id}")
-async def data_room_delete_vault_item(section: str, item_id: str, request: Request):
-    from core.dashboard_access import require_fleet_admin
-    from features import data_room_credentials_store as creds
-
-    require_fleet_admin(request)
-    updated = creds.delete_vault_item(section, item_id)
-    if not updated:
-        return {"status": "error", "message": "Vault entry not found"}
-    return {"status": "ok", "credentials": updated}
 
 
-@app.get("/data-room/offer-letters/{item_id}/preview")
-async def data_room_offer_letter_preview(item_id: str, request: Request):
-    from fastapi import HTTPException
-
-    from features import data_room_credentials_store as creds
-
-    if not _data_room_admin_only(request):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    try:
-        path, row = creds.resolve_offer_letter_pdf(item_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    name = (row.get("filename") or row.get("id") or "offer-letter.pdf").replace('"', "")
-    return FileResponse(
-        path,
-        media_type="application/pdf",
-        filename=name,
-        headers={"Content-Disposition": f'inline; filename="{name}"'},
-    )
 
 
-@app.get("/data-room/offer-letters/{item_id}/download")
-async def data_room_offer_letter_download(item_id: str, request: Request):
-    from fastapi import HTTPException
-
-    from features import data_room_credentials_store as creds
-
-    if not _data_room_admin_only(request):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    try:
-        path, row = creds.resolve_offer_letter_pdf(item_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    name = (row.get("filename") or row.get("id") or "offer-letter.pdf").replace('"', "")
-    return FileResponse(
-        path,
-        media_type="application/pdf",
-        filename=name,
-        headers={"Content-Disposition": f'attachment; filename="{name}"'},
-    )
 
 
-@app.post("/data-room/offer-letters/{item_id}/upload")
-async def data_room_offer_letter_upload(
-    item_id: str,
-    request: Request,
-    file: UploadFile = File(...),
-):
-    from core.dashboard_access import require_fleet_admin
-    from features import data_room_credentials_store as creds
-
-    require_fleet_admin(request)
-    try:
-        raw = await file.read()
-        row = creds.save_offer_letter_pdf(item_id, raw)
-    except FileNotFoundError as exc:
-        return {"status": "error", "message": str(exc)}
-    except ValueError as exc:
-        return {"status": "error", "message": str(exc)}
-    return {"status": "ok", "offer_letter": row}
 
 
-@app.post("/data-room/offer-letters/upload-analyze")
-async def data_room_offer_letter_upload_analyze(
-    request: Request,
-    file: UploadFile = File(...),
-):
-    """Save a new offer-letter PDF and return editable extracted metadata."""
-    from core.dashboard_access import require_fleet_admin
-    from features import data_room_credentials_store as creds
-
-    require_fleet_admin(request)
-    try:
-        raw = await file.read()
-        row = creds.create_offer_letter_from_pdf(file.filename or "offer-letter.pdf", raw)
-    except (FileNotFoundError, ValueError) as exc:
-        return {"status": "error", "message": str(exc)}
-    return {
-        "status": "ok",
-        "offer_letter": row,
-        "message": "PDF saved and fields auto-filled. Review the values, then save.",
-    }
 
 
-@app.get("/data-room/{oid}")
-async def data_room_get(oid: str):
-    from features import data_room_store
-
-    row = data_room_store.get_opportunity(oid)
-    if not row or not data_room_store._is_partner_opportunity(row):
-        return {"status": "error", "message": "Opportunity not found"}
-    return {"status": "ok", "opportunity": row}
 
 
-@app.post("/data-room", dependencies=[Depends(_require_fleet_admin)])
-async def data_room_create(body: dict):
-    from features import data_room_store
-
-    summary = (body.get("summary") or body.get("name") or "").strip()
-    if not summary and not (body.get("name") or "").strip():
-        return {"status": "error", "message": "Name or summary is required"}
-    row = data_room_store.create_opportunity(body or {})
-    return {"status": "ok", "opportunity": row}
 
 
-@app.patch("/data-room/{oid}", dependencies=[Depends(_require_fleet_admin)])
-async def data_room_update(oid: str, body: dict):
-    from features import data_room_store
-
-    row = data_room_store.update_opportunity(oid, body or {})
-    if not row:
-        return {"status": "error", "message": "Opportunity not found"}
-    return {"status": "ok", "opportunity": row}
 
 
-@app.delete("/data-room/{oid}", dependencies=[Depends(_require_fleet_admin)])
-async def data_room_delete(oid: str):
-    from features import data_room_store
-
-    ok = data_room_store.delete_opportunity(oid)
-    if not ok:
-        return {"status": "error", "message": "Opportunity not found"}
-    return {"status": "ok"}
 
 
 # ── Payment proofs ──────────────────────────────────────────────────────────────
 
-@app.post("/candidates/{cid}/proofs")
-async def candidates_upload_proof(
-    request: Request,
-    cid: str,
-    file: UploadFile = File(...),
-    note: str = Form(default=""),
-    attachment_type: str = Form(default=""),
-):
-    """Attach a payment screenshot (image) to a candidate.
-
-    Multipart form fields:
-      - `file`  (required): the screenshot itself.
-      - `note`  (optional): a short caption (e.g. "₹10k UPI · 26 May").
-    """
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-    from features.candidate_attachments import AttachmentType, parse_attachment_type
-    from fastapi import HTTPException
-
-    try:
-        if parse_attachment_type(attachment_type) != AttachmentType.PAYMENT_PROOF:
-            raise ValueError("Payment upload requires attachment_type=payment_proof")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Candidate not found"}
-    assert_candidate_row_access(request, existing)
-    ai_extraction = None
-    fraud_check = None
-    try:
-        raw = await file.read()
-        try:
-            from features.payment_verification_engine import verify_payment_screenshot
-            expected = candidate_store.effective_expected_payment(existing)
-            paid = int(existing.get("payment") or 0)
-            ai_extraction = await asyncio.to_thread(
-                verify_payment_screenshot,
-                raw,
-                file.content_type or "image/jpeg",
-                source_module="candidate_payment_proof",
-                expected_amount=max(0, expected - paid),
-                entity_id=cid,
-                entity_name=existing.get("name") or "",
-                candidate_id=cid,
-                referrer_id=existing.get("reference") or "",
-                referrer_hint=existing.get("reference") or "",
-                purpose="candidate_payment",
-                payment_scope=(
-                    "ROUND"
-                    if existing.get("service_type") == "round_wise"
-                    else "PROFILE"
-                ),
-            )
-        except Exception as exc:
-            logger.exception("Central payment verification failed for candidate proof")
-            return {
-                "status": "error",
-                "message": f"Payment screenshot could not be verified: {exc}",
-            }
-        from features.payment_fraud_detection import assess_payment_proof
-        fraud_check = assess_payment_proof(raw, ai_extraction, candidate_id=cid, candidate_name=existing.get("name") or "")
-        if fraud_check["decision"] == "rejected":
-            match = (fraud_check.get("duplicate_matches") or [{}])[0]
-            return {"status": "error", "message": " ".join(fraud_check["reasons"]), "fraud_check": fraud_check, "duplicate_candidate": match.get("candidate_name")}
-        metadata = {
-            "sha256": fraud_check["sha256"], "utr_number": fraud_check.get("utr_number") or "",
-            "transaction_id": (ai_extraction or {}).get("transaction_id") or "",
-            "payment_status": (ai_extraction or {}).get("status") or "",
-            "company_payment_verified": bool((ai_extraction or {}).get("company_payment_verified")),
-            "booking_eligible": bool((ai_extraction or {}).get("booking_eligible")),
-            "verification_state": (ai_extraction or {}).get("verification_state") or "",
-            "receiver_name": (ai_extraction or {}).get("receiver_name") or "",
-            "receiver_upi_id": (ai_extraction or {}).get("receiver_upi_id") or "",
-            "receiver_phone": (ai_extraction or {}).get("receiver_phone") or "",
-            "verified_amount": int((ai_extraction or {}).get("amount") or 0),
-            "receiver_account": (ai_extraction or {}).get("receiver_account") or "",
-            "receiver_type": (ai_extraction or {}).get("receiver_type") or "unknown",
-            "ledger_entry_id": (ai_extraction or {}).get("ledger_entry_id") or "",
-            "ledger_action": (ai_extraction or {}).get("ledger_action") or "",
-            "ledger_status": (ai_extraction or {}).get("ledger_status") or "",
-            "payment_id": (ai_extraction or {}).get("payment_id") or "",
-            "evidence_id": (ai_extraction or {}).get("evidence_id") or "",
-            "entitlement_id": (ai_extraction or {}).get("entitlement_id") or "",
-            "payment_scope": (ai_extraction or {}).get("payment_scope") or "",
-            "source_module": "candidate_payment_proof",
-            "fraud_decision": fraud_check["decision"], "fraud_reasons": fraud_check["reasons"],
-            "fraud_warnings": fraud_check["warnings"], "fraud_checked_at": fraud_check["checked_at"],
-        }
-        entry = candidate_store.add_payment_proof(
-            cid,
-            data=raw,
-            original_name=file.filename or "",
-            mime_type=file.content_type or "",
-            note=note or "",
-            metadata=metadata,
-        )
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
-    if entry is None:
-        return {"status": "error", "message": "Candidate not found"}
-    row = candidate_store.get_candidate(cid)
-    # Keep the interactive request deterministic. Calling Ollama here used to
-    # hold the browser in "Uploading" for up to 30 minutes.
-    if ai_extraction:
-        amount = int(ai_extraction.get("amount") or 0)
-        status = str(ai_extraction.get("status") or "unknown")
-        ai_extraction["narrative"] = (
-            f"Ollama detected a payment of ₹{amount:,} with status {status}."
-            if amount
-            else "Payment proof saved; extracted details require manual review."
-        )
-    resp = {"status": "ok", "proof": entry, "candidate": row}
-    if ai_extraction:
-        resp["ai_extraction"] = ai_extraction
-    if fraud_check:
-        resp["fraud_check"] = fraud_check
-    return resp
 
 
-@app.get("/candidates/{cid}/proofs/{pid}")
-async def candidates_serve_proof(cid: str, pid: str, request: Request):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Proof not found"}
-    assert_candidate_row_access(request, existing)
-    hit = candidate_store.get_proof(cid, pid)
-    if hit is None:
-        return {"status": "error", "message": "Proof not found"}
-    path, entry = hit
-    return FileResponse(
-        path,
-        media_type=entry.get("mime_type") or "application/octet-stream",
-        filename=entry.get("original_name") or entry.get("filename"),
-    )
 
 
-@app.get("/candidates/{cid}/attachments/{attachment_type}/{attachment_id}")
-async def candidates_serve_typed_attachment(
-    cid: str, attachment_type: str, attachment_id: str, request: Request
-):
-    from fastapi import HTTPException
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Attachment not found")
-    assert_candidate_row_access(request, existing)
-    try:
-        hit = candidate_store.get_attachment(cid, attachment_id, attachment_type)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    if hit is None:
-        raise HTTPException(status_code=404, detail="Attachment not found")
-    path, entry = hit
-    return FileResponse(
-        path,
-        media_type=entry.get("mime_type") or "application/octet-stream",
-        filename=entry.get("original_name") or entry.get("filename"),
-    )
 
 
-@app.post("/candidates/{cid}/profile-photo")
-async def candidates_upload_profile_photo(
-    request: Request,
-    cid: str,
-    file: UploadFile = File(...),
-    attachment_type: str = Form(default=""),
-):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-    from features.candidate_attachments import AttachmentType, parse_attachment_type
-    from fastapi import HTTPException
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Candidate not found"}
-    assert_candidate_row_access(request, existing)
-    try:
-        if parse_attachment_type(attachment_type) != AttachmentType.PROFILE_PHOTO:
-            raise ValueError("Profile photo upload requires attachment_type=profile_photo")
-        entry = candidate_store.set_profile_photo(
-            cid,
-            data=await file.read(),
-            original_name=file.filename or "",
-            mime_type=file.content_type or "",
-            note="Candidate profile photo",
-            metadata={"source_module": "candidate_profile"},
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {
-        "status": "ok",
-        "profile_photo": entry,
-        "candidate": candidate_store.get_candidate(cid),
-    }
 
 
-@app.delete("/candidates/{cid}/proofs/{pid}")
-async def candidates_delete_proof(cid: str, pid: str, request: Request):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Proof not found"}
-    assert_candidate_row_access(request, existing)
-    ok = candidate_store.delete_proof(cid, pid)
-    if not ok:
-        return {"status": "error", "message": "Proof not found"}
-    row = candidate_store.get_candidate(cid)
-    return {"status": "ok", "candidate": row}
 
 
-@app.patch("/candidates/{cid}/proofs/{pid}")
-async def candidates_update_proof_note(cid: str, pid: str, body: dict, request: Request):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Proof not found"}
-    assert_candidate_row_access(request, existing)
-    note = (body or {}).get("note", "")
-    entry = candidate_store.update_proof_note(cid, pid, note)
-    if entry is None:
-        return {"status": "error", "message": "Proof not found"}
-    return {"status": "ok", "proof": entry}
 
 
 # ── Resume versions ───────────────────────────────────────────────────────────
@@ -4134,109 +1091,14 @@ def _resolve_resume_hit(cid: str, rid: str):
     return None
 
 
-@app.post("/candidates/{cid}/resumes")
-async def candidates_upload_resume(
-    request: Request,
-    cid: str,
-    file: UploadFile = File(...),
-    note: str = Form(default=""),
-):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Candidate not found"}
-    assert_candidate_row_access(request, existing)
-    try:
-        raw = await file.read()
-        entry = candidate_store.add_resume(
-            cid,
-            data=raw,
-            original_name=file.filename or "",
-            mime_type=file.content_type or "",
-            note=note or "",
-        )
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
-    if entry is None:
-        return {"status": "error", "message": "Candidate not found"}
-    row = candidate_store.get_candidate(cid)
-    # AI-powered resume extraction (non-blocking enrichment)
-    ai_extraction = None
-    try:
-        mime = file.content_type or ""
-        if "pdf" in mime.lower():
-            from features.ollama_resume_extract import extract_resume_with_ollama
-            ai_extraction = await asyncio.to_thread(extract_resume_with_ollama, raw, mime)
-    except Exception:
-        pass
-    resp = {"status": "ok", "resume": entry, "candidate": row}
-    if ai_extraction and ai_extraction.get("is_resume"):
-        resp["ai_extraction"] = ai_extraction
-    return resp
 
 
-@app.get("/candidates/{cid}/resumes/{rid}")
-async def candidates_serve_resume(cid: str, rid: str, request: Request):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if existing:
-        assert_candidate_row_access(request, existing)
-    hit = _resolve_resume_hit(cid, rid)
-    if hit is None:
-        return {"status": "error", "message": "Resume not found"}
-    path, entry = hit
-    return _resume_file_response(path, entry, inline=False)
 
 
-@app.get("/candidates/{cid}/resumes/{rid}/preview")
-async def candidates_serve_resume_preview(cid: str, rid: str, request: Request):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if existing:
-        assert_candidate_row_access(request, existing)
-    hit = _resolve_resume_hit(cid, rid)
-    if hit is None:
-        raise HTTPException(status_code=404, detail="Resume not found")
-    path, entry = hit
-    return _resume_file_response(path, entry, inline=True)
 
 
-@app.delete("/candidates/{cid}/resumes/{rid}")
-async def candidates_delete_resume(cid: str, rid: str, request: Request):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Resume not found"}
-    assert_candidate_row_access(request, existing)
-    ok = candidate_store.delete_resume(cid, rid)
-    if not ok:
-        return {"status": "error", "message": "Resume not found"}
-    row = candidate_store.get_candidate(cid)
-    return {"status": "ok", "candidate": row}
 
 
-@app.patch("/candidates/{cid}/resumes/{rid}")
-async def candidates_update_resume_note(cid: str, rid: str, body: dict, request: Request):
-    from core.dashboard_access import assert_candidate_row_access
-    from features import candidate_store
-
-    existing = candidate_store.get_candidate(cid)
-    if not existing:
-        return {"status": "error", "message": "Resume not found"}
-    assert_candidate_row_access(request, existing)
-    note = (body or {}).get("note", "")
-    entry = candidate_store.update_resume_note(cid, rid, note)
-    if entry is None:
-        return {"status": "error", "message": "Resume not found"}
-    return {"status": "ok", "resume": entry}
 
 
 # ── Referrer identities and payment accounts ───────────────────────────────────
@@ -4351,343 +1213,34 @@ async def referrer_payment_account_delete(request: Request, account_id: str):
 
 # ── Handler / reference expenses (legacy route names retained) ────────────────
 
-@app.get("/handler-expenses")
-async def handler_expenses_list(
-    request: Request,
-    reference: str | None = Query(default=None),
-    month: str | None = Query(default=None),
-):
-    from core.dashboard_access import handler_payout_reference_scope
-    from features import handler_expenses
-
-    reference = handler_payout_reference_scope(request, reference)
-    rows = handler_expenses.list_expenses(reference=reference, month=month)
-    total = sum(int(r.get("amount") or 0) for r in rows)
-    # Merge months from handler expenses + candidates for complete dropdown
-    months_set = {m["value"] for m in handler_expenses.available_months()}
-    try:
-        from features import candidate_store
-        for m in candidate_store.available_months():
-            if isinstance(m, dict):
-                months_set.add(m["value"])
-            else:
-                months_set.add(m)
-    except Exception:
-        pass
-    month_names = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-    all_months = []
-    for m in sorted(months_set, reverse=True):
-        try:
-            y, mo = m.split("-")
-            label = f"{month_names[int(mo) - 1]} {y}"
-        except (ValueError, IndexError):
-            label = m
-        all_months.append({"value": m, "label": label})
-    return {
-        "status": "ok",
-        "expenses": rows,
-        "count": len(rows),
-        "total": total,
-        "categories": handler_expenses.CATEGORY_LABELS,
-        "available_months": all_months,
-    }
 
 
-@app.post("/handler-expenses", dependencies=[Depends(_require_fleet_admin)])
-async def handler_expenses_create(
-    reference: str = Form(...),
-    amount: str = Form(...),
-    category: str = Form(default="commission"),
-    note: str = Form(default=""),
-    date: str = Form(default=""),
-    file: UploadFile = File(...),
-):
-    from features import handler_expenses
-    from features.referrer_registry import resolve_referrer
-
-    selected_referrer = resolve_referrer(reference)
-    if selected_referrer is None:
-        return {
-            "status": "error",
-            "message": "Select one registered referrer before logging a payout.",
-        }
-    canonical_reference = str(selected_referrer.get("name") or "").strip()
-    if int(float(amount or 0)) <= 0:
-        return {"status": "error", "message": "Amount must be greater than zero"}
-
-    # Validate the screenshot
-    raw = await file.read()
-    if not raw:
-        return {"status": "error", "message": "Payment screenshot is required"}
-    if len(raw) > handler_expenses.MAX_PROOF_BYTES:
-        return {"status": "error", "message": f"File too large (max {handler_expenses.MAX_PROOF_BYTES // (1024*1024)} MB)"}
-    mime = (file.content_type or "").lower().split(";")[0].strip()
-    if not handler_expenses._ext_from_mime(mime, file.filename or ""):
-        return {"status": "error", "message": "Only image files (jpg / png / webp / gif / heic) are allowed"}
-
-    body = {
-        "reference": canonical_reference,
-        "amount": int(float(amount)),
-        "category": category,
-        "note": note.strip(),
-        "date": date,
-    }
-    try:
-        from features.payment_verification_engine import verify_payment_screenshot
-        verification = await asyncio.to_thread(
-            verify_payment_screenshot,
-            raw,
-            mime or "image/jpeg",
-            source_module="handler_expense_create",
-            expected_amount=int(float(amount)),
-            entity_name=canonical_reference,
-            referrer_hint=canonical_reference,
-            referrer_id=str(selected_referrer.get("id") or ""),
-            purpose=(
-                "handler_payout"
-                if category.strip().lower() == "commission"
-                else "expense_reimbursement"
-            ),
-        )
-        if not verification.get("deterministic_verified"):
-            return {
-                "status": "error",
-                "message": " ".join(verification.get("deterministic_reasons") or [])
-                or "Payment screenshot could not be verified.",
-                "ai_extraction": verification,
-            }
-    except Exception as exc:
-        logger.exception("Central payment verification failed for handler expense")
-        return {"status": "error", "message": f"Payment screenshot could not be verified: {exc}"}
-    row = handler_expenses.create_expense(body)
-
-    # Attach the proof to the newly created expense
-    try:
-        handler_expenses.add_proof(
-            row["id"],
-            data=raw,
-            original_name=file.filename or "",
-            mime_type=file.content_type or "",
-            note=note.strip(),
-        )
-    except ValueError:
-        pass  # expense already created, proof validation already passed above
-
-    # Reload the row to include proofs
-    updated = next(
-        (r for r in handler_expenses.list_expenses() if r.get("id") == row["id"]),
-        row,
-    )
-    return {"status": "ok", "expense": updated}
 
 
-@app.patch("/handler-expenses/{eid}", dependencies=[Depends(_require_fleet_admin)])
-async def handler_expenses_update(eid: str, body: dict):
-    from features import handler_expenses
-
-    row = handler_expenses.update_expense(eid, body or {})
-    if row is None:
-        return {"status": "error", "message": "Expense not found"}
-    return {"status": "ok", "expense": row}
 
 
-@app.delete("/handler-expenses/{eid}", dependencies=[Depends(_require_fleet_admin)])
-async def handler_expenses_delete(eid: str):
-    from features import handler_expenses
-
-    ok = handler_expenses.delete_expense(eid)
-    if not ok:
-        return {"status": "error", "message": "Expense not found"}
-    return {"status": "ok"}
 
 
-@app.get("/handler-expenses/summary")
-async def handler_expenses_summary(
-    request: Request,
-    month: str | None = Query(default=None),
-    reference: str | None = Query(default=None),
-):
-    from core.dashboard_access import handler_payout_reference_scope
-    from features import handler_expenses
-
-    scoped_reference = handler_payout_reference_scope(request, reference)
-    summary = handler_expenses.summary_by_handler(month=month)
-    if scoped_reference:
-        key = scoped_reference.strip().lower()
-        summary = {
-            name: bucket for name, bucket in summary.items()
-            if name.strip().lower() == key
-        }
-    total = sum(b["total"] for b in summary.values())
-    return {
-        "status": "ok",
-        "summary": summary,
-        "total": total,
-        "count": sum(b["count"] for b in summary.values()),
-    }
 
 
 # ── Handler expense proofs (payment screenshots) ────────────────────────────────
 
-@app.post("/handler-expenses/{eid}/proofs", dependencies=[Depends(_require_fleet_admin)])
-async def handler_expense_upload_proof(
-    eid: str,
-    file: UploadFile = File(...),
-    note: str = Form(default=""),
-):
-    """Attach a payment screenshot to a handler expense entry."""
-    from features import handler_expenses
-
-    try:
-        raw = await file.read()
-        expense = next(
-            (row for row in handler_expenses.list_expenses() if row.get("id") == eid),
-            None,
-        )
-        if expense is None:
-            return {"status": "error", "message": "Expense not found"}
-        from features.payment_verification_engine import verify_payment_screenshot
-        verification = await asyncio.to_thread(
-            verify_payment_screenshot,
-            raw,
-            file.content_type or "image/jpeg",
-            source_module="handler_expense_proof",
-            expected_amount=int(expense.get("amount") or 0),
-            entity_id=eid,
-            entity_name=expense.get("reference") or "",
-            referrer_hint=expense.get("reference") or "",
-            purpose=(
-                "handler_payout"
-                if str(expense.get("category") or "").lower() == "commission"
-                else "expense_reimbursement"
-            ),
-        )
-        if not verification.get("deterministic_verified"):
-            return {
-                "status": "error",
-                "message": " ".join(verification.get("deterministic_reasons") or [])
-                or "Payment screenshot could not be verified.",
-                "ai_extraction": verification,
-            }
-        entry = handler_expenses.add_proof(
-            eid,
-            data=raw,
-            original_name=file.filename or "",
-            mime_type=file.content_type or "",
-            note=note or "",
-        )
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
-    if entry is None:
-        return {"status": "error", "message": "Expense not found"}
-    return {"status": "ok", "proof": entry}
 
 
-@app.get("/handler-expenses/{eid}/proofs/{pid}")
-async def handler_expense_serve_proof(eid: str, pid: str):
-    """Serve a stored handler expense proof image."""
-    from features import handler_expenses
-
-    hit = handler_expenses.get_proof(eid, pid)
-    if hit is None:
-        return {"status": "error", "message": "Proof not found"}
-    path, entry = hit
-    return FileResponse(
-        path,
-        media_type=entry.get("mime_type") or "application/octet-stream",
-        filename=entry.get("original_name") or entry.get("filename"),
-    )
 
 
-@app.delete("/handler-expenses/{eid}/proofs/{pid}", dependencies=[Depends(_require_fleet_admin)])
-async def handler_expense_delete_proof(eid: str, pid: str):
-    """Remove a proof from a handler expense entry."""
-    from features import handler_expenses
-
-    ok = handler_expenses.delete_proof(eid, pid)
-    if not ok:
-        return {"status": "error", "message": "Proof not found"}
-    return {"status": "ok"}
 
 
 # ── Company expenses (operational costs) ─────────────────────────────────────────
 
-@app.get("/company-expenses")
-async def company_expenses_list(
-    month: str | None = Query(default=None),
-    category: str | None = Query(default=None),
-):
-    from features import company_expenses
-    rows = company_expenses.list_expenses(month=month, category=category)
-    # Merge months from company expenses + handler expenses + candidates
-    months_set = {m["value"] for m in company_expenses.available_months()}
-    try:
-        from features import handler_expenses
-        for m in handler_expenses.available_months():
-            months_set.add(m["value"])
-    except Exception:
-        pass
-    try:
-        from features import candidate_store
-        for m in candidate_store.available_months():
-            if isinstance(m, dict):
-                months_set.add(m["value"])
-            else:
-                months_set.add(m)
-    except Exception:
-        pass
-    # Build sorted month options
-    month_names = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-    all_months = []
-    for m in sorted(months_set, reverse=True):
-        try:
-            y, mo = m.split("-")
-            label = f"{month_names[int(mo) - 1]} {y}"
-        except (ValueError, IndexError):
-            label = m
-        all_months.append({"value": m, "label": label})
-    return {
-        "status": "ok",
-        "expenses": rows,
-        "available_months": all_months,
-        "categories": [
-            {"value": k, "label": v}
-            for k, v in company_expenses.CATEGORY_LABELS.items()
-        ],
-    }
 
 
-@app.post("/company-expenses", dependencies=[Depends(_require_fleet_admin)])
-async def company_expenses_create(body: dict):
-    from features import company_expenses
-    row = company_expenses.create_expense(body)
-    return {"status": "ok", "expense": row}
 
 
-@app.patch("/company-expenses/{eid}", dependencies=[Depends(_require_fleet_admin)])
-async def company_expenses_update(eid: str, body: dict):
-    from features import company_expenses
-    row = company_expenses.update_expense(eid, body)
-    if not row:
-        return {"status": "error", "message": "Not found"}
-    return {"status": "ok", "expense": row}
 
 
-@app.delete("/company-expenses/{eid}", dependencies=[Depends(_require_fleet_admin)])
-async def company_expenses_delete(eid: str):
-    from features import company_expenses
-    ok = company_expenses.delete_expense(eid)
-    return {"status": "ok" if ok else "not_found"}
 
 
-@app.get("/company-expenses/total")
-async def company_expenses_total(month: str | None = Query(default=None)):
-    """Combined view: handler payouts + company expenses = total expenditure."""
-    from features import company_expenses
-    result = company_expenses.total_expenditure(month=month)
-    return {"status": "ok", **result}
 
 
 # ── Handler base salaries (hybrid pay model) ────────────────────────────────────
@@ -4697,45 +1250,10 @@ async def company_expenses_total(month: str | None = Query(default=None)):
 # the candidates table). The hybrid total is what the Handler Payouts
 # card and Top Performers chips already show.
 
-@app.get("/handler-salaries")
-async def handler_salaries_list(month: str | None = Query(default=None)):
-    from features import handler_salaries
-    rows = handler_salaries.list_salaries()
-    by_handler = handler_salaries.salary_owed_by_handler(month=month)
-    return {
-        "status": "ok",
-        "salaries": rows,
-        "by_handler": by_handler,
-        "total_for_view": handler_salaries.total_salary_owed(month=month),
-        "month": month or "all",
-    }
 
 
-@app.post("/handler-salaries")
-async def handler_salaries_upsert(body: dict):
-    """Create or update one handler's monthly salary.
-
-    Body: { reference, monthly_salary, active_from?, active_until? }
-    Passing monthly_salary <= 0 clears the entry (same as DELETE).
-    """
-    from features import handler_salaries
-    try:
-        row = handler_salaries.set_salary(
-            reference     = body.get("reference") or "",
-            monthly_salary= body.get("monthly_salary") or 0,
-            active_from   = body.get("active_from"),
-            active_until  = body.get("active_until"),
-        )
-    except ValueError as e:
-        return {"status": "error", "message": str(e)}
-    return {"status": "ok", "salary": row}
 
 
-@app.delete("/handler-salaries/{reference}")
-async def handler_salaries_delete(reference: str):
-    from features import handler_salaries
-    removed = handler_salaries.delete_salary(reference)
-    return {"status": "ok" if removed else "not_found", "reference": reference}
 
 
 # ── Frontend (production) ───────────────────────────────────────────────────────
@@ -4802,3 +1320,30 @@ if os.path.exists(STATIC_DIR):
             os.path.join(STATIC_DIR, "index.html"),
             headers=_NO_CACHE,
         )
+
+
+# --- domain routers (extracted; Wave A) ---
+from api.routers.accounts import router as accounts_router
+app.include_router(accounts_router)
+from api.routers.ai import router as ai_router
+app.include_router(ai_router)
+from api.routers.auth import router as auth_router
+app.include_router(auth_router)
+from api.routers.candidates import router as candidates_router
+app.include_router(candidates_router)
+from api.routers.crm import router as crm_router
+app.include_router(crm_router)
+from api.routers.data_room import router as data_room_router
+app.include_router(data_room_router)
+from api.routers.expenses import router as expenses_router
+app.include_router(expenses_router)
+from api.routers.fleet import router as fleet_router
+app.include_router(fleet_router)
+from api.routers.forwarding import router as forwarding_router
+app.include_router(forwarding_router)
+from api.routers.groups import router as groups_router
+app.include_router(groups_router)
+from api.routers.inbox import router as inbox_router
+app.include_router(inbox_router)
+from api.routers.stats import router as stats_router
+app.include_router(stats_router)
