@@ -16,8 +16,8 @@ def isolated_registry(monkeypatch, tmp_path):
                 "referrers": [
                     {
                         "id": "referrer-pavan-kalyan",
-                        "name": "Referrer One",
-                        "aliases": ["Referrer One", "Referrer One"],
+                        "name": "Sample Referrer",
+                        "aliases": ["Sample Referrer", "SAMPLE REFERRER TWO"],
                         "is_active": True,
                     },
                     {
@@ -40,7 +40,7 @@ def isolated_registry(monkeypatch, tmp_path):
     monkeypatch.setattr(
         referrer_registry,
         "_dynamic_reference_names",
-        lambda: ["PAVAN KALYAN", "Thrilok"],
+        lambda: ["SAMPLE REFERRER", "Thrilok"],
     )
     return referrers_path, accounts_path
 
@@ -49,10 +49,10 @@ def test_existing_pavan_aliases_resolve_to_one_stable_referrer(isolated_registry
     rows = referrer_registry.list_referrers()
 
     assert len(rows) == 2
-    assert referrer_registry.resolve_referrer("Referrer One")["id"] == (
+    assert referrer_registry.resolve_referrer("Sample Referrer")["id"] == (
         "referrer-pavan-kalyan"
     )
-    assert referrer_registry.resolve_referrer("Referrer One")["id"] == (
+    assert referrer_registry.resolve_referrer("SAMPLE REFERRER TWO")["id"] == (
         "referrer-pavan-kalyan"
     )
 
@@ -63,8 +63,8 @@ def test_admin_account_lifecycle_masks_identifier_and_preserves_history(
     created = referrer_registry.add_payment_account(
         "referrer-pavan-kalyan",
         {
-            "account_holder_name": "Referrer One",
-            "upi_id": "PavanKalyan42761 @ okaxis",
+            "account_holder_name": "SAMPLE REFERRER TWO",
+            "upi_id": "SampleRef42761 @ okaxis",
             "provider_name": "UPI",
         },
         actor="admin@example.test",

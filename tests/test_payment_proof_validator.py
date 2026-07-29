@@ -4,7 +4,7 @@ from features.payment_proof_validator import _extract_max_amount
 def test_extract_amount_prefers_payment_over_masked_account_and_ad_price():
     ocr_text = """Payment Successful
 21 May 2026 at 10:03 AM
-Referrer Three
+SAMPLE REFERRER
 ******5810
 ~10,000 Split Expense
 Get Powered Eyeglasses with Blu Lens at $999

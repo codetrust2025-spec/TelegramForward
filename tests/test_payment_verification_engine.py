@@ -18,7 +18,7 @@ def _isolated_receiver_registry(monkeypatch, tmp_path):
 def _extraction(**patch):
     row = {
         "amount": 5000,
-        "receiver_name": "J Ravinder",
+        "receiver_name": "SAMPLE RECEIVER",
         "receiver_upi_id": "company@upi",
         "receiver_phone": "",
         "receiver_account": "",
@@ -80,7 +80,7 @@ def test_exact_verified_identifier_overrides_only_model_confidence(
         b"low-confidence-exact-receipt",
         source_module="handler_expense_create",
         expected_amount=5000,
-        entity_name="J Ravinder",
+        entity_name="SAMPLE RECEIVER",
         purpose="handler_payout",
     )
 
@@ -310,7 +310,7 @@ def test_pawan_kalyan_exact_upi_end_to_end(monkeypatch, tmp_path):
                     "id": "referrer-pawan-kalyan",
                     "referrer_id": "pawan-kalyan",
                     "name": "Referrer One",
-                    "account_holder_name": "Referrer One",
+                    "account_holder_name": "SAMPLE REFERRER",
                     "upi_ids": ["referrer@upi"],
                     "verification_status": "VERIFIED",
                     "active": True,
@@ -322,7 +322,7 @@ def test_pawan_kalyan_exact_upi_end_to_end(monkeypatch, tmp_path):
         monkeypatch,
         _extraction(
             amount=1000,
-            receiver_name="Referrer One",
+            receiver_name="SAMPLE REFERRER",
             receiver_upi_id="referrer@upi",
             transaction_id="T2607152036338548026419",
             utr_number="727950697571",
@@ -366,7 +366,7 @@ def test_pavan_receiver_classification_does_not_depend_on_amount(
                 {
                     "id": "referrer-pavan-account",
                     "referrer_id": "referrer-pavan-kalyan",
-                    "name": "Referrer One",
+                    "name": "SAMPLE REFERRER",
                     "upi_ids": ["referrer@upi"],
                     "verification_status": "VERIFIED",
                     "active": True,
@@ -378,8 +378,8 @@ def test_pavan_receiver_classification_does_not_depend_on_amount(
         monkeypatch,
         _extraction(
             amount=amount,
-            receiver_name="Referrer One",
-            receiver_upi_id="PAVANKALYAN42761@OKAXIS",
+            receiver_name="SAMPLE REFERRER",
+            receiver_upi_id="REFERRER@UPI",
             transaction_id=f"PAVAN-{amount}",
             utr_number=f"UTR-{amount}",
         ),
@@ -473,9 +473,9 @@ def test_upi_normalization_is_exact_not_partial(monkeypatch):
         json.dumps([{"name": "Pawan", "upi_ids": ["referrer@upi"]}]),
     )
     exact = engine.classify_receiver(
-        {"receiver_upi_id": " PavanKalyan42761 @ okaxis "}
+        {"receiver_upi_id": " Referrer @ Upi "}
     )
-    partial = engine.classify_receiver({"receiver_upi_id": "kalyan42761@okaxis"})
+    partial = engine.classify_receiver({"receiver_upi_id": "ferrer@upi"})
     assert exact["receiver_type"] == "referrer"
     assert exact["receiver_match"] == "upi"
     assert partial["receiver_type"] == "unknown"
@@ -647,7 +647,7 @@ def test_thrilok_exact_full_phone_is_amount_independent(
             [
                 {
                     "id": "thrilok-phone",
-                    "name": "Referrer Three",
+                    "name": "SAMPLE REFERRER TWO",
                     "referrer_id": "referrer-thrilok",
                     "payment_phone_number": "+91 99598 85810",
                     "verification_status": "VERIFIED",
@@ -660,7 +660,7 @@ def test_thrilok_exact_full_phone_is_amount_independent(
         _extraction(
             amount=amount,
             direction="PAID_TO",
-            receiver_name="Referrer Three",
+            receiver_name="SAMPLE REFERRER TWO",
             receiver_upi_id="",
             receiver_phone_number="9959885810",
             utr_number=f"THRILOK{amount}",
@@ -694,7 +694,7 @@ def test_venugopal_exact_full_phone_is_amount_independent(
             [
                 {
                     "id": "venugopal-phone",
-                    "name": "Referrer Two",
+                    "name": "SAMPLE REFERRER ONE",
                     "referrer_id": "referrer-venugopal",
                     "payment_phone_number": "+919000000002",
                     "verification_status": "VERIFIED",
@@ -707,9 +707,9 @@ def test_venugopal_exact_full_phone_is_amount_independent(
         _extraction(
             amount=amount,
             direction="PAID_TO",
-            receiver_name="Referrer Two",
+            receiver_name="SAMPLE REFERRER ONE",
             receiver_upi_id="",
-            receiver_phone_number="+91 87906 68020",
+            receiver_phone_number="+91 90000 00002",
             utr_number=f"VENUGOPAL{amount}",
         ),
     )
@@ -736,7 +736,7 @@ def test_masked_phone_is_incomplete_and_never_auto_approved(monkeypatch, tmp_pat
             [
                 {
                     "id": "thrilok-phone",
-                    "name": "Referrer Three",
+                    "name": "SAMPLE REFERRER TWO",
                     "referrer_id": "referrer-thrilok",
                     "payment_phone_number": "+919000000003",
                     "verification_status": "VERIFIED",
@@ -748,7 +748,7 @@ def test_masked_phone_is_incomplete_and_never_auto_approved(monkeypatch, tmp_pat
         monkeypatch,
         _extraction(
             direction="PAID_TO",
-            receiver_name="Referrer Three",
+            receiver_name="SAMPLE REFERRER TWO",
             receiver_upi_id="",
             receiver_phone_number="******5810",
             utr_number="MASKED5810",
@@ -775,14 +775,14 @@ def test_received_from_sender_maps_only_credited_to_owner(monkeypatch, tmp_path)
             [
                 {
                     "id": "thrilok-upi",
-                    "name": "Referrer Three",
+                    "name": "SAMPLE REFERRER TWO",
                     "referrer_id": "referrer-thrilok",
                     "upi_id": "thrilok@upi",
                     "verification_status": "VERIFIED",
                 },
                 {
                     "id": "ravinder-upi",
-                    "name": "Ravinder",
+                    "name": "Sample Referrer Three",
                     "referrer_id": "referrer-ravinder",
                     "upi_id": "referrer3@upi",
                     "verification_status": "VERIFIED",
@@ -794,7 +794,7 @@ def test_received_from_sender_maps_only_credited_to_owner(monkeypatch, tmp_path)
         monkeypatch,
         _extraction(
             direction="RECEIVED_FROM",
-            receiver_name="Referrer Three",
+            receiver_name="SAMPLE REFERRER TWO",
             receiver_upi_id="thrilok@upi",
             credited_to_identifier="referrer3@upi",
             utr_number="DIRECTION123",
@@ -809,9 +809,9 @@ def test_received_from_sender_maps_only_credited_to_owner(monkeypatch, tmp_path)
     )
 
     assert result["verification_state"] == "VERIFIED_REFERRER_PAYMENT"
-    assert result["receiver_registry_name"] == "Ravinder"
+    assert result["receiver_registry_name"] == "Sample Referrer Three"
     assert result["matched_referrer_id"] == "referrer-ravinder"
-    assert result["receiver_registry_name"] != "Referrer Three"
+    assert result["receiver_registry_name"] != "SAMPLE REFERRER TWO"
 
 
 def test_received_from_preserves_explicit_receiver_when_both_parties_extracted(
@@ -824,7 +824,7 @@ def test_received_from_preserves_explicit_receiver_when_both_parties_extracted(
             [
                 {
                     "id": "pavan-upi",
-                    "name": "Referrer One",
+                    "name": "SAMPLE REFERRER",
                     "referrer_id": "referrer-pavan-kalyan",
                     "upi_id": "referrer@upi",
                     "verification_status": "VERIFIED",
@@ -836,9 +836,9 @@ def test_received_from_preserves_explicit_receiver_when_both_parties_extracted(
         monkeypatch,
         _extraction(
             direction="RECEIVED_FROM",
-            sender_name="Payer Name",
+            sender_name="SAMPLE SENDER",
             sender_upi_id="sender@upi",
-            receiver_name="Referrer One",
+            receiver_name="SAMPLE REFERRER",
             receiver_upi_id="referrer@upi",
             credited_to_identifier="State Bank of India 4485",
             transaction_id="484653160050",
@@ -856,7 +856,7 @@ def test_received_from_preserves_explicit_receiver_when_both_parties_extracted(
         purpose="expense_reimbursement",
     )
 
-    assert result["receiver_registry_name"] == "Referrer One"
+    assert result["receiver_registry_name"] == "SAMPLE REFERRER"
     assert result["receiver_match"] == "upi"
     assert result["verification_state"] == "VERIFIED_REFERRER_PAYMENT"
     assert result["deterministic_verified"] is True
