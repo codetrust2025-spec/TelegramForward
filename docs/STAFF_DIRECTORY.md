@@ -27,7 +27,7 @@ cp config/staff_directory.example.json config/staff_directory.json
   "persona_name": "Karthik",
   "members": {
     "senior_tech":    {"name": "…", "phone": "9000000001",      "whatsapp": "https://wa.me/91…"},
-    "data_lead":      {"name": "…", "phone": "+91 90323 88581", "whatsapp": "https://wa.me/91…"},
+    "data_lead":      {"name": "…", "phone": "+91 90000 00002", "whatsapp": "https://wa.me/91…"},
     "react_lead_a":   {"name": "…", "phone": "+91 …",           "whatsapp": "https://wa.me/91…"},
     "react_lead_b":   {"name": "…", "phone": "+91 …",           "whatsapp": "https://wa.me/91…"},
     "devops_lead":    {"name": "…", "phone": "+91 …",           "whatsapp": "https://wa.me/91…"},
