@@ -51,6 +51,25 @@ def _install_extractor(monkeypatch, value):
     return calls
 
 
+def _write_referrer_registry(tmp_path, *names):
+    """Register placeholder referrer names so resolve_referrer() verifies them,
+    keeping tests self-contained (no dependency on ambient/real referrer data)."""
+    path = tmp_path / "referrers.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "referrers": [
+                    {"id": f"referrer-{i}", "name": n, "aliases": [], "is_active": True}
+                    for i, n in enumerate(names)
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
 def test_company_payment_uses_ollama_only_and_posts_credit(monkeypatch, tmp_path):
     monkeypatch.setenv("PAYMENT_VERIFICATION_LEDGER_FILE", str(tmp_path / "ledger.json"))
     calls = _install_extractor(monkeypatch, _extraction())
@@ -210,6 +229,9 @@ def test_referrer_allocation_uses_configurable_split(monkeypatch, tmp_path):
     monkeypatch.setenv(
         "PAYMENT_COMMISSION_RULES_JSON", json.dumps({"Referrer One": 40})
     )
+    monkeypatch.setenv(
+        "REFERRER_REGISTRY_FILE", _write_referrer_registry(tmp_path, "Referrer One")
+    )
     _install_extractor(
         monkeypatch,
         _extraction(
@@ -318,6 +340,9 @@ def test_pawan_kalyan_exact_upi_end_to_end(monkeypatch, tmp_path):
             ]
         ),
     )
+    monkeypatch.setenv(
+        "REFERRER_REGISTRY_FILE", _write_referrer_registry(tmp_path, "Referrer One")
+    )
     _install_extractor(
         monkeypatch,
         _extraction(
@@ -342,7 +367,7 @@ def test_pawan_kalyan_exact_upi_end_to_end(monkeypatch, tmp_path):
     )
 
     assert result["verification_state"] == "VERIFIED_REFERRER_PAYMENT"
-    assert result["referrer_id"] == "referrer-pavan-kalyan"
+    assert result["referrer_id"] == "referrer-0"
     assert result["booking_eligible"] is True
     assert result["ledger_status"] == "posted"
     row = engine.ledger_entries()[0]
@@ -490,6 +515,9 @@ def test_default_half_split_for_variable_amounts(monkeypatch, tmp_path, amount):
     monkeypatch.setenv(
         "PAYMENT_REFERRER_RECEIVERS_JSON",
         json.dumps([{"name": "Referrer One", "upi_ids": ["pawan@upi"]}]),
+    )
+    monkeypatch.setenv(
+        "REFERRER_REGISTRY_FILE", _write_referrer_registry(tmp_path, "Referrer One")
     )
     _install_extractor(
         monkeypatch,
