@@ -29,6 +29,9 @@ module.exports = {
         PORT: "8000",
         NO_RELOAD: "1",
         LOG_LEVEL: "info",
+        // Company payee UPI handles (all route to J Ravinder's account).
+        // Unioned with the payment_upi_id runtime config; add new handles here.
+        COMPANY_PAYMENT_UPI_IDS: "raviarvind1111@ybl",
         OCR_ENABLED: "false",
         OLLAMA_BASE_URL: "http://127.0.0.1:11435",
         OLLAMA_REMOTE_ENABLED: "true",
