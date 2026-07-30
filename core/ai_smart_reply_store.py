@@ -40,7 +40,21 @@ STAGE_CLOSED = "closed"
 VALID_STAGES = {STAGE_GREETING, STAGE_QUALIFY, STAGE_VALUE, STAGE_CTA, STAGE_CLOSED}
 
 
-from core.karthik_business_prompt import KARTHIK_BUSINESS_PROMPT
+# The Karthik business prompt lives outside git (config/karthik/business.md via
+# core.karthik.playbooks). If that source tree is absent in a deployment, fall
+# back gracefully instead of failing the whole module import — otherwise
+# get_config()/update_config() become unusable and every consumer that reads
+# runtime settings (payment_upi_id, model, CTA link, …) silently degrades.
+try:
+    from core.karthik_business_prompt import KARTHIK_BUSINESS_PROMPT
+except Exception:
+    try:
+        from core.karthik.playbooks import get_business_prompt
+
+        KARTHIK_BUSINESS_PROMPT = get_business_prompt()
+    except Exception:
+        KARTHIK_BUSINESS_PROMPT = ""
+
 from core import staff_directory as _staff
 
 _DEFAULT_BUSINESS_PROMPT = KARTHIK_BUSINESS_PROMPT
