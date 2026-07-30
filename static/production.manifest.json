@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "description": "Pinned production assets \u2014 live site must match these hashes.",
+  "git_commit": "0025c2758ba33a0a378a1a40b2109c0d6a058227",
+  "git_commit_short": "0025c27",
+  "deployed_at": "2026-07-30T06:43:17Z",
+  "js": "assets/app-lNcihEWM.js",
+  "css": "assets/index-C0OkZimz.css",
+  "js_sha256": "fae6d3727d81270670193f63348afbcc4fa50ca106e0ecb76fc9fdea5df7ade7",
+  "css_sha256": "dab8fb10379bdc452ee36ed4d2b19dcea9876a1b18e4f9754b2c29f53bac0825",
+  "js_bytes": 1361273,
+  "css_bytes": 667950,
+  "server_py_sha256": "82a2e30d46dccf320de0ba33336fa64de534fb73203eebe3b8544ef3a6404fc3"
+}
