@@ -415,6 +415,11 @@ def is_free_service_candidate(name: str) -> bool:
 RE_SERVICE_STATUS = "re_service"
 
 
+def re_service_grant_allowed(role: str) -> bool:
+    """Only administrators may issue the one-time Re-Service entitlement."""
+    return _clean_str(role).lower() == "admin"
+
+
 def row_has_re_service_grant(row: dict) -> bool:
     """True when this row carries an unused Re-Service entitlement."""
     if not isinstance(row, dict):
@@ -450,6 +455,7 @@ def find_re_service_grant(
         hit = next((r for r in grants if str(r.get("id") or "") == cid), None)
         if hit:
             return hit
+        return None
 
     phone_key = candidate_phone_identity(phone)
     round_label = normalise_interview_round(interview_round)
@@ -470,6 +476,7 @@ def find_re_service_grant(
                 if exact:
                     return exact
             return by_phone[0]
+        return None
 
     name_key = _normalise_candidate_name_key(canonical_candidate_name(_clean_str(name)))
     if name_key:
@@ -1264,6 +1271,33 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         ),
         "paymentReusedByBookingId": _clean_str(
             record.get("paymentReusedByBookingId", base.get("paymentReusedByBookingId"))
+        ),
+        "re_service_eligible": _coerce_bool(
+            record.get("re_service_eligible", base.get("re_service_eligible", False))
+        ),
+        "re_service_consumed": _coerce_bool(
+            record.get("re_service_consumed", base.get("re_service_consumed", False))
+        ),
+        "re_service_booking": _coerce_bool(
+            record.get("re_service_booking", base.get("re_service_booking", False))
+        ),
+        "re_service_grant_row_id": _clean_str(
+            record.get("re_service_grant_row_id", base.get("re_service_grant_row_id"))
+        ),
+        "re_service_granted_at": _clean_str(
+            record.get("re_service_granted_at", base.get("re_service_granted_at"))
+        ),
+        "re_service_granted_by": _clean_str(
+            record.get("re_service_granted_by", base.get("re_service_granted_by"))
+        ),
+        "re_service_consumed_at": _clean_str(
+            record.get("re_service_consumed_at", base.get("re_service_consumed_at"))
+        ),
+        "re_service_consumed_booking_id": _clean_str(
+            record.get(
+                "re_service_consumed_booking_id",
+                base.get("re_service_consumed_booking_id"),
+            )
         ),
         "telegram_slot":    _clean_str(record.get("telegram_slot", base.get("telegram_slot"))),
         "telegram_user_id": int(record.get("telegram_user_id") or base.get("telegram_user_id") or 0) or None,
@@ -4311,6 +4345,7 @@ def import_confirmed_interview_slot(**kwargs) -> tuple[dict, str]:
         name=_clean_str(kwargs.get("name") or ""),
         phone=_clean_str(kwargs.get("phone") or ""),
         interview_round=_clean_str(kwargs.get("interview_round") or ""),
+        candidate_id=_clean_str(kwargs.get("candidate_id") or ""),
     )
     row, action = _import_confirmed_interview_slot(**kwargs)
     if grant and isinstance(row, dict) and row.get("id"):
@@ -4358,6 +4393,7 @@ def _import_confirmed_interview_slot(
     payment_proof_id: str | None = None,
     pending_payment_proof: tuple[str, dict] | None = None,
     payment_reuse: dict | None = None,
+    candidate_id: str = "",
     idempotency_key: str = "",
     slot_image: bytes | None = None,
     slot_image_name: str = "",
@@ -4384,7 +4420,10 @@ def _import_confirmed_interview_slot(
         if previous:
             return previous, "skip_exists"
     re_service_grant = find_re_service_grant(
-        name=canon, phone=phone, interview_round=interview_round
+        name=canon,
+        phone=phone,
+        interview_round=interview_round,
+        candidate_id=candidate_id,
     )
     pay_block = None
     if not pending_payment_proof and not re_service_grant:

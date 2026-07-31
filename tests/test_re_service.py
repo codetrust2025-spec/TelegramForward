@@ -77,6 +77,21 @@ def test_grant_is_found_by_phone_and_round(store):
     assert cs.find_re_service_grant(phone="9000000000", name="Someone Else") is None
 
 
+def test_grant_does_not_fall_back_to_name_when_phone_or_id_mismatches(store):
+    row = _mk(store, name="Strict Identity", phone="9876500034", interview_round="L2")
+    cs.set_interview_attendance(row["id"], status="re_service", by="admin")
+
+    assert cs.find_re_service_grant(name=row["name"], phone="9000000000") is None
+    assert cs.find_re_service_grant(name=row["name"], candidate_id="different-id") is None
+
+
+def test_only_admin_can_grant_re_service():
+    assert cs.re_service_grant_allowed("admin") is True
+    assert cs.re_service_grant_allowed("ADMIN") is True
+    assert cs.re_service_grant_allowed("handler") is False
+    assert cs.re_service_grant_allowed("") is False
+
+
 def test_completed_re_service_interview_burns_the_grant(store):
     row = _mk(store, name="Burn Once", phone="9876500044")
     cs.set_interview_attendance(row["id"], status="re_service", by="admin")
