@@ -63,6 +63,17 @@ def save_verified_proof(*, name: str, service_type: str, data: bytes, original_n
         raise ValueError("File too large (max 8 MB)")
     if not verification.get("booking_eligible"):
         raise ValueError("Payment proof is not verified for booking")
+    from features.payment_fraud_detection import assess_payment_proof
+
+    fraud_check = assess_payment_proof(
+        data,
+        verification,
+        candidate_id=candidate_id,
+        candidate_name=name,
+        candidate_phone=phone,
+    )
+    if fraud_check["decision"] == "rejected":
+        raise ValueError(" ".join(fraud_check["reasons"]))
     proof_id = uuid.uuid4().hex
     extension = _extension(mime_type, original_name)
     filename = f"{proof_id}.{extension}"
@@ -72,7 +83,7 @@ def save_verified_proof(*, name: str, service_type: str, data: bytes, original_n
     with open(temporary, "wb") as handle:
         handle.write(data)
     os.replace(temporary, path)
-    entry = {"id": proof_id, "filename": filename, "original_name": str(original_name or filename)[:160], "mime_type": mime_type or f"image/{extension}", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "name_key": _name_key(name), "service_type": str(service_type or "").strip() or "profile_service", "phone": str(phone or "").strip(), "candidate_id": str(candidate_id or "").strip(), "technology": str(technology or "").strip(), "interview_round": str(interview_round or "").strip(), "amount_due": max(0, int(amount_due or 0)), "note": str(note or "")[:200], "uploaded_at": _now_iso(), "verification": dict(verification)}
+    entry = {"id": proof_id, "filename": filename, "original_name": str(original_name or filename)[:160], "mime_type": mime_type or f"image/{extension}", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "name_key": _name_key(name), "service_type": str(service_type or "").strip() or "profile_service", "phone": str(phone or "").strip(), "candidate_id": str(candidate_id or "").strip(), "technology": str(technology or "").strip(), "interview_round": str(interview_round or "").strip(), "amount_due": max(0, int(amount_due or 0)), "note": str(note or "")[:200], "uploaded_at": _now_iso(), "verification": dict(verification), "fraud_check": fraud_check, "message": fraud_check.get("message") or "", "previousBookingId": fraud_check.get("previousBookingId") or "", "reusedPaymentId": fraud_check.get("reusedPaymentId") or ""}
     with _lock:
         index = _load()
         index["proofs"][proof_id] = entry
@@ -115,3 +126,26 @@ def get_verified_proof(proof_id: str, *, name: str, service_type: str, phone: st
         return None
     path = os.path.join(PENDING_PAYMENT_DIR, str(entry.get("filename") or ""))
     return (path, entry) if os.path.isfile(path) else None
+
+
+def validate_for_confirmation(
+    pending_payment_proof: tuple[str, dict],
+    *,
+    phone: str = "",
+    candidate_id: str = "",
+) -> dict:
+    path, pending = pending_payment_proof
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    from features.payment_fraud_detection import assess_payment_proof
+
+    fraud_check = assess_payment_proof(
+        raw,
+        dict(pending.get("verification") or {}),
+        candidate_id=candidate_id,
+        candidate_name=str(pending.get("name_key") or ""),
+        candidate_phone=phone or str(pending.get("phone") or ""),
+    )
+    if fraud_check["decision"] == "rejected":
+        raise ValueError(" ".join(fraud_check["reasons"]))
+    return fraud_check
