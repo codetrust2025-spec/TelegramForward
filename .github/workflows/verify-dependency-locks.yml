@@ -22,8 +22,6 @@ jobs:
       PIP_NO_CACHE_DIR: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PIP_NO_INPUT: "1"
-      npm_config_cache: ${{ runner.temp }}/npm-cache
-      ARTIFACT_DIR: ${{ runner.temp }}/dependency-locks
 
     steps:
       - name: Check out recovery source without credentials
@@ -40,6 +38,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20.19.0"
+
+      - name: Initialize temporary paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ARTIFACT_DIR=$RUNNER_TEMP/dependency-locks" >> "$GITHUB_ENV"
+          echo "npm_config_cache=$RUNNER_TEMP/npm-cache" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/dependency-locks"
+          mkdir -p "$RUNNER_TEMP/npm-cache"
 
       - name: Verify sanitized runner inputs
         shell: bash
