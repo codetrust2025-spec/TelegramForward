@@ -63,13 +63,6 @@ function formatFriendlyTime(hhmm) {
   return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })
 }
 
-function formatElapsed(seconds) {
-  const safeSeconds = Math.max(0, Number(seconds) || 0)
-  const minutes = Math.floor(safeSeconds / 60)
-  const remainder = safeSeconds % 60
-  return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
-}
-
 /** Convert any time to 12-hour "hh:mm AM/PM" format */
 function normalizeTo12h(val) {
   if (!val) return ''
@@ -185,7 +178,7 @@ function dedupeCandidates(rows) {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }))
 }
 
-function SlotCandidatePicker({ candidates, value, onChange, disabled }) {
+function SlotCandidatePicker({ candidates, value, onChange, disabled, inputRef }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef(null)
   const options = useMemo(() => dedupeCandidates(candidates), [candidates])
@@ -202,7 +195,7 @@ function SlotCandidatePicker({ candidates, value, onChange, disabled }) {
         <svg className="sbs-picker__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
         </svg>
-        <input className="sbs-input sbs-name-input" value={value}
+        <input ref={inputRef} className="sbs-input sbs-name-input" value={value}
           onChange={e => { onChange(e.target.value); setOpen(true) }}
           onFocus={() => setOpen(true)}
           placeholder="Choose or type your name" disabled={disabled}
@@ -225,61 +218,26 @@ function SlotCandidatePicker({ candidates, value, onChange, disabled }) {
   )
 }
 
-/** Payment AI extraction result card — shown in the public slot booking form after proof upload */
+/** Compact payment verification summary shown after proof upload. */
 function PaymentAiResultCard({ ai }) {
   if (!ai) return null
-  const verified = ai.verified
+  const verified = Boolean(ai.verified || ai.booking_eligible || ai.company_payment_verified)
   const referrerVerified = ai.verification_state === 'VERIFIED_REFERRER_PAYMENT'
-  const amount = ai.amount ? `₹${Number(ai.amount).toLocaleString('en-IN')}` : null
-  const utr = ai.utr_number || ai.reference_number || null
-  const app = ai.payment_app || null
   const status = ai.status || 'unknown'
-  const narrative = ai.narrative || ai.verification_result || null
-  const confidence = ai.confidence_score || 0
-  const receiver = ai.receiver_registry_name || ai.receiver_name || null
-  const receiverUpi = ai.receiver_upi_id || null
-
-  const borderColor = verified ? 'rgba(34,197,94,0.35)' : status === 'failed' ? 'rgba(239,68,68,0.35)' : 'rgba(251,191,36,0.35)'
-  const bgColor = verified ? 'rgba(34,197,94,0.07)' : status === 'failed' ? 'rgba(239,68,68,0.06)' : 'rgba(251,191,36,0.06)'
-  const icon = verified ? '✓' : status === 'failed' ? '✗' : '⚠'
-  const iconColor = verified ? '#22c55e' : status === 'failed' ? '#ef4444' : '#fbbf24'
+  const stateClass = verified ? 'success' : status === 'failed' ? 'error' : 'warn'
 
   return (
-    <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: '8px', background: bgColor, border: `1px solid ${borderColor}`, fontSize: '12px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: narrative ? '6px' : 0 }}>
-        <span style={{ fontWeight: 700, color: iconColor, fontSize: '14px' }}>{icon}</span>
-        <span style={{ fontWeight: 600, color: 'rgba(226,232,240,0.9)' }}>
-          {referrerVerified
-            ? 'Registered Referrer Payment Detected'
-            : verified
-              ? 'Company payment verified'
-              : status === 'failed'
-                ? 'Payment failed'
-                : 'Payment needs review'}
-        </span>
-        {confidence > 0 && (
-          <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'rgba(148,163,184,0.7)' }}>
-            {ai.detected_by || ai.primary_model || 'AI'} · {confidence}%
-          </span>
-        )}
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', color: 'rgba(226,232,240,0.8)', marginBottom: narrative ? '6px' : 0 }}>
-        {amount && <span>💰 {amount}</span>}
-        {utr && <span>🔖 UTR {utr}</span>}
-        {app && <span>📱 {app}</span>}
-        {ai.payment_date && <span>📅 {ai.payment_date}</span>}
-        {ai.sender_name && <span>👤 {ai.sender_name}</span>}
-        {receiver && <span>Receiver: {receiver}</span>}
-        {receiverUpi && <span>UPI: {receiverUpi}</span>}
-      </div>
-      {referrerVerified && (
-        <p style={{ margin: narrative ? '0 0 6px' : 0, color: 'rgba(134,239,172,0.95)', lineHeight: 1.45 }}>
-          Booking can continue. The company share is recorded for recovery in the referrer settlement ledger.
-        </p>
-      )}
-      {narrative && (
-        <p style={{ margin: 0, color: 'rgba(203,213,225,0.85)', fontStyle: 'italic', lineHeight: 1.45 }}>{narrative}</p>
-      )}
+    <div className={`sbs-verify-badge sbs-verify-badge--${stateClass}`} role="status">
+      <span>{verified ? '✓' : status === 'failed' ? '✕' : '!'}</span>
+      <strong>
+        {referrerVerified
+          ? 'Referrer payment verified'
+          : verified
+            ? 'Payment verified'
+            : status === 'failed'
+              ? 'Payment failed'
+              : 'Payment needs review'}
+      </strong>
     </div>
   )
 }
@@ -292,8 +250,6 @@ export function SubmitSlotPage() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [parsing, setParsing] = useState(false)
-  const [parseElapsed, setParseElapsed] = useState(0)
-  const parseStartedAtRef = useRef(0)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [name, setName] = useState('')
@@ -315,14 +271,20 @@ export function SubmitSlotPage() {
   const [roundWisePhone, setRoundWisePhone] = useState('')
   const [serviceType, setServiceType] = useState('profile_service')
   const [showServiceDrop, setShowServiceDrop] = useState(false)
-  const [triedSubmit, setTriedSubmit] = useState(false)
+  const [validationError, setValidationError] = useState(null)
   const [aiExtraction, setAiExtraction] = useState(null)
   const [aiBlocked, setAiBlocked] = useState('')
   const [userEditedFields, setUserEditedFields] = useState({})
   const [paymentAiResult, setPaymentAiResult] = useState(null)
   const [paymentAnalysing, setPaymentAnalysing] = useState(false)
-  const [paymentElapsed, setPaymentElapsed] = useState(0)
-  const paymentStartedAtRef = useRef(0)
+  const clientNameRef = useRef(null)
+  const roundRef = useRef(null)
+  const phoneRef = useRef(null)
+  const technologyRef = useRef(null)
+  const paymentRef = useRef(null)
+  const inviteRef = useRef(null)
+  const manualDateRef = useRef(null)
+  const manualTimeRef = useRef(null)
 
   const effectiveName = name.trim()
   const selected = useMemo(() => {
@@ -342,20 +304,24 @@ export function SubmitSlotPage() {
 
   const highConfidenceAiResult = Boolean(
     aiExtraction
-    && Number(aiExtraction.confidence_score) >= 90
+    && aiExtraction.auto_booking_safe === true
     && (aiExtraction.interview_date || aiExtraction.date)
     && (aiExtraction.start_time || aiExtraction.time)
     && !aiExtraction.verification_conflict
     && aiExtraction.looks_like_interview_invite !== false
     && !aiExtraction.is_payment_screenshot
   )
-  const showManualSlotFields = Boolean(slotFile && !parsing && !highConfidenceAiResult)
+  const showManualSlotFields = Boolean(
+    slotFile
+    && !parsing
+    && (
+      aiExtraction?.manual_fields_required === true
+      || (!highConfidenceAiResult && !parsedSlot?.date)
+    )
+  )
   // Every round-wise booking must have a freshly verified payment receipt,
   // including a first-time name that is not yet present in the roster.
   const showPaymentCard = serviceType === 'round_wise' || Boolean(selected?.needs_payment_proof || paymentDue)
-  const paymentBalanceDue = selected?.needs_payment_proof
-    ? (selected.balance_due || 0)
-    : (paymentDue?.balance_due || (serviceType === 'round_wise' ? 5000 : 0))
   const needsPaymentProof = Boolean(showPaymentCard && !paymentProofId)
   const roundWisePhoneDigits = roundWisePhone.replace(/\D/g, '')
   const roundWisePhoneValid = serviceType !== 'round_wise'
@@ -364,23 +330,34 @@ export function SubmitSlotPage() {
   // A payment_due answer belongs to one name — drop it as soon as that changes.
   useEffect(() => { setPaymentDue(null) }, [effectiveName, serviceType])
 
-  useEffect(() => {
-    if (!parsing) return undefined
-    const startedAt = parseStartedAtRef.current || Date.now()
-    const timer = window.setInterval(() => {
-      setParseElapsed(Math.floor((Date.now() - startedAt) / 1000))
-    }, 250)
-    return () => window.clearInterval(timer)
-  }, [parsing])
+  const validationRefs = {
+    client_name: clientNameRef,
+    interview_round: roundRef,
+    phone: phoneRef,
+    technology: technologyRef,
+    payment: paymentRef,
+    invite: inviteRef,
+    invite_datetime: manualDateRef,
+  }
 
-  useEffect(() => {
-    if (!paymentAnalysing) return undefined
-    const startedAt = paymentStartedAtRef.current || Date.now()
-    const timer = window.setInterval(() => {
-      setPaymentElapsed(Math.floor((Date.now() - startedAt) / 1000))
-    }, 250)
-    return () => window.clearInterval(timer)
-  }, [paymentAnalysing])
+  function showValidationError(field, message) {
+    setValidationError({ field, message })
+    window.requestAnimationFrame(() => {
+      const target = validationRefs[field]?.current || inviteRef.current
+      target?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+      target?.focus?.({ preventScroll: true })
+    })
+  }
+
+  function clearValidationError(field) {
+    setValidationError(current => current?.field === field ? null : current)
+  }
+
+  function inlineError(field) {
+    return validationError?.field === field
+      ? <span className="sbs-hint sbs-hint--warn" role="alert">{validationError.message}</span>
+      : null
+  }
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -410,9 +387,6 @@ export function SubmitSlotPage() {
 
   async function parseScreenshot(file) {
     if (!file) { setParsedSlot(null); setAiExtraction(null); setAiBlocked(''); return }
-    const parseStartedAt = Date.now()
-    parseStartedAtRef.current = parseStartedAt
-    setParseElapsed(0)
     setParsing(true); setError(''); setSuccess(''); setAiExtraction(null); setAiBlocked('')
     try {
       // Try AI extraction first
@@ -466,7 +440,11 @@ export function SubmitSlotPage() {
           return
         }
 
-        console.warn('[Invite extraction] automatic booking blocked; manual verification required', ext)
+        console.warn(
+          '[Invite extraction] automatic booking blocked',
+          ext.failure_stage || 'unknown',
+          ext.failure_reason || ext.warnings || ext,
+        )
         setParsedSlot(null)
         setParsing(false)
         return
@@ -474,17 +452,26 @@ export function SubmitSlotPage() {
     } catch (e) {
       console.warn('AI extraction failed; automatic booking blocked:', e)
       setParsedSlot(null)
-      setAiBlocked('AI verification is unavailable. Enter the interview date and time manually.')
+      setAiExtraction({
+        confidence_score: 0,
+        manual_fields_required: true,
+        failure_stage: 'request',
+        failure_reason: e?.message || 'Invite extraction request failed.',
+      })
+      setAiBlocked('')
       setParsing(false)
       return
-    } finally {
-      setParseElapsed(Math.max(1, Math.ceil((Date.now() - parseStartedAt) / 1000)))
-      setParsing(false)
-    }
+    } finally { setParsing(false) }
 
     // No OCR-only fallback: a single source must never populate booking data.
     setParsedSlot(null)
-    setAiBlocked('AI verification returned no result. Enter the interview date and time manually.')
+    setAiExtraction({
+      confidence_score: 0,
+      manual_fields_required: true,
+      failure_stage: 'response',
+      failure_reason: 'Invite extraction returned no usable result.',
+    })
+    setAiBlocked('')
     setParsing(false)
     return
     
@@ -493,6 +480,7 @@ export function SubmitSlotPage() {
   async function onSlotFileChange(file) {
     if (slotPreview) URL.revokeObjectURL(slotPreview)
     setSlotFile(file || null); setParsedSlot(null); setManualDate(''); setManualTime(''); setSuccess(''); setAiExtraction(null); setAiBlocked(''); setUserEditedFields({})
+    if (file) clearValidationError('invite')
     if (file) { setSlotPreview(URL.createObjectURL(file)); await parseScreenshot(file) }
     else setSlotPreview('')
   }
@@ -508,15 +496,13 @@ export function SubmitSlotPage() {
   async function uploadPaymentProof(file = null) {
     const proof = file || paymentFile
     if (!effectiveName || !proof) { setError('Enter your name and attach a payment screenshot first.'); return }
-    const paymentStartedAt = Date.now()
-    paymentStartedAtRef.current = paymentStartedAt
-    setPaymentElapsed(0)
     setBusy(true); setError(''); setSuccess(''); setPaymentAiResult(null); setPaymentAnalysing(true)
     try {
       const fd = new FormData()
       fd.append('name', effectiveName)
       fd.append('service_type', serviceType)
       fd.append('phone', roundWisePhone)
+      fd.append('candidate_id', selected?.id || '')
       fd.append('technology', roundWiseTechnology)
       fd.append('interview_round', interviewRound)
       fd.append('file', proof)
@@ -524,22 +510,15 @@ export function SubmitSlotPage() {
       const data = await res.json()
       if (!res.ok) { setError(data.message || 'Payment upload failed'); return }
       setPaymentProofId(data.proof_id || ''); setPaymentFile(null)
+      clearValidationError('payment')
       const verification = data.ai_extraction || {}
-      setSuccess(
-        verification.verification_state === 'VERIFIED_REFERRER_PAYMENT'
-          ? 'Registered referrer payment verified — commission already received and company share will be adjusted during settlement. You can confirm your slot.'
-          : 'Company payment verified — you can confirm your slot.'
-      )
+      setSuccess(data.message === 'Previous booking cancelled — payment can be reused.' ? data.message : '')
       // Capture AI extraction result that backend already ran during upload
       if (verification.is_payment_screenshot) {
         setPaymentAiResult(verification)
       }
     } catch { setError('Network error — try again') }
-    finally {
-      setPaymentElapsed(Math.max(1, Math.floor((Date.now() - paymentStartedAt) / 1000)))
-      setBusy(false)
-      setPaymentAnalysing(false)
-    }
+    finally { setBusy(false); setPaymentAnalysing(false) }
   }
 
   const effectiveBookingDate = manualDate || parsedSlot?.date || ''
@@ -552,26 +531,23 @@ export function SubmitSlotPage() {
 
   async function submitBook(ev) {
     ev.preventDefault()
-    if (parsing) {
-      setError('Please wait until invite reading is complete.')
-      return
-    }
-    if (
-      !effectiveName
-      || !slotFile
-      || !interviewRound
-      || (serviceType === 'round_wise' && !roundWiseTechnology)
-      || !roundWisePhoneValid
-      || needsPaymentProof
-    ) {
-      setTriedSubmit(true)
-      setError('')
-      return
+    setError('')
+    if (!effectiveName) return showValidationError('client_name', 'Enter the client name to continue.')
+    if (!interviewRound) return showValidationError('interview_round', 'Select the interview round to continue.')
+    if (!roundWisePhoneValid) return showValidationError('phone', 'Enter a valid phone number (10–15 digits).')
+    if (serviceType === 'round_wise' && !roundWiseTechnology) return showValidationError('technology', 'Select the technology to continue.')
+    if (showPaymentCard && (!paymentFile && !paymentProofId)) return showValidationError('payment', 'Upload and verify the payment screenshot to continue.')
+    if (showPaymentCard && (!paymentProofId || paymentAnalysing)) return showValidationError('payment', 'Upload and verify the payment screenshot to continue.')
+    if (!slotFile) return showValidationError('invite', 'Upload the interview invite screenshot to continue.')
+    if (parsing || aiBlocked || !bookingSlot?.date || !bookingSlot?.time) {
+      return showValidationError('invite_datetime', parsing
+        ? 'Wait for interview invite verification to finish.'
+        : 'Verify the interview date and time to continue.')
     }
     if (isPastDate) {
-      setError('Interview date is in the past. Please select today or a future date.')
-      return
+      return showValidationError('invite_datetime', 'Interview date is in the past. Select today or a future date.')
     }
+    setValidationError(null)
     setBusy(true); setError(''); setSuccess('')
     try {
       const fd = new FormData()
@@ -586,15 +562,32 @@ export function SubmitSlotPage() {
         : (bookingSlot?.technology || '')
       if (technology) fd.append('technology', technology)
       if (serviceType === 'round_wise') fd.append('phone', roundWisePhone.trim())
+      fd.append('candidate_id', selected?.id || '')
       if (paymentProofId) fd.append('payment_proof_id', paymentProofId)
+      fd.append(
+        'idempotency_key',
+        [
+          effectiveName.trim().toLowerCase(),
+          serviceType,
+          roundWisePhone.trim(),
+          bookingSlot?.date || '',
+          bookingSlot?.time || '',
+          bookingSlot?.time_end || '',
+          bookingSlot?.interview_round || '',
+          paymentProofId,
+        ].join('|')
+      )
       fd.append('file', slotFile)
-      const res = await fetch(`${API_BASE}/public/slots/book`, { method: 'POST', body: fd })
+      const res = await fetch(`${API_BASE}/bookings/confirm`, { method: 'POST', body: fd })
       const data = await res.json()
       if (!res.ok) {
         if (data.payment_due) {
           // Reveal the payment card so the proof can be uploaded right here.
           setPaymentDue({ balance_due: data.balance_due || 0, name: data.name || effectiveName })
-          setError(data.message || 'Payment required.')
+          showValidationError(
+            'payment',
+            data.message || 'Upload and verify the payment screenshot to continue.',
+          )
         } else {
           setError(data.message || 'Could not book slot')
         }
@@ -602,8 +595,16 @@ export function SubmitSlotPage() {
       }
       if (slotPreview) URL.revokeObjectURL(slotPreview)
       setSlotFile(null); setSlotPreview(''); setParsedSlot(null); setManualDate(''); setManualTime(''); setInterviewRound(''); setRoundWiseTechnology(''); setRoundWisePhone(''); setServiceType('profile_service'); setPaymentProofId('')
+      setPaymentFile(null)
+      setPaymentDue(null)
+      setAiExtraction(null)
+      setAiBlocked('')
+      setUserEditedFields({})
+      setPaymentAiResult(null)
+      setPaymentAnalysing(false)
+      setShowServiceDrop(false)
       setName('')
-      setTriedSubmit(false)
+      setValidationError(null)
       setSuccess(`Slot confirmed for ${data.candidate?.name || effectiveName}.`)
       // Refresh data first, then switch to confirmed tab after 2 seconds
       await refresh()
@@ -612,31 +613,14 @@ export function SubmitSlotPage() {
     finally { setBusy(false) }
   }
 
-  const TrustBadges = () => (
-    <div className="sbs-trust">
-      <div className="sbs-trust__item">
-        <span className="sbs-trust__icon sbs-trust__icon--green"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
-        <div><div className="sbs-trust__title">Secure &amp; Private</div><div className="sbs-trust__sub">Your data is safe with us</div></div>
-      </div>
-      <div className="sbs-trust__item">
-        <span className="sbs-trust__icon sbs-trust__icon--purple"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" strokeLinecap="round"/></svg></span>
-        <div><div className="sbs-trust__title">Smart Detection</div><div className="sbs-trust__sub">We read date &amp; time automatically</div></div>
-      </div>
-      <div className="sbs-trust__item">
-        <span className="sbs-trust__icon sbs-trust__icon--blue"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg></span>
-        <div><div className="sbs-trust__title">Instant Confirmation</div><div className="sbs-trust__sub">Get confirmation as soon as you book</div></div>
-      </div>
-    </div>
-  )
-
   return (
-    <div className="sbs-screen">
+    <div className="sbs-screen submit-slot-screen">
       <div className="sbs-glow" aria-hidden="true" />
       <div className="sbs-card">
         <header className="sbs-header">
           <div className="sbs-header__text">
             <h1 className="sbs-header__title">Book Interview Slot</h1>
-            <p className="sbs-header__sub">Pick the right slot, upload invite, and confirm.</p>
+            <p className="sbs-header__sub">Pick the slot, upload invite, and confirm.</p>
           </div>
           <div className="sbs-header__icon" aria-hidden="true">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
@@ -721,12 +705,11 @@ export function SubmitSlotPage() {
                 </div>
               )}
             </section>
-            <TrustBadges />
           </div>
         ) : (
           /* ── Book slot tab — direct booking form only ─────── */
           <div className="sbs-body">
-            <form className="sbs-form" onSubmit={submitBook}>
+            <form className="sbs-form" onSubmit={submitBook} noValidate>
               <div className="sbs-field">
                 <span className="sbs-label">Service type</span>
                 <div className="sbs-select-wrap sbs-select-wrap--custom">
@@ -746,24 +729,25 @@ export function SubmitSlotPage() {
               <label className="sbs-field">
                 <span className="sbs-label">Client name</span>
                 {serviceType === "round_wise" ? (
-                  <input className="sbs-input" type="text" value={name} onChange={e => { setName(e.target.value); setPaymentProofId(''); }} placeholder="Type client name" disabled={busy || parsing} />
+                  <input ref={clientNameRef} className="sbs-input" type="text" value={name} onChange={e => { setName(e.target.value); setPaymentProofId(''); if (e.target.value.trim()) clearValidationError('client_name') }} placeholder="Type client name" disabled={busy || parsing} />
                 ) : (
-                  <SlotCandidatePicker candidates={candidates} value={name} onChange={v => { setName(v); setPaymentProofId('') }} disabled={busy || parsing} />
+                  <SlotCandidatePicker inputRef={clientNameRef} candidates={candidates} value={name} onChange={v => { setName(v); setPaymentProofId(''); if (v.trim()) clearValidationError('client_name') }} disabled={busy || parsing} />
                 )}
-                {triedSubmit && !effectiveName
-                  ? <span className="sbs-hint sbs-hint--warn">Enter client name to confirm.</span>
-                  : <span className="sbs-hint">{serviceType === "round_wise" ? "Type the client name for this round." : "Pick from the list or type a new client name."}</span>}
+                {inlineError('client_name')}
+                {validationError?.field !== 'client_name' && serviceType === 'round_wise' && (
+                  <span className="sbs-hint">Type the client name for this round.</span>
+                )}
               </label>
 
               <label className="sbs-field">
                 <span className="sbs-label">Interview round <span className="sbs-required" aria-hidden="true">*</span></span>
-                <div className={`sbs-select-wrap${triedSubmit && !interviewRound ? ' sbs-select-wrap--required' : ''}`}>
-                  <select className="sbs-select" value={interviewRound} onChange={e => setInterviewRound(e.target.value)} disabled={busy || parsing} required>
+                <div className="sbs-select-wrap">
+                  <select ref={roundRef} className="sbs-select" value={interviewRound} onChange={e => { setInterviewRound(e.target.value); if (e.target.value) clearValidationError('interview_round') }} disabled={busy || parsing}>
                     <option value="">Select round (L1, L2…)</option>
                     {ROUND_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
                 </div>
-                {triedSubmit && !interviewRound && <span className="sbs-hint sbs-hint--warn">Required — select a round to confirm.</span>}
+                {inlineError('interview_round')}
               </label>
 
               {serviceType === 'round_wise' && (
@@ -771,29 +755,30 @@ export function SubmitSlotPage() {
                   <label className="sbs-field">
                     <span className="sbs-label">Phone number <span className="sbs-required" aria-hidden="true">*</span></span>
                     <input
-                      className={`sbs-input${triedSubmit && !roundWisePhoneValid ? ' sbs-input--required' : ''}`}
+                      ref={phoneRef}
+                      className="sbs-input"
                       type="tel"
                       inputMode="tel"
                       autoComplete="tel"
                       value={roundWisePhone}
-                      onChange={e => setRoundWisePhone(e.target.value)}
+                      onChange={e => { setRoundWisePhone(e.target.value); if (e.target.value.replace(/\D/g, '').length >= 10) clearValidationError('phone') }}
                       placeholder="Enter candidate phone number"
                       disabled={busy || parsing}
-                      required
                     />
-                    {triedSubmit && !roundWisePhoneValid
-                      ? <span className="sbs-hint sbs-hint--warn">Enter a valid phone number (10–15 digits).</span>
-                      : <span className="sbs-hint">Used only for this round-wise candidate record.</span>}
+                    {inlineError('phone')}
+                    {validationError?.field !== 'phone' && (
+                      <span className="sbs-hint">Used only for this round-wise candidate record.</span>
+                    )}
                   </label>
                   <label className="sbs-field">
                     <span className="sbs-label">Technology <span className="sbs-required" aria-hidden="true">*</span></span>
-                    <div className={`sbs-select-wrap${triedSubmit && !roundWiseTechnology ? ' sbs-select-wrap--required' : ''}`}>
+                    <div className="sbs-select-wrap">
                       <select
+                        ref={technologyRef}
                         className="sbs-select"
                         value={roundWiseTechnology}
-                        onChange={e => setRoundWiseTechnology(e.target.value)}
+                        onChange={e => { setRoundWiseTechnology(e.target.value); if (e.target.value) clearValidationError('technology') }}
                         disabled={busy || parsing}
-                        required
                       >
                         <option value="">Select technology</option>
                         {TECHNOLOGY_OPTIONS.map(technology => (
@@ -801,50 +786,28 @@ export function SubmitSlotPage() {
                         ))}
                       </select>
                     </div>
-                    {triedSubmit && !roundWiseTechnology && (
-                      <span className="sbs-hint sbs-hint--warn">Required — select the technology for this round.</span>
-                    )}
+                    {inlineError('technology')}
                   </label>
                 </>
               )}
-
               {showPaymentCard && (
-                <div className="sbs-pay-card">
-                  <div className="sbs-pay-head"><span>Payment due</span><strong>₹{paymentBalanceDue.toLocaleString('en-IN')}</strong></div>
-                  <p className="sbs-hint">A successful payment to the official company account or an active verified registered referrer account is accepted. Unknown receivers are blocked.</p>
+                <div ref={paymentRef} tabIndex={-1} className="sbs-pay-card">
+                  <div className="sbs-pay-head"><span>Payment due</span></div>
                   {paymentProofId ? (
                     <>
-                      <p className="sbs-pay-ok">Payment proof on file ✓</p>
+                      <SubmitSlotFileDrop compact file={paymentFile} disabled={busy || parsing} busy={busy || paymentAnalysing} onFile={f => { setPaymentFile(f); setPaymentProofId(''); setPaymentAiResult(null); if (f) uploadPaymentProof(f) }} />
                       {paymentAiResult && (
                         <PaymentAiResultCard ai={paymentAiResult} />
                       )}
-                      {paymentElapsed > 0 && (
-                        <div className="sbs-status sbs-status--complete" role="status">
-                          <span>Payment AI reading completed</span>
-                          <span className="sbs-stopwatch" aria-label={`Payment AI reading time ${formatElapsed(paymentElapsed)}`}>
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                              <circle cx="12" cy="13" r="8" />
-                              <path d="M12 9v4l2.5 1.5M9 2h6M12 2v3" strokeLinecap="round" />
-                            </svg>
-                            {formatElapsed(paymentElapsed)}
-                          </span>
-                        </div>
-                      )}
+                      {!paymentAiResult && <div className="sbs-verify-badge sbs-verify-badge--success" role="status"><span>✓</span><strong>Payment verified</strong></div>}
                     </>
                   ) : (
                     <>
-                      <SubmitSlotFileDrop compact label="Payment screenshot" file={paymentFile} disabled={busy || parsing} busy={busy || paymentAnalysing} onFile={f => { setPaymentFile(f); setPaymentAiResult(null); if (f) uploadPaymentProof(f) }} />
+                      <SubmitSlotFileDrop compact file={paymentFile} disabled={busy || parsing} busy={busy || paymentAnalysing} onFile={f => { setPaymentFile(f); setPaymentAiResult(null); if (f) uploadPaymentProof(f) }} />
                       {paymentAnalysing ? (
-                        <div className="sbs-status sbs-status--loading">
+                        <div className="sbs-verify-badge sbs-verify-badge--loading">
                           <Spinner size={14} />
-                          <span>Reading payment screenshot with AI…</span>
-                          <span className="sbs-stopwatch" aria-label={`Payment AI elapsed time ${formatElapsed(paymentElapsed)}`}>
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                              <circle cx="12" cy="13" r="8" />
-                              <path d="M12 9v4l2.5 1.5M9 2h6M12 2v3" strokeLinecap="round" />
-                            </svg>
-                            {formatElapsed(paymentElapsed)}
-                          </span>
+                          <strong>Reading payment…</strong>
                         </div>
                       ) : paymentFile && (
                           /* Only reachable when the automatic upload failed. */
@@ -852,64 +815,30 @@ export function SubmitSlotPage() {
                             Retry upload
                           </button>
                         )}
-                      {!paymentAnalysing && paymentElapsed > 0 && (
-                        <div className="sbs-status sbs-status--complete" role="status">
-                          <span>Payment AI reading completed</span>
-                          <span className="sbs-stopwatch" aria-label={`Payment AI reading time ${formatElapsed(paymentElapsed)}`}>
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                              <circle cx="12" cy="13" r="8" />
-                              <path d="M12 9v4l2.5 1.5M9 2h6M12 2v3" strokeLinecap="round" />
-                            </svg>
-                            {formatElapsed(paymentElapsed)}
-                          </span>
-                        </div>
-                      )}
-                      {triedSubmit && needsPaymentProof && <span className="sbs-hint sbs-hint--warn">Upload and save payment proof to confirm.</span>}
                     </>
                   )}
+                  {inlineError('payment')}
                 </div>
               )}
 
-              <div className="sbs-field">
+              <div ref={inviteRef} tabIndex={-1} className="sbs-field sbs-invite-field">
                 <span className="sbs-label">Interview invite screenshot</span>
-                <SubmitSlotFileDrop compact hint="Teams, Gmail, Calendar, or Zoom — date and time must be visible." file={slotFile} previewUrl={slotPreview} disabled={busy} busy={parsing} onFile={onSlotFileChange} />
-                {triedSubmit && !slotFile && <span className="sbs-hint sbs-hint--warn">Upload your interview invite screenshot to confirm.</span>}
-              </div>
-
-              {parsing && (
-                <div className="sbs-status sbs-status--loading">
-                  <Spinner size={18} />
-                  <span>Reading invite with AI…</span>
-                  <span className="sbs-stopwatch" aria-label={`Elapsed time ${formatElapsed(parseElapsed)}`}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                      <circle cx="12" cy="13" r="8" />
-                      <path d="M12 9v4l2.5 1.5M9 2h6M12 2v3" strokeLinecap="round" />
-                    </svg>
-                    {formatElapsed(parseElapsed)}
-                  </span>
-                </div>
-              )}
-              {!parsing && slotFile && parseElapsed > 0 && (
-                <div className="sbs-status sbs-status--complete" role="status">
-                  <span>AI reading completed</span>
-                  <span className="sbs-stopwatch" aria-label={`AI reading time ${formatElapsed(parseElapsed)}`}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                      <circle cx="12" cy="13" r="8" />
-                      <path d="M12 9v4l2.5 1.5M9 2h6M12 2v3" strokeLinecap="round" />
-                    </svg>
-                    {formatElapsed(parseElapsed)}
-                  </span>
-                </div>
-              )}
-
-              {aiBlocked && <div className="sbs-alert sbs-alert--error" role="alert">{aiBlocked}</div>}
+                <SubmitSlotFileDrop compact file={slotFile} disabled={busy} busy={parsing} onFile={onSlotFileChange} />
+                {inlineError('invite')}
+                {!parsing && aiExtraction && !aiBlocked && (
+                  <div className="sbs-status sbs-status--complete" role="status">
+                    <span>AI reading completed</span>
+                  </div>
+                )}
+                {parsing && <div className="sbs-verify-badge sbs-verify-badge--loading"><Spinner size={14} /><strong>Reading invite…</strong></div>}
+                {aiBlocked && <div className="sbs-alert sbs-alert--error" role="alert">{aiBlocked}</div>}
 
               {aiExtraction && !aiBlocked && aiExtraction.confidence_score > 0 && (
                 <div className="sbs-detected">
                   <span className={`sbs-detected__badge ${aiExtraction.confidence_score >= 90 ? 'sbs-detected__badge--green' : aiExtraction.confidence_score >= 70 ? 'sbs-detected__badge--yellow' : 'sbs-detected__badge--red'}`}>
                     {aiExtraction.detected_by
                       ? `Detected by ${aiExtraction.detected_by} · ${aiExtraction.confidence_score}%`
-                      : `AI · ${aiExtraction.confidence_score}%`}
+                      : `AI verified · ${aiExtraction.confidence_score}%`}
                   </span>
                   <div className="sbs-detected__main">
                     {aiExtraction.interview_date && <span className="sbs-detected__date">{formatFriendlyDate(aiExtraction.interview_date)}</span>}
@@ -917,17 +846,12 @@ export function SubmitSlotPage() {
                   </div>
                   <div className="sbs-detected__chips">
                     {uniqueNonEmptyTags([
-                      aiExtraction.interview_round,
-                      aiExtraction.technology,
                       aiExtraction.meeting_platform ? platformLabel(aiExtraction.meeting_platform) : '',
                       aiExtraction.screenshot_source,
                     ]).map((tag, i) => (
                       <span key={i} className={`sbs-chip${i > 0 ? ' sbs-chip--muted' : ''}`}>{tag}</span>
                     ))}
                   </div>
-                  {aiExtraction.warnings && aiExtraction.warnings.length > 0 && (
-                    <div className="sbs-detected__warnings">{aiExtraction.warnings.map((w, i) => <span key={i} className="sbs-hint sbs-hint--warn">{w}</span>)}</div>
-                  )}
                 </div>
               )}
 
@@ -939,12 +863,11 @@ export function SubmitSlotPage() {
                     <span className="sbs-detected__time">{formatFriendlyTime(parsedSlot.time)}{parsedSlot.time_end ? ` – ${formatFriendlyTime(parsedSlot.time_end)}` : ''}</span>
                   </div>
                   <div className="sbs-detected__chips">
-                    {parsedSlot.interview_round && <span className="sbs-chip">{parsedSlot.interview_round}</span>}
-                    {parsedSlot.technology && <span className="sbs-chip sbs-chip--muted">{parsedSlot.technology}</span>}
-                    {parsedSlot.platform && <span className="sbs-chip sbs-chip--muted">{platformLabel(parsedSlot.platform)}</span>}
+                    {parsedSlot.platform && <span className="sbs-chip">{platformLabel(parsedSlot.platform)}</span>}
                   </div>
                 </div>
               )}
+              </div>
 
               {showManualSlotFields && (
                 <div className="sbs-manual">
@@ -952,7 +875,7 @@ export function SubmitSlotPage() {
                     {aiExtraction?.verification_conflict
                       ? 'Automatic booking was blocked because OCR and AI read different values. Check the invite and enter the correct date and start time.'
                       : aiExtraction?.manual_fields_required
-                        ? 'Automatic verification could not safely confirm the date and time. Enter the values exactly as shown in the invite.'
+                        ? (aiExtraction.failure_reason || 'Automatic verification could not safely confirm the date and time. Enter the values exactly as shown in the invite.')
                         : parsedSlot?.date
                           ? 'Verify detected date & time — correct below if wrong.'
                           : 'Include the date line in your screenshot or enter manually.'}
@@ -972,25 +895,25 @@ export function SubmitSlotPage() {
                     </div>
                   )}
                   <div className="sbs-manual__grid">
-                    <label className="sbs-field"><span className="sbs-label">Interview date</span><input className="sbs-input" type="date" value={manualDate || parsedSlot?.date || ''} onChange={e => { setManualDate(e.target.value); setUserEditedFields(f => ({...f, date: true})); }} disabled={busy || parsing} /></label>
-                    <label className="sbs-field"><span className="sbs-label">Start time</span><input className="sbs-input" type="text" placeholder="e.g. 02:00 PM" value={normalizeTo12h(manualTime || parsedSlot?.time || '')} onChange={e => { setManualTime(e.target.value); setUserEditedFields(f => ({...f, time: true})); }} disabled={busy || parsing} /></label>
+                    <label className="sbs-field"><span className="sbs-label">Interview date</span><input ref={manualDateRef} className="sbs-input" type="date" value={manualDate || parsedSlot?.date || ''} onChange={e => { setManualDate(e.target.value); setUserEditedFields(f => ({...f, date: true})); if (e.target.value && (manualTime || parsedSlot?.time)) clearValidationError('invite_datetime') }} disabled={busy || parsing} /></label>
+                    <label className="sbs-field"><span className="sbs-label">Start time</span><input ref={manualTimeRef} className="sbs-input" type="text" placeholder="e.g. 02:00 PM" value={normalizeTo12h(manualTime || parsedSlot?.time || '')} onChange={e => { setManualTime(e.target.value); setUserEditedFields(f => ({...f, time: true})); if (e.target.value && (manualDate || parsedSlot?.date)) clearValidationError('invite_datetime') }} disabled={busy || parsing} /></label>
                   </div>
-                  {isPastDate && <span className="sbs-hint sbs-hint--warn">Interview date is in the past. Please select today or a future date.</span>}
+                  {inlineError('invite_datetime')}
                 </div>
               )}
 
               {error && <p className="sbs-alert sbs-alert--error" role="alert">{error}</p>}
               {success && <div className="sbs-alert sbs-alert--success sbs-success-anim"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{flexShrink:0}}><path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg><span>{success}</span></div>}
 
-              <button type="submit" className="sbs-cta sbs-cta--ready" disabled={busy || parsing || isPastDate || !!aiBlocked}>
-                {busy ? <Spinner size={18} /> : parsing ? 'Reading invite...' : 'Confirm booking'}
-              </button>
+              <div className="sbs-sticky-action">
+                <button type="submit" className="sbs-cta sbs-cta--ready" disabled={busy || parsing || isPastDate || !!aiBlocked}>
+                  <span>{busy ? <Spinner size={18} /> : parsing ? 'Reading invite...' : 'Confirm booking'}</span>
+                </button>
+              </div>
             </form>
-            <TrustBadges />
           </div>
         )}
       </div>
-      <p className="sbs-foot">TeleAutomation · secure slot booking</p>
     </div>
   )
 }
