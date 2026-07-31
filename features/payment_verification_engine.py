@@ -1169,6 +1169,7 @@ def verify_payment_screenshot(
         normalized_mime,
         allow_slow_ai=True,
         use_ocr=use_ocr,
+        crosscheck_ocr=True,
     )
     normalized_extraction = _normalize_directional_extraction(extraction or {})
     result = verify_payment_against_due(
@@ -1244,6 +1245,11 @@ def verify_payment_screenshot(
             "approved_expense_reimbursement",
         },
     )
+    amount_mismatch_reason = str(result.get("amount_mismatch_reason") or "").strip()
+    if amount_mismatch_reason:
+        reason_codes = list(dict.fromkeys([*reason_codes, "AMOUNT_SOURCE_MISMATCH"]))
+        verification_state = "PENDING_MANUAL_REVIEW"
+        result["verified"] = False
     deterministic_verified = verification_state in {
         "VERIFIED_COMPANY_PAYMENT",
         "VERIFIED_REFERRER_PAYMENT",
@@ -1313,6 +1319,8 @@ def verify_payment_screenshot(
         reasons.append("Payment extraction confidence is below the configured threshold.")
     if "TRANSACTION_REFERENCE_MISSING" in reason_codes:
         reasons.append("The transaction or UTR reference is not visible.")
+    if amount_mismatch_reason:
+        reasons.append(amount_mismatch_reason)
     result["deterministic_reasons"] = reasons
 
     result["_image_size"] = len(image_data)

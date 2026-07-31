@@ -50,10 +50,11 @@ IMPORTANT: Today's date is {today}.
 Extract these fields from the payment screenshot:
 
 Schema:
-{{"payment_status": "SUCCESS|FAILED|PENDING|UNKNOWN", "direction": "PAID_TO|RECEIVED_FROM|TRANSFERRED_TO|UNKNOWN", "amount_minor": 0, "currency": "INR", "sender_name": "", "sender_upi_id": "", "sender_phone_number": "", "sender_account_identifier": "", "receiver_name": "", "receiver_upi_id": "", "receiver_phone_number": "", "receiver_account_identifier": "", "credited_to_identifier": "", "debited_from_identifier": "", "transaction_id": "", "utr": "", "transaction_date": "YYYY-MM-DD", "transaction_time": "hh:mm AM/PM", "provider": "", "confidence": {{"payment_status": 0.0, "direction": 0.0, "amount": 0.0, "receiver_name": 0.0, "receiver_upi_id": 0.0, "receiver_phone_number": 0.0, "transaction_id": 0.0, "utr": 0.0}}, "missing_fields": [], "warnings": [], "is_payment_screenshot": true}}
+{{"payment_status": "SUCCESS|FAILED|PENDING|UNKNOWN", "direction": "PAID_TO|RECEIVED_FROM|TRANSFERRED_TO|UNKNOWN", "amount": 0, "visible_amounts": [], "currency": "INR", "sender_name": "", "sender_upi_id": "", "sender_phone_number": "", "sender_account_identifier": "", "receiver_name": "", "receiver_upi_id": "", "receiver_phone_number": "", "receiver_account_identifier": "", "credited_to_identifier": "", "debited_from_identifier": "", "transaction_id": "", "utr": "", "transaction_date": "YYYY-MM-DD", "transaction_time": "hh:mm AM/PM", "provider": "", "confidence": {{"payment_status": 0.0, "direction": 0.0, "amount": 0.0, "receiver_name": 0.0, "receiver_upi_id": 0.0, "receiver_phone_number": 0.0, "transaction_id": 0.0, "utr": 0.0}}, "missing_fields": [], "warnings": [], "is_payment_screenshot": true}}
 
 Rules:
-- "amount_minor" is integer paise. Example: INR 5,000 is 500000.
+- "amount" is integer rupees. Example: INR 10,000 is 10000. Preserve every digit and never infer paise.
+- "visible_amounts" lists every payment-like rupee amount visible in the receipt.
 - "payment_status" is SUCCESS, PENDING, FAILED, or UNKNOWN.
 - "direction" is critical. A person under "Received from" is the sender, not the receiver.
 - For RECEIVED_FROM, put the account after "Credited to" in "credited_to_identifier".
@@ -203,7 +204,9 @@ def _run_tesseract_ocr(image_data: bytes) -> str | None:
         img = Image.open(io.BytesIO(image_data))
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
-        return pytesseract.image_to_string(img, lang="eng")
+        default_text = pytesseract.image_to_string(img, lang="eng")
+        sparse_text = pytesseract.image_to_string(img, lang="eng", config="--psm 11")
+        return "\n".join(part for part in (default_text, sparse_text) if part)
     except Exception as exc:
         logger.warning("Tesseract OCR failed: %s", exc)
         return None
@@ -211,33 +214,7 @@ def _run_tesseract_ocr(image_data: bytes) -> str | None:
 
 def _extract_amount_from_text(text: str) -> float:
     """Extract payment amount from OCR text using regex patterns."""
-    amounts = []
-    # ₹X,XXX patterns
-    for m in re.finditer(r'₹\s*([\d,]+(?:\.\d{1,2})?)', text):
-        try:
-            amounts.append(float(m.group(1).replace(',', '')))
-        except ValueError:
-            pass
-    # Rs.X,XXX patterns
-    for m in re.finditer(r'[Rr][Ss]\.?\s*([\d,]+(?:\.\d{1,2})?)', text):
-        try:
-            amounts.append(float(m.group(1).replace(',', '')))
-        except ValueError:
-            pass
-    # %X,XXX (OCR misread of ₹)
-    for m in re.finditer(r'%\s*([\d,]+(?:\.\d{1,2})?)', text):
-        try:
-            val = float(m.group(1).replace(',', ''))
-            if val >= 500:
-                amounts.append(val)
-        except ValueError:
-            pass
-    # OCR can drop the rupee symbol while retaining comma grouping.
-    for m in re.finditer(r'(?<![\d,])(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?)(?![\d,])', text):
-        try:
-            amounts.append(float(m.group(1).replace(',', '')))
-        except ValueError:
-            pass
+    amounts = _extract_amount_candidates_from_text(text)
     if not amounts:
         return 0
     # Return the most common amount, or the largest reasonable one
@@ -251,10 +228,119 @@ def _extract_amount_from_text(text: str) -> float:
     return 0
 
 
+def _normalize_amount_number(value: Any) -> int:
+    """Parse a rupee amount without dropping comma-grouped digits."""
+    if value is None or isinstance(value, bool):
+        return 0
+    cleaned = re.sub(r"(?i)(?:inr|rs\.?)", "", str(value))
+    cleaned = cleaned.replace("₹", "").replace(",", "").strip()
+    match = re.search(r"\d+(?:\.\d{1,2})?", cleaned)
+    if not match:
+        return 0
+    try:
+        return int(float(match.group(0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_amount_candidates_from_text(text: str) -> list[int]:
+    """Return every visible payment-like rupee amount found by OCR."""
+    candidates: list[int] = []
+    patterns = (
+        r"₹\s*([\d,]+(?:\.\d{1,2})?)",
+        r"(?i)\b(?:INR|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)",
+        r"%\s*([\d,]+(?:\.\d{1,2})?)",
+        r"(?<![\d,])(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?)(?![\d,])",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, text or ""):
+            amount = _normalize_amount_number(match.group(1))
+            if 500 <= amount <= 1_000_000:
+                candidates.append(amount)
+    status_amount = re.search(
+        r"(?i)(?:payment|transaction)\s+successful\s*\n+\s*([2%]?\d{3,7})\b",
+        text or "",
+    )
+    if status_amount:
+        raw_amount = status_amount.group(1)
+        if raw_amount.startswith(("2", "%")) and len(raw_amount) >= 5:
+            raw_amount = raw_amount[1:]
+        amount = _normalize_amount_number(raw_amount)
+        if 500 <= amount <= 1_000_000:
+            candidates.append(amount)
+    return candidates
+
+
+def _amount_from_model(extracted: dict[str, Any]) -> int:
+    """Normalize model rupee and legacy paise fields while preserving digits."""
+    direct_amount = _normalize_amount_number(extracted.get("amount"))
+    if direct_amount:
+        return direct_amount
+    minor_amount = _normalize_amount_number(extracted.get("amount_minor"))
+    return minor_amount // 100 if minor_amount else 0
+
+
+def _cross_check_visible_amounts(
+    result: dict[str, Any], ocr_text: str | None
+) -> dict[str, Any]:
+    """Reconcile vision output with all payment amounts visible to OCR."""
+    checked = dict(result)
+    vision_amount = int(checked.get("amount") or 0)
+    model_visible_amounts = [
+        amount
+        for amount in (
+            _normalize_amount_number(value)
+            for value in (checked.get("visible_amounts") or [])
+        )
+        if 500 <= amount <= 1_000_000
+    ]
+    unique_amounts = sorted(
+        set([*_extract_amount_candidates_from_text(ocr_text or ""), *model_visible_amounts])
+    )
+    ocr_amount = int(_extract_amount_from_text(ocr_text or ""))
+    visible_amount = ocr_amount or (max(unique_amounts) if unique_amounts else 0)
+    checked["vision_amount"] = vision_amount
+    checked["ocr_amount"] = ocr_amount
+    checked["ocr_amount_candidates"] = unique_amounts
+
+    mismatch_reason = ""
+    if vision_amount and visible_amount and vision_amount != visible_amount:
+        source_label = "OCR amount" if ocr_amount else "Visible amount"
+        mismatch_reason = (
+            f"{source_label} INR {visible_amount:,} disagrees with vision amount "
+            f"INR {vision_amount:,}."
+        )
+        checked["amount"] = visible_amount
+    elif len(unique_amounts) > 1:
+        mismatch_reason = "OCR found conflicting visible amounts: " + ", ".join(
+            f"INR {amount:,}" for amount in unique_amounts
+        ) + "."
+
+    checked["amount_mismatch_reason"] = mismatch_reason
+    checked["amount_crosscheck"] = (
+        "mismatch" if mismatch_reason else "matched" if vision_amount and visible_amount else "single_source"
+    )
+    if mismatch_reason:
+        checked["verified"] = False
+        warnings = list(checked.get("warnings") or [])
+        if mismatch_reason not in warnings:
+            warnings.append(mismatch_reason)
+        checked["warnings"] = warnings
+        logger.warning("Payment amount cross-check failed: %s", mismatch_reason)
+    return checked
+
+
 def _extract_utr_from_text(text: str) -> str:
     """Extract UTR/reference number from OCR text."""
     # UTR pattern (12-digit number)
     m = re.search(r'(?:UTR|utr|Utr)[:\s]*([A-Za-z0-9]{12,22})', text)
+    if m:
+        return m.group(1)
+    m = re.search(
+        r"(?:UPI\s*)?(?:Reference|Ref)\s*(?:ID|No|Number)?[:\s]*([A-Za-z0-9]{8,22})",
+        text,
+        re.IGNORECASE,
+    )
     if m:
         return m.group(1)
     # Reference number pattern
@@ -446,6 +532,7 @@ def extract_payment_with_ollama(
     *,
     allow_slow_ai: bool = True,
     use_ocr: bool | None = None,
+    crosscheck_ocr: bool = False,
 ) -> dict[str, Any]:
     """Extract payment details from a screenshot using hybrid OCR + AI approach.
 
@@ -465,7 +552,11 @@ def extract_payment_with_ollama(
         logger.info("Ollama not reachable (SSH tunnel may be down), using OCR only")
 
     # ── Step 1: OCR + regex (instant) ───────────────────────────────────────
-    run_ocr = ocr_enabled() if use_ocr is None else bool(use_ocr and ocr_enabled())
+    run_ocr = (
+        ocr_enabled()
+        if use_ocr is None
+        else bool((use_ocr or crosscheck_ocr) and ocr_enabled())
+    )
     ocr_text = _run_tesseract_ocr(image_data) if run_ocr else None
     if not run_ocr:
         logger.info("Global OCR is disabled; sending payment proof directly to Ollama vision")
@@ -473,7 +564,8 @@ def extract_payment_with_ollama(
     if ocr_text and len(ocr_text) > 10:
         logger.info("OCR extracted %d chars for payment", len(ocr_text))
 
-        # Try regex first (instant)
+        # OCR is an independent cross-check. A full verification request still
+        # sends the original image bytes to the vision model.
         regex_result = _ocr_regex_extraction(ocr_text)
         if regex_result and regex_result["amount"] >= 500:
             logger.info(
@@ -483,7 +575,8 @@ def extract_payment_with_ollama(
                 regex_result.get("status", ""),
             )
             regex_result["raw_detected_text"] = ocr_text[:1000]
-            return regex_result
+            if not allow_slow_ai or not ollama_available:
+                return regex_result
 
         # ── Step 2: Text model cleanup (~10-30s) ────────────────────────────
         if not allow_slow_ai:
@@ -504,7 +597,7 @@ def extract_payment_with_ollama(
             fallback["warnings"] = ["AI enrichment skipped to keep the upload responsive"]
             return fallback
 
-        if ollama_available:
+        if ollama_available and not regex_result:
             logger.info("Regex incomplete, trying text model for payment extraction")
             text_result = _try_text_model_cleanup(ocr_text)
             if text_result and text_result.get("amount", 0) >= 500:
@@ -522,7 +615,8 @@ def extract_payment_with_ollama(
                     result["amount"],
                     result.get("utr_number", ""),
                 )
-                return result
+                if not allow_slow_ai:
+                    return result
     else:
         logger.info("OCR text too short (%d chars), going to vision model", len(ocr_text or ""))
 
@@ -614,11 +708,7 @@ def extract_payment_with_ollama(
             or result.get("receiver_account")
             or ""
         )
-        if not result.get("amount") and result.get("amount_minor") is not None:
-            try:
-                result["amount"] = int(result["amount_minor"]) // 100
-            except (TypeError, ValueError):
-                result["amount"] = 0
+        result["amount"] = _amount_from_model(result)
         if not result.get("confidence_score") and isinstance(
             result.get("confidence"), dict
         ):
@@ -632,11 +722,6 @@ def extract_payment_with_ollama(
                 result["confidence_score"] = round(
                     average if average > 1 else average * 100
                 )
-        # Normalize amount to int
-        try:
-            result["amount"] = int(float(result.get("amount", 0)))
-        except (ValueError, TypeError):
-            result["amount"] = 0
         result["extraction_source"] = "vision_model"
         result["extraction_method"] = "vision"
         result["primary_model"] = used_model
@@ -647,6 +732,14 @@ def extract_payment_with_ollama(
         result["is_payment_screenshot"] = True
         if ocr_text:
             result["raw_detected_text"] = ocr_text[:1000]
+            result["utr_number"] = result.get("utr_number") or _extract_utr_from_text(ocr_text)
+            result["receiver_upi_id"] = (
+                result.get("receiver_upi_id") or _extract_receiver_upi_from_text(ocr_text)
+            )
+            result["receiver_phone"] = (
+                result.get("receiver_phone") or _extract_receiver_phone_from_text(ocr_text)
+            )
+        result = _cross_check_visible_amounts(result, ocr_text)
         logger.info("Vision extracted: amount=₹%d, UTR=%s", result["amount"], result.get("utr_number", ""))
         return result
 
@@ -680,7 +773,7 @@ def verify_payment_against_due(
     extraction: dict[str, Any],
     amount_due: int,
     *,
-    tolerance_pct: float = 0.05,
+    tolerance_pct: float = 0.0,
 ) -> dict[str, Any]:
     """Verify extracted payment amount against what's due.
 
@@ -716,7 +809,7 @@ def verify_payment_against_due(
         result["amount_sufficient"] = True
         return result
 
-    min_acceptable = amount_due * (1 - tolerance_pct)
+    min_acceptable = amount_due * (1 - max(0.0, tolerance_pct))
 
     if detected >= min_acceptable:
         result["verified"] = True

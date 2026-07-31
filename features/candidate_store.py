@@ -5932,6 +5932,7 @@ def _store_typed_attachment(
             "fraud_decision", "fraud_reasons", "fraud_warnings", "fraud_checked_at",
             "company_payment_verified", "receiver_name", "receiver_upi_id",
             "receiver_phone", "verified_amount", "receiver_account",
+            "vision_amount", "ocr_amount", "amount_mismatch_reason",
             "receiver_type", "ledger_entry_id", "ledger_action",
             "ledger_status", "source_module", "booking_eligible",
             "verification_state", "payment_id", "evidence_id",
