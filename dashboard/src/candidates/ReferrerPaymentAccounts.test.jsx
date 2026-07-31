@@ -21,6 +21,8 @@ afterEach(() => {
   // restoreAllMocks does not undo vi.stubGlobal — unstub so the fetch stub
   // never leaks into other test files sharing the worker.
   vi.unstubAllGlobals();
+  // Runs even when a test fails, so a pinned clock can never leak.
+  vi.useRealTimers();
 });
 
 
@@ -416,6 +418,12 @@ describe("referrer payment accounts", () => {
   });
 
   it("filters recent expense history by month and totals all matching records", async () => {
+    // PayoutModal seeds its history filter from the real clock, so this test
+    // only sees the July fixtures while the machine is actually in July 2026.
+    // Pin the instant instead. Only Date is faked — setTimeout stays real so
+    // Testing Library's async queries still resolve. afterEach restores it.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-15T12:00:00+05:30"));
     vi.stubGlobal("fetch", vi.fn((url) => {
       if (String(url).endsWith("/referrers")) {
         return response({
