@@ -37,12 +37,8 @@ OLLAMA_TEXT_TIMEOUT = int(os.environ.get("OLLAMA_TEXT_TIMEOUT", "60"))
 
 
 def _ollama_only_test_mode() -> bool:
-    """Return True when screenshot OCR is intentionally disabled for testing."""
-    return (
-        not ocr_enabled()
-        or os.environ.get("INVITE_EXTRACTION_MODE", "").strip().lower()
-        == "ollama_only"
-    )
+    """Return True only for the explicit diagnostic mode."""
+    return os.environ.get("INVITE_EXTRACTION_MODE", "").strip().lower() == "ollama_only"
 
 # ── Prompt ──────────────────────────────────────────────────────────────────
 INVITE_EXTRACTION_PROMPT = """You are an interview invite screenshot extraction assistant.
@@ -198,6 +194,19 @@ def validate_12h_time_format(time_value: str) -> bool:
     return bool(re.match(r'^(0[1-9]|1[0-2]):[0-5]\d\s(AM|PM)$', time_value))
 
 
+def normalize_time_to_24h(time_value: str) -> str:
+    normalized = normalize_time_to_12h(time_value)
+    match = re.match(r"^(\d{2}):(\d{2})\s+(AM|PM)$", normalized)
+    if not match:
+        return ""
+    hour, minute, meridiem = int(match.group(1)), int(match.group(2)), match.group(3)
+    if meridiem == "AM" and hour == 12:
+        hour = 0
+    elif meridiem == "PM" and hour != 12:
+        hour += 12
+    return f"{hour:02d}:{minute:02d}"
+
+
 def _date_time_agree(first: dict[str, Any], second: dict[str, Any]) -> bool:
     """Require exact agreement on the fields that can create a booking."""
     first_date = str(first.get("interview_date") or "").strip()
@@ -210,6 +219,27 @@ def _date_time_agree(first: dict[str, Any], second: dict[str, Any]) -> bool:
         and first_date == second_date
         and first_time == second_time
     )
+
+
+def _normalize_supported_timezone(value: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(value or "").strip()).lower()
+    if normalized in {
+        "asia/kolkata",
+        "ist",
+        "india standard time",
+        "gmt+05:30",
+        "gmt +05:30",
+        "utc+05:30",
+        "utc +05:30",
+    }:
+        return "Asia/Kolkata"
+    return ""
+
+
+def _timezone_agrees(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    first_timezone = _normalize_supported_timezone(str(first.get("timezone") or ""))
+    second_timezone = _normalize_supported_timezone(str(second.get("timezone") or ""))
+    return bool(first_timezone and first_timezone == second_timezone)
 
 
 # ── Ollama API calls ────────────────────────────────────────────────────────
@@ -339,6 +369,11 @@ def validate_invite_extraction(extracted: dict[str, Any]) -> dict[str, Any]:
         extracted["start_time"] = normalize_time_to_12h(extracted["start_time"])
     if extracted.get("end_time"):
         extracted["end_time"] = normalize_time_to_12h(extracted["end_time"])
+    normalized_timezone = _normalize_supported_timezone(
+        str(extracted.get("timezone") or "")
+    )
+    if normalized_timezone:
+        extracted["timezone"] = normalized_timezone
     
     # ── Fix wrong year: if extracted date is in the past, correct year ──────
     if extracted.get("interview_date"):
@@ -363,13 +398,20 @@ def validate_invite_extraction(extracted: dict[str, Any]) -> dict[str, Any]:
     extracted["missing_fields"] = missing
     
     # Determine if manual fields are needed
-    extracted["manual_fields_required"] = bool(missing) or score < 70
+    extracted["manual_fields_required"] = bool(
+        not extracted.get("interview_date")
+        or not extracted.get("start_time")
+        or score < 70
+    )
     
     # Ensure boolean fields
     extracted.setdefault("is_payment_screenshot", False)
     extracted.setdefault("looks_like_interview_invite", True)
     extracted.setdefault("warnings", [])
     extracted.setdefault("screenshot_source", "")
+    extracted["date"] = extracted.get("interview_date") or ""
+    extracted["time"] = normalize_time_to_24h(str(extracted.get("start_time") or ""))
+    extracted["time_end"] = normalize_time_to_24h(str(extracted.get("end_time") or ""))
     
     return extracted
 
@@ -470,7 +512,32 @@ def _empty_extraction() -> dict[str, Any]:
         "is_payment_screenshot": False,
         "looks_like_interview_invite": False,
         "manual_fields_required": True,
+        "auto_booking_safe": False,
+        "failure_stage": "",
+        "failure_reason": "",
+        "date": "",
+        "time": "",
+        "time_end": "",
     }
+
+
+def _labeled_ocr_failure_reason(candidate: dict[str, Any] | None) -> str:
+    if not candidate:
+        return "OCR did not produce a structured invite candidate."
+    raw_text = str(candidate.get("raw_detected_text") or "")
+    if not re.search(r"\b(?:interview|meeting|assessment)\b", raw_text, re.IGNORECASE):
+        return "OCR text did not contain explicit interview context."
+    if not candidate.get("_explicit_date") or not candidate.get("interview_date"):
+        return "OCR did not contain an explicit supported interview date with a year."
+    if not candidate.get("_explicit_start") or not candidate.get("start_time"):
+        return "OCR did not contain an explicit supported interview start time."
+    if not candidate.get("_timezone_explicit") or candidate.get("timezone") != "Asia/Kolkata":
+        return "OCR timezone was missing, ambiguous, or unsupported."
+    return ""
+
+
+def _labeled_ocr_is_authoritative(candidate: dict[str, Any] | None) -> bool:
+    return not _labeled_ocr_failure_reason(candidate)
 
 
 # ── Main extraction function ────────────────────────────────────────────────
@@ -508,7 +575,7 @@ def extract_interview_invite_with_ollama(
         return _fallback_to_existing_ocr(image_data, mime_type)
     
     # ── Step 1: Try OCR + text model (fast path) ────────────────────────────
-    ocr_text = "" if ollama_only else _run_tesseract_ocr(image_data)
+    ocr_text = "" if ollama_only or not ocr_enabled() else _run_tesseract_ocr(image_data)
     
     if ocr_text and len(ocr_text) > 10:
         logger.info("OCR extracted %d chars, trying fast extraction", len(ocr_text))
@@ -521,9 +588,14 @@ def extract_interview_invite_with_ollama(
         except Exception as e:
             logger.warning("Regex parse failed: %s", e)
         
-        if regex_result and regex_result.get("date") and regex_result.get("time"):
-            # Regex found date+time — use it directly, optionally enhance with text model
-            logger.info("Regex proposed date=%s time=%s; requesting vision verification", regex_result["date"], regex_result["time"])
+        if regex_result and (regex_result.get("date") or regex_result.get("time")):
+            # Preserve partial labelled evidence so failure diagnostics can say
+            # exactly which booking field was absent.
+            logger.info(
+                "Regex proposed date=%s time=%s; requesting vision verification",
+                regex_result.get("date", ""),
+                regex_result.get("time", ""),
+            )
             
             # Build result from regex (instant)
             result = _empty_extraction()
@@ -538,6 +610,12 @@ def extract_interview_invite_with_ollama(
             result["interview_round"] = regex_result.get("interview_round", "")
             result["meeting_platform"] = regex_result.get("platform", "")
             result["technology"] = regex_result.get("technology", "")
+            result["timezone"] = regex_result.get("timezone", "")
+            result["raw_detected_text"] = ocr_text[:3000]
+            result["_explicit_date"] = bool(regex_result.get("_explicit_date"))
+            result["_explicit_start"] = bool(regex_result.get("_explicit_start"))
+            result["_timezone_explicit"] = bool(regex_result.get("_timezone_explicit"))
+            result["_labeled"] = bool(regex_result.get("_labeled"))
             result["looks_like_interview_invite"] = True
             fields_found = sum(1 for f in ["interview_date", "start_time", "interview_round", "meeting_platform"] if result.get(f))
             result["confidence_score"] = 0
@@ -565,6 +643,31 @@ def extract_interview_invite_with_ollama(
                     ocr_candidate = extracted
     else:
         logger.info("OCR text too short (%d chars), going to vision model", len(ocr_text or ""))
+
+    if _labeled_ocr_is_authoritative(ocr_candidate):
+        ocr_candidate["confidence_score"] = 95
+        ocr_candidate["manual_fields_required"] = False
+        ocr_candidate["auto_booking_safe"] = True
+        ocr_candidate["detected_by"] = "OCR labelled date/time"
+        ocr_candidate["extraction_method"] = "ocr_labelled_verified"
+        ocr_candidate["failure_stage"] = ""
+        ocr_candidate["failure_reason"] = ""
+        ocr_candidate["diagnostics"] = {
+            "input_bytes": len(image_data),
+            "input_transport": "original_upload",
+            "image_compressed": False,
+            "vision_verification": "not_required_for_explicit_labelled_date_time",
+        }
+        ocr_candidate = validate_invite_extraction(ocr_candidate)
+        logger.info(
+            "Invite extraction accepted labelled OCR date=%s start=%s end=%s timezone=%s bytes=%d",
+            ocr_candidate.get("interview_date"),
+            ocr_candidate.get("time"),
+            ocr_candidate.get("time_end"),
+            ocr_candidate.get("timezone"),
+            len(image_data),
+        )
+        return ocr_candidate
     
     # ── Step 2: Try vision model (slow path) ────────────────────────────────
     img_b64 = base64.b64encode(image_data).decode("utf-8")
@@ -604,7 +707,14 @@ def extract_interview_invite_with_ollama(
     
     # ── Step 4: If all AI failed, fall back to regex OCR ────────────────────
     if not extracted:
-        logger.warning("All vision models failed; refusing automatic booking")
+        ocr_failure_reason = _labeled_ocr_failure_reason(ocr_candidate)
+        logger.warning(
+            "Invite extraction vision_failed: primary=%s backup=%s ocr_reason=%s bytes=%d",
+            OLLAMA_VISION_MODEL,
+            OLLAMA_BACKUP_VISION_MODEL,
+            ocr_failure_reason,
+            len(image_data),
+        )
         if ollama_only:
             result = _empty_extraction()
             result["extraction_source"] = "ollama"
@@ -614,8 +724,13 @@ def extract_interview_invite_with_ollama(
             result["warnings"] = [
                 "Ollama could not read this screenshot. OCR is disabled in test mode; enter the fields manually."
             ]
+            result["failure_stage"] = "vision"
+            result["failure_reason"] = "Vision model returned no parseable JSON."
             return result
-        return _fallback_to_existing_ocr(image_data, mime_type)
+        result = _fallback_to_existing_ocr(image_data, mime_type)
+        result["failure_stage"] = "vision"
+        result["failure_reason"] = ocr_failure_reason or "Vision model returned no parseable JSON."
+        return result
     
     # Validate and normalize
     extracted = validate_invite_extraction(extracted)
@@ -639,7 +754,11 @@ def extract_interview_invite_with_ollama(
     # Fail closed: a single parser or model cannot authorize an automatic
     # booking. OCR/text and vision must independently agree on date + start.
     extracted["auto_booking_safe"] = False
-    if ocr_candidate and _date_time_agree(ocr_candidate, extracted):
+    if (
+        ocr_candidate
+        and _date_time_agree(ocr_candidate, extracted)
+        and _timezone_agrees(ocr_candidate, extracted)
+    ):
         extracted["auto_booking_safe"] = True
         extracted["manual_fields_required"] = False
         extracted["confidence_score"] = 95
@@ -659,6 +778,7 @@ def extract_interview_invite_with_ollama(
     else:
         extracted["confidence_score"] = 0
         extracted["manual_fields_required"] = True
+        extracted["failure_stage"] = "cross_source_verification"
         if ocr_candidate:
             extracted["verification_conflict"] = {
                 "ocr": {
@@ -678,8 +798,13 @@ def extract_interview_invite_with_ollama(
             "OCR and AI did not independently agree on the booking date/time. "
             "Automatic booking is blocked; enter the fields manually."
         )
+        extracted["failure_reason"] = (
+            "OCR and vision returned different date or start-time values."
+            if ocr_candidate
+            else "OCR did not independently extract a supported date and start time."
+        )
     
-    return extracted
+    return validate_invite_extraction(extracted)
 
 
 def _run_tesseract_ocr(image_data: bytes) -> str:
@@ -734,6 +859,8 @@ def _fallback_to_existing_ocr(image_data: bytes, mime_type: str) -> dict[str, An
         result["missing_fields"] = [f for f in ["interview_date", "start_time", "interview_round"] if not result.get(f)]
         result["manual_fields_required"] = True
         result["auto_booking_safe"] = False
+        result["failure_stage"] = "fallback_ocr"
+        result["failure_reason"] = "AI was unavailable; fallback OCR cannot authorize booking."
         
         return result
     except Exception as e:
@@ -741,5 +868,7 @@ def _fallback_to_existing_ocr(image_data: bytes, mime_type: str) -> dict[str, An
         result = _empty_extraction()
         result["extraction_source"] = "failed"
         result["warnings"] = ["AI extraction unavailable. Using standard OCR/manual entry."]
+        result["failure_stage"] = "fallback_ocr"
+        result["failure_reason"] = f"Fallback OCR failed: {e}"
         return result
 
