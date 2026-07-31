@@ -64,6 +64,13 @@ export function SubmitSlotFileDrop({
           <div className="submit-slot-drop-preview">
             <img src={previewUrl} alt="" />
           </div>
+        ) : file ? (
+          <div className="submit-slot-drop-icon submit-slot-drop-icon--file" aria-hidden="true">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+              <path d="M6 2h8l4 4v16H6z" strokeLinejoin="round" />
+              <path d="M14 2v5h5" strokeLinejoin="round" />
+            </svg>
+          </div>
         ) : (
           <div className="submit-slot-drop-icon" aria-hidden="true">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -85,6 +92,19 @@ export function SubmitSlotFileDrop({
             </>
           )}
         </div>
+        {file && (
+          <button
+            type="button"
+            className="submit-slot-drop-remove"
+            aria-label={`Remove ${file.name}`}
+            onClick={ev => {
+              ev.stopPropagation()
+              onFile(null)
+            }}
+          >
+            ×
+          </button>
+        )}
       </div>
       {hint ? <p className="submit-slot-drop-hint">{hint}</p> : null}
     </div>
