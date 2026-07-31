@@ -1,0 +1,263 @@
+name: Verify Linux dependency locks (recovery)
+
+on:
+  push:
+    branches:
+      - codex/production-recovery-20260731
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-lock-recovery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-locks:
+    if: github.ref == 'refs/heads/codex/production-recovery-20260731'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CI_SAFE_STARTUP: "1"
+      PIP_NO_CACHE_DIR: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PIP_NO_INPUT: "1"
+      npm_config_cache: ${{ runner.temp }}/npm-cache
+      ARTIFACT_DIR: ${{ runner.temp }}/dependency-locks
+
+    steps:
+      - name: Check out recovery source without credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node 20.19.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.0"
+
+      - name: Verify sanitized runner inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CI_SAFE_STARTUP" = "1"
+          test ! -e .env
+          test ! -e uploads
+          test ! -e logs
+          test ! -e data/accounts_config.json
+          if find . -maxdepth 1 -name '*.session*' -print -quit | grep -q .; then
+            echo "Telegram session files are not permitted in CI."
+            exit 1
+          fi
+          mkdir -p "$ARTIFACT_DIR"
+          printf 'CI_SAFE_STARTUP=1 verified\n' > "$ARTIFACT_DIR/sanitized-runner.txt"
+
+      - name: Install exact lock-generation tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/lock-venv"
+          "$RUNNER_TEMP/lock-venv/bin/python" -m pip install --upgrade "pip==25.0.1" "pip-tools==7.5.2" 2>&1 | tee "$ARTIFACT_DIR/lock-tool-install.txt"
+          npm install --global "npm@10.8.2" 2>&1 | tee "$ARTIFACT_DIR/npm-install.txt"
+          {
+            python --version
+            "$RUNNER_TEMP/lock-venv/bin/python" -m pip --version
+            "$RUNNER_TEMP/lock-venv/bin/pip-compile" --version
+            node --version
+            npm --version
+          } | tee "$ARTIFACT_DIR/tool-versions.txt"
+          test "$(npm --version)" = "10.8.2"
+
+      - name: Verify CI-safe mode before server import
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/lock-venv/bin/python" -c "from core.config import is_ci_safe_startup; assert is_ci_safe_startup()"
+
+      - name: Determine development dependency input
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -Eq '^[[:space:]]*-r[[:space:]]+requirements\.txt[[:space:]]*$' requirements-dev.txt; then
+            printf 'requirements-dev.txt includes requirements.txt\n' | tee "$ARTIFACT_DIR/dependency-inputs.txt"
+            printf 'requirements-dev.txt\n' > "$ARTIFACT_DIR/dev-input-path.txt"
+          else
+            {
+              cat requirements.txt
+              printf '\n'
+              cat requirements-dev.txt
+            } > "$ARTIFACT_DIR/requirements-dev-input.txt"
+            printf 'requirements-dev.txt did not include runtime requirements; combined input generated.\n' | tee "$ARTIFACT_DIR/dependency-inputs.txt"
+            printf '%s\n' "$ARTIFACT_DIR/requirements-dev-input.txt" > "$ARTIFACT_DIR/dev-input-path.txt"
+          fi
+
+      - name: Generate hash-locked dependencies outside the repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEV_INPUT="$(cat "$ARTIFACT_DIR/dev-input-path.txt")"
+          "$RUNNER_TEMP/lock-venv/bin/pip-compile" --generate-hashes --resolver=backtracking --strip-extras --output-file "$ARTIFACT_DIR/requirements.lock" requirements.txt 2>&1 | tee "$ARTIFACT_DIR/runtime-lock-generation.txt"
+          "$RUNNER_TEMP/lock-venv/bin/pip-compile" --generate-hashes --resolver=backtracking --strip-extras --output-file "$ARTIFACT_DIR/requirements-dev.lock" "$DEV_INPUT" 2>&1 | tee "$ARTIFACT_DIR/dev-lock-generation.txt"
+          test ! -e requirements.lock
+          test ! -e requirements-dev.lock
+
+      - name: Verify fresh runtime and development dependency installs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/runtime-venv"
+          "$RUNNER_TEMP/runtime-venv/bin/pip" install --require-hashes -r "$ARTIFACT_DIR/requirements.lock" 2>&1 | tee "$ARTIFACT_DIR/runtime-install.txt"
+          "$RUNNER_TEMP/runtime-venv/bin/pip" check 2>&1 | tee "$ARTIFACT_DIR/runtime-pip-check.txt"
+          python -m venv "$RUNNER_TEMP/dev-venv"
+          "$RUNNER_TEMP/dev-venv/bin/pip" install --require-hashes -r "$ARTIFACT_DIR/requirements-dev.lock" 2>&1 | tee "$ARTIFACT_DIR/dev-install.txt"
+          "$RUNNER_TEMP/dev-venv/bin/pip" check 2>&1 | tee "$ARTIFACT_DIR/dev-pip-check.txt"
+
+      - name: Compile and import in CI-safe mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/dev-venv/bin/python" -m compileall -q api core features services workers server.py
+          "$RUNNER_TEMP/dev-venv/bin/python" -c "import server; assert any(route.path == '/health' for route in server.app.routes)"
+
+      - name: Run isolated Uvicorn health smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/dev-venv/bin/uvicorn" server:app --host 127.0.0.1 --port 8011 > "$ARTIFACT_DIR/uvicorn.log" 2>&1 &
+          SERVER_PID=$!
+          cleanup() {
+            kill "$SERVER_PID" 2>/dev/null || true
+            wait "$SERVER_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          deadline=$((SECONDS + 20))
+          healthy=0
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+              echo "Uvicorn exited before health became available." >&2
+              exit 1
+            fi
+            if curl -fsS --max-time 2 http://127.0.0.1:8011/health > "$ARTIFACT_DIR/health.json"; then
+              healthy=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$healthy" -ne 1 ]; then
+            echo "Uvicorn health endpoint did not become ready within 20 seconds." >&2
+            exit 1
+          fi
+          "$RUNNER_TEMP/dev-venv/bin/python" -c "import json; assert json.load(open('$ARTIFACT_DIR/health.json')) == {'status': 'ok'}"
+
+      - name: Classify exact backend referrer-fixture baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          "$RUNNER_TEMP/dev-venv/bin/python" -m pytest -q -r f 2>&1 | tee "$ARTIFACT_DIR/backend-tests.txt"
+          pytest_status=${PIPESTATUS[0]}
+          set -e
+          cat > "$ARTIFACT_DIR/backend-known-baseline.txt" <<'EOF'
+          tests/test_payment_verification_engine.py::test_referrer_sponsored_payment_creates_future_commission_recovery
+          tests/test_payment_verification_engine.py::test_negative_settlement_becomes_carry_forward_not_cash_payment
+          tests/test_payment_verification_engine.py::test_pavan_receiver_classification_does_not_depend_on_amount[958]
+          tests/test_payment_verification_engine.py::test_pavan_receiver_classification_does_not_depend_on_amount[1000]
+          tests/test_payment_verification_engine.py::test_pavan_receiver_classification_does_not_depend_on_amount[20000]
+          tests/test_payment_verification_engine.py::test_thrilok_exact_full_phone_is_amount_independent[1500]
+          tests/test_payment_verification_engine.py::test_thrilok_exact_full_phone_is_amount_independent[5000]
+          tests/test_payment_verification_engine.py::test_thrilok_exact_full_phone_is_amount_independent[10000]
+          tests/test_payment_verification_engine.py::test_thrilok_exact_full_phone_is_amount_independent[15000]
+          tests/test_payment_verification_engine.py::test_thrilok_exact_full_phone_is_amount_independent[30500]
+          tests/test_payment_verification_engine.py::test_thrilok_exact_full_phone_is_amount_independent[31000]
+          tests/test_payment_verification_engine.py::test_venugopal_exact_full_phone_is_amount_independent[5000]
+          tests/test_payment_verification_engine.py::test_venugopal_exact_full_phone_is_amount_independent[25000]
+          tests/test_payment_verification_engine.py::test_received_from_preserves_explicit_receiver_when_both_parties_extracted
+          EOF
+          grep '^FAILED ' "$ARTIFACT_DIR/backend-tests.txt" | sed 's/^FAILED //' | sort -u > "$ARTIFACT_DIR/backend-actual-failures.txt" || true
+          sort -u -o "$ARTIFACT_DIR/backend-known-baseline.txt" "$ARTIFACT_DIR/backend-known-baseline.txt"
+          if [ "$pytest_status" -eq 0 ]; then
+            echo "Expected referrer baseline failures disappeared; update the baseline intentionally." >&2
+            exit 1
+          fi
+          if [ "$pytest_status" -ne 1 ]; then
+            echo "pytest infrastructure, collection, or interruption failure: $pytest_status" >&2
+            exit 1
+          fi
+          diff -u "$ARTIFACT_DIR/backend-known-baseline.txt" "$ARTIFACT_DIR/backend-actual-failures.txt"
+
+      - name: Install frontend from committed lockfile
+        working-directory: dashboard
+        shell: bash
+        run: npm ci --ignore-scripts 2>&1 | tee "$ARTIFACT_DIR/npm-ci.txt"
+
+      - name: Classify exact frontend Recruitment Mail baseline
+        working-directory: dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          npm test -- --reporter=json --outputFile="$ARTIFACT_DIR/frontend-vitest.json" 2>&1 | tee "$ARTIFACT_DIR/frontend-tests.txt"
+          frontend_status=${PIPESTATUS[0]}
+          set -e
+          cat > "$ARTIFACT_DIR/frontend-known-baseline.txt" <<'EOF'
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > renders the redesigned monitoring hub with separated journeys
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > keeps candidate data visible when Ollama diagnostics fail
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > uses the header candidate selector as a global filter
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > opens the complete source mail when an interview activity row is selected
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > opens Gmail connection inline from the main review screen
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > refreshes monitoring data without reloading the page
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > offers an add candidate Gmail form for candidates without a mailbox
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > autopopulates the selected candidate's saved email address
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > keeps mailboxes attached to a legacy candidate alias visible
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > shows action confirmation and live sync progress for a mailbox
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > shows a dated interview confirmation in the Review Queue
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > resolves the candidate name via canonical_candidate_id when candidate_id is a stale alias
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > filters the Review Queue to matching statuses when a summary tile is clicked
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > shows 'Pending AI' instead of a misleading 0% when AI never ran
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > shows AI retry-pending details in Detection Evidence instead of staying stuck on Loading
+          src/components/RecruitmentMailPanel.test.jsx > RecruitmentMailPanel > shows an error state with a working Retry button when the evidence API fails, never staying stuck on Loading
+          EOF
+          node --input-type=module - "$ARTIFACT_DIR/frontend-vitest.json" <<'NODE' > "$ARTIFACT_DIR/frontend-actual-failures.txt"
+          import fs from 'node:fs';
+          import path from 'node:path';
+
+          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const failures = [];
+          for (const result of report.testResults ?? []) {
+            const file = path.relative(process.cwd(), result.name).split(path.sep).join('/');
+            for (const assertion of result.assertionResults ?? []) {
+              if (assertion.status === 'failed') {
+                failures.push([file, ...(assertion.ancestorTitles ?? []), assertion.title].join(' > '));
+              }
+            }
+          }
+          process.stdout.write([...new Set(failures)].sort().join('\n') + (failures.length ? '\n' : ''));
+          NODE
+          sort -u -o "$ARTIFACT_DIR/frontend-known-baseline.txt" "$ARTIFACT_DIR/frontend-known-baseline.txt"
+          if [ "$frontend_status" -eq 0 ]; then
+            echo "Expected Recruitment Mail baseline failures disappeared; update the baseline intentionally." >&2
+            exit 1
+          fi
+          if [ "$frontend_status" -ne 1 ]; then
+            echo "Vitest infrastructure or interruption failure: $frontend_status" >&2
+            exit 1
+          fi
+          diff -u "$ARTIFACT_DIR/frontend-known-baseline.txt" "$ARTIFACT_DIR/frontend-actual-failures.txt"
+
+      - name: Build frontend only after baseline classification
+        working-directory: dashboard
+        shell: bash
+        run: npm run build 2>&1 | tee "$ARTIFACT_DIR/frontend-build.txt"
+
+      - name: Upload dependency verification artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-lock-verification-${{ github.sha }}
+          path: ${{ runner.temp }}/dependency-locks
+          if-no-files-found: warn
