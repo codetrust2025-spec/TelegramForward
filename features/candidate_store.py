@@ -179,6 +179,9 @@ INTERVIEW_ATTENDANCE_STATUSES = frozenset({
     "not_attended",
     "cancelled",
     "rescheduled",
+    # Admin-only marker that grants one free repeat interview. It is never
+    # surfaced on the candidate portal and never counts as attendance.
+    "re_service",
 })
 
 
@@ -403,6 +406,150 @@ def is_free_service_candidate(name: str) -> bool:
     if not key:
         return False
     return "keerthana" in key or "satyanarayana" in key
+
+
+# ── Re-Service ───────────────────────────────────────────────────────────────
+# An admin marks a round "Re-Service" when the candidate deserves one free
+# repeat interview. The grant lives entirely on the candidate row: the public
+# booking flow never names it, and the candidate portal never renders it.
+RE_SERVICE_STATUS = "re_service"
+
+
+def row_has_re_service_grant(row: dict) -> bool:
+    """True when this row carries an unused Re-Service entitlement."""
+    if not isinstance(row, dict):
+        return False
+    return _coerce_bool(row.get("re_service_eligible")) and not _coerce_bool(
+        row.get("re_service_consumed")
+    )
+
+
+def find_re_service_grant(
+    *,
+    name: str = "",
+    phone: str = "",
+    interview_round: str = "",
+    candidate_id: str = "",
+    rows: list[dict] | None = None,
+) -> dict | None:
+    """Locate an unused Re-Service grant for this candidate.
+
+    Matching follows the identifiers the booking form actually supplies:
+    candidate id when known, otherwise phone + interview round, falling back to
+    phone alone and finally the canonical name. Returns None when the candidate
+    has no grant, which keeps every normal booking on the untouched path.
+    """
+    if rows is None:
+        rows = list_candidates(stage="all", month="all")
+    grants = [r for r in rows if row_has_re_service_grant(r)]
+    if not grants:
+        return None
+
+    cid = _clean_str(candidate_id)
+    if cid:
+        hit = next((r for r in grants if str(r.get("id") or "") == cid), None)
+        if hit:
+            return hit
+
+    phone_key = candidate_phone_identity(phone)
+    round_label = normalise_interview_round(interview_round)
+    if phone_key:
+        by_phone = [
+            r for r in grants
+            if candidate_phone_identity(r.get("phone")) == phone_key
+        ]
+        if by_phone:
+            if round_label:
+                exact = next(
+                    (
+                        r for r in by_phone
+                        if normalise_interview_round(r.get("interview_round")) == round_label
+                    ),
+                    None,
+                )
+                if exact:
+                    return exact
+            return by_phone[0]
+
+    name_key = _normalise_candidate_name_key(canonical_candidate_name(_clean_str(name)))
+    if name_key:
+        by_name = [
+            r for r in grants
+            if _normalise_candidate_name_key(r.get("name") or "") == name_key
+        ]
+        if by_name:
+            if round_label:
+                exact = next(
+                    (
+                        r for r in by_name
+                        if normalise_interview_round(r.get("interview_round")) == round_label
+                    ),
+                    None,
+                )
+                if exact:
+                    return exact
+            return by_name[0]
+    return None
+
+
+def candidate_is_re_service_eligible(
+    *,
+    name: str = "",
+    phone: str = "",
+    interview_round: str = "",
+    candidate_id: str = "",
+) -> bool:
+    """Public-facing predicate used to waive payment for one repeat booking."""
+    return find_re_service_grant(
+        name=name,
+        phone=phone,
+        interview_round=interview_round,
+        candidate_id=candidate_id,
+    ) is not None
+
+
+def grant_re_service(cid: str, *, by: str = "") -> dict | None:
+    """Give this candidate one free re-service interview."""
+    data = _load()
+    rows = data.get("candidates") or []
+    for i, r in enumerate(rows):
+        if str(r.get("id") or "") != str(cid):
+            continue
+        r = dict(r)
+        r["re_service_eligible"] = True
+        r["re_service_consumed"] = False
+        r["re_service_granted_at"] = _now_iso()
+        r["re_service_granted_by"] = (by or "").strip()[:120]
+        r["re_service_consumed_at"] = ""
+        r["updated_at"] = _now_iso()
+        rows[i] = r
+        data["candidates"] = rows
+        _save(data)
+        return _with_computed(r)
+    return None
+
+
+def consume_re_service_grant(cid: str, *, booking_id: str = "") -> dict | None:
+    """Burn the one-time grant once the re-service interview is completed."""
+    data = _load()
+    rows = data.get("candidates") or []
+    for i, r in enumerate(rows):
+        if str(r.get("id") or "") != str(cid):
+            continue
+        if not _coerce_bool(r.get("re_service_eligible")):
+            return _with_computed(dict(r))
+        r = dict(r)
+        r["re_service_eligible"] = False
+        r["re_service_consumed"] = True
+        r["re_service_consumed_at"] = _now_iso()
+        if booking_id:
+            r["re_service_consumed_booking_id"] = str(booking_id)
+        r["updated_at"] = _now_iso()
+        rows[i] = r
+        data["candidates"] = rows
+        _save(data)
+        return _with_computed(r)
+    return None
 
 
 def is_low_priority_slot_booker(name: str) -> bool:
@@ -869,6 +1016,8 @@ def _coerce_bool(value) -> bool:
 # ── Schema normalisation ────────────────────────────────────────────────────
 
 _ALLOWED_FIELDS = {
+    "re_service_eligible", "re_service_consumed", "re_service_booking",
+    "re_service_grant_row_id",
     "name", "stage", "technology", "task", "phone", "email", "reference",
     "consultancy", "bgv_certificates", "ctc_percentage",
     "payment", "expected_payment", "follow_up",
@@ -2476,8 +2625,15 @@ def slot_booking_payment_block_reason(
     *,
     payment_proof_id: str | None = None,
     require_payment_proof: bool = False,
+    phone: str = "",
+    interview_round: str = "",
 ) -> str | None:
     """None if the candidate may book; else human-readable payment blocker."""
+    # One admin-granted free re-interview: no dues, no receipt, no expiry check.
+    if candidate_is_re_service_eligible(
+        name=name, phone=phone, interview_round=interview_round
+    ):
+        return None
     due = merged_balance_due_for_name(name)
     if due <= 0 and not require_payment_proof:
         return None
@@ -3211,6 +3367,20 @@ def set_interview_attendance(
         remark_text = _clean_str(remark)[:500]
         r["interview_attendance_status"] = resolved_status
         r["interview_attended"] = resolved_status == "attended"
+        # "Re-Service" is an entitlement, not an attendance outcome: it grants
+        # one free repeat interview and leaves the round's own history alone.
+        if resolved_status == RE_SERVICE_STATUS:
+            r["re_service_eligible"] = True
+            r["re_service_consumed"] = False
+            r["re_service_granted_at"] = _now_iso()
+            r["re_service_granted_by"] = (by or "").strip()[:120]
+            r["re_service_consumed_at"] = ""
+        # A completed re-service interview burns the one-time grant, so the
+        # candidate's next booking is charged normally again.
+        elif resolved_status == "attended" and _coerce_bool(r.get("re_service_booking")):
+            r["re_service_eligible"] = False
+            r["re_service_consumed"] = True
+            r["re_service_consumed_at"] = _now_iso()
         # Feedback describes how an attended interview went, so it is kept only
         # while the round stays "attended". Omitting the field leaves whatever
         # was recorded before untouched.
@@ -3250,6 +3420,16 @@ def set_interview_attendance(
         rows[i] = r
         data["candidates"] = rows
         _save(data)
+        # The grant may have been issued on a different round's row, so clear it
+        # at the source too — otherwise the benefit could be spent twice.
+        grant_row_id = _clean_str(r.get("re_service_grant_row_id"))
+        if (
+            resolved_status == "attended"
+            and _coerce_bool(r.get("re_service_booking"))
+            and grant_row_id
+            and grant_row_id != str(cid)
+        ):
+            consume_re_service_grant(grant_row_id, booking_id=str(cid))
         return _with_computed(r)
     return None
 
@@ -4110,7 +4290,50 @@ def _finish_public_slot_import(
     return row, action
 
 
-def import_confirmed_interview_slot(
+def import_confirmed_interview_slot(**kwargs) -> tuple[dict, str]:
+    """Book the slot, then record whether it consumed a Re-Service grant.
+
+    The grant is resolved before booking because the booking itself may create
+    a fresh round row; stamping the provenance afterwards lets the completed
+    interview burn the benefit on whichever row originally carried it.
+    """
+    grant = find_re_service_grant(
+        name=_clean_str(kwargs.get("name") or ""),
+        phone=_clean_str(kwargs.get("phone") or ""),
+        interview_round=_clean_str(kwargs.get("interview_round") or ""),
+    )
+    row, action = _import_confirmed_interview_slot(**kwargs)
+    if grant and isinstance(row, dict) and row.get("id"):
+        row = _mark_re_service_booking(
+            str(row["id"]), grant_row_id=str(grant.get("id") or "")
+        ) or row
+    return row, action
+
+
+def _mark_re_service_booking(cid: str, *, grant_row_id: str) -> dict | None:
+    """Stamp Re-Service provenance straight onto the stored row.
+
+    This deliberately bypasses update_candidate(): the normaliser there rebuilds
+    rows from known columns, which would silently drop the marker and leave the
+    one-time benefit unconsumable.
+    """
+    data = _load()
+    rows = data.get("candidates") or []
+    for i, r in enumerate(rows):
+        if str(r.get("id") or "") != str(cid):
+            continue
+        r = dict(r)
+        r["re_service_booking"] = True
+        r["re_service_grant_row_id"] = grant_row_id
+        r["updated_at"] = _now_iso()
+        rows[i] = r
+        data["candidates"] = rows
+        _save(data)
+        return _with_computed(r)
+    return None
+
+
+def _import_confirmed_interview_slot(
     *,
     name: str,
     date: str,
@@ -4149,12 +4372,17 @@ def import_confirmed_interview_slot(
         )
         if previous:
             return previous, "skip_exists"
+    re_service_grant = find_re_service_grant(
+        name=canon, phone=phone, interview_round=interview_round
+    )
     pay_block = None
-    if not pending_payment_proof:
+    if not pending_payment_proof and not re_service_grant:
         pay_block = slot_booking_payment_block_reason(
             canon,
             payment_proof_id=payment_proof_id,
             require_payment_proof=is_round_wise,
+            phone=phone,
+            interview_round=interview_round,
         )
     if pay_block:
         due = merged_balance_due_for_name(canon)

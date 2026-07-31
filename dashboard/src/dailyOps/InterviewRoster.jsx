@@ -23,6 +23,8 @@ const STATUS_OPTIONS = [
   { value: 'not_attended', label: 'Not attended', tone: 'missed' },
   { value: 'cancelled', label: 'Cancelled', tone: 'cancelled' },
   { value: 'rescheduled', label: 'Rescheduled', tone: 'rescheduled' },
+  // Admin-only: grants one free repeat interview. Never shown to candidates.
+  { value: 're_service', label: 'Re-Service', tone: 'reservice' },
 ]
 
 function todayIso() {

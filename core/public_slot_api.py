@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+from threading import Lock
 from typing import Any
 
 from fastapi import File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
+_booking_confirmation_lock = Lock()
 
 
 def _json_error(message: str, status: int = 400, **extra: Any) -> JSONResponse:
@@ -50,21 +53,8 @@ def install_public_slot_routes(app) -> None:
         try:
             raw = await file.read()
             if service_type.strip() == "round_wise":
-                payment_owner = cs.ensure_round_wise_payment_row(
-                    name,
-                    phone=phone,
-                    technology=technology,
-                    interview_round=interview_round,
-                    # Tabs opened before the frontend deployment do not send
-                    # these three new fields.  Keep them compatible: the final
-                    # booking endpoint still requires and persists all fields.
-                    allow_incomplete=True,
-                )
-                due_amount = max(
-                    0,
-                    cs.effective_expected_payment(payment_owner)
-                    - int(payment_owner.get("payment") or 0),
-                )
+                due_amount = cs.baseline_for_service("round_wise")
+                payment_owner = None
             else:
                 due_amount = cs.merged_balance_due_for_name(name) if name else 0
                 payment_owner = cs._best_row_for_slot_name(name)
@@ -88,6 +78,7 @@ def install_public_slot_routes(app) -> None:
                     payment_scope=(
                         "ROUND" if service_type.strip() == "round_wise" else "PROFILE"
                     ),
+                    create_ledger=False,
                 )
                 ai_extraction["company_payment_reasons"] = list(
                     ai_extraction.get("deterministic_reasons") or []
@@ -118,15 +109,28 @@ def install_public_slot_routes(app) -> None:
                     "Upload a clear receipt showing the receiver UPI ID or payment phone number, amount, UTR, and successful status."
                 )
 
-            result = cs.public_add_payment_proof_for_name(
-                name,
+            from features.pending_slot_payment import save_verified_proof
+
+            pending_proof = save_verified_proof(
+                name=name,
+                service_type=service_type.strip() or "profile_service",
+                phone=phone,
+                technology=technology,
+                interview_round=interview_round,
                 data=raw,
                 original_name=file.filename or "payment.jpg",
                 mime_type=file.content_type or "image/jpeg",
+                amount_due=due_amount,
                 note=note or "",
-                extraction=ai_extraction,
-                service_type=service_type,
+                verification=ai_extraction,
             )
+            result = {
+                "candidate_id": "",
+                "proof_id": pending_proof["id"],
+                "proof": pending_proof,
+                "balance_due": 0,
+                "name": name.strip(),
+            }
             try:
                 ai_extraction["narrative"] = await asyncio.to_thread(
                     generate_payment_narrative,
@@ -147,6 +151,13 @@ def install_public_slot_routes(app) -> None:
     async def public_slot_parse_screenshot(file: UploadFile = File(...)):
         raw = await file.read()
         mime = file.content_type or "image/jpeg"
+        logger.info(
+            "Invite upload received filename=%s mime=%s bytes=%d sha256=%s transport=original",
+            file.filename or "",
+            mime,
+            len(raw),
+            hashlib.sha256(raw).hexdigest()[:16],
+        )
         try:
             from features.slot_screenshot_parse import parse_invite_screenshot
 
@@ -192,6 +203,14 @@ def install_public_slot_routes(app) -> None:
             }
         
         is_success = bool(result and result.get("confidence_score", 0) > 0)
+        if not result.get("auto_booking_safe"):
+            logger.warning(
+                "Invite extraction not safe stage=%s reason=%s method=%s warnings=%s",
+                result.get("failure_stage") or "unknown",
+                result.get("failure_reason") or "No exact failure reason supplied",
+                result.get("extraction_method") or result.get("extraction_source"),
+                result.get("warnings") or [],
+            )
         return {
             "status": "ok",
             "success": is_success,
@@ -254,6 +273,7 @@ def install_public_slot_routes(app) -> None:
                 ),
                 purpose="candidate_payment",
                 payment_scope="PROFILE",
+                create_ledger=False,
             )
 
             if candidate_name.strip() and result.get("is_payment_screenshot"):
@@ -360,11 +380,17 @@ def install_public_slot_routes(app) -> None:
         service_type: str = Form(default="round_wise"),
         notes: str = Form(default=""),
         payment_proof_id: str = Form(default=""),
+        idempotency_key: str = Form(default=""),
         file: UploadFile | None = File(default=None),
     ):
         normalized_service_type = service_type.strip() or "round_wise"
         normalized_technology = technology.strip()
         normalized_phone = phone.strip() if normalized_service_type == "round_wise" else ""
+        normalized_round = cs.normalise_interview_round(interview_round)
+        if not normalized_round:
+            return _json_error(
+                "Interview round is required. Select L1, L2, or another valid round."
+            )
         if normalized_service_type == "round_wise" and not normalized_technology:
             return _json_error(
                 "Technology is required for round-wise booking. "
@@ -379,6 +405,8 @@ def install_public_slot_routes(app) -> None:
         slot_image: bytes | None = None
         slot_image_name = ""
         slot_image_mime = ""
+        if not file or not file.filename:
+            return _json_error("Interview invite screenshot is required.")
         if file and file.filename:
             slot_image = await file.read()
             slot_image_name = file.filename or "slot.jpg"
@@ -401,23 +429,78 @@ def install_public_slot_routes(app) -> None:
                 "Automatic booking is allowed only after dual-source AI verification; "
                 "otherwise enter them manually."
             )
-        try:
-            row, action = cs.import_confirmed_interview_slot(
+        normalized_proof_id = payment_proof_id.strip()
+        pending_payment_proof = None
+        if normalized_proof_id:
+            from features.pending_slot_payment import get_verified_proof
+
+            pending_payment_proof = get_verified_proof(
+                normalized_proof_id,
                 name=name,
-                date=day,
-                time=slot_time,
-                time_end=slot_end,
-                interview_round=interview_round,
-                technology=normalized_technology,
-                phone=normalized_phone,
                 service_type=normalized_service_type,
-                notes=notes,
-                source="submit-slot form",
-                payment_proof_id=payment_proof_id.strip() or None,
-                slot_image=slot_image,
-                slot_image_name=slot_image_name,
-                slot_image_mime=slot_image_mime,
+                phone=normalized_phone,
+                technology=normalized_technology,
+                interview_round=normalized_round,
             )
+        # An admin-granted Re-Service booking is free: it needs no receipt and
+        # never reaches the payment gate. Everyone else follows the unchanged
+        # round-wise rule that a verified screenshot must be present.
+        re_service_booking = cs.candidate_is_re_service_eligible(
+            name=name.strip(),
+            phone=normalized_phone,
+            interview_round=normalized_round,
+        )
+        if (
+            normalized_service_type == "round_wise"
+            and not pending_payment_proof
+            and not re_service_booking
+        ):
+            return _json_error(
+                "Payment screenshot not found or expired — upload it again before booking.",
+                payment_due=True,
+                balance_due=cs.baseline_for_service("round_wise"),
+                name=name.strip(),
+            )
+        booking_key = hashlib.sha256(
+            "|".join(
+                [
+                    idempotency_key.strip(),
+                    name.strip().lower(),
+                    normalized_service_type,
+                    normalized_phone,
+                    day,
+                    slot_time,
+                    slot_end,
+                    normalized_round.lower(),
+                    normalized_proof_id,
+                ]
+            ).encode("utf-8")
+        ).hexdigest()
+        try:
+            with _booking_confirmation_lock:
+                row, action = cs.import_confirmed_interview_slot(
+                    name=name,
+                    date=day,
+                    time=slot_time,
+                    time_end=slot_end,
+                    interview_round=normalized_round,
+                    technology=normalized_technology,
+                    phone=normalized_phone,
+                    service_type=normalized_service_type,
+                    notes=notes,
+                    source="submit-slot form",
+                    payment_proof_id=normalized_proof_id or None,
+                    pending_payment_proof=pending_payment_proof,
+                    idempotency_key=booking_key,
+                    slot_image=slot_image,
+                    slot_image_name=slot_image_name,
+                    slot_image_mime=slot_image_mime,
+                )
+                row = cs.finalize_public_booking_payment(
+                    row,
+                    pending_payment_proof=pending_payment_proof,
+                    idempotency_key=booking_key,
+                )
         except cs.PaymentDueError as e:
             return _json_error(
                 str(e),
