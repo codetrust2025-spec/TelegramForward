@@ -54,14 +54,18 @@ def _install_extractor(monkeypatch, value):
 def _write_referrer_registry(tmp_path, *names):
     """Register placeholder referrer names so resolve_referrer() verifies them,
     keeping tests self-contained (no dependency on ambient/real referrer data)."""
+    entries = [
+        entry if isinstance(entry, tuple) else ("referrer-%d" % i, entry)
+        for i, entry in enumerate(names)
+    ]
     path = tmp_path / "referrers.json"
     path.write_text(
         json.dumps(
             {
                 "version": 1,
                 "referrers": [
-                    {"id": f"referrer-{i}", "name": n, "aliases": [], "is_active": True}
-                    for i, n in enumerate(names)
+                    {"id": rid, "name": n, "aliases": [], "is_active": True}
+                    for rid, n in entries
                 ],
             }
         ),
@@ -116,6 +120,12 @@ def test_referrer_sponsored_payment_creates_future_commission_recovery(
     monkeypatch.setenv(
         "PAYMENT_REFERRER_RECEIVERS_JSON",
         json.dumps([{"name": "Thrilok", "upi_ids": ["thrilok@upi"]}]),
+    )
+    # A referrer-sponsored payment verifies only when the receiver account
+    # links to a canonical registered referrer, so register it here too.
+    monkeypatch.setenv(
+        "REFERRER_REGISTRY_FILE", _write_referrer_registry(tmp_path, "Thrilok"
+        )
     )
     _install_extractor(
         monkeypatch,
@@ -296,6 +306,12 @@ def test_negative_settlement_becomes_carry_forward_not_cash_payment(
         "PAYMENT_REFERRER_RECEIVERS_JSON",
         json.dumps([{"name": "Thrilok", "upi_ids": ["thrilok@upi"]}]),
     )
+    # A referrer-sponsored payment verifies only when the receiver account
+    # links to a canonical registered referrer, so register it here too.
+    monkeypatch.setenv(
+        "REFERRER_REGISTRY_FILE", _write_referrer_registry(tmp_path, "Thrilok"
+        )
+    )
     _install_extractor(
         monkeypatch,
         _extraction(
@@ -398,6 +414,12 @@ def test_pavan_receiver_classification_does_not_depend_on_amount(
                 }
             ]
         ),
+    )
+    # A referrer-sponsored payment verifies only when the receiver account
+    # links to a canonical registered referrer, so register it here too.
+    monkeypatch.setenv(
+        "REFERRER_REGISTRY_FILE", _write_referrer_registry(tmp_path, ("referrer-pavan-kalyan", "SAMPLE REFERRER")
+        )
     )
     _install_extractor(
         monkeypatch,
@@ -683,6 +705,12 @@ def test_thrilok_exact_full_phone_is_amount_independent(
             ]
         ),
     )
+    # A referrer-sponsored payment verifies only when the receiver account
+    # links to a canonical registered referrer, so register it here too.
+    monkeypatch.setenv(
+        "REFERRER_REGISTRY_FILE", _write_referrer_registry(tmp_path, ("referrer-thrilok", "SAMPLE REFERRER TWO")
+        )
+    )
     _install_extractor(
         monkeypatch,
         _extraction(
@@ -729,6 +757,12 @@ def test_venugopal_exact_full_phone_is_amount_independent(
                 }
             ]
         ),
+    )
+    # A referrer-sponsored payment verifies only when the receiver account
+    # links to a canonical registered referrer, so register it here too.
+    monkeypatch.setenv(
+        "REFERRER_REGISTRY_FILE", _write_referrer_registry(tmp_path, ("referrer-venugopal", "SAMPLE REFERRER ONE")
+        )
     )
     _install_extractor(
         monkeypatch,
@@ -859,6 +893,12 @@ def test_received_from_preserves_explicit_receiver_when_both_parties_extracted(
                 }
             ]
         ),
+    )
+    # A referrer-sponsored payment verifies only when the receiver account
+    # links to a canonical registered referrer, so register it here too.
+    monkeypatch.setenv(
+        "REFERRER_REGISTRY_FILE", _write_referrer_registry(tmp_path, ("referrer-pavan-kalyan", "SAMPLE REFERRER")
+        )
     )
     _install_extractor(
         monkeypatch,
