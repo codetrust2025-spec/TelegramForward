@@ -166,7 +166,11 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          "$RUNNER_TEMP/dev-venv/bin/python" -m pytest -q -r f 2>&1 | tee "$ARTIFACT_DIR/backend-tests.txt"
+          # COLUMNS is pinned so the short-summary format cannot vary with the
+          # runner's reported terminal width (pytest only appends " - <reason>"
+          # to a FAILED line when it fits, which made the captured artifact
+          # non-deterministic between local and CI runs).
+          COLUMNS=200 "$RUNNER_TEMP/dev-venv/bin/python" -m pytest -q -r f 2>&1 | tee "$ARTIFACT_DIR/backend-tests.txt"
           pytest_status=${PIPESTATUS[0]}
           set -e
           cat > "$ARTIFACT_DIR/backend-known-baseline.txt" <<'EOF'
@@ -185,7 +189,26 @@ jobs:
           tests/test_payment_verification_engine.py::test_venugopal_exact_full_phone_is_amount_independent[25000]
           tests/test_payment_verification_engine.py::test_received_from_preserves_explicit_receiver_when_both_parties_extracted
           EOF
-          grep '^FAILED ' "$ARTIFACT_DIR/backend-tests.txt" | sed 's/^FAILED //' | sort -u > "$ARTIFACT_DIR/backend-actual-failures.txt" || true
+          # Reduce each short-summary line to a canonical pytest node ID.
+          # Strips ANSI colour, CR from CRLF, the "FAILED " prefix, and the
+          # trailing " - <reason>" description. The bracket depth counter keeps
+          # a parameterised id such as test_x[a - b] intact.
+          sed -e 's/\x1b\[[0-9;]*[a-zA-Z]//g' -e 's/\r$//' "$ARTIFACT_DIR/backend-tests.txt" \
+            | grep -E '^FAILED[[:space:]]' \
+            | awk '{
+                sub(/^FAILED[[:space:]]+/, "")
+                depth = 0; cut = -1; n = length($0)
+                for (i = 1; i <= n; i++) {
+                  ch = substr($0, i, 1)
+                  if (ch == "[") depth++
+                  else if (ch == "]") { if (depth > 0) depth-- }
+                  else if (depth == 0 && substr($0, i, 3) == " - ") { cut = i; break }
+                }
+                if (cut > 0) { $0 = substr($0, 1, cut - 1) }
+                sub(/[[:space:]]+$/, "")
+                if (length($0) > 0) print
+              }' \
+            | sort -u > "$ARTIFACT_DIR/backend-actual-failures.txt" || true
           sort -u -o "$ARTIFACT_DIR/backend-known-baseline.txt" "$ARTIFACT_DIR/backend-known-baseline.txt"
           if [ "$pytest_status" -eq 0 ]; then
             echo "Expected referrer baseline failures disappeared; update the baseline intentionally." >&2
@@ -193,6 +216,10 @@ jobs:
           fi
           if [ "$pytest_status" -ne 1 ]; then
             echo "pytest infrastructure, collection, or interruption failure: $pytest_status" >&2
+            exit 1
+          fi
+          if [ ! -s "$ARTIFACT_DIR/backend-actual-failures.txt" ]; then
+            echo "pytest reported failures but no FAILED node ID could be parsed; refusing to accept the run." >&2
             exit 1
           fi
           diff -u "$ARTIFACT_DIR/backend-known-baseline.txt" "$ARTIFACT_DIR/backend-actual-failures.txt"
