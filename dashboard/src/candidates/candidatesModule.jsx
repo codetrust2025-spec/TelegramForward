@@ -706,10 +706,10 @@ export function PaymentProofUploader({
             margin: "8px 0",
             padding: "8px 12px",
             borderRadius: "6px",
-            background: aiResult.verified
+            background: aiResult.deterministic_verified
               ? "rgba(34,197,94,.1)"
               : "rgba(251,191,36,.1)",
-            border: aiResult.verified
+            border: aiResult.deterministic_verified
               ? "1px solid rgba(34,197,94,.25)"
               : "1px solid rgba(251,191,36,.25)",
             fontSize: "12px",
@@ -718,40 +718,13 @@ export function PaymentProofUploader({
         >
           <div
             style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: "6px",
+              display: "grid",
+              gridTemplateColumns: "auto 1fr auto",
+              gap: "4px 10px",
             }}
           >
-            <strong
-              style={{
-                color: aiResult.verified ? "#22c55e" : "#f59e0b",
-                fontSize: "12px",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {aiResult.verified ? "✓ Verified" : "⚠ Pending"}
-            </strong>
-            <span
-              style={{
-                color: "rgba(255,255,255,.85)",
-                fontSize: "12px",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {aiResult.amount > 0 && (
-                <span>₹{aiResult.amount.toLocaleString("en-IN")}</span>
-              )}
-              {aiResult.utr_number && <span> · UTR {aiResult.utr_number}</span>}
-              {aiResult.payment_app && <span> · {aiResult.payment_app}</span>}
-              {aiResult.status && aiResult.status !== "unknown" && (
-                <span> · {aiResult.status}</span>
-              )}
-              {aiResult.payment_date && <span> · {aiResult.payment_date}</span>}
-            </span>
+            <span>Amount</span>
+            <strong>₹{Number(aiResult.amount || 0).toLocaleString("en-IN")}</strong>
             <button
               type="button"
               onClick={() => setAiResult(null)}
@@ -763,27 +736,28 @@ export function PaymentProofUploader({
                 fontSize: "13px",
                 color: "inherit",
                 padding: "0 2px",
-                flexShrink: 0,
               }}
             >
               ×
             </button>
-          </div>
-          {aiResult.narrative && (
-            <div
+            <span>Receiver</span>
+            <strong style={{ gridColumn: "2 / 4" }}>
+              {aiResult.receiver_name || "Not detected"}
+            </strong>
+            <span>UPI/reference ID</span>
+            <strong style={{ gridColumn: "2 / 4" }}>
+              {aiResult.utr_number || aiResult.transaction_id || "Not detected"}
+            </strong>
+            <span>Verification status</span>
+            <strong
               style={{
-                marginTop: "6px",
-                paddingTop: "6px",
-                borderTop: "1px solid rgba(255,255,255,.08)",
-                fontSize: "12px",
-                color: "rgba(226,232,240,.9)",
-                lineHeight: "1.5",
-                fontStyle: "italic",
+                gridColumn: "2 / 4",
+                color: aiResult.deterministic_verified ? "#22c55e" : "#f59e0b",
               }}
             >
-              {aiResult.narrative}
-            </div>
-          )}
+              {aiResult.deterministic_verified ? "Verified" : "Needs review"}
+            </strong>
+          </div>
         </div>
       )}
       {t.length > 0 && (
