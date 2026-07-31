@@ -495,6 +495,21 @@ def normalise_interview_attendee_name(raw: str | None) -> str:
     raise ValueError("Interview attendee must be Nikhila, Bhavana, or Tool")
 
 
+INTERVIEW_FEEDBACK_VALUES = {"positive", "negative"}
+
+
+def normalise_interview_feedback(raw: str | None) -> str:
+    """Map free-text feedback onto the two supported outcomes ("" = not set)."""
+    key = (raw or "").strip().lower()
+    if key in {"", "pending", "none"}:
+        return ""
+    if key in {"positive", "good", "pass", "passed"}:
+        return "positive"
+    if key in {"negative", "bad", "fail", "failed"}:
+        return "negative"
+    raise ValueError("Interview feedback must be positive or negative")
+
+
 def normalise_interview_attendance_status(
     raw: str | None,
     *,
@@ -867,6 +882,7 @@ _ALLOWED_FIELDS = {
     "interview_company", "interview_role", "interview_source_thread_id",
     "interview_source_message_id", "interview_source_timezone",
     "interview_booking_source",
+    "booking_idempotency_key",
     "purpose",
 }
 
@@ -1087,6 +1103,9 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         "interview_source_message_id": _clean_str(record.get("interview_source_message_id", base.get("interview_source_message_id"))),
         "interview_source_timezone": _clean_str(record.get("interview_source_timezone", base.get("interview_source_timezone"))),
         "interview_booking_source": _clean_str(record.get("interview_booking_source", base.get("interview_booking_source"))).lower(),
+        "booking_idempotency_key": _clean_str(
+            record.get("booking_idempotency_key", base.get("booking_idempotency_key"))
+        ),
         "telegram_slot":    _clean_str(record.get("telegram_slot", base.get("telegram_slot"))),
         "telegram_user_id": int(record.get("telegram_user_id") or base.get("telegram_user_id") or 0) or None,
         "payment_proofs":   list(record.get("payment_proofs", base.get("payment_proofs")) or []),
@@ -3169,6 +3188,7 @@ def set_interview_attendance(
     remark: str = "",
     attended: bool | None = None,
     attendee: str | None = None,
+    feedback: str | None = None,
     by: str,
     allow_future: bool = False,
 ) -> dict | None:
@@ -3191,6 +3211,21 @@ def set_interview_attendance(
         remark_text = _clean_str(remark)[:500]
         r["interview_attendance_status"] = resolved_status
         r["interview_attended"] = resolved_status == "attended"
+        # Feedback describes how an attended interview went, so it is kept only
+        # while the round stays "attended". Omitting the field leaves whatever
+        # was recorded before untouched.
+        if resolved_status == "attended":
+            if feedback is None:
+                try:
+                    r["interview_feedback"] = normalise_interview_feedback(
+                        r.get("interview_feedback")
+                    )
+                except ValueError:
+                    r["interview_feedback"] = ""
+            else:
+                r["interview_feedback"] = normalise_interview_feedback(feedback)
+        else:
+            r["interview_feedback"] = ""
         if resolved_status in {"attended", "not_attended"}:
             r["interview_attendance_remark"] = remark_text
             r["interview_attended_at"] = _now_iso()
@@ -4088,6 +4123,8 @@ def import_confirmed_interview_slot(
     service_type: str = "round_wise",
     source: str = "public-upload",
     payment_proof_id: str | None = None,
+    pending_payment_proof: tuple[str, dict] | None = None,
+    idempotency_key: str = "",
     slot_image: bytes | None = None,
     slot_image_name: str = "",
     slot_image_mime: str = "",
@@ -4100,11 +4137,25 @@ def import_confirmed_interview_slot(
         raise ValueError(f"{canon} is no longer booking interview slots.")
 
     is_round_wise = _normalise_service_type(service_type, {}) == "round_wise"
-    pay_block = slot_booking_payment_block_reason(
-        canon,
-        payment_proof_id=payment_proof_id,
-        require_payment_proof=is_round_wise,
-    )
+    booking_key = _clean_str(idempotency_key)
+    if booking_key:
+        previous = next(
+            (
+                row
+                for row in list_candidates(stage="all", month="all")
+                if _clean_str(row.get("booking_idempotency_key")) == booking_key
+            ),
+            None,
+        )
+        if previous:
+            return previous, "skip_exists"
+    pay_block = None
+    if not pending_payment_proof:
+        pay_block = slot_booking_payment_block_reason(
+            canon,
+            payment_proof_id=payment_proof_id,
+            require_payment_proof=is_round_wise,
+        )
     if pay_block:
         due = merged_balance_due_for_name(canon)
         if is_round_wise and due <= 0:
@@ -4335,6 +4386,90 @@ def import_confirmed_interview_slot(
     raise ValueError(
         f"No existing candidate matched {canon}. Add/select the candidate before booking an interview slot."
     )
+
+
+def finalize_public_booking_payment(
+    row: dict,
+    *,
+    pending_payment_proof: tuple[str, dict] | None = None,
+    idempotency_key: str = "",
+) -> dict:
+    """Attach temporary payment evidence only after booking confirmation."""
+    cid = _clean_str(row.get("id"))
+    if not cid:
+        raise ValueError("Confirmed candidate record is missing")
+
+    booking_key = _clean_str(idempotency_key)
+    current = get_candidate(cid) or row
+    patch: dict = {}
+    if booking_key and _clean_str(current.get("booking_idempotency_key")) != booking_key:
+        patch["booking_idempotency_key"] = booking_key
+
+    if pending_payment_proof:
+        path, pending = pending_payment_proof
+        pending_id = _clean_str(pending.get("id"))
+        existing_proof = next(
+            (
+                proof
+                for proof in (current.get("payment_proofs") or [])
+                if _clean_str(proof.get("pending_proof_id")) == pending_id
+            ),
+            None,
+        )
+        if not existing_proof:
+            with open(path, "rb") as handle:
+                raw = handle.read()
+            verification = dict(pending.get("verification") or {})
+            fraud_check = dict(pending.get("fraud_check") or {})
+            entry = add_payment_proof(
+                cid,
+                data=raw,
+                original_name=_clean_str(pending.get("original_name")) or "payment.jpg",
+                mime_type=_clean_str(pending.get("mime_type")) or "image/jpeg",
+                note=_clean_str(pending.get("note"))
+                or "Verified payment proof · submit-slot",
+                metadata={
+                    "pending_proof_id": pending_id,
+                    "sha256": pending.get("sha256") or fraud_check.get("sha256") or "",
+                    "fraud_decision": fraud_check.get("decision") or "",
+                    "fraud_reasons": fraud_check.get("reasons") or [],
+                    "fraud_warnings": fraud_check.get("warnings") or [],
+                    "utr_number": str(
+                        verification.get("utr_number")
+                        or verification.get("reference_number")
+                        or verification.get("transaction_id")
+                        or ""
+                    ),
+                    "transaction_id": verification.get("transaction_id") or "",
+                    "payment_status": verification.get("status") or "",
+                    "company_payment_verified": bool(
+                        verification.get("company_payment_verified")
+                    ),
+                    "booking_eligible": bool(verification.get("booking_eligible")),
+                    "verification_state": verification.get("verification_state") or "",
+                    "receiver_name": verification.get("receiver_name") or "",
+                    "receiver_upi_id": verification.get("receiver_upi_id") or "",
+                    "receiver_phone": verification.get("receiver_phone") or "",
+                    "receiver_account": verification.get("receiver_account") or "",
+                    "receiver_type": verification.get("receiver_type") or "company",
+                    "verified_amount": int(verification.get("amount") or 0),
+                    "payment_scope": verification.get("payment_scope") or "",
+                    "source_module": "public_slot_confirmation",
+                },
+            )
+            if not entry:
+                raise ValueError("Could not attach verified payment proof")
+            current = get_candidate(cid) or current
+            amount = max(0, int(pending.get("amount_due") or 0))
+            expected = effective_expected_payment(current)
+            patch["payment"] = min(
+                int(current.get("payment") or 0) + amount,
+                expected,
+            )
+
+    if patch:
+        current = update_candidate(cid, patch, allow_slot_without_rules=True)
+    return current
 
 
 def _slot_picker_dedupe_key(row: dict) -> str:
@@ -5491,6 +5626,7 @@ def _store_typed_attachment(
             "verification_state", "payment_id", "evidence_id",
             "entitlement_id", "payment_scope",
             "booking_id", "source_endpoint", "upload_context",
+            "pending_proof_id",
         ):
             if key in metadata:
                 entry[key] = metadata[key]

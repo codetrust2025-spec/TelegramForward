@@ -153,6 +153,7 @@ function RowActions({ row, busy, canEditAttendee, onEditAttendee, onEditSlot, on
 function SlotEditModal({ row, mode, targetStatus, targetLabel, busy, onClose, onSave }) {
   const [attendee, setAttendee] = useState(row.interview_attendee_resolved || row.interview_attendee || 'Bhavana')
   const [remark, setRemark] = useState(row.interview_attendance_remark || '')
+  const [feedback, setFeedback] = useState(row.interview_feedback || '')
   const [date, setDate] = useState(row.date || '')
   const [time, setTime] = useState(row.time || '')
   const [timeEnd, setTimeEnd] = useState(row.time_end || '')
@@ -162,15 +163,18 @@ function SlotEditModal({ row, mode, targetStatus, targetLabel, busy, onClose, on
   const [error, setError] = useState('')
   const attendeeOnly = mode === 'attendee'
   const attendeeWithStatus = mode === 'attendee-with-status'
+  // Feedback only makes sense once an interview actually happened.
+  const wantsFeedback = attendeeWithStatus && targetStatus === 'attended'
   async function submit(event) {
     event.preventDefault()
     if (attendeeWithStatus && !remark.trim()) { setError('Please add a note about the interview.'); return }
+    if (wantsFeedback && !feedback) { setError('Select whether the interview feedback was positive or negative.'); return }
     setError('')
     try {
       if (attendeeOnly) {
         await onSave({ attendee })
       } else if (attendeeWithStatus) {
-        await onSave({ attendee, status: targetStatus, remark: remark.trim() })
+        await onSave({ attendee, status: targetStatus, remark: remark.trim(), feedback: wantsFeedback ? feedback : '' })
       } else {
         if (!technology) { setError('Please select the interview technology.'); return }
         await onSave({ date, time, time_end: timeEnd, notes, interview_round: round, technology })
@@ -185,7 +189,7 @@ function SlotEditModal({ row, mode, targetStatus, targetLabel, busy, onClose, on
       <form className="cand-modal ops-slot-modal" onSubmit={submit}>
         <header className="cand-modal-header"><div><h3 className="cand-modal-title">{attendeeWithStatus ? `Mark as "${targetLabel}"?` : attendeeOnly ? 'Edit attendee' : 'Edit interview slot'}</h3><p className="cand-modal-sub">{attendeeWithStatus ? `Select attendee and update attendance for ${row.name}` : row.name}</p></div><button type="button" className="cand-modal-close" onClick={onClose} aria-label="Close">×</button></header>
         <div className="cand-modal-body">
-          {(attendeeOnly || attendeeWithStatus) ? <><label className="cand-field cand-field--span2"><span className="cand-field-label">Attendee{attendeeWithStatus ? ' (who attended the interview?)' : ''}</span><select className="cand-input" value={attendee} onChange={event => setAttendee(event.target.value)} required autoFocus>{ATTENDEES.map(name => <option key={name} value={name}>{name}</option>)}</select></label>{attendeeWithStatus && <label className="cand-field cand-field--span2"><span className="cand-field-label">Note / remark *</span><input className="cand-input" value={remark} onChange={event => setRemark(event.target.value)} placeholder="e.g. Interview went well, next round scheduled" required /></label>}</> : <><label className="cand-field"><span className="cand-field-label">Date</span><input className="cand-input" type="date" value={date} onChange={event => setDate(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Start time</span><input className="cand-input" type="time" value={time} onChange={event => setTime(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">End time</span><input className="cand-input" type="time" value={timeEnd} onChange={event => setTimeEnd(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Interview round</span><select className="cand-input" value={round} onChange={event => setRound(event.target.value)}><option value="">Select round</option><option value="L1">L1</option><option value="L2">L2</option><option value="HR">HR</option><option value="Final">Final</option><option value="Screening">Screening</option></select></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Technology *</span><select className="cand-input" value={technology} onChange={event => setTechnology(event.target.value)} required><option value="">Select technology</option>{technology && !TECHNOLOGIES.includes(technology) && <option value={technology}>{technology}</option>}{TECHNOLOGIES.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Notes</span><input className="cand-input" value={notes} onChange={event => setNotes(event.target.value)} /></label></>}
+          {(attendeeOnly || attendeeWithStatus) ? <><label className="cand-field cand-field--span2"><span className="cand-field-label">Attendee{attendeeWithStatus ? ' (who attended the interview?)' : ''}</span><select className="cand-input" value={attendee} onChange={event => setAttendee(event.target.value)} required autoFocus>{ATTENDEES.map(name => <option key={name} value={name}>{name}</option>)}</select></label>{wantsFeedback && <label className="cand-field cand-field--span2"><span className="cand-field-label">Interview feedback *</span><select className="cand-input" value={feedback} onChange={event => setFeedback(event.target.value)} required><option value="">Select feedback</option><option value="positive">Positive</option><option value="negative">Negative</option></select></label>}{attendeeWithStatus && <label className="cand-field cand-field--span2"><span className="cand-field-label">Note / remark *</span><input className="cand-input" value={remark} onChange={event => setRemark(event.target.value)} placeholder="e.g. Interview went well, next round scheduled" required /></label>}</> : <><label className="cand-field"><span className="cand-field-label">Date</span><input className="cand-input" type="date" value={date} onChange={event => setDate(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Start time</span><input className="cand-input" type="time" value={time} onChange={event => setTime(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">End time</span><input className="cand-input" type="time" value={timeEnd} onChange={event => setTimeEnd(event.target.value)} required /></label><label className="cand-field"><span className="cand-field-label">Interview round</span><select className="cand-input" value={round} onChange={event => setRound(event.target.value)}><option value="">Select round</option><option value="L1">L1</option><option value="L2">L2</option><option value="HR">HR</option><option value="Final">Final</option><option value="Screening">Screening</option></select></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Technology *</span><select className="cand-input" value={technology} onChange={event => setTechnology(event.target.value)} required><option value="">Select technology</option>{technology && !TECHNOLOGIES.includes(technology) && <option value={technology}>{technology}</option>}{TECHNOLOGIES.map(name => <option key={name} value={name}>{name}</option>)}</select></label><label className="cand-field cand-field--span2"><span className="cand-field-label">Notes</span><input className="cand-input" value={notes} onChange={event => setNotes(event.target.value)} /></label></>}
           {error && <p className="admin-error cand-field--span2">{error}</p>}
         </div>
         <footer className="cand-modal-footer"><button type="button" className="cand-btn cand-btn--ghost" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className={`cand-btn cand-btn--primary${attendeeWithStatus && (targetStatus === 'not_attended' || targetStatus === 'cancelled') ? ' cand-btn--danger' : ''}`} disabled={busy}>{busy ? 'Saving…' : attendeeWithStatus ? targetLabel : 'Save changes'}</button></footer>
@@ -347,7 +351,7 @@ export function InterviewRoster({
     }
   }, [focusDay, onFocusDayApplied, setDay])
 
-  async function saveAttendance(row, status, attendee, remark) {
+  async function saveAttendance(row, status, attendee, remark, feedback) {
     setBusyId(row.id)
     setError('')
     try {
@@ -355,6 +359,7 @@ export function InterviewRoster({
       if (status && (status === 'attended' || status === 'not_attended')) {
         body.attendee = attendee || row.interview_attendee_resolved || row.interview_attendee || 'Bhavana'
       }
+      if (feedback !== undefined) body.feedback = feedback || ''
       const res = await fetch(`${API}/candidates/${row.id}/interview-attendance`, {
         method: 'POST',
         credentials: 'include',
@@ -565,9 +570,14 @@ export function InterviewRoster({
                           : <span className="ops-slot-shot-empty">Not available</span>}
                       </td>
                       <td data-label="Notes" className="ops-interview-notes-cell">
+                        {row.interview_feedback && (
+                          <span className={`ops-feedback-pill ops-feedback-pill--${row.interview_feedback}`}>
+                            {row.interview_feedback === 'positive' ? 'Positive' : 'Negative'}
+                          </span>
+                        )}
                         {row.interview_attendance_remark
                           ? <span className="ops-interview-notes-text" title={row.interview_attendance_remark}>{row.interview_attendance_remark}</span>
-                          : '—'}
+                          : (row.interview_feedback ? null : '—')}
                       </td>
                       {canManage && <td data-label="Actions" className="ops-dash-attend-cell"><RowActions row={row} busy={busyId === row.id} canEditAttendee={canEditAttendee} onEditAttendee={() => setEditing({ row, mode: 'attendee' })} onEditSlot={() => setEditing({ row, mode: 'slot' })} onRemove={removeSlot} /></td>}
                     </tr>
@@ -578,7 +588,7 @@ export function InterviewRoster({
           </div>
         </div>
       )}
-      {editing && <SlotEditModal row={editing.row} mode={editing.mode} targetStatus={editing.targetStatus} targetLabel={editing.targetLabel} busy={busyId === editing.row.id} onClose={() => setEditing(null)} onSave={values => editing.mode === 'attendee' ? saveAttendee(editing.row, values.attendee) : editing.mode === 'attendee-with-status' ? saveAttendance(editing.row, values.status, values.attendee, values.remark) : saveSlot(editing.row, values)} />}
+      {editing && <SlotEditModal row={editing.row} mode={editing.mode} targetStatus={editing.targetStatus} targetLabel={editing.targetLabel} busy={busyId === editing.row.id} onClose={() => setEditing(null)} onSave={values => editing.mode === 'attendee' ? saveAttendee(editing.row, values.attendee) : editing.mode === 'attendee-with-status' ? saveAttendance(editing.row, values.status, values.attendee, values.remark, values.feedback) : saveSlot(editing.row, values)} />}
       {screenshotRow && <SlotScreenshotModal row={screenshotRow} onClose={() => setScreenshotRow(null)} />}
     </section>
   )

@@ -447,6 +447,7 @@ async def candidates_interview_attendance(cid: str, request: Request, body: dict
             remark=b.get("remark") or "",
             attended=b.get("attended"),
             attendee=b.get("attendee"),
+            feedback=b.get("feedback"),
             by=_ops_by(request),
             allow_future=allow_future,
         )
