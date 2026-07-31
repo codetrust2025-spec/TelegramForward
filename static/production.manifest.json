@@ -1,14 +1,14 @@
 {
   "version": 2,
   "description": "Pinned production assets \u2014 live site must match these hashes.",
-  "git_commit": "58c78c9e0aea4f8e287db4627932aa6339a25715",
-  "git_commit_short": "58c78c9",
-  "deployed_at": "2026-07-31T11:11:07Z",
-  "js": "assets/app-C2Tl0H72.js",
-  "css": "assets/index-BXwT8Adv.css",
-  "js_sha256": "1317db9faec7a6963df957a01c22fc1f71501cb408687447d8f80e817b692f87",
-  "css_sha256": "54bb26bc07e40f7d6b0af548b746236f1e1162413fb8643522adad4a69e472d0",
-  "js_bytes": 1358202,
-  "css_bytes": 675929,
+  "git_commit": "e438dee676cccf36f173eac4d10d1b95d71c38b5",
+  "git_commit_short": "e438dee",
+  "deployed_at": "2026-07-31T11:30:54Z",
+  "js": "assets/app-xmnQ9XcC.js",
+  "css": "assets/index-DZeLTCIP.css",
+  "js_sha256": "ed2616ce4999fd0d3725c0b1e8e33ec315d34ba723422baa14ff119c957b39a1",
+  "css_sha256": "9f96ce3c47ac8bebbb8d37db8707f95d851fcee1f87d42ebee0cf040f27ac8db",
+  "js_bytes": 1362170,
+  "css_bytes": 668567,
   "server_py_sha256": "82a2e30d46dccf320de0ba33336fa64de534fb73203eebe3b8544ef3a6404fc3"
 }
