@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from core import broadcast
-from core.config import ACCOUNTS, ACCOUNT_SLOTS, BASE_DIR, DATA_DIR, GROUPS_FILE, MESSAGE_FILE
+from core.config import ACCOUNTS, ACCOUNT_SLOTS, BASE_DIR, DATA_DIR, GROUPS_FILE, MESSAGE_FILE, is_ci_safe_startup
 from core.groups_store import (
     _normalize_group_name,
     build_group_lists,
@@ -75,7 +75,8 @@ def _load_project_dotenv() -> None:
                     os.environ[key] = val.strip().strip('"').strip("'")
 
 
-_load_project_dotenv()
+if not is_ci_safe_startup():
+    _load_project_dotenv()
 
 registry = manager  # backward-compatible alias
 
@@ -442,8 +443,7 @@ def _repair_inbox_conversation_keys() -> None:
         log_reload_event(f"Inbox key repair: {total} conversation(s) fixed")
 
 
-@app.on_event("startup")
-async def startup():
+async def _normal_startup():
     global _persist_running_task, _health_monitor, _membership_scheduler
     from core.config import warn_default_telegram_creds
 
@@ -505,8 +505,14 @@ async def startup():
     recruitment_mail_worker.start()
 
 
-@app.on_event("shutdown")
-async def shutdown():
+@app.on_event("startup")
+async def startup():
+    if is_ci_safe_startup():
+        return
+    await _normal_startup()
+
+
+async def _normal_shutdown():
     """Graceful shutdown — persist workers, disconnect Telethon, resume after reload."""
     global _persist_running_task, _health_monitor, _membership_scheduler, _shutdown_monitor
 
@@ -539,6 +545,13 @@ async def shutdown():
     running = await graceful_shutdown(registry)
     if reload_enabled():
         log_process_shutdown(running_workers=running)
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    if is_ci_safe_startup():
+        return
+    await _normal_shutdown()
 
 
 # ── Forwarding control (per-account independent) ──────────────────────────────

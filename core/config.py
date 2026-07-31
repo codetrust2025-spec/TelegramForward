@@ -24,6 +24,11 @@ def is_production_deploy() -> bool:
     return bool(os.environ.get("DASHBOARD_PASSWORD", "").strip())
 
 
+def is_ci_safe_startup() -> bool:
+    """True only for the isolated CI smoke-startup mode."""
+    return os.environ.get("CI_SAFE_STARTUP", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def warn_default_telegram_creds() -> None:
     """Log when production still uses baked-in Telethon API defaults."""
     if not is_production_deploy():
