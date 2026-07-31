@@ -44,6 +44,13 @@ def test_ollama_only_mode_is_explicit_and_reversible(monkeypatch):
     assert _ollama_only_test_mode() is True
 
 
+def test_disabling_ocr_does_not_enable_ollama_test_mode(monkeypatch):
+    monkeypatch.delenv("INVITE_EXTRACTION_MODE", raising=False)
+    monkeypatch.setenv("OCR_ENABLED", "false")
+
+    assert _ollama_only_test_mode() is False
+
+
 def test_ollama_only_mode_never_calls_ocr(monkeypatch):
     monkeypatch.setenv("INVITE_EXTRACTION_MODE", "ollama_only")
     monkeypatch.setattr(invite_extract, "_is_ollama_available", lambda: True)
@@ -95,3 +102,117 @@ def test_ollama_only_mode_does_not_fall_back_to_another_vision_model(monkeypatch
     assert calls == [invite_extract.OLLAMA_VISION_MODEL]
     assert result["ollama_only_test"] is True
     assert result["auto_booking_safe"] is False
+
+
+def _install_invite_flow(monkeypatch, ocr_text, vision_response=None):
+    monkeypatch.delenv("INVITE_EXTRACTION_MODE", raising=False)
+    monkeypatch.setenv("OCR_ENABLED", "true")
+    monkeypatch.setattr(invite_extract, "_is_ollama_available", lambda: True)
+    monkeypatch.setattr(invite_extract, "_run_tesseract_ocr", lambda _image: ocr_text)
+    monkeypatch.setattr(
+        invite_extract,
+        "call_ollama_vision_model",
+        lambda *_args, **_kwargs: vision_response,
+    )
+    monkeypatch.setattr(
+        invite_extract,
+        "_fallback_to_existing_ocr",
+        lambda *_args, **_kwargs: invite_extract._empty_extraction(),
+    )
+
+
+def test_explicit_labeled_invite_uses_original_image_without_vision(monkeypatch):
+    ocr_text = """
+    accenture
+    Hi Rama Krishnam Raju,
+    We can confirm that your Skills Interview is all set.
+    Date: 30-Jul-2026
+    Time: 03:00 PM until! 04:00 PM GMT+05:30 India Standard Time
+    The conversation will be Virtual Interview
+    """
+    _install_invite_flow(monkeypatch, ocr_text)
+
+    def vision_must_not_run(*_args, **_kwargs):
+        raise AssertionError("Explicit labelled OCR must not be vetoed by vision")
+
+    monkeypatch.setattr(invite_extract, "call_ollama_vision_model", vision_must_not_run)
+    original = b"original-full-resolution-image"
+    result = invite_extract.extract_interview_invite_with_ollama(original, "image/jpeg")
+
+    assert result["date"] == "2026-07-30"
+    assert result["time"] == "15:00"
+    assert result["time_end"] == "16:00"
+    assert result["timezone"] == "Asia/Kolkata"
+    assert result["auto_booking_safe"] is True
+    assert result["manual_fields_required"] is False
+    assert result["diagnostics"]["input_bytes"] == len(original)
+    assert result["diagnostics"]["input_transport"] == "original_upload"
+    assert result["diagnostics"]["image_compressed"] is False
+
+
+def test_matching_ai_and_ocr_extraction_remains_successful(monkeypatch):
+    ocr_text = "Interview scheduled 30-Jul-2026 at 03:00 PM IST"
+    vision = json.dumps(
+        {
+            "interview_date": "2026-07-30",
+            "start_time": "03:00 PM",
+            "end_time": "03:30 PM",
+            "timezone": "Asia/Kolkata",
+            "confidence_score": 92,
+            "looks_like_interview_invite": True,
+        }
+    )
+    _install_invite_flow(monkeypatch, ocr_text, vision)
+
+    result = invite_extract.extract_interview_invite_with_ollama(b"original", "image/jpeg")
+
+    assert result["auto_booking_safe"] is True
+    assert result["interview_date"] == "2026-07-30"
+    assert result["start_time"] == "03:00 PM"
+
+
+def test_missing_date_requires_manual_fallback_with_exact_reason(monkeypatch, caplog):
+    _install_invite_flow(monkeypatch, "Interview\nTime: 03:00 PM IST")
+
+    result = invite_extract.extract_interview_invite_with_ollama(b"image", "image/jpeg")
+
+    assert result["auto_booking_safe"] is False
+    assert result["manual_fields_required"] is True
+    assert result["failure_stage"] == "vision"
+    assert "explicit supported interview date" in result["failure_reason"]
+    assert "vision_failed" in caplog.text
+
+
+def test_missing_start_time_requires_manual_fallback(monkeypatch):
+    _install_invite_flow(monkeypatch, "Interview\nDate: 30-Jul-2026\nIST")
+
+    result = invite_extract.extract_interview_invite_with_ollama(b"image", "image/jpeg")
+
+    assert result["auto_booking_safe"] is False
+    assert result["manual_fields_required"] is True
+    assert "explicit supported interview start time" in result["failure_reason"]
+
+
+def test_ambiguous_timezone_requires_manual_fallback(monkeypatch):
+    _install_invite_flow(
+        monkeypatch,
+        "Interview\nDate: 30-Jul-2026\nTime: 03:00 PM\nCST",
+    )
+
+    result = invite_extract.extract_interview_invite_with_ollama(b"image", "image/jpeg")
+
+    assert result["auto_booking_safe"] is False
+    assert result["manual_fields_required"] is True
+    assert "timezone was missing, ambiguous, or unsupported" in result["failure_reason"]
+
+
+def test_invalid_image_logs_failure_and_exposes_manual_fields(monkeypatch, caplog):
+    _install_invite_flow(monkeypatch, "")
+
+    result = invite_extract.extract_interview_invite_with_ollama(b"not-an-image", "image/jpeg")
+
+    assert result["auto_booking_safe"] is False
+    assert result["manual_fields_required"] is True
+    assert result["failure_stage"] == "vision"
+    assert result["failure_reason"]
+    assert "vision_failed" in caplog.text

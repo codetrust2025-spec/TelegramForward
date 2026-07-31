@@ -29,7 +29,7 @@ module.exports = {
         PORT: "8000",
         NO_RELOAD: "1",
         LOG_LEVEL: "info",
-        OCR_ENABLED: "false",
+        OCR_ENABLED: "true",
         OLLAMA_BASE_URL: "http://127.0.0.1:11435",
         OLLAMA_REMOTE_ENABLED: "true",
         OLLAMA_EXPECT_REVERSE_SSH_TUNNEL: "true",

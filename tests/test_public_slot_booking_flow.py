@@ -73,6 +73,31 @@ def test_upload_creates_nothing_and_confirm_is_idempotent(monkeypatch, tmp_path)
     assert len(rows[0]["payment_proofs"]) == 1
 
 
+def test_failed_invite_extraction_creates_no_candidate(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "features.ollama_invite_extract.extract_interview_invite_with_ollama",
+        lambda *_args, **_kwargs: {
+            "confidence_score": 0,
+            "auto_booking_safe": False,
+            "manual_fields_required": True,
+            "failure_stage": "vision",
+            "failure_reason": "Vision model returned no parseable JSON.",
+            "missing_fields": ["interview_date", "start_time"],
+            "warnings": ["Enter the date and time manually."],
+        },
+    )
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/public/slots/extract-invite-ai",
+        files={"file": ("invite.jpg", b"invalid-image", "image/jpeg")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["manual_fields_required"] is True
+    assert cs.list_candidates(stage="all", month="all") == []
+
+
 def test_missing_payment_blocks_confirmation_without_records(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     response = client.post(
