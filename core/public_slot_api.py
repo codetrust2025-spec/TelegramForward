@@ -47,6 +47,7 @@ def install_public_slot_routes(app) -> None:
         note: str = Form(default=""),
         service_type: str = Form(default=""),
         phone: str = Form(default=""),
+        candidate_id: str = Form(default=""),
         technology: str = Form(default=""),
         interview_round: str = Form(default=""),
     ):
@@ -115,6 +116,7 @@ def install_public_slot_routes(app) -> None:
                 name=name,
                 service_type=service_type.strip() or "profile_service",
                 phone=phone,
+                candidate_id=candidate_id,
                 technology=technology,
                 interview_round=interview_round,
                 data=raw,
@@ -130,6 +132,7 @@ def install_public_slot_routes(app) -> None:
                 "proof": pending_proof,
                 "balance_due": 0,
                 "name": name.strip(),
+                "message": pending_proof.get("message") or "",
             }
             try:
                 ai_extraction["narrative"] = await asyncio.to_thread(
@@ -465,38 +468,6 @@ def install_public_slot_routes(app) -> None:
                 "Automatic booking is allowed only after dual-source AI verification; "
                 "otherwise enter them manually."
             )
-        normalized_proof_id = payment_proof_id.strip()
-        pending_payment_proof = None
-        if normalized_proof_id:
-            from features.pending_slot_payment import get_verified_proof
-
-            pending_payment_proof = get_verified_proof(
-                normalized_proof_id,
-                name=name,
-                service_type=normalized_service_type,
-                phone=normalized_phone,
-                technology=normalized_technology,
-                interview_round=normalized_round,
-            )
-        # An admin-granted Re-Service booking is free: it needs no receipt and
-        # never reaches the payment gate. Everyone else follows the unchanged
-        # round-wise rule that a verified screenshot must be present.
-        re_service_booking = cs.candidate_is_re_service_eligible(
-            name=name.strip(),
-            phone=normalized_phone,
-            interview_round=normalized_round,
-        )
-        if (
-            normalized_service_type == "round_wise"
-            and not pending_payment_proof
-            and not re_service_booking
-        ):
-            return _json_error(
-                "Payment screenshot not found or expired — upload it again before booking.",
-                payment_due=True,
-                balance_due=cs.baseline_for_service("round_wise"),
-                name=name.strip(),
-            )
         booking_key = hashlib.sha256(
             "|".join(
                 [
@@ -541,6 +512,15 @@ def install_public_slot_routes(app) -> None:
                 if existing_booking:
                     row, action = existing_booking, "skip_exists"
                 else:
+                    payment_reuse = {}
+                    if pending_payment_proof:
+                        from features.pending_slot_payment import validate_for_confirmation
+
+                        payment_reuse = validate_for_confirmation(
+                            pending_payment_proof,
+                            phone=normalized_phone,
+                            candidate_id=candidate_id.strip(),
+                        )
                     row, action = cs.import_confirmed_interview_slot(
                         name=name, date=day, time=slot_time, time_end=slot_end,
                         interview_round=normalized_round, technology=normalized_technology,
@@ -548,11 +528,13 @@ def install_public_slot_routes(app) -> None:
                         notes=notes, source="submit-slot form",
                         payment_proof_id=normalized_proof_id or None,
                         pending_payment_proof=pending_payment_proof,
+                        payment_reuse=payment_reuse,
                         idempotency_key=booking_key, slot_image=slot_image,
                         slot_image_name=slot_image_name, slot_image_mime=slot_image_mime,
                     )
                     row = cs.finalize_public_booking_payment(
                         row, pending_payment_proof=pending_payment_proof,
+                        payment_reuse=payment_reuse,
                         idempotency_key=booking_key,
                     )
         except cs.PaymentDueError as e:
