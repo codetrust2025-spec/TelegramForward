@@ -39,6 +39,7 @@ _PUBLIC_EXACT = frozenset({
     "/sw.js",
     "/webhooks/whatsapp",
     "/push/vapid-public-key",
+    "/bookings/confirm",
 })
 
 _PUBLIC_PREFIXES = (
@@ -51,7 +52,7 @@ _PUBLIC_PREFIXES = (
 _API_ROOTS = frozenset({
     "groups", "account", "accounts", "login", "auth", "message", "start", "stop",
     "state", "health", "ws", "inbox", "crm", "stats", "admin", "ai", "candidates",
-    "data-room", "public",
+    "data-room", "public", "bookings",
     "metrics", "alerts", "handler-expenses", "handler-salaries", "voice",
     "webhooks", "whatsapp", "push", "devices", "demo-tools", "workspace", "fleet", "api",
 })
