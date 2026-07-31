@@ -130,3 +130,52 @@ def test_legacy_booking_endpoint_cannot_create(monkeypatch, tmp_path):
     response = client.post("/public/slots/book")
     assert response.status_code == 410
     assert cs.list_candidates(stage="all", month="all") == []
+
+
+def test_re_service_uses_final_confirmation_and_consumes_only_after_completion(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    original = cs.create_candidate(
+        {
+            "name": "Re Service Candidate",
+            "phone": "9876500088",
+            "service_type": "round_wise",
+            "interview_round": "L1",
+            "technology": "Testing",
+        }
+    )
+    cs.set_interview_attendance(original["id"], status="re_service", by="admin")
+    booking = {
+        **_booking(""),
+        "name": original["name"],
+        "phone": original["phone"],
+        "candidate_id": original["id"],
+        "technology": "Testing",
+        "idempotency_key": "re-service-final-confirmation",
+    }
+
+    first = client.post(
+        "/bookings/confirm",
+        data=booking,
+        files={"file": ("invite.jpg", b"invite", "image/jpeg")},
+    )
+    second = client.post(
+        "/bookings/confirm",
+        data=booking,
+        files={"file": ("invite.jpg", b"invite", "image/jpeg")},
+    )
+
+    assert first.status_code == second.status_code == 200
+    booked_id = first.json()["candidate"]["id"]
+    assert first.json()["candidate"]["re_service_booking"] is True
+    assert second.json()["candidate"]["id"] == booked_id
+    assert cs.candidate_is_re_service_eligible(candidate_id=original["id"]) is True
+
+    cs.set_interview_attendance(
+        booked_id,
+        status="attended",
+        remark="completed",
+        feedback="positive",
+        by="admin",
+        allow_future=True,
+    )
+    assert cs.candidate_is_re_service_eligible(candidate_id=original["id"]) is False

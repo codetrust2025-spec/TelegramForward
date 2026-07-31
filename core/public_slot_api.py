@@ -426,6 +426,7 @@ def install_public_slot_routes(app) -> None:
             name=name.strip(),
             phone=normalized_phone,
             interview_round=normalized_round,
+            candidate_id=candidate_id.strip(),
         )
         if normalized_service_type == "round_wise" and not pending_payment_proof and not re_service_booking:
             return _json_error(
@@ -529,6 +530,7 @@ def install_public_slot_routes(app) -> None:
                         payment_proof_id=normalized_proof_id or None,
                         pending_payment_proof=pending_payment_proof,
                         payment_reuse=payment_reuse,
+                        candidate_id=candidate_id.strip(),
                         idempotency_key=booking_key, slot_image=slot_image,
                         slot_image_name=slot_image_name, slot_image_mime=slot_image_mime,
                     )
