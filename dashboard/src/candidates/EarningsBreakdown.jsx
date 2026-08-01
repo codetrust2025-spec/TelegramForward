@@ -202,6 +202,7 @@ export default function EarningsBreakdown({
               const adminComplimentaryCount = Number(p.admin_complimentary_count) || 0;
               const salary = Number(p.salary_total) || 0;
               const owed = Number(p.auto_earnings_total) || 0;
+              const recoveries = Number(p.recoveries_total) || 0;
               const paid = Number(p.paid_out_total) || 0;
               const net = Number(p.net_payable) || 0;
               const priorBalance = Number(p.prior_balance) || 0;
@@ -327,10 +328,25 @@ export default function EarningsBreakdown({
                                         <strong>{signedCurrency(priorBalance)}</strong>
                                       </span>
                                     )}
+                                    {/* Earnings is the full amount owed for the month —
+                                        commission AND salary. Showing commission alone
+                                        made the strip contradict itself: the numbers no
+                                        longer added up to the closing balance beside them. */}
                                     <span className="earn-summary-metric earn-summary-earnings">
                                       <span className="earn-summary-label">Earnings</span>
-                                      <strong>{fmt(commission)}</strong>
+                                      <strong>{fmt(owed)}</strong>
+                                      {salary > 0 && (
+                                        <span className="earn-summary-note" title="Monthly salary included in this month's earnings">
+                                          incl. {fmt(salary)} salary
+                                        </span>
+                                      )}
                                     </span>
+                                    {recoveries > 0 && (
+                                      <span className="earn-summary-metric earn-summary-recoveries">
+                                        <span className="earn-summary-label">Recoveries</span>
+                                        <strong>−{fmt(recoveries)}</strong>
+                                      </span>
+                                    )}
                                     <span className="earn-summary-metric earn-summary-expenses">
                                       <span className="earn-summary-label">Expenses</span>
                                       <strong>{paid > 0 ? `−${fmt(paid)}` : fmt(0)}</strong>
