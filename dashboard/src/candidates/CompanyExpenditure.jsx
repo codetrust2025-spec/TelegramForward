@@ -310,7 +310,7 @@ export default function CompanyExpenditure({ onClose, apiBase = "" }) {
                   <strong className="compexp-list-amount compexp-list-amount--revenue">{fmt(totals?.revenue)}</strong>
                 </div>
                 <div className="compexp-list-row">
-                  <span className="compexp-list-name">− Handler commission (50%)</span>
+                  <span className="compexp-list-name">− Handler earnings (commission + complimentary)</span>
                   <span className="compexp-list-meta"></span>
                   <strong className="compexp-list-amount compexp-list-amount--expense">−{fmt((totals?.revenue || 0) - (totals?.company_revenue || 0))}</strong>
                 </div>

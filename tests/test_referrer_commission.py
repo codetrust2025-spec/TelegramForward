@@ -1,4 +1,7 @@
 from features.candidate_store import (
+    admin_complimentary_amount,
+    handler_earning_allocations,
+    referrer_complimentary_amount,
     referrer_commission_amount,
     referrer_commission_basis,
 )
@@ -52,3 +55,54 @@ def test_bgv_pass_through_remains_non_commissionable():
 
     assert referrer_commission_basis(row) == 20_000
     assert referrer_commission_amount(row) == 10_000
+
+
+def test_completed_profile_adds_both_complimentary_amounts_to_base_commission():
+    row = {
+        "reference": "Charan",
+        "stage": "completed",
+        "service_type": "profile_service",
+        "expected_payment": 20_000,
+        "payment": 20_000,
+    }
+
+    assert referrer_commission_amount(row) == 10_000
+    assert referrer_complimentary_amount(row) == 5_000
+    assert admin_complimentary_amount(row) == 5_000
+    assert handler_earning_allocations(row) == {
+        "charan": 15_000,
+        "thrilok": 5_000,
+    }
+
+
+def test_thrilok_receives_both_extras_when_he_is_the_referrer():
+    row = {
+        "reference": "Thrilok",
+        "stage": "completed",
+        "service_type": "profile_service",
+        "expected_payment": 20_000,
+        "payment": 20_000,
+    }
+
+    assert handler_earning_allocations(row) == {"thrilok": 20_000}
+
+
+def test_complimentary_amounts_require_completed_profile_service():
+    incomplete_profile = {
+        "reference": "Charan",
+        "stage": "in_progress",
+        "service_type": "profile_service",
+        "payment": 20_000,
+    }
+    completed_round = {
+        "reference": "Charan",
+        "stage": "completed",
+        "service_type": "round_wise",
+        "payment": 8_000,
+        "expected_payment": 8_000,
+    }
+
+    assert referrer_complimentary_amount(incomplete_profile) == 0
+    assert admin_complimentary_amount(incomplete_profile) == 0
+    assert referrer_complimentary_amount(completed_round) == 0
+    assert admin_complimentary_amount(completed_round) == 0

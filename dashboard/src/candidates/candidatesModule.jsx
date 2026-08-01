@@ -2321,7 +2321,7 @@ function X8({
                 placeholder="Handler name"
                 title={a ? "Your handler name is set automatically" : undefined}
               />
-              <span className="cand-field-hint">Earns 50% commission.</span>
+              <span className="cand-field-hint">Earns 50% commission, plus ₹5,000 when a Profile-service candidate is completed.</span>
             </label>
             <label className="cand-field">
               <span className="cand-field-label">Date</span>
@@ -2868,7 +2868,7 @@ function J8({
             <div className="cand-stat-sub">
               <strong className="cand-net-pos">{cr(x)}</strong> owed
               {salaryTotal > 0 ? (
-                <span title="Owed = salaries + 50% commission on receipts">
+                <span title="Owed = salaries + 50% commission + completed-profile complimentary amounts">
                   {" "}
                   ({cr(salaryTotal)} salary + {cr(commissionTotal)} comm.)
                 </span>
@@ -3311,7 +3311,7 @@ function _Component26({
                         0 && (
                         <span
                           className="cand-perf-stat cand-perf-stat--earning"
-                          title={`Auto-computed: ${m.commission_pct || 50}% of every rupee the client paid to the business goes to the referrer.`}
+                          title={`Auto-computed: ${m.commission_pct || 50}% commission plus completed-profile complimentary amounts.`}
                         >
                           ₹
                           {(
@@ -3319,10 +3319,12 @@ function _Component26({
                             m.auto_earnings_total ??
                             0
                           ).toLocaleString("en-IN")}{" "}
-                          commission
-                          <em className="cand-perf-stat-em">
-                            ({m.commission_pct || 50}%)
-                          </em>
+                          earnings
+                          {(m.complimentary_total || 0) > 0 && (
+                            <em className="cand-perf-stat-em">
+                              (incl. {$a(m.complimentary_total)} complimentary)
+                            </em>
+                          )}
                         </span>
                       )}
                       {(m.paid_out_total || 0) > 0 && (
@@ -3337,7 +3339,7 @@ function _Component26({
                         (m.paid_out_total || 0) > 0) && (
                         <span
                           className={`cand-perf-stat cand-perf-stat--net${(m.net_payable || 0) > 0 ? " cand-perf-stat--net-pos" : " cand-perf-stat--net-neg"}`}
-                          title="Net owed = (50% of client payments) − (already paid out). Positive means the operator still owes the handler."
+                          title="Net owed = commission + complimentary amounts + salary − paid out. Positive means the operator still owes the handler."
                         >
                           {(m.net_payable || 0) > 0
                             ? "Owe"
@@ -3558,7 +3560,7 @@ function _Component28({ stats: e, scopeLabel: t, onClose: r, onManage: n }) {
               </span>
               <span
                 className="cand-payout-chunk cand-payout-chunk--earn"
-                title={`Salary base + ${h}% commission (penalised when client paid below prescribed tariff)`}
+                title={`Salary + ${h}% commission + completed-profile complimentary amounts`}
               >
                 <span className="cand-payout-pip" /> Owed{" "}
                 <strong>{At(c)}</strong>
@@ -3670,11 +3672,11 @@ function _Component28({ stats: e, scopeLabel: t, onClose: r, onManage: n }) {
                   </th>
                   <th
                     className="cand-earn-col-money"
-                    title={`${h}% referral share`}
+                    title={`${h}% commission plus completed-profile complimentary amounts`}
                   >
-                    Referral
+                    Earnings
                   </th>
-                  <th className="cand-earn-col-money" title="Salary + referral">
+                  <th className="cand-earn-col-money" title="Salary + earnings">
                     Owed
                   </th>
                   <th
@@ -5335,24 +5337,21 @@ function CandidatesPanelImpl() {
           (sum, row) => sum + (Number(row.payment) || 0),
           0,
         );
-        const referral = rows.reduce(
-          (sum, row) => sum + (Number(row.handler_commission) || 0),
+        const handlerEarnings = rows.reduce(
+          (sum, row) => sum + (Number(row.total_handler_earnings) || 0),
           0,
         );
-        const company = Math.max(0, received - referral);
-        total.textContent = `${money(received)} client collections − ${money(referral)} referral share = ${money(company)} company revenue`;
+        const company = received - handlerEarnings;
+        total.textContent = `${money(received)} client collections − ${money(handlerEarnings)} handler earnings = ${money(company)} company revenue`;
         rows
           .filter((row) => Number(row.payment) > 0)
           .forEach((row) =>
             makeLine(
               lines,
-              `${row.name} · ${money(row.payment)} received − ${money(row.handler_commission)} referral`,
+              `${row.name} · ${money(row.payment)} received − ${money(row.total_handler_earnings)} handler earnings`,
               money(
-                Math.max(
-                  0,
-                  (Number(row.payment) || 0) -
-                    (Number(row.handler_commission) || 0),
-                ),
+                (Number(row.payment) || 0) -
+                  (Number(row.total_handler_earnings) || 0),
               ),
             ),
           );

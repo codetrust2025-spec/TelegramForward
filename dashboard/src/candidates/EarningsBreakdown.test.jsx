@@ -10,7 +10,7 @@ function jsonResponse(payload) {
   });
 }
 
-function renderBreakdown(candidates, onViewPaymentProofs = vi.fn()) {
+function renderBreakdown(candidates, onViewPaymentProofs = vi.fn(), performerOverrides = {}) {
   vi.stubGlobal(
     "fetch",
     vi.fn(() => jsonResponse({ status: "ok", candidates })),
@@ -26,6 +26,7 @@ function renderBreakdown(candidates, onViewPaymentProofs = vi.fn()) {
             auto_earnings_total: 10000,
             paid_out_total: 0,
             net_payable: 10000,
+            ...performerOverrides,
           },
         ],
       }}
@@ -130,5 +131,23 @@ describe("EarningsBreakdown payment-proof action", () => {
         name: "View payment proofs for No Proof Candidate",
       }),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows completed-profile complimentary earnings separately", async () => {
+    renderBreakdown(
+      [],
+      vi.fn(),
+      {
+        commission_total: 15000,
+        complimentary_total: 5000,
+        admin_complimentary_total: 5000,
+        admin_complimentary_count: 1,
+        auto_earnings_total: 15000,
+        net_payable: 15000,
+      },
+    );
+
+    expect(await screen.findByText("incl. ₹5,000 complimentary")).toBeInTheDocument();
+    expect(screen.getByText("Admin complimentary · 1 completed profile")).toBeInTheDocument();
   });
 });
