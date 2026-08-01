@@ -565,4 +565,50 @@ describe("referrer payment accounts", () => {
     expect(screen.getByText("2 entries")).toBeInTheDocument();
     expect(screen.getByText("Total expenses: ₹1,500")).toBeInTheDocument();
   });
+
+  it("offers the entered expense month even when it has no history yet", async () => {
+    // Filing the first expense of a month was impossible: the History month
+    // dropdown was built only from the current month and months that already
+    // had rows, so a fresh month never appeared as an option.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-01T12:00:00+05:30"));
+    vi.stubGlobal("fetch", vi.fn((url) => {
+      if (String(url).endsWith("/referrers")) {
+        return response({ status: "ok", referrers: [{ id: "referrer-thrilok", name: "Thrilok" }] });
+      }
+      if (String(url).includes("/candidates/stats?")) {
+        return response({ status: "ok", stats: { top_performers: [{ name: "Thrilok", net_payable: 32000 }] } });
+      }
+      return response({ status: "ok", expenses: [], available_months: [] });
+    }));
+
+    render(
+      <PayoutModal
+        handlerNames={["Thrilok"]}
+        ownedSummary={{}}
+        onClose={() => {}}
+        apiBase="/api"
+        categories={[]}
+        categoryLabels={{}}
+        formatCurrency={(value) => `₹${Number(value).toLocaleString("en-IN")}`}
+        formatDate={(value) => value}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole("option", { name: "Thrilok" })).toBeInTheDocument());
+    fireEvent.change(screen.getByRole("combobox", { name: "Referrer *" }), {
+      target: { value: "referrer-thrilok" },
+    });
+
+    const monthSelect = screen.getByRole("combobox", { name: "Filter expense history by month" });
+    // July is absent before a July date is entered...
+    expect(within(monthSelect).queryByRole("option", { name: "Jul 2026" })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/Expense date/i), { target: { value: "2026-07-31" } });
+
+    // ...and becomes selectable once the expense is dated in July.
+    expect(within(monthSelect).getByRole("option", { name: "Jul 2026" })).toBeInTheDocument();
+    fireEvent.change(monthSelect, { target: { value: "2026-07" } });
+    expect(monthSelect).toHaveValue("2026-07");
+  });
 });

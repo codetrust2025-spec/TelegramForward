@@ -249,6 +249,11 @@ export default function PayoutModal({
   const historyMonthOptions = useMemo(() => {
     const values = new Set([currentMonthValue()]);
     if (historyMonth !== "all") values.add(historyMonth);
+    // The month being filed must be selectable even when it has no expenses
+    // yet. Without this, filing the first expense of a month is impossible:
+    // the month only appears once a row already exists in it.
+    const enteredMonth = String(form.date || "").slice(0, 7);
+    if (/^\d{4}-\d{2}$/.test(enteredMonth)) values.add(enteredMonth);
     filtered.forEach((row) => {
       const value = String(row.date || "").slice(0, 7);
       if (/^\d{4}-\d{2}$/.test(value)) values.add(value);
@@ -259,7 +264,7 @@ export default function PayoutModal({
         .map((value) => ({ value, label: formatMonthLabel(value) })),
       { value: "all", label: "All months" },
     ];
-  }, [filtered, historyMonth]);
+  }, [filtered, historyMonth, form.date]);
 
   const historyFiltered = useMemo(() => {
     return filtered.filter((row) => (
