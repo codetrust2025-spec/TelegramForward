@@ -31,6 +31,14 @@ Every change follows:
 
 Do not skip gates because a change appears small.
 
+Continue through these gates automatically. Do not stop after step 7 or step 8
+to ask whether to proceed when deployment is permitted. `PROJECT_RULES.md`
+defines the definition of done, the continuous delivery obligation, and the only
+legitimate blockers; follow it rather than pausing for routine confirmation.
+
+When genuinely blocked, report the blocker and what is needed to clear it, then
+continue from that point once it is resolved.
+
 ## Required preflight
 
 Before editing:
@@ -108,3 +116,8 @@ Use only `DEPLOYMENT.md` for releases and `RECOVERY.md` for incidents or drift.
 ## Completion report
 
 Report the branch/commit, changed behavior and files, tests/builds, known baseline failures, security/runtime scans, remaining risks, and whether anything was pushed, merged, deployed, restarted, or changed in Production.
+
+If the change reached Production, include the merge commit, the deployed commit,
+proof that local `main`, GitHub `main`, and the deployed commit match, the
+Production verification performed, and the rollback target retained. If it did
+not, say which gate it stopped at and why.
