@@ -1,3 +1,9 @@
+# Git ↔ Production Sync — Historical Reference
+
+> **Superseded:** `PROJECT_RULES.md`, `DEVELOPMENT_WORKFLOW.md`, and
+> `DEPLOYMENT.md` are authoritative. Do not use the direct `main` push,
+> developer-worktree upload, or legacy deployment commands below.
+
 # Git ↔ Production sync
 
 Production drift happened because **two conflicting workflows** were used at the same time.
