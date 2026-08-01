@@ -172,6 +172,60 @@ describe("referrer payment accounts", () => {
     expect(screen.getByRole("heading", { name: "Recent expense history" })).toBeInTheDocument();
   });
 
+  it("uses the launching earnings month for salary-inclusive payout validation", async () => {
+    vi.stubGlobal("fetch", vi.fn((url) => {
+      const value = String(url);
+      if (value.endsWith("/referrers")) {
+        return response({
+          status: "ok",
+          referrers: [{ id: "referrer-thrilok", name: "Thrilok", aliases: [] }],
+        });
+      }
+      if (value.includes("/candidates/stats?")) {
+        return response({
+          status: "ok",
+          stats: {
+            top_performers: [{
+              name: "Thrilok",
+              commission_total: 27000,
+              salary_total: 15000,
+              auto_earnings_total: 42000,
+              net_payable: 42000,
+            }],
+          },
+        });
+      }
+      return response({ status: "ok", expenses: [], available_months: [] });
+    }));
+
+    render(
+      <PayoutModal
+        handlerNames={["Thrilok"]}
+        ownedSummary={{}}
+        initialMonth="2026-07"
+        onClose={() => {}}
+        apiBase="/api"
+        categories={[]}
+        categoryLabels={{}}
+        formatCurrency={(value) => `₹${Number(value).toLocaleString("en-IN")}`}
+        formatDate={(value) => value}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole("option", { name: "Thrilok" })).toBeInTheDocument());
+    fireEvent.change(screen.getByRole("combobox", { name: "Referrer *" }), {
+      target: { value: "referrer-thrilok" },
+    });
+
+    await waitFor(() => expect(screen.getByText("₹42,000")).toBeInTheDocument());
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/candidates/stats?month=2026-07&reference=Thrilok",
+      { credentials: "include" },
+    );
+    expect(screen.getByLabelText("Expense amount (₹) *")).toHaveAttribute("max", "42000");
+    expect(screen.getByRole("combobox", { name: "Filter expense history by month" })).toHaveValue("2026-07");
+  });
+
   it("confirms and saves an expense through the existing handler-expenses API", async () => {
     const confirm = vi.fn().mockResolvedValue(true);
     window.__TA_CONFIRM_VALUE__ = { confirm };

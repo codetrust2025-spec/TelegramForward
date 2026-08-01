@@ -3438,6 +3438,7 @@ function _Component29({
   handlerNames: e = [],
   topPerformers: tp = [],
   ownedSummary: t,
+  month: selectedMonth,
   onClose: r,
   onChanged: n,
 }) {
@@ -3446,6 +3447,7 @@ function _Component29({
       handlerNames={e}
       topPerformers={tp}
       ownedSummary={t}
+      initialMonth={selectedMonth}
       onClose={r}
       onChanged={n}
       apiBase={ve}
@@ -6061,6 +6063,7 @@ function CandidatesPanelImpl() {
             .map((ge) => ge.name)
             .filter(Boolean)}
           topPerformers={(c == null ? undefined : c.top_performers) || []}
+          month={m}
           ownedSummary={{
             owed:
               (c == null ? undefined : c.handler_auto_earnings_total) ??
