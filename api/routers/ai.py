@@ -255,3 +255,52 @@ async def daily_ai_briefing_refresh(request: Request):
         get_briefing, reference=_viewer_reference(request), refresh=True,
     )
     return {"status": "ok", "message": "Briefing updated", "briefing": payload}
+
+
+# ── Global OCR policy ────────────────────────────────────────────────────────
+# One switch for every feature that may run Tesseract. Turning it off must turn
+# OCR off project-wide, so this is the only place the value can be changed.
+
+@router.get("/ai/ocr-policy")
+async def read_ocr_policy(request: Request):
+    """Current OCR mode. Readable by any signed-in operator."""
+    from core.dashboard_access import operator_profile
+    from core import ocr_policy
+
+    operator_profile(request)  # rejects an unauthenticated caller
+    return {"status": "ok", **ocr_policy.status()}
+
+
+@router.put("/ai/ocr-policy")
+async def update_ocr_policy(request: Request, body: dict):
+    """Flip the switch. Admin only, and every change is audited."""
+    from fastapi import HTTPException
+    from core.dashboard_access import operator_profile
+    from core import ocr_policy
+
+    profile = operator_profile(request)
+    if (profile.get("role") or "").strip().lower() != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can change the OCR policy")
+
+    raw = (body or {}).get("enabled")
+    if not isinstance(raw, bool):
+        raise HTTPException(status_code=400, detail="'enabled' must be true or false")
+
+    actor = str(profile.get("username") or profile.get("name") or "admin")
+    client = getattr(request, "client", None)
+    result = ocr_policy.set_ocr_enabled(
+        raw, actor=actor, source_ip=getattr(client, "host", "") or ""
+    )
+    return {"status": "ok", **result}
+
+
+@router.get("/ai/ocr-policy/audit")
+async def read_ocr_policy_audit(request: Request, limit: int = 20):
+    """Who changed the switch, when, and from what to what. Admin only."""
+    from fastapi import HTTPException
+    from core.dashboard_access import operator_profile
+    from core import ocr_policy
+
+    if (operator_profile(request).get("role") or "").strip().lower() != "admin":
+        raise HTTPException(status_code=403, detail="Only an admin can read the OCR policy audit")
+    return {"status": "ok", "entries": ocr_policy.audit_log(limit)}
