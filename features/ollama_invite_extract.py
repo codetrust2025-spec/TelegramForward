@@ -32,8 +32,31 @@ logger = logging.getLogger(__name__)
 OLLAMA_VISION_MODEL = model_for("interview_screenshot_vision")
 OLLAMA_BACKUP_VISION_MODEL = os.environ.get("OLLAMA_BACKUP_VISION_MODEL", "moondream")
 OLLAMA_REASONING_MODEL = model_for("reasoning_text")
-OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "900"))
-OLLAMA_TEXT_TIMEOUT = int(os.environ.get("OLLAMA_TEXT_TIMEOUT", "60"))
+def _invite_model_timeout() -> int:
+    """Per-call model timeout, never longer than the endpoint's own budget.
+
+    The public invite endpoint gives up after INVITE_EXTRACTION_TIMEOUT and
+    returns a manual-entry fallback, but it waits via asyncio.to_thread and
+    thread-pool workers cannot be cancelled. Without this ceiling an abandoned
+    call would keep a pool thread and an Ollama slot busy for the full
+    OLLAMA_TIMEOUT (900s by default) — and a candidate retrying would stack
+    more of them until the shared executor starved.
+    """
+    configured = int(os.environ.get("OLLAMA_TIMEOUT", "900"))
+    try:
+        budget = int(str(os.environ.get("INVITE_EXTRACTION_TIMEOUT", "")).strip())
+    except (TypeError, ValueError):
+        budget = 0
+    if budget <= 0:
+        budget = 90
+    # Mirror the endpoint's own ceiling so an over-large override cannot push
+    # the model call back past the proxy read timeout.
+    budget = min(budget, 240)
+    return max(30, min(configured, budget))
+
+
+OLLAMA_TIMEOUT = _invite_model_timeout()
+OLLAMA_TEXT_TIMEOUT = min(int(os.environ.get("OLLAMA_TEXT_TIMEOUT", "60")), OLLAMA_TIMEOUT)
 
 
 def _ollama_only_test_mode() -> bool:

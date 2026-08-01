@@ -135,6 +135,34 @@ function uniqueNonEmptyTags(values) {
   })
 }
 
+/**
+ * Read a fetch Response that is expected to be JSON.
+ *
+ * Nginx answers an upstream timeout with an HTML 504 page and a restarting
+ * backend with an HTML 502, so `res.json()` on its own throws a SyntaxError
+ * whose raw text ("Unexpected token '<'") used to reach the candidate.
+ * Throw a controlled error instead; callers turn it into friendly copy.
+ */
+export const INVITE_READ_FAILED_MESSAGE =
+  'Could not read the invite. Retry or enter date and time manually.'
+
+export async function readJsonResponse(res) {
+  const contentType = String(res.headers?.get?.('content-type') || '')
+  if (!contentType.toLowerCase().includes('application/json')) {
+    throw new Error(`Expected JSON, received "${contentType || 'unknown'}" (HTTP ${res.status})`)
+  }
+  let body
+  try {
+    body = await res.json()
+  } catch {
+    throw new Error(`Malformed JSON response (HTTP ${res.status})`)
+  }
+  if (body === null || typeof body !== 'object') {
+    throw new Error(`Empty or unusable JSON response (HTTP ${res.status})`)
+  }
+  return body
+}
+
 const ROUND_OPTIONS = ['Screening', 'L1', 'L2', 'Final', 'HR']
 
 function candidateNameKey(value) {
@@ -250,6 +278,7 @@ export function SubmitSlotPage() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [parsing, setParsing] = useState(false)
+  const parseInFlightRef = useRef(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [name, setName] = useState('')
@@ -387,13 +416,23 @@ export function SubmitSlotPage() {
 
   async function parseScreenshot(file) {
     if (!file) { setParsedSlot(null); setAiExtraction(null); setAiBlocked(''); return }
+    // Extraction is slow, so a second click (or a rapid re-upload) could
+    // previously start a parallel request and let the loser overwrite the
+    // winner's result. Ignore re-entry while one is already in flight.
+    if (parseInFlightRef.current) return
+    parseInFlightRef.current = true
     setParsing(true); setError(''); setSuccess(''); setAiExtraction(null); setAiBlocked('')
     try {
       // Try AI extraction first
       const fd = new FormData(); fd.append('file', file)
       const res = await fetch(`${API_BASE}/public/slots/extract-invite-ai`, { method: 'POST', body: fd })
-      const data = await res.json()
-      
+      // A proxy timeout (504) or a restarting backend (502) replies with an
+      // HTML error page. Parsing that blindly surfaced the raw
+      // "Unexpected token '<'" SyntaxError to candidates, so confirm the
+      // response really is JSON before parsing it.
+      const data = await readJsonResponse(res)
+
+
       if (res.ok && data.status === 'ok' && data.data) {
         const ext = data.data
         setAiExtraction(ext)
@@ -456,12 +495,14 @@ export function SubmitSlotPage() {
         confidence_score: 0,
         manual_fields_required: true,
         failure_stage: 'request',
-        failure_reason: e?.message || 'Invite extraction request failed.',
+        // Never surface the raw transport/parser error to a candidate; the
+        // technical detail goes to the console for operators instead.
+        failure_reason: INVITE_READ_FAILED_MESSAGE,
       })
       setAiBlocked('')
       setParsing(false)
       return
-    } finally { setParsing(false) }
+    } finally { setParsing(false); parseInFlightRef.current = false }
 
     // No OCR-only fallback: a single source must never populate booking data.
     setParsedSlot(null)
