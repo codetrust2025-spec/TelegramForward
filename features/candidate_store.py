@@ -214,10 +214,9 @@ def baseline_for_service(
 # ledger now only tracks money already paid OUT (commission disbursements,
 # travel, food etc.) — net = auto_earnings − paid_out.
 #
-# If the referrer charges the client below the prescribed tariff, their
-# commission is penalised by the shortfall: basis = max(0, 2×received −
-# prescribed), then 50%. Example: internal round prescribed ₹9k, client
-# pays ₹5k → basis ₹1k → handler gets ₹500 (not ₹2,500).
+# Commission is based on eligible cash received, capped at the agreed client
+# charge. Charging below the prescribed tariff does not reduce the referrer's
+# percentage; the agreed deal itself already limits the commissionable amount.
 HANDLER_COMMISSION_PCT = 50
 
 # Owners / admins — not handler commission recipients (hidden from payout UI).
@@ -303,16 +302,6 @@ def referrer_commission_basis(row: dict) -> int:
     bgv_charge = BGV_CERTIFICATES_PAYMENT if _coerce_bool(row.get("bgv_certificates")) else 0
     agreed = max(0, effective_expected_payment(row) - bgv_charge)
     charged = min(received, agreed) if agreed > 0 else 0
-    prescribed = baseline_for_service(
-        _normalise_service_type(row.get("service_type"), row),
-        consultancy=bool(row.get("consultancy", False)),
-        interview_scope=_normalise_interview_scope(row.get("interview_scope"), row),
-    )
-    # Installments toward the agreed deal — commission accrues on cash received.
-    if agreed > 0 and received < agreed:
-        return charged
-    if charged < prescribed:
-        return max(0, 2 * charged - prescribed)
     return charged
 
 
