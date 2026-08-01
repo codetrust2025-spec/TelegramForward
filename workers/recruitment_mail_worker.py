@@ -8,6 +8,9 @@ from services.recruitment_mail_agent import process_message
 
 logger=logging.getLogger('teleautomation.recruitment_mail_worker')
 
+def _monotonic():
+    return time.monotonic()
+
 def _publish(event_type:str,**payload):
     try:
         from core.recruitment_realtime import publish
@@ -19,7 +22,10 @@ class RecruitmentMailWorker:
     def __init__(self):
         self._task=None;self._stopping=False;self._jobs=set()
         self._watch_task=None;self._ai_recovery_task=None
-        self._last_watch_renewal=0.0;self._last_ai_recovery=0.0
+        # Maintenance must be eligible on the first worker loop.  A zero
+        # baseline accidentally delays it on freshly booted hosts where
+        # time.monotonic() is still below the 60/900-second intervals.
+        self._last_watch_renewal=float('-inf');self._last_ai_recovery=float('-inf')
     def start(self):
         if self._task is None or self._task.done():
             store.recover_interrupted_jobs()
@@ -59,7 +65,7 @@ class RecruitmentMailWorker:
                     # so a slow Ollama response cannot leave Gmail jobs QUEUED.
                     if self._watch_task and self._watch_task.done():self._watch_task=None
                     if self._ai_recovery_task and self._ai_recovery_task.done():self._ai_recovery_task=None
-                    now=time.monotonic()
+                    now=_monotonic()
                     if self._watch_task is None and now-self._last_watch_renewal>=900:
                         self._last_watch_renewal=now
                         self._watch_task=asyncio.create_task(self._run_maintenance('watch-renewal',self.renew_due_watches),name='mailbox-watch-renewal')
