@@ -2,6 +2,30 @@ import { useState, useMemo, useCallback, useEffect, Fragment } from "react";
 import "./EarningsBreakdown.css";
 import { normalizePaymentProofs } from "./paymentProofs.js";
 
+/** "2026-07" → "Jul 2026". Returns "" for anything that is not a real month. */
+function monthLabel(value) {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(value || "").trim());
+  if (!match) return "";
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, 1);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+}
+
+/**
+ * Name the months a carried-forward balance came from: one month as-is, a run
+ * as "Apr – Jun 2026". Gaps are not spelled out — the tooltip carries the
+ * amounts, and a span reads better than a list of six months.
+ */
+function monthSpanLabel(months) {
+  const valid = (months || []).filter(m => /^\d{4}-\d{2}$/.test(String(m || "")));
+  if (valid.length === 0) return "";
+  const sorted = [...valid].sort();
+  const first = monthLabel(sorted[0]);
+  const last = monthLabel(sorted[sorted.length - 1]);
+  if (!first) return "";
+  return first === last ? first : `${first} – ${last}`;
+}
+
 /**
  * Earnings Breakdown — replaces "Top Performers" tab.
  * Shows per-handler earnings detail with expandable per-candidate rows.
@@ -218,6 +242,27 @@ export default function EarningsBreakdown({
                 if (numeric < 0) return `−${fmt(Math.abs(numeric))}`;
                 return fmt(0);
               };
+              // Why the opening balance exists. A bare figure invites the
+              // question "where did this come from?", so name the months it
+              // came from and show the earned/paid/recovered split behind it.
+              const priorOwed = Number(p.prior_owed) || 0;
+              const priorPaid = Number(p.prior_paid) || 0;
+              const priorRecoveries = Number(p.prior_recoveries) || 0;
+              const priorMonths = Array.isArray(p.prior_months) ? p.prior_months : [];
+              const priorSpan = monthSpanLabel(priorMonths);
+              const openingReason = priorSpan
+                ? `${priorBalance > 0 ? "unpaid from" : "overpaid in"} ${priorSpan}`
+                : priorBalance > 0
+                  ? "unpaid from earlier months"
+                  : "overpaid in earlier months";
+              const openingDetail = [
+                `Earned ${fmt(priorOwed)}`,
+                `paid ${fmt(priorPaid)}`,
+                priorRecoveries > 0 ? `recovered ${fmt(priorRecoveries)}` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")
+                + (priorSpan ? ` before ${monthLabel(month)}` : "");
 
               return (
                 <Fragment key={p.ref_key || p.name}>
@@ -243,7 +288,10 @@ export default function EarningsBreakdown({
                     <td className={`earn-td--money ${net > 0 ? "earn-green" : net < 0 ? "earn-red" : "earn-settled"}`}>
                       <strong>{net > 0 ? "+" : ""}{fmt(net)}</strong>
                       {priorBalance !== 0 && month && month !== "all" && (
-                        <span className="earn-carry-fwd" title={`Carry-forward from prior months: ${fmt(priorBalance)}`}>
+                        <span
+                          className="earn-carry-fwd"
+                          title={`Carry-forward ${signedCurrency(priorBalance)} — ${openingReason}. ${openingDetail}.`}
+                        >
                           {priorBalance > 0 ? "↑" : "↓"}{fmt(Math.abs(priorBalance))} c/f
                         </span>
                       )}
@@ -326,6 +374,9 @@ export default function EarningsBreakdown({
                                       <span className="earn-summary-metric earn-summary-opening">
                                         <span className="earn-summary-label">Opening balance</span>
                                         <strong>{signedCurrency(priorBalance)}</strong>
+                                        <span className="earn-summary-note" title={openingDetail}>
+                                          {openingReason}
+                                        </span>
                                       </span>
                                     )}
                                     {/* Earnings is the full amount owed for the month —

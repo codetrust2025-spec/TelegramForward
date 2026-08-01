@@ -5318,12 +5318,23 @@ def _carry_forward_balances(
     # Deduplicate using the same logic as stats
     prior_rows = _stats_rows_deduped(prior_rows)
 
+    # Which prior months actually moved each handler's balance. The UI states a
+    # reason for the opening balance, and "carried from June" is only honest if
+    # it names the months that really contributed.
+    prior_months: dict[str, set[str]] = {}
+
+    def _note_month(key: str, month_value: str | None) -> None:
+        if key and month_value:
+            prior_months.setdefault(key, set()).add(month_value)
+
     prior_commission: dict[str, int] = {}
     for r in prior_rows:
         for ref_key, handler_share in handler_earning_allocations(r).items():
             if scope_key and ref_key != scope_key:
                 continue
             prior_commission[ref_key] = prior_commission.get(ref_key, 0) + handler_share
+            if handler_share:
+                _note_month(ref_key, _row_display_month(r))
 
     # ── Cumulative salary from prior months ──
     prior_salary: dict[str, int] = {}
@@ -5346,7 +5357,10 @@ def _carry_forward_balances(
                 for key, sbucket in sal.items():
                     if scope_key and key != scope_key:
                         continue
-                    prior_salary[key] = prior_salary.get(key, 0) + int(sbucket.get("owed") or 0)
+                    owed_here = int(sbucket.get("owed") or 0)
+                    prior_salary[key] = prior_salary.get(key, 0) + owed_here
+                    if owed_here:
+                        _note_month(key, pm)
             except Exception:
                 pass
     except Exception:
@@ -5373,6 +5387,8 @@ def _carry_forward_balances(
                 continue
             amount = int(exp.get("amount") or 0)
             prior_paid[key] = prior_paid.get(key, 0) + amount
+            if amount:
+                _note_month(key, exp_month)
     except Exception:
         pass
 
@@ -5388,7 +5404,10 @@ def _carry_forward_balances(
             key = _reference_key(entry.get("referrer") or entry.get("receiver_registry_name") or "")
             if not key or (scope_key and key != scope_key):
                 continue
-            prior_recoveries[key] = prior_recoveries.get(key, 0) + int(entry.get("amount") or 0)
+            recovered_here = int(entry.get("amount") or 0)
+            prior_recoveries[key] = prior_recoveries.get(key, 0) + recovered_here
+            if recovered_here:
+                _note_month(key, entry_month)
     except Exception:
         pass
 
@@ -5414,6 +5433,7 @@ def _carry_forward_balances(
             "prior_paid": paid,
             "prior_recoveries": recovery,
             "prior_balance": (comm + sal) - paid - recovery,
+            "prior_months": sorted(prior_months.get(key) or ()),
         }
     return result
 
@@ -5827,8 +5847,15 @@ def stats(
         p["carry_forward_receivable"] = max(0, -p["net_payable"])
         p["commission_pct"]    = HANDLER_COMMISSION_PCT
 
-        # Carry-forward detail field so UI can show the breakdown.
+        # Carry-forward detail fields so the UI can state WHY an opening
+        # balance exists instead of showing a bare figure.
         p["prior_balance"]     = prior_balance
+        p["prior_commission"]  = int(cf.get("prior_commission") or 0)
+        p["prior_salary"]      = int(cf.get("prior_salary") or 0)
+        p["prior_owed"]        = int(cf.get("prior_owed") or 0)
+        p["prior_paid"]        = int(cf.get("prior_paid") or 0)
+        p["prior_recoveries"]  = int(cf.get("prior_recoveries") or 0)
+        p["prior_months"]      = list(cf.get("prior_months") or [])
 
         # ── April & May 2026: treat as fully settled for all handlers ──
         if month in ("2026-04", "2026-05"):
@@ -5836,6 +5863,13 @@ def stats(
             p["prior_balance"] = 0
             p["cash_payout"] = 0
             p["carry_forward_receivable"] = 0
+            # No balance is carried, so there is nothing to explain either.
+            p["prior_commission"] = 0
+            p["prior_salary"] = 0
+            p["prior_owed"] = 0
+            p["prior_paid"] = 0
+            p["prior_recoveries"] = 0
+            p["prior_months"] = []
 
         # Backwards-compat aliases so older client bundles keep rendering
         # something sensible until the next refresh:
@@ -5871,6 +5905,12 @@ def stats(
             p["cash_payout"] = 0
             p["carry_forward_receivable"] = 0
             p["prior_balance"] = 0
+            p["prior_commission"] = 0
+            p["prior_salary"] = 0
+            p["prior_owed"] = 0
+            p["prior_paid"] = 0
+            p["prior_recoveries"] = 0
+            p["prior_months"] = []
             p["earnings_total"] = 0
             p["deductions_total"] = 0
             p["net_earning"] = 0
