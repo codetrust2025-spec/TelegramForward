@@ -440,6 +440,18 @@ async def candidates_interview_attendance(cid: str, request: Request, body: dict
     profile = operator_profile(request)
     role = (profile.get("role") or "").strip().lower()
     allow_future = role in {"admin", "handler"}
+    requested_status = candidate_store.normalise_interview_attendance_status(
+        b.get("status") or "",
+        legacy_attended=b.get("attended"),
+    )
+    if (
+        requested_status == candidate_store.RE_SERVICE_STATUS
+        and not candidate_store.re_service_grant_allowed(role)
+    ):
+        return {
+            "status": "error",
+            "message": "Only an administrator can grant Re-Service.",
+        }
     try:
         row = candidate_store.set_interview_attendance(
             cid,

@@ -128,7 +128,7 @@ def _parse_labeled_interview_block(blob: str) -> tuple[str, str, str]:
         r"\btime\s*:\s*"
         r"(?!\d{1,2}[/.-]\d{1,2}[/.-]20\d{2}\b)"
         r"(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(am|pm)?"
-        r"(?:\s*(?:-|to|\u2013|\u2014|until|untill|till)\s*"
+        r"(?:\s*(?:-|to|\u2013|\u2014|until|untill|till)\s*[^\w\d]?\s*"
         r"(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(am|pm)?)?",
         text,
         re.IGNORECASE,
@@ -379,6 +379,21 @@ def _local_ocr_text(data: bytes) -> str:
             scale = max(2, 1500 // w)
             gray = gray.resize((w * scale, h * scale), Image.LANCZOS)
 
+        focused_text = ""
+        if h >= 600:
+            focused = img.crop((0, int(h * 0.43), w, int(h * 0.72))).convert("L")
+            focused = ImageOps.autocontrast(focused)
+            focused = focused.resize(
+                (focused.width * 2, focused.height * 2),
+                Image.LANCZOS,
+            )
+            focused = ImageEnhance.Contrast(focused).enhance(1.8)
+            focused_text = pytesseract.image_to_string(
+                focused,
+                config="--psm 11 --oem 3",
+            ) or ""
+            focused_text = str(focused_text).strip()
+
         # Try OCR without binarization first (preserves more detail)
         text = pytesseract.image_to_string(gray, config='--psm 3 --oem 3') or ""
         text = str(text).strip()
@@ -392,7 +407,7 @@ def _local_ocr_text(data: bytes) -> str:
             if len(text2) > len(text):
                 text = text2
 
-        return text
+        return "\n".join(part for part in (focused_text, text) if part)
     except Exception as exc:
         logger.warning("slot screenshot local OCR failed: %s", exc)
         return ""
@@ -613,6 +628,30 @@ def _parse_platform_from_blob(blob: str) -> str:
     return ""
 
 
+def _parse_timezone_from_blob(blob: str) -> str:
+    text = blob or ""
+    if re.search(r"\bAsia/Kolkata\b", text, re.IGNORECASE):
+        return "Asia/Kolkata"
+    if re.search(r"\bIndia\s+Standard\s+Time\b", text, re.IGNORECASE):
+        return "Asia/Kolkata"
+    if re.search(r"\bIST\b", text, re.IGNORECASE):
+        return "Asia/Kolkata"
+    if re.search(r"\b(?:GMT|UTC)\s*\+\s*0?5\s*:\s*30\b", text, re.IGNORECASE):
+        return "Asia/Kolkata"
+    return ""
+
+
+def _has_explicit_date_with_year(blob: str) -> bool:
+    text = (blob or "").replace("\n", " ")
+    patterns = (
+        r"\b20\d{2}-\d{2}-\d{2}\b",
+        r"\b\d{1,2}[/.-]\d{1,2}[/.-]20\d{2}\b",
+        rf"\b\d{{1,2}}\s*[/.-]?\s*(?:{_MONTH_PATTERN})\s*[,/.-]?\s*20\d{{2}}\b",
+        rf"\b(?:{_MONTH_PATTERN})\s+\d{{1,2}},?\s+20\d{{2}}\b",
+    )
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
+
+
 def _parse_technology_from_blob(blob: str) -> str:
     """Extract technology from invite titles like 'Technical Screening_Frontend Angular Developer_...'"""
     low = (blob or "").lower()
@@ -684,10 +723,14 @@ def parse_invite_text(blob: str) -> dict[str, Any]:
         "interview_round": _parse_round_from_blob(blob),
         "technology": _parse_technology_from_blob(blob),
         "platform": _parse_platform_from_blob(blob),
+        "timezone": _parse_timezone_from_blob(blob),
         "raw_text": (blob or "")[:2000],
+        "_explicit_date": bool(date and _has_explicit_date_with_year(blob)),
+        "_explicit_start": bool(start and (labeled_start or lf_start or md24_start)),
     }
     if labeled_start:
         out["_labeled"] = True
+    out["_timezone_explicit"] = bool(out["timezone"])
     return out
 
 

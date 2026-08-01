@@ -415,6 +415,11 @@ def is_free_service_candidate(name: str) -> bool:
 RE_SERVICE_STATUS = "re_service"
 
 
+def re_service_grant_allowed(role: str) -> bool:
+    """Only administrators may issue the one-time Re-Service entitlement."""
+    return _clean_str(role).lower() == "admin"
+
+
 def row_has_re_service_grant(row: dict) -> bool:
     """True when this row carries an unused Re-Service entitlement."""
     if not isinstance(row, dict):
@@ -450,6 +455,7 @@ def find_re_service_grant(
         hit = next((r for r in grants if str(r.get("id") or "") == cid), None)
         if hit:
             return hit
+        return None
 
     phone_key = candidate_phone_identity(phone)
     round_label = normalise_interview_round(interview_round)
@@ -470,6 +476,7 @@ def find_re_service_grant(
                 if exact:
                     return exact
             return by_phone[0]
+        return None
 
     name_key = _normalise_candidate_name_key(canonical_candidate_name(_clean_str(name)))
     if name_key:
@@ -1032,6 +1039,7 @@ _ALLOWED_FIELDS = {
     "interview_source_message_id", "interview_source_timezone",
     "interview_booking_source",
     "booking_idempotency_key",
+    "previousBookingId", "reusedPaymentId", "paymentReusedByBookingId",
     "purpose",
 }
 
@@ -1254,6 +1262,42 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         "interview_booking_source": _clean_str(record.get("interview_booking_source", base.get("interview_booking_source"))).lower(),
         "booking_idempotency_key": _clean_str(
             record.get("booking_idempotency_key", base.get("booking_idempotency_key"))
+        ),
+        "previousBookingId": _clean_str(
+            record.get("previousBookingId", base.get("previousBookingId"))
+        ),
+        "reusedPaymentId": _clean_str(
+            record.get("reusedPaymentId", base.get("reusedPaymentId"))
+        ),
+        "paymentReusedByBookingId": _clean_str(
+            record.get("paymentReusedByBookingId", base.get("paymentReusedByBookingId"))
+        ),
+        "re_service_eligible": _coerce_bool(
+            record.get("re_service_eligible", base.get("re_service_eligible", False))
+        ),
+        "re_service_consumed": _coerce_bool(
+            record.get("re_service_consumed", base.get("re_service_consumed", False))
+        ),
+        "re_service_booking": _coerce_bool(
+            record.get("re_service_booking", base.get("re_service_booking", False))
+        ),
+        "re_service_grant_row_id": _clean_str(
+            record.get("re_service_grant_row_id", base.get("re_service_grant_row_id"))
+        ),
+        "re_service_granted_at": _clean_str(
+            record.get("re_service_granted_at", base.get("re_service_granted_at"))
+        ),
+        "re_service_granted_by": _clean_str(
+            record.get("re_service_granted_by", base.get("re_service_granted_by"))
+        ),
+        "re_service_consumed_at": _clean_str(
+            record.get("re_service_consumed_at", base.get("re_service_consumed_at"))
+        ),
+        "re_service_consumed_booking_id": _clean_str(
+            record.get(
+                "re_service_consumed_booking_id",
+                base.get("re_service_consumed_booking_id"),
+            )
         ),
         "telegram_slot":    _clean_str(record.get("telegram_slot", base.get("telegram_slot"))),
         "telegram_user_id": int(record.get("telegram_user_id") or base.get("telegram_user_id") or 0) or None,
@@ -4301,6 +4345,7 @@ def import_confirmed_interview_slot(**kwargs) -> tuple[dict, str]:
         name=_clean_str(kwargs.get("name") or ""),
         phone=_clean_str(kwargs.get("phone") or ""),
         interview_round=_clean_str(kwargs.get("interview_round") or ""),
+        candidate_id=_clean_str(kwargs.get("candidate_id") or ""),
     )
     row, action = _import_confirmed_interview_slot(**kwargs)
     if grant and isinstance(row, dict) and row.get("id"):
@@ -4347,6 +4392,8 @@ def _import_confirmed_interview_slot(
     source: str = "public-upload",
     payment_proof_id: str | None = None,
     pending_payment_proof: tuple[str, dict] | None = None,
+    payment_reuse: dict | None = None,
+    candidate_id: str = "",
     idempotency_key: str = "",
     slot_image: bytes | None = None,
     slot_image_name: str = "",
@@ -4373,7 +4420,10 @@ def _import_confirmed_interview_slot(
         if previous:
             return previous, "skip_exists"
     re_service_grant = find_re_service_grant(
-        name=canon, phone=phone, interview_round=interview_round
+        name=canon,
+        phone=phone,
+        interview_round=interview_round,
+        candidate_id=candidate_id,
     )
     pay_block = None
     if not pending_payment_proof and not re_service_grant:
@@ -4404,6 +4454,54 @@ def _import_confirmed_interview_slot(
         raise ValueError("Select the interview round (L1, L2, etc.)")
 
     rows = list_candidates(stage="all", month="all")
+    reuse = dict(payment_reuse or {})
+    if is_round_wise and reuse.get("reuse_allowed"):
+        previous_booking_id = _clean_str(reuse.get("previousBookingId"))
+        reused_payment_id = _clean_str(reuse.get("reusedPaymentId"))
+        previous_booking = next(
+            (row for row in rows if _clean_str(row.get("id")) == previous_booking_id),
+            None,
+        )
+        if not previous_booking or not reused_payment_id:
+            from features.payment_fraud_detection import PAYMENT_REUSE_BLOCKED_MESSAGE
+            raise ValueError(PAYMENT_REUSE_BLOCKED_MESSAGE)
+        _resolve_public_slot_conflicts(
+            candidate_name=canon,
+            date=day,
+            time=slot_time,
+            time_end=slot_end,
+            exclude_candidate_id=previous_booking_id,
+        )
+        note = sanitize_candidate_notes(_clean_str(notes))
+        row = _duplicate_candidate_slot(
+            previous_booking,
+            date=day,
+            time=slot_time,
+            time_end=slot_end,
+            notes=note,
+            interview_round=rnd,
+        )
+        row = update_candidate(
+            str(row["id"]),
+            {
+                "technology": tech,
+                "phone": normalized_phone,
+                "previousBookingId": previous_booking_id,
+                "reusedPaymentId": reused_payment_id,
+            },
+            allow_slot_without_rules=True,
+        )
+        return _finish_public_slot_import(
+            row,
+            "rebooked_with_reused_payment",
+            technology=tech,
+            phone=normalized_phone,
+            interview_round=rnd,
+            slot_image=slot_image,
+            slot_image_name=slot_image_name,
+            slot_image_mime=slot_image_mime,
+            source=source,
+        )
     proof_owner = _payment_proof_owner_for_slot_name(canon, payment_proof_id)
     existing = _find_existing_slot_row(rows, canon, day, slot_time)
     if existing and _candidate_has_confirmed_slot(existing):
@@ -4620,6 +4718,7 @@ def finalize_public_booking_payment(
     row: dict,
     *,
     pending_payment_proof: tuple[str, dict] | None = None,
+    payment_reuse: dict | None = None,
     idempotency_key: str = "",
 ) -> dict:
     """Attach temporary payment evidence only after booking confirmation."""
@@ -4632,6 +4731,15 @@ def finalize_public_booking_payment(
     patch: dict = {}
     if booking_key and _clean_str(current.get("booking_idempotency_key")) != booking_key:
         patch["booking_idempotency_key"] = booking_key
+    reuse = dict(payment_reuse or {})
+    if reuse.get("reuse_allowed"):
+        previous_booking_id = _clean_str(reuse.get("previousBookingId"))
+        reused_payment_id = _clean_str(reuse.get("reusedPaymentId"))
+        if not previous_booking_id or not reused_payment_id:
+            from features.payment_fraud_detection import PAYMENT_REUSE_BLOCKED_MESSAGE
+            raise ValueError(PAYMENT_REUSE_BLOCKED_MESSAGE)
+        patch["previousBookingId"] = previous_booking_id
+        patch["reusedPaymentId"] = reused_payment_id
 
     if pending_payment_proof:
         path, pending = pending_payment_proof
@@ -4697,6 +4805,20 @@ def finalize_public_booking_payment(
 
     if patch:
         current = update_candidate(cid, patch, allow_slot_without_rules=True)
+    if reuse.get("reuse_allowed"):
+        previous = get_candidate(_clean_str(reuse.get("previousBookingId")))
+        if not previous:
+            from features.payment_fraud_detection import PAYMENT_REUSE_BLOCKED_MESSAGE
+            raise ValueError(PAYMENT_REUSE_BLOCKED_MESSAGE)
+        existing_rebooking_id = _clean_str(previous.get("paymentReusedByBookingId"))
+        if existing_rebooking_id and existing_rebooking_id != cid:
+            from features.payment_fraud_detection import PAYMENT_REUSE_BLOCKED_MESSAGE
+            raise ValueError(PAYMENT_REUSE_BLOCKED_MESSAGE)
+        update_candidate(
+            str(previous["id"]),
+            {"paymentReusedByBookingId": cid},
+            allow_slot_without_rules=True,
+        )
     return current
 
 
@@ -5849,6 +5971,7 @@ def _store_typed_attachment(
             "fraud_decision", "fraud_reasons", "fraud_warnings", "fraud_checked_at",
             "company_payment_verified", "receiver_name", "receiver_upi_id",
             "receiver_phone", "verified_amount", "receiver_account",
+            "vision_amount", "ocr_amount", "amount_mismatch_reason",
             "receiver_type", "ledger_entry_id", "ledger_action",
             "ledger_status", "source_module", "booking_eligible",
             "verification_state", "payment_id", "evidence_id",
