@@ -24,6 +24,10 @@ function currentMonthValue() {
   return todayInputValue().slice(0, 7);
 }
 
+function selectedMonthValue(value) {
+  return /^\d{4}-\d{2}$/.test(String(value || "")) ? String(value) : "all";
+}
+
 function formatMonthLabel(value) {
   if (!/^\d{4}-\d{2}$/.test(String(value || ""))) return String(value || "");
   const [year, month] = value.split("-").map(Number);
@@ -48,6 +52,7 @@ export default function PayoutModal({
   handlerNames = [],
   topPerformers = [],
   ownedSummary,
+  initialMonth = "all",
   onClose,
   onChanged,
   // injected from parent so we don't re-import
@@ -67,8 +72,14 @@ export default function PayoutModal({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filterHandler, setFilterHandler] = useState("all");
-  const [filterMonth, setFilterMonth] = useState("all");
-  const [historyMonth, setHistoryMonth] = useState(currentMonthValue);
+  // Keep payout validation in the same accounting period that launched the
+  // modal. Without this, a July earnings view silently fetched all-time stats,
+  // which excluded July's monthly salary and capped settlement at commission.
+  const [filterMonth, setFilterMonth] = useState(() => selectedMonthValue(initialMonth));
+  const [historyMonth, setHistoryMonth] = useState(() => {
+    const selected = selectedMonthValue(initialMonth);
+    return selected === "all" ? currentMonthValue() : selected;
+  });
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(() => ({
     reference: "",
