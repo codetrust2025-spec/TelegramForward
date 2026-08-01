@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Spinner } from '../Loader.jsx'
 import { SubmitSlotFileDrop } from './SubmitSlotFileDrop.jsx'
+import AiProcessingStatus from '../components/AiProcessingStatus.jsx'
 import { TwelveHourTimePicker } from './TwelveHourTimePicker.jsx'
 
 const API_BASE = typeof window !== 'undefined' && window.location.port === '3000'
@@ -875,13 +876,36 @@ export function SubmitSlotPage() {
                 <span className="sbs-label">Interview invite screenshot</span>
                 <SubmitSlotFileDrop compact file={slotFile} disabled={busy} busy={parsing} onFile={onSlotFileChange} />
                 {inlineError('invite')}
-                {!parsing && aiExtraction && !aiBlocked && (
-                  <div className="sbs-status sbs-status--complete" role="status">
-                    <span>AI reading completed</span>
-                  </div>
+                {parsing && (
+                  <AiProcessingStatus
+                    variant="card"
+                    state="processing"
+                    title="Reading invite"
+                    mode={aiExtraction?.processing_mode || null}
+                  />
                 )}
-                {parsing && <div className="sbs-verify-badge sbs-verify-badge--loading"><Spinner size={14} /><strong>Reading invite…</strong></div>}
-                {aiBlocked && <div className="sbs-alert sbs-alert--error" role="alert">{aiBlocked}</div>}
+                {!parsing && aiExtraction && !aiBlocked && (
+                  <AiProcessingStatus
+                    variant="inline"
+                    state="success"
+                    title="Reading invite"
+                    message="AI reading completed"
+                    mode={aiExtraction?.processing_mode || null}
+                  />
+                )}
+                {!parsing && aiBlocked && (
+                  <AiProcessingStatus
+                    variant="card"
+                    state="error"
+                    title="Reading invite"
+                    message={aiBlocked}
+                    mode={aiExtraction?.processing_mode || null}
+                    onRetry={slotFile ? () => parseScreenshot(slotFile) : undefined}
+                    onCancel={() => onSlotFileChange(null)}
+                    retryLabel="Retry"
+                    cancelLabel="Remove file"
+                  />
+                )}
 
               {aiExtraction && !aiBlocked && aiExtraction.confidence_score > 0 && (
                 <div className="sbs-detected">

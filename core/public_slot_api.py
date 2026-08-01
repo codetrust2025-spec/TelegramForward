@@ -12,13 +12,18 @@ from typing import Any
 from fastapi import File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
+from core.ocr_policy import processing_mode
+
 logger = logging.getLogger(__name__)
 _booking_confirmation_lock = Lock()
 
 # Invite extraction must always answer with JSON. Nginx gives the app 300s
 # (proxy_read_timeout) before serving its own HTML 504, which the browser
 # cannot parse, so the application deadline is deliberately well below that.
-INVITE_EXTRACTION_TIMEOUT_DEFAULT = 90
+# 90s proved too tight: the vision model was still working at 90,091ms and
+# every invite fell through to manual entry. 240s leaves a 60s margin under
+# Nginx's 300s proxy_read_timeout, so the application still answers first.
+INVITE_EXTRACTION_TIMEOUT_DEFAULT = 240
 INVITE_EXTRACTION_TIMEOUT_CEILING = 240
 
 
@@ -44,6 +49,7 @@ def _invite_extraction_fallback(warning: str) -> dict:
         "status": "ok",
         "success": False,
         "extraction_source": "error",
+        "processing_mode": processing_mode(),
         "data": {
             "candidate_name": "",
             "interview_date": "",
@@ -259,6 +265,8 @@ def install_public_slot_routes(app) -> None:
         return {
             "status": "ok",
             "success": is_success,
+            # Which engine read the file, so the page can say so plainly.
+            "processing_mode": processing_mode(),
             "extraction_source": result.get("extraction_source", "unknown"),
             "primary_model": result.get("primary_model", ""),
             "backup_model": result.get("backup_model", ""),
