@@ -88,6 +88,9 @@ def test_worker_claims_mailbox_job_while_ai_recovery_is_blocked(monkeypatch):
     import workers.recruitment_mail_worker as module
 
     async def scenario():
+        # GitHub runners can begin this test with less than 60 seconds of
+        # system uptime.  Keep that fresh-host condition deterministic.
+        monkeypatch.setattr(module,'_monotonic',lambda:1.0)
         worker=RecruitmentMailWorker()
         recovery_started=threading.Event();recovery_release=threading.Event()
         claimed=[];pending=[{'id':'j-blocked','mailbox_id':'mb1','attempts':1}]
@@ -100,7 +103,7 @@ def test_worker_claims_mailbox_job_while_ai_recovery_is_blocked(monkeypatch):
         monkeypatch.setattr(worker,'renew_due_watches',lambda:None)
         monkeypatch.setattr(worker,'process_job',lambda job:claimed.append(job['id']))
         monkeypatch.setattr(worker,'process_ai_recovery',lambda:(recovery_started.set(),recovery_release.wait(2)))
-        worker._last_watch_renewal=__import__('time').monotonic()
+        worker._last_watch_renewal=module._monotonic()
 
         worker.start()
         try:
