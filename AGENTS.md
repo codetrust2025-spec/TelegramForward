@@ -8,9 +8,9 @@ This file applies to the entire repository. It is the mandatory entry point for 
 2. `PROJECT_RULES.md` is the authoritative repository policy.
 3. `DEVELOPMENT_WORKFLOW.md`, `DEPLOYMENT.md`, and `RECOVERY.md` define the required procedures for their activities.
 4. `CONTRIBUTING.md` defines contributor expectations.
-5. Nested `AGENTS.md` files may add local implementation rules but may not weaken root safety, review, data-protection, backup, or deployment rules.
+5. Nested `AGENTS.md` files may add local implementation rules but may not weaken root safety, pull-request/CI, data-protection, backup, or deployment rules.
 
-Stop and report any conflict that could damage data, expose a secret, bypass review, or modify Production unexpectedly.
+Stop and report any conflict that could damage data, expose a secret, bypass a required Pull Request or CI check, or modify Production unexpectedly.
 
 ## Mandatory workflow
 
@@ -23,7 +23,7 @@ Every change follows:
 5. Commit
 6. Push
 7. Pull Request
-8. Review and merge to `main`
+8. Merge the CI-passing Pull Request to `main` (independent review is optional)
 9. Backup verification
 10. Production deployment from the exact merged commit
 11. Verification
@@ -90,10 +90,10 @@ Templates contain placeholders or safe defaults only. Production values must not
 - Never commit or push directly on `main`.
 - Never force-push or rewrite shared history.
 - Never use destructive cleanup/reset commands on unverified paths.
-- Never deploy a dirty tree, local patch, or unreviewed branch.
+- Never deploy a dirty tree, local patch, or unmerged branch.
 - Never claim a marker is authoritative unless it matches the running release and GitHub `main`.
 
-GitHub `main` is protected. Every change must use a Pull Request, obtain at least one approval, resolve review conversations, and pass the required `Backend tests` and `Frontend tests` checks. Never attempt to bypass, weaken, or temporarily disable these protections.
+GitHub `main` is protected. Every change must use a Pull Request and pass the required `Backend tests` and `Frontend tests` checks before merge. Independent approval is optional for this single-owner repository. If review occurs, resolve its conversations before merge. Never attempt to bypass, weaken, or temporarily disable the Pull Request or required-check protections.
 
 ## Production prohibitions
 

@@ -12,7 +12,7 @@ Read `PROJECT_RULES.md`, `AGENTS.md`, `DEVELOPMENT_WORKFLOW.md`, and `CONTRIBUTI
 - Start from a clean feature branch based on synchronized `main`.
 - Preserve dirty work; never discard user changes.
 - Make focused changes and add regression tests for behavior changes.
-- Run backend and frontend validation before review.
+- Run backend and frontend validation before Pull Request merge.
 - Never weaken tests to obtain a passing result.
 - Never expose or modify secrets, `.env`, uploads, databases, sessions, logs, caches, runtime JSON, or backups.
 - Never deploy from a working directory or unmerged branch.
@@ -22,7 +22,7 @@ Read `PROJECT_RULES.md`, `AGENTS.md`, `DEVELOPMENT_WORKFLOW.md`, and `CONTRIBUTI
 
 ## Standard lifecycle
 
-`Requirements -> Feature branch -> Development -> Tests -> Commit -> Push -> PR -> Review -> Merge -> Backup -> Deploy -> Verify -> Monitor`
+`Requirements -> Feature branch -> Development -> Tests -> Commit -> Push -> PR -> Required CI -> Optional review -> Merge -> Backup -> Deploy -> Verify -> Monitor`
 
 ## Project invariants
 
