@@ -9598,6 +9598,14 @@ body {
   flex-direction: column;
   gap: 12px;
 }
+/* Controls that read their own endpoint and must stay usable even when the
+   smart-reply config below them fails to load. */
+.ai-settings-standalone {
+  padding: 14px 18px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
 .ai-settings-warning {
   background: rgba(245, 158, 11, 0.12);
   border: 1px solid rgba(245, 158, 11, 0.35);

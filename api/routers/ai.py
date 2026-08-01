@@ -1,6 +1,7 @@
 """Auto-extracted ai routes (pure move from server.py)."""
 import asyncio
 import json
+import logging
 import os
 import shutil
 from datetime import datetime
@@ -58,20 +59,51 @@ from server import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _smart_reply_health() -> dict:
+    """Health block for the settings screen, degrading instead of failing.
+
+    ``core.ai_smart_reply`` imports the Karthik playbook tree, which lives
+    outside git (see core/ai_smart_reply_store.py). Deployments without that
+    tree cannot import the module at all, and a hard import here turned the
+    whole settings endpoint into a 500 — taking every unrelated control on that
+    screen down with it, including the OCR switch. Report the module as
+    unavailable instead; the caller still gets its config.
+    """
+    try:
+        from core import ai_smart_reply
+
+        health = ai_smart_reply.health()
+        health.setdefault("available", True)
+        return health
+    except Exception as exc:  # noqa: BLE001 - degraded health must never raise
+        logger.warning("AI smart reply health unavailable: %s", exc)
+        return {
+            "available": False,
+            "enabled": False,
+            "api_key_present": bool(
+                (os.getenv("AI_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
+            ),
+            "unavailable_reason": (
+                "The AI smart reply engine is not installed on this deployment, "
+                "so its status and controls cannot be read."
+            ),
+        }
+
 
 @router.get("/ai/smart-reply/config")
 async def ai_smart_reply_get_config():
-    from core import ai_smart_reply
     from core.ai_smart_reply_store import get_config
 
     return {
         "status": "ok",
         "config": get_config(),
-        "health": ai_smart_reply.health(),
+        "health": _smart_reply_health(),
     }
 @router.post("/ai/smart-reply/config")
 async def ai_smart_reply_update_config(body: dict):
-    from core import ai_smart_reply
     from core.ai_smart_reply_store import update_config
 
     patch = {k: v for k, v in (body or {}).items() if v is not None}
@@ -79,7 +111,7 @@ async def ai_smart_reply_update_config(body: dict):
     return {
         "status": "ok",
         "config": cfg,
-        "health": ai_smart_reply.health(),
+        "health": _smart_reply_health(),
     }
 @router.get("/ai/smart-reply/preset/economy")
 async def ai_smart_reply_economy_preset_preview():
