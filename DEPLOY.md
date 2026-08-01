@@ -1,3 +1,10 @@
+# Legacy Deployment Guide — Superseded
+
+> **Do not use this document for current Production deployment.** Its upload,
+> in-place update, and direct restart procedures are historical and conflict
+> with current policy. Use `DEPLOYMENT.md`; governing rules are in
+> `PROJECT_RULES.md`.
+
 # Deployment Guide — Telegram Forwarder
 
 ## Recommended: Hostinger VPS (~$4/month)

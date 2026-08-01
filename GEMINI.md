@@ -1,5 +1,10 @@
 # TeleAutomation — Gemini CLI Project Context
 
+> **Authoritative policy:** Gemini must first follow `PROJECT_RULES.md`,
+> `AGENTS.md`, and `DEVELOPMENT_WORKFLOW.md`. Any instruction below permitting
+> direct development/push on `main`, legacy file upload, or deployment without
+> a verified backup is superseded.
+
 This file is automatically loaded by Gemini CLI when you run `gemini` from this directory.
 It gives you full project context so you can start working immediately.
 
