@@ -312,8 +312,14 @@
   font-size: 14px;
   font-weight: 800;
 }
+.earn-summary-note {
+  color: var(--text-dim, #7b8a9e);
+  font-size: 10px;
+  font-weight: 600;
+}
 .earn-summary-opening strong { color: #7dd3fc; }
 .earn-summary-earnings strong { color: #4ade80; }
+.earn-summary-recoveries strong { color: #fca5a5; }
 .earn-summary-expenses strong { color: #fca5a5; }
 .earn-summary-balance--positive strong { color: #4ade80; }
 .earn-summary-balance--negative strong { color: #f87171; }
