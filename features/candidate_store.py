@@ -214,11 +214,12 @@ def baseline_for_service(
 # ledger now only tracks money already paid OUT (commission disbursements,
 # travel, food etc.) — net = auto_earnings − paid_out.
 #
-# If the referrer charges the client below the prescribed tariff, their
-# commission is penalised by the shortfall: basis = max(0, 2×received −
-# prescribed), then 50%. Example: internal round prescribed ₹9k, client
-# pays ₹5k → basis ₹1k → handler gets ₹500 (not ₹2,500).
+# Commission is based on eligible cash received, capped at the agreed client
+# charge. Charging below the prescribed tariff does not reduce the referrer's
+# percentage; the agreed deal itself already limits the commissionable amount.
 HANDLER_COMMISSION_PCT = 50
+PROFILE_CLOSURE_COMPLIMENTARY_AMOUNT = 5_000
+PROFILE_CLOSURE_ADMIN_REFERENCE = "Thrilok"
 
 # Owners / admins — not handler commission recipients (hidden from payout UI).
 HANDLER_PAYOUT_EXCLUDED_REF_KEYS = frozenset({"ravinder"})
@@ -303,21 +304,47 @@ def referrer_commission_basis(row: dict) -> int:
     bgv_charge = BGV_CERTIFICATES_PAYMENT if _coerce_bool(row.get("bgv_certificates")) else 0
     agreed = max(0, effective_expected_payment(row) - bgv_charge)
     charged = min(received, agreed) if agreed > 0 else 0
-    prescribed = baseline_for_service(
-        _normalise_service_type(row.get("service_type"), row),
-        consultancy=bool(row.get("consultancy", False)),
-        interview_scope=_normalise_interview_scope(row.get("interview_scope"), row),
-    )
-    # Installments toward the agreed deal — commission accrues on cash received.
-    if agreed > 0 and received < agreed:
-        return charged
-    if charged < prescribed:
-        return max(0, 2 * charged - prescribed)
     return charged
 
 
 def referrer_commission_amount(row: dict) -> int:
     return (referrer_commission_basis(row) * HANDLER_COMMISSION_PCT) // 100
+
+
+def is_closed_profile_service(row: dict) -> bool:
+    """Whether a candidate earns the two profile-closure complimentary amounts."""
+    return (
+        str(row.get("stage") or "").strip().lower() == "completed"
+        and _normalise_service_type(row.get("service_type"), row) == "profile_service"
+    )
+
+
+def referrer_complimentary_amount(row: dict) -> int:
+    reference = _reference_key(row.get("reference") or "")
+    if reference == "unknown" or not is_closed_profile_service(row):
+        return 0
+    return PROFILE_CLOSURE_COMPLIMENTARY_AMOUNT
+
+
+def admin_complimentary_amount(row: dict) -> int:
+    if not is_closed_profile_service(row):
+        return 0
+    return PROFILE_CLOSURE_COMPLIMENTARY_AMOUNT
+
+
+def handler_earning_allocations(row: dict) -> dict[str, int]:
+    """Allocate base commission and closure extras to their earning handlers."""
+    allocations: dict[str, int] = {}
+    reference = _reference_key(row.get("reference") or "")
+    if reference != "unknown":
+        allocations[reference] = (
+            referrer_commission_amount(row) + referrer_complimentary_amount(row)
+        )
+    admin_bonus = admin_complimentary_amount(row)
+    if admin_bonus:
+        admin_key = _reference_key(PROFILE_CLOSURE_ADMIN_REFERENCE)
+        allocations[admin_key] = allocations.get(admin_key, 0) + admin_bonus
+    return {key: amount for key, amount in allocations.items() if amount > 0}
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -1406,10 +1433,21 @@ def _with_computed(row: dict) -> dict:
     enriched["balance_due"] = balance
     enriched["payment_status"] = status
     enriched["needs_followup"] = balance > 0
-    enriched["handler_commission"] = referrer_commission_amount(row)
+    base_commission = referrer_commission_amount(row)
+    referrer_bonus = referrer_complimentary_amount(row)
+    admin_bonus = admin_complimentary_amount(row)
+    enriched["base_handler_commission"] = base_commission
+    enriched["referrer_complimentary_amount"] = referrer_bonus
+    enriched["admin_complimentary_amount"] = admin_bonus
+    # Candidate rows are shown under their own referrer. The admin bonus is
+    # itemised separately in Thrilok's earnings breakdown to avoid double count.
+    enriched["handler_commission"] = base_commission + referrer_bonus
+    enriched["total_handler_earnings"] = sum(handler_earning_allocations(row).values())
     commissionable_expected = max(0, expected - (BGV_CERTIFICATES_PAYMENT if enriched["bgv_certificates"] else 0))
-    enriched["handler_commission_max"] = (commissionable_expected * HANDLER_COMMISSION_PCT) // 100
-    enriched["company_revenue"] = max(0, received - enriched["handler_commission"])
+    enriched["handler_commission_max"] = (
+        (commissionable_expected * HANDLER_COMMISSION_PCT) // 100
+    ) + referrer_bonus
+    enriched["company_revenue"] = received - enriched["total_handler_earnings"]
     attachments = partition_candidate_attachments(enriched)
     payment_proofs = attachments["payment_proofs"]
     enriched.pop("proofs", None)
@@ -5257,7 +5295,7 @@ def _carry_forward_balances(
     scope_key: str | None = None,
     service_type_filter: str | None = None,
 ) -> dict[str, dict]:
-    """Compute cumulative commission earned and payouts made for each handler
+    """Compute cumulative candidate earnings and payouts made for each handler
     across ALL months strictly BEFORE `target_month`.
 
     Returns {handler_key: {"prior_commission": int, "prior_paid": int}}
@@ -5267,14 +5305,9 @@ def _carry_forward_balances(
     if not target_month or target_month == "all":
         return {}
 
-    # ── Cumulative commission from prior months ──
+    # ── Cumulative commission and complimentary amounts from prior months ──
     store_data = _load()
     all_rows = [_with_computed(r) for r in (store_data.get("candidates") or [])]
-    if scope_key:
-        all_rows = [
-            r for r in all_rows
-            if _reference_key(r.get("reference") or "") == scope_key
-        ]
     if service_type_filter and service_type_filter != "all":
         all_rows = [r for r in all_rows if _normalise_service_type(r.get("service_type"), r) == service_type_filter]
 
@@ -5287,12 +5320,10 @@ def _carry_forward_balances(
 
     prior_commission: dict[str, int] = {}
     for r in prior_rows:
-        ref_raw = (r.get("reference") or "").strip()
-        if not ref_raw:
-            continue
-        ref_key = _reference_key(ref_raw)
-        handler_share = referrer_commission_amount(r)
-        prior_commission[ref_key] = prior_commission.get(ref_key, 0) + handler_share
+        for ref_key, handler_share in handler_earning_allocations(r).items():
+            if scope_key and ref_key != scope_key:
+                continue
+            prior_commission[ref_key] = prior_commission.get(ref_key, 0) + handler_share
 
     # ── Cumulative salary from prior months ──
     prior_salary: dict[str, int] = {}
@@ -5313,6 +5344,8 @@ def _carry_forward_balances(
             try:
                 sal = _hs.salary_owed_by_handler(month=pm)
                 for key, sbucket in sal.items():
+                    if scope_key and key != scope_key:
+                        continue
                     prior_salary[key] = prior_salary.get(key, 0) + int(sbucket.get("owed") or 0)
             except Exception:
                 pass
@@ -5411,14 +5444,17 @@ def stats(
 
     store_data = _load()
     if _all_rows is not None:
-        all_rows = _all_rows
+        unscoped_all_rows = list(_all_rows)
     else:
-        all_rows = [_with_computed(r) for r in (store_data.get("candidates") or [])]
-        if scope_key:
-            all_rows = [
-                r for r in all_rows
-                if _reference_key(r.get("reference") or "") == scope_key
-            ]
+        unscoped_all_rows = [
+            _with_computed(r) for r in (store_data.get("candidates") or [])
+        ]
+    all_rows = list(unscoped_all_rows)
+    if scope_key:
+        all_rows = [
+            r for r in all_rows
+            if _reference_key(r.get("reference") or "") == scope_key
+        ]
     # Apply service_type filter before computing stats
     if service_type and service_type != "all":
         all_rows = [r for r in all_rows if _normalise_service_type(r.get("service_type"), r) == service_type]
@@ -5429,6 +5465,29 @@ def stats(
         rows = list_candidates(month=month, reference=reference, service_type=service_type)
     else:
         rows = _stats_rows_deduped(all_rows)
+
+    # Thrilok's admin complimentary amount is earned on every completed
+    # profile, including profiles referred by someone else. Keep those rows
+    # out of scoped candidate/revenue data and import only the ₹5k allocation.
+    admin_extra_rows: list[dict] = []
+    if scope_key == _reference_key(PROFILE_CLOSURE_ADMIN_REFERENCE):
+        if month and month != "all":
+            admin_source_rows = list_candidates(
+                month=month,
+                reference=None,
+                service_type=service_type,
+            )
+        else:
+            admin_source_rows = _stats_rows_deduped(unscoped_all_rows)
+            if service_type and service_type != "all":
+                admin_source_rows = [
+                    row for row in admin_source_rows
+                    if _normalise_service_type(row.get("service_type"), row) == service_type
+                ]
+        admin_extra_rows = [
+            row for row in admin_source_rows
+            if _reference_key(row.get("reference") or "") != scope_key
+        ]
 
     total = len(rows)
     by_stage = {s: 0 for s in VALID_STAGES}
@@ -5459,10 +5518,13 @@ def stats(
         interview_scope = _normalise_interview_scope(r.get("interview_scope"), r)
         expected = effective_expected_payment(r)
         balance = max(0, expected - amt)
-        # Handler commission follows the agreed deal (expected_payment), not
-        # the prescribed baseline — partial payments accrue gradually.
-        handler_share = referrer_commission_amount(r)
-        company_share = max(0, amt - handler_share)
+        # Base commission stays at 50% of eligible cash. Closed profile-service
+        # rows add ₹5k to the referrer and ₹5k to Thrilok as admin.
+        base_commission = referrer_commission_amount(r)
+        referrer_bonus = referrer_complimentary_amount(r)
+        admin_bonus = admin_complimentary_amount(r)
+        handler_share = base_commission + referrer_bonus + admin_bonus
+        company_share = amt - handler_share
         revenue += amt
         referral_commission += handler_share
         company_revenue += company_share
@@ -5491,6 +5553,11 @@ def stats(
                 "fail": 0, "dropped": 0, "revenue_total": 0, "revenue_completed": 0,
                 "pending_total": 0, "pending_count": 0,
                 "auto_earnings_total": 0, "auto_earnings_completed": 0,
+                "base_commission_total": 0,
+                "referrer_complimentary_total": 0,
+                "admin_complimentary_total": 0,
+                "referrer_complimentary_count": 0,
+                "admin_complimentary_count": 0,
                 "company_revenue_total": 0, "company_revenue_completed": 0,
                 "consultancy_count": 0,
             }
@@ -5502,13 +5569,77 @@ def stats(
             bucket[st] += 1
         bucket["revenue_total"] += amt
         bucket["company_revenue_total"] += company_share
-        bucket["auto_earnings_total"] += handler_share
+        referrer_earnings = base_commission + referrer_bonus
+        bucket["auto_earnings_total"] += referrer_earnings
+        bucket["base_commission_total"] += base_commission
+        bucket["referrer_complimentary_total"] += referrer_bonus
+        if referrer_bonus:
+            bucket["referrer_complimentary_count"] += 1
         if is_consultancy:
             bucket["consultancy_count"] += 1
         if st == "completed":
             bucket["revenue_completed"] += amt
             bucket["company_revenue_completed"] += company_share
-            bucket["auto_earnings_completed"] += handler_share
+            bucket["auto_earnings_completed"] += referrer_earnings
+
+        if admin_bonus and (not scope_key or scope_key == _reference_key(PROFILE_CLOSURE_ADMIN_REFERENCE)):
+            admin_key = _reference_key(PROFILE_CLOSURE_ADMIN_REFERENCE)
+            admin_bucket = perf.get(admin_key)
+            if admin_bucket is None:
+                admin_bucket = {
+                    "ref_key": admin_key,
+                    "name": PROFILE_CLOSURE_ADMIN_REFERENCE,
+                    "count": 0, "completed": 0, "in_progress": 0,
+                    "fail": 0, "dropped": 0,
+                    "revenue_total": 0, "revenue_completed": 0,
+                    "pending_total": 0, "pending_count": 0,
+                    "auto_earnings_total": 0, "auto_earnings_completed": 0,
+                    "base_commission_total": 0,
+                    "referrer_complimentary_total": 0,
+                    "admin_complimentary_total": 0,
+                    "referrer_complimentary_count": 0,
+                    "admin_complimentary_count": 0,
+                    "company_revenue_total": 0, "company_revenue_completed": 0,
+                    "consultancy_count": 0,
+                }
+                perf[admin_key] = admin_bucket
+            admin_bucket["auto_earnings_total"] += admin_bonus
+            admin_bucket["admin_complimentary_total"] += admin_bonus
+            admin_bucket["admin_complimentary_count"] += 1
+            admin_bucket["auto_earnings_completed"] += admin_bonus
+
+    # A Thrilok-scoped request intentionally excludes other handlers' candidate
+    # rows. Import only Thrilok's admin allocation from those rows so private
+    # candidate/revenue details remain out of the scoped response.
+    if admin_extra_rows:
+        admin_key = _reference_key(PROFILE_CLOSURE_ADMIN_REFERENCE)
+        admin_bucket = perf.get(admin_key)
+        if admin_bucket is None:
+            admin_bucket = {
+                "ref_key": admin_key,
+                "name": PROFILE_CLOSURE_ADMIN_REFERENCE,
+                "count": 0, "completed": 0, "in_progress": 0,
+                "fail": 0, "dropped": 0,
+                "revenue_total": 0, "revenue_completed": 0,
+                "pending_total": 0, "pending_count": 0,
+                "auto_earnings_total": 0, "auto_earnings_completed": 0,
+                "base_commission_total": 0,
+                "referrer_complimentary_total": 0,
+                "admin_complimentary_total": 0,
+                "referrer_complimentary_count": 0,
+                "admin_complimentary_count": 0,
+                "company_revenue_total": 0, "company_revenue_completed": 0,
+                "consultancy_count": 0,
+            }
+            perf[admin_key] = admin_bucket
+        for row in admin_extra_rows:
+            admin_bonus = admin_complimentary_amount(row)
+            if not admin_bonus:
+                continue
+            admin_bucket["auto_earnings_total"] += admin_bonus
+            admin_bucket["auto_earnings_completed"] += admin_bonus
+            admin_bucket["admin_complimentary_total"] += admin_bonus
+            admin_bucket["admin_complimentary_count"] += 1
 
     pending_total, pending_count, pending_no_remark, pending_by_ref = (
         _pending_collections_from_rows(rows)
@@ -5586,6 +5717,11 @@ def stats(
                 "fail": 0, "dropped": 0, "revenue_total": 0, "revenue_completed": 0,
                 "pending_total": 0, "pending_count": 0,
                 "auto_earnings_total": 0, "auto_earnings_completed": 0,
+                "base_commission_total": 0,
+                "referrer_complimentary_total": 0,
+                "admin_complimentary_total": 0,
+                "referrer_complimentary_count": 0,
+                "admin_complimentary_count": 0,
                 "company_revenue_total": 0, "company_revenue_completed": 0,
                 "consultancy_count": 0,
             }
@@ -5593,6 +5729,9 @@ def stats(
             perf[ref_key]["name"] = _prefer_reference_display(perf[ref_key]["name"], ref)
 
     total_handler_commission    = 0
+    total_handler_base_commission = 0
+    total_handler_referrer_complimentary = 0
+    total_handler_admin_complimentary = 0
     total_handler_salary        = 0
     total_handler_paid_out      = 0
     total_handler_recoveries    = 0
@@ -5624,6 +5763,11 @@ def stats(
                     "fail": 0, "dropped": 0, "revenue_total": 0, "revenue_completed": 0,
                     "pending_total": 0, "pending_count": 0,
                     "auto_earnings_total": 0, "auto_earnings_completed": 0,
+                    "base_commission_total": 0,
+                    "referrer_complimentary_total": 0,
+                    "admin_complimentary_total": 0,
+                    "referrer_complimentary_count": 0,
+                    "admin_complimentary_count": 0,
                     "company_revenue_total": 0, "company_revenue_completed": 0,
                     "consultancy_count": 0,
                 }
@@ -5638,6 +5782,10 @@ def stats(
         recovery_bucket = recovery_summary.get(key, {})
 
         commission = int(p["auto_earnings_total"])
+        base_commission = int(p.get("base_commission_total") or 0)
+        referrer_complimentary = int(p.get("referrer_complimentary_total") or 0)
+        admin_complimentary = int(p.get("admin_complimentary_total") or 0)
+        complimentary = referrer_complimentary + admin_complimentary
         salary     = int(salary_bucket.get("owed") or 0)
         owed       = commission + salary
         paid_out   = int(exp_bucket.get("total") or 0)
@@ -5655,6 +5803,7 @@ def stats(
 
         # Salary-side fields — show THIS month's values only.
         p["commission_total"]  = commission
+        p["complimentary_total"] = complimentary
         p["salary_total"]      = salary
         p["salary_monthly"]    = int(salary_bucket.get("monthly_salary") or 0)
         p["salary_active"]     = bool(salary_bucket.get("monthly_salary"))
@@ -5700,6 +5849,12 @@ def stats(
         if _payout_excluded_handler(key) or _payout_excluded_handler(p.get("name") or ""):
             p["payout_excluded"] = True
             p["commission_total"] = 0
+            p["base_commission_total"] = 0
+            p["referrer_complimentary_total"] = 0
+            p["admin_complimentary_total"] = 0
+            p["complimentary_total"] = 0
+            p["referrer_complimentary_count"] = 0
+            p["admin_complimentary_count"] = 0
             p["salary_total"] = 0
             p["salary_monthly"] = 0
             p["salary_active"] = False
@@ -5724,6 +5879,9 @@ def stats(
             continue
 
         total_handler_commission += commission
+        total_handler_base_commission += base_commission
+        total_handler_referrer_complimentary += referrer_complimentary
+        total_handler_admin_complimentary += admin_complimentary
         total_handler_salary     += salary
         total_handler_paid_out   += paid_out
         total_handler_recoveries += recoveries
@@ -5755,7 +5913,7 @@ def stats(
         "by_stage": by_stage,
         "revenue_total": revenue,
         "revenue_completed": completed_revenue,
-        # Company revenue = client cash in minus referrer commission only.
+        # Company revenue = client cash in minus commission and complimentary amounts.
         "client_collections_total": revenue,
         "referral_commission_total": referral_commission,
         "company_revenue_total": company_revenue,
@@ -5772,12 +5930,18 @@ def stats(
         "direct_count":        direct_count,
         "direct_revenue":      direct_revenue,
         # Handler-payout view (new model):
-        #   owed  = sum of auto-computed 50% commissions
+        #   owed  = 50% commissions + completed-profile complimentary amounts
         #   paid  = sum of every handler_expenses ledger row
         #   net   = owed − paid (positive = operator still owes the handler)
         "commission_pct":               HANDLER_COMMISSION_PCT,
         "handler_auto_earnings_total":  total_handler_auto_earnings,
         "handler_commission_total":     total_handler_commission,
+        "handler_base_commission_total": total_handler_base_commission,
+        "handler_referrer_complimentary_total": total_handler_referrer_complimentary,
+        "handler_admin_complimentary_total": total_handler_admin_complimentary,
+        "handler_complimentary_total": (
+            total_handler_referrer_complimentary + total_handler_admin_complimentary
+        ),
         "handler_salary_total":         total_handler_salary,
         "handler_paid_out_total":       total_handler_paid_out,
         "handler_recoveries_total":      total_handler_recoveries,

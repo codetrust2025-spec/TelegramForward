@@ -186,7 +186,7 @@ export default function EarningsBreakdown({
               <th className="earn-th--num">Leads</th>
               <th className="earn-th--num">Done</th>
               <th className="earn-th--money">Revenue</th>
-              <th className="earn-th--money">Commission (50%)</th>
+              <th className="earn-th--money">Earnings</th>
               <th className="earn-th--money">Salary</th>
               <th className="earn-th--money">Total Owed</th>
               <th className="earn-th--money">Paid Out</th>
@@ -197,6 +197,9 @@ export default function EarningsBreakdown({
           <tbody>
             {sorted.map(p => {
               const commission = Number(p.commission_total ?? p.auto_earnings_total) || 0;
+              const complimentary = Number(p.complimentary_total) || 0;
+              const adminComplimentary = Number(p.admin_complimentary_total) || 0;
+              const adminComplimentaryCount = Number(p.admin_complimentary_count) || 0;
               const salary = Number(p.salary_total) || 0;
               const owed = Number(p.auto_earnings_total) || 0;
               const paid = Number(p.paid_out_total) || 0;
@@ -225,7 +228,14 @@ export default function EarningsBreakdown({
                     <td className="earn-td--num">{p.count || 0}</td>
                     <td className="earn-td--num earn-green">{p.completed || 0}</td>
                     <td className="earn-td--money">{fmt(p.revenue_total || 0)}</td>
-                    <td className="earn-td--money earn-green">{fmt(commission)}</td>
+                    <td className="earn-td--money earn-green">
+                      {fmt(commission)}
+                      {complimentary > 0 && (
+                        <span className="earn-carry-fwd" title="Included completed-profile complimentary amounts">
+                          incl. {fmt(complimentary)} complimentary
+                        </span>
+                      )}
+                    </td>
                     <td className="earn-td--money earn-blue">{salary > 0 ? fmt(salary) : "—"}</td>
                     <td className="earn-td--money"><strong>{fmt(owed)}</strong></td>
                     <td className="earn-td--money earn-red">{paid > 0 ? fmt(paid) : "₹0"}</td>
@@ -298,6 +308,14 @@ export default function EarningsBreakdown({
                                     </li>
                                   );
                                 })}
+                                {adminComplimentary > 0 && (
+                                  <li className="earn-breakdown-item">
+                                    <span className="earn-breakdown-desc">
+                                      Admin complimentary · {adminComplimentaryCount} completed profile{adminComplimentaryCount === 1 ? "" : "s"}
+                                    </span>
+                                    <strong className="earn-breakdown-amount">{fmt(adminComplimentary)}</strong>
+                                  </li>
+                                )}
                                 <li className="earn-breakdown-item earn-breakdown-total">
                                   <span className="earn-breakdown-total-title">
                                     <strong>Total ({Number(p.count) || rows.length} candidates)</strong>
