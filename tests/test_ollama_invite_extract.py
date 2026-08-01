@@ -171,6 +171,54 @@ def test_matching_ai_and_ocr_extraction_remains_successful(monkeypatch):
     assert result["start_time"] == "03:00 PM"
 
 
+def test_matching_date_time_with_missing_timezone_is_not_reported_as_conflict(monkeypatch):
+    ocr_text = "Interview scheduled 30-Jul-2099 at 03:00 PM"
+    vision = json.dumps(
+        {
+            "interview_date": "2099-07-30",
+            "start_time": "03:00 PM",
+            "timezone": "Asia/Kolkata",
+            "confidence_score": 92,
+            "looks_like_interview_invite": True,
+        }
+    )
+    _install_invite_flow(monkeypatch, ocr_text, vision)
+
+    result = invite_extract.extract_interview_invite_with_ollama(
+        b"original", "image/jpeg"
+    )
+
+    assert result["auto_booking_safe"] is False
+    assert result["manual_fields_required"] is True
+    assert result["failure_stage"] == "cross_source_verification"
+    assert "verification_conflict" not in result
+    assert "timezone" in result["failure_reason"].lower()
+    assert all("date/time" not in warning for warning in result["warnings"])
+
+
+def test_different_start_times_still_report_verification_conflict(monkeypatch):
+    ocr_text = "Interview scheduled 30-Jul-2099 at 03:00 PM IST"
+    vision = json.dumps(
+        {
+            "interview_date": "2099-07-30",
+            "start_time": "04:00 PM",
+            "timezone": "Asia/Kolkata",
+            "confidence_score": 92,
+            "looks_like_interview_invite": True,
+        }
+    )
+    _install_invite_flow(monkeypatch, ocr_text, vision)
+
+    result = invite_extract.extract_interview_invite_with_ollama(
+        b"original", "image/jpeg"
+    )
+
+    assert result["auto_booking_safe"] is False
+    assert result["verification_conflict"]["ocr"]["start_time"] == "03:00 PM"
+    assert result["verification_conflict"]["vision"]["start_time"] == "04:00 PM"
+    assert "date/time" in result["warnings"][-1]
+
+
 def test_missing_date_requires_manual_fallback_with_exact_reason(monkeypatch, caplog):
     _install_invite_flow(monkeypatch, "Interview\nTime: 03:00 PM IST")
 
