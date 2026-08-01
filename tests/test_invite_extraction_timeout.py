@@ -81,3 +81,41 @@ def test_timeout_fallback_creates_no_candidate_and_no_booking(monkeypatch, tmp_p
     after = len(cs._load(force=True).get("candidates") or [])
     assert after == before == 0
     assert payload["data"]["manual_fields_required"] is True
+
+
+def test_model_timeout_never_outlives_the_endpoint_budget(monkeypatch):
+    """asyncio.to_thread workers cannot be cancelled.
+
+    If the model call could run longer than the endpoint's budget, every
+    abandoned extraction would hold a pool thread and an Ollama slot after the
+    user already saw the manual-entry fallback.
+    """
+    from features import ollama_invite_extract as extract
+
+    monkeypatch.setenv("OLLAMA_TIMEOUT", "900")
+    monkeypatch.delenv("INVITE_EXTRACTION_TIMEOUT", raising=False)
+    assert extract._invite_model_timeout() == 90
+
+    monkeypatch.setenv("INVITE_EXTRACTION_TIMEOUT", "120")
+    assert extract._invite_model_timeout() == 120
+
+    # A small budget still leaves a usable floor rather than 0.
+    monkeypatch.setenv("INVITE_EXTRACTION_TIMEOUT", "5")
+    assert extract._invite_model_timeout() == 30
+
+    # An explicitly short OLLAMA_TIMEOUT is still respected.
+    monkeypatch.setenv("OLLAMA_TIMEOUT", "45")
+    monkeypatch.setenv("INVITE_EXTRACTION_TIMEOUT", "120")
+    assert extract._invite_model_timeout() == 45
+
+
+def test_model_timeout_stays_under_the_proxy_limit(monkeypatch):
+    from features import ollama_invite_extract as extract
+
+    monkeypatch.setenv("OLLAMA_TIMEOUT", "900")
+    for budget in ["", "90", "120", "240", "9999"]:
+        if budget:
+            monkeypatch.setenv("INVITE_EXTRACTION_TIMEOUT", budget)
+        else:
+            monkeypatch.delenv("INVITE_EXTRACTION_TIMEOUT", raising=False)
+        assert extract._invite_model_timeout() < NGINX_PROXY_READ_TIMEOUT
