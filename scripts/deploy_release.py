@@ -96,7 +96,8 @@ def clean_checkout(commit: str, workspace: Path) -> Path:
             cwd=REPO, stdout=handle, check=True,
         )
     with tarfile.open(archive) as tar:
-        tar.extractall(source)
+        # 'data' rejects absolute paths, traversal and unsafe metadata.
+        tar.extractall(source, filter="data")
     archive.unlink()
     # A release must never ship runtime state, even if a path was committed.
     for name in RUNTIME_LINKS:
@@ -227,15 +228,27 @@ def migrate_legacy_layout(client, commit: str) -> None:
     log("no 'current' symlink: migrating legacy layout")
     legacy = f"{RELEASES}/legacy-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     ssh(client, f"mkdir -p {q(RELEASES)}")
+    # Fail closed: a partial copy must never become 'current'. `set -e` plus an
+    # unguarded cp means ENOSPC or a permission error aborts here, while the
+    # live flat tree is still untouched and still serving.
     ssh(
         client,
-        "cd {root} && mkdir -p {dest} && for entry in * .[!.]*; do "
+        "set -e; cd {root}; mkdir -p {dest}; for entry in * .[!.]*; do "
         "case \"$entry\" in releases|current|.env|data|uploads|logs|session_*.session|venv) continue;; esac; "
-        "[ -e \"$entry\" ] && cp -a \"$entry\" {dest}/ || true; done".format(
+        "[ -e \"$entry\" ] || continue; cp -a \"$entry\" {dest}/; done".format(
             root=q(REMOTE_ROOT), dest=q(legacy)
         ),
-        check=False,
     )
+    # Prove the copy is usable before anything points at it.
+    for required in ("server.py", "core", "static/index.html"):
+        present = ssh(
+            client, f"test -e {q(legacy + '/' + required)} && echo yes || echo no", check=False
+        )
+        if present != "yes":
+            raise SystemExit(
+                f"Legacy migration incomplete: {required} missing from {legacy}. "
+                "'current' was not created; the live tree is unchanged."
+            )
     link_runtime(client, legacy)
     ssh(client, f"ln -sfn {q(legacy)} {q(CURRENT)}.tmp && mv -Tf {q(CURRENT)}.tmp {q(CURRENT)}")
     log(f"legacy release preserved as {legacy} and 'current' now points at it")
