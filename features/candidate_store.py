@@ -5327,6 +5327,13 @@ def _carry_forward_balances(
         if key and month_value:
             prior_months.setdefault(key, set()).add(month_value)
 
+    # Profile-closure complimentary is earned differently from ordinary
+    # commission — it can even come from another handler's candidate — so it is
+    # tracked separately. A carried balance that turns out to be an unpaid
+    # closure complimentary should say so rather than read as generic arrears.
+    prior_complimentary: dict[str, int] = {}
+    prior_complimentary_count: dict[str, int] = {}
+
     prior_commission: dict[str, int] = {}
     for r in prior_rows:
         for ref_key, handler_share in handler_earning_allocations(r).items():
@@ -5335,6 +5342,23 @@ def _carry_forward_balances(
             prior_commission[ref_key] = prior_commission.get(ref_key, 0) + handler_share
             if handler_share:
                 _note_month(ref_key, _row_display_month(r))
+
+        closure_admin_key = _reference_key(PROFILE_CLOSURE_ADMIN_REFERENCE)
+        row_reference = _reference_key(r.get("reference") or "")
+        for comp_key, comp_amount in (
+            (closure_admin_key, admin_complimentary_amount(r)),
+            (row_reference, referrer_complimentary_amount(r)),
+        ):
+            if not comp_amount or not comp_key or comp_key == "unknown":
+                continue
+            if scope_key and comp_key != scope_key:
+                continue
+            prior_complimentary[comp_key] = (
+                prior_complimentary.get(comp_key, 0) + comp_amount
+            )
+            prior_complimentary_count[comp_key] = (
+                prior_complimentary_count.get(comp_key, 0) + 1
+            )
 
     # ── Cumulative salary from prior months ──
     prior_salary: dict[str, int] = {}
@@ -5434,6 +5458,9 @@ def _carry_forward_balances(
             "prior_recoveries": recovery,
             "prior_balance": (comm + sal) - paid - recovery,
             "prior_months": sorted(prior_months.get(key) or ()),
+            # Part of prior_commission, not on top of it.
+            "prior_complimentary": prior_complimentary.get(key, 0),
+            "prior_complimentary_count": prior_complimentary_count.get(key, 0),
         }
     return result
 
@@ -5856,6 +5883,8 @@ def stats(
         p["prior_paid"]        = int(cf.get("prior_paid") or 0)
         p["prior_recoveries"]  = int(cf.get("prior_recoveries") or 0)
         p["prior_months"]      = list(cf.get("prior_months") or [])
+        p["prior_complimentary"] = int(cf.get("prior_complimentary") or 0)
+        p["prior_complimentary_count"] = int(cf.get("prior_complimentary_count") or 0)
 
         # ── April & May 2026: treat as fully settled for all handlers ──
         if month in ("2026-04", "2026-05"):
@@ -5870,6 +5899,8 @@ def stats(
             p["prior_paid"] = 0
             p["prior_recoveries"] = 0
             p["prior_months"] = []
+            p["prior_complimentary"] = 0
+            p["prior_complimentary_count"] = 0
 
         # Backwards-compat aliases so older client bundles keep rendering
         # something sensible until the next refresh:
@@ -5911,6 +5942,8 @@ def stats(
             p["prior_paid"] = 0
             p["prior_recoveries"] = 0
             p["prior_months"] = []
+            p["prior_complimentary"] = 0
+            p["prior_complimentary_count"] = 0
             p["earnings_total"] = 0
             p["deductions_total"] = 0
             p["net_earning"] = 0

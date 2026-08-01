@@ -106,3 +106,75 @@ describe("opening balance states its reason", () => {
     expect(chip.getAttribute("title")).toContain("Earned ₹45,000");
   });
 });
+
+// A profile closure grants the closure admin a complimentary amount, sometimes
+// on another handler's candidate. Calling that "unpaid commission" tells the
+// wrong story, so the label names it.
+describe("opening balance made of an unpaid closure complimentary", () => {
+  const CLOSURE = {
+    ...THRILOK,
+    prior_owed: 50000,
+    prior_paid: 45000,
+    prior_balance: 5000,
+    prior_complimentary: 5000,
+    prior_complimentary_count: 1,
+  };
+
+  it("calls it a profile-closure complimentary, not generic arrears", async () => {
+    const { opening } = await openRow(CLOSURE);
+    expect(opening.textContent).toContain("unpaid profile-closure complimentary from Jun 2026");
+    expect(opening.textContent).not.toMatch(/^.*\bunpaid from\b/);
+  });
+
+  it("names the complimentary amount in the hover detail", async () => {
+    const { opening } = await openRow(CLOSURE);
+    expect(opening.querySelector(".earn-summary-note").getAttribute("title")).toBe(
+      "Earned ₹50,000 · incl. ₹5,000 profile-closure complimentary · paid ₹45,000 before Jul 2026",
+    );
+  });
+
+  it("marks it visually as a different kind of debt", async () => {
+    const { opening } = await openRow(CLOSURE);
+    expect(opening.querySelector(".earn-summary-note--complimentary")).not.toBeNull();
+  });
+
+  it("counts multiple closures in the detail", async () => {
+    const { opening } = await openRow({
+      ...CLOSURE,
+      prior_complimentary: 10000,
+      prior_complimentary_count: 2,
+      prior_owed: 55000,
+      prior_balance: 10000,
+      net_payable: 10000,
+    });
+    expect(opening.querySelector(".earn-summary-note").getAttribute("title")).toContain(
+      "incl. ₹10,000 profile-closure complimentary (2 closures)",
+    );
+  });
+
+  it("stays generic when the balance exceeds the complimentary granted", async () => {
+    const { opening } = await openRow({
+      ...CLOSURE,
+      prior_owed: 70000,
+      prior_balance: 25000,
+      net_payable: 25000,
+    });
+    expect(opening.textContent).toContain("unpaid from Jun 2026");
+    expect(opening.textContent).not.toContain("profile-closure complimentary from");
+    // The complimentary is still disclosed, just not claimed as the whole reason.
+    expect(opening.querySelector(".earn-summary-note").getAttribute("title")).toContain(
+      "incl. ₹5,000 profile-closure complimentary",
+    );
+    expect(opening.querySelector(".earn-summary-note--complimentary")).toBeNull();
+  });
+
+  it("does not call an overpayment a complimentary", async () => {
+    const { opening } = await openRow({
+      ...CLOSURE,
+      prior_paid: 55000,
+      prior_balance: -5000,
+      net_payable: -5000,
+    });
+    expect(opening.textContent).toContain("overpaid in Jun 2026");
+  });
+});
