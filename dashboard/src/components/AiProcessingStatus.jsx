@@ -79,9 +79,13 @@ function useRotatingMessage(active, messages, reducedMotion) {
   return messages[Math.min(index, messages.length - 1)] || "";
 }
 
+export const MODE_LABELS = { "ocr+ai": "OCR + AI", ai: "AI only" };
+
 export default function AiProcessingStatus({
   state = "processing",
   variant = "card",
+  /** "ocr+ai" | "ai" — which engine is reading the file. Omit to hide. */
+  mode = null,
   title = "AI processing",
   message,
   messages = AI_STAGE_MESSAGES,
@@ -105,10 +109,12 @@ export default function AiProcessingStatus({
     typeof progress === "number" && Number.isFinite(progress) && progress >= 0;
   const clamped = hasRealProgress ? Math.min(100, Math.max(0, progress)) : null;
 
+  const modeLabel = mode ? MODE_LABELS[mode] || null : null;
+
   // Announce politely: this is status, never an interruption.
   const ariaLabel = useMemo(
-    () => [title, copy.label, detail].filter(Boolean).join(" — "),
-    [title, copy.label, detail],
+    () => [title, modeLabel, copy.label, detail].filter(Boolean).join(" — "),
+    [title, modeLabel, copy.label, detail],
   );
 
   const classes = [
@@ -145,7 +151,15 @@ export default function AiProcessingStatus({
       </span>
 
       <span className="aips__body">
-        {variant === "card" && <span className="aips__title">{title}</span>}
+        {variant === "card" && (
+          <span className="aips__title">
+            {title}
+            {modeLabel && <span className="aips__mode">{modeLabel}</span>}
+          </span>
+        )}
+        {variant !== "card" && modeLabel && (
+          <span className="aips__mode aips__mode--inline">{modeLabel}</span>
+        )}
         <span className="aips__message">{detail || copy.label}</span>
         {hasRealProgress && (
           <span

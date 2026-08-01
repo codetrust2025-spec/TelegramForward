@@ -64,6 +64,21 @@ GitHub `main` must remain protected with no direct pushes or force-pushes, admin
 
 Never commit or overwrite `.env`/secrets, credentials, uploads/resumes/evidence, databases, sessions, logs, caches, temporary/runtime JSON, queues/workers, backups, rollback archives, or forensic evidence. Use sanitized templates and fixtures; Production values never appear in source, tests, commits, PRs, screenshots, commands, or reports.
 
+### AI and OCR features
+
+Any feature that reads an image or document through Ollama or OCR must:
+
+- ask `core.ocr_policy.ocr_enabled()` before executing Tesseract, and never keep
+  a private fallback path — a hidden fallback makes "OCR off" untrue;
+- surface progress through the shared `AiProcessingStatus` component rather than
+  a bespoke spinner, passing the active mode so a user can see whether OCR or AI
+  alone produced the result;
+- degrade to a friendly message with retry or manual entry when the model fails,
+  never a raw transport or parser error.
+
+The global switch is admin-only, persisted, and audited. Turning it off disables
+OCR across the whole project; only `core.ocr_policy` may resolve it.
+
 ## 4. Architecture invariants
 
 - Accounts and workers remain isolated.

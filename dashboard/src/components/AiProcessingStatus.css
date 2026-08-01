@@ -158,3 +158,39 @@
 .aips--still .aips__ring,
 .aips--still .aips__trail::after { animation: none; }
 .aips--still .aips__check { stroke-dashoffset: 0; }
+
+/* Which engine is reading the file. Shown so a user can tell why a result
+   differs after an admin flips the global OCR switch. */
+.aips__mode {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--aips-accent);
+  background: var(--aips-accent-soft);
+  color: var(--aips-accent);
+  font-size: var(--text-xs, 10px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.aips__mode--inline { margin-left: 0; margin-top: 2px; align-self: flex-start; }
+
+/* Admin OCR switch */
+.ocr-policy__mode {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: var(--text-xs, 10px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid #7c9cff;
+  background: rgba(124, 156, 255, 0.16);
+  color: #7c9cff;
+}
+.ocr-policy__mode[data-mode="ai"] { border-color: #fbbf24; background: rgba(251, 191, 36, 0.16); color: #fbbf24; }
+.ocr-policy__notice { display: block; margin-top: 6px; color: #4ade80; font-size: var(--text-md, 12px); }
+.ocr-policy__error { display: block; margin-top: 6px; color: #f87171; font-size: var(--text-md, 12px); }
