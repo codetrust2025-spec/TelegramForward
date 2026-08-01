@@ -1800,6 +1800,7 @@ function G8() {
     expected_payment: String(Cu),
     follow_up: "",
     date: new Date().toISOString().slice(0, 10),
+    closure_date: "",
     time: "",
     expenses: "",
     notes: "",
@@ -1829,6 +1830,7 @@ function K8(e) {
       : String(os(r, t, n)),
     follow_up: e.follow_up || "",
     date: e.date || "",
+    closure_date: e.closure_date || "",
     time: e.time || "",
     expenses: e.expenses || "",
     notes: e.notes || "",
@@ -2332,6 +2334,22 @@ function X8({
                 onChange={(C) => g("date", C.target.value)}
               />
             </label>
+            {l.stage === "completed" && (
+              <label className="cand-field">
+                <span className="cand-field-label">Closure date</span>
+                <input
+                  className="cand-input"
+                  type="date"
+                  value={l.closure_date || ""}
+                  onChange={(C) => g("closure_date", C.target.value)}
+                />
+                <span className="cand-field-hint">
+                  Recorded automatically when the stage was set to Completed. The
+                  ₹5,000 profile-closure complimentary counts in this month —
+                  correct the date if the profile actually closed on another day.
+                </span>
+              </label>
+            )}
             {l.service_type === "profile_service" && (
               <label className="cand-field">
                 <span className="cand-field-label">

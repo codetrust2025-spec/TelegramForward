@@ -353,6 +353,12 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _today_iso_date() -> str:
+    """Local calendar date. Payout months follow the operator's calendar, not
+    UTC — a closure logged late on the 31st belongs to that month."""
+    return datetime.now().strftime("%Y-%m-%d")
+
+
 def canonical_technology(tech: str) -> str:
     """Merge spelling variants (e.g. React Js vs React JS) for roster grouping."""
     raw = (tech or "").strip()
@@ -1056,6 +1062,9 @@ _ALLOWED_FIELDS = {
     "consultancy", "bgv_certificates", "ctc_percentage",
     "payment", "expected_payment", "follow_up",
     "date", "logged_date", "time", "time_end", "expenses", "notes",
+    # Auto-stamped when a profile is marked completed; patchable so an operator
+    # can correct a closure that was recorded on the wrong day.
+    "closure_date",
     "telegram_slot", "telegram_user_id",
     "service_type", "interview_scope",
     "slot_confirmed",
@@ -1363,11 +1372,46 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         out["stage"] = "in_progress"
     if out["task"] not in VALID_TASKS:
         out["task"] = "not_started"
+    # ── Closure date ──
+    # The profile-closure complimentary is earned on the day a profile actually
+    # closes, which can fall in a different month from the day the lead was
+    # registered. Stamp the date when the stage becomes "completed" and keep it
+    # stable across later edits; clear it if the profile reopens, so that a
+    # re-closure records the date it really happened rather than the first one.
+    was_completed = str((existing or {}).get("stage") or "").strip().lower() == "completed"
+    supplied = _clean_str(record.get("closure_date"))[:10] if "closure_date" in record else ""
+    recorded = _clean_str(base.get("closure_date"))[:10]
+    if out["stage"] == "completed":
+        if len(supplied) == 10:
+            # An operator corrected the date; take it and re-stamp the audit time.
+            out["closure_date"] = supplied
+            out["closure_recorded_at"] = _now_iso()
+        elif was_completed and len(recorded) == 10:
+            out["closure_date"] = recorded
+            out["closure_recorded_at"] = _clean_str(base.get("closure_recorded_at"))
+        else:
+            out["closure_date"] = _today_iso_date()
+            out["closure_recorded_at"] = _now_iso()
+    else:
+        out["closure_date"] = ""
+        out["closure_recorded_at"] = ""
     logged = (out.get("logged_date") or "").strip()[:10]
     day = (out.get("date") or "").strip()[:10]
     if len(logged) != 10 and len(day) == 10 and (not existing or "date" in record):
         out["logged_date"] = day
     return out
+
+
+def _row_closure_month(row: dict) -> str:
+    """Month a profile closed, for attributing closure complimentary amounts.
+
+    Falls back to the registration month for rows closed before closure dates
+    were recorded, so no historical figure moves when this is introduced.
+    """
+    closed = _clean_str(row.get("closure_date"))[:10]
+    if len(closed) >= 7 and closed[4] == "-":
+        return closed[:7]
+    return _row_display_month(row)
 
 
 def _row_lead_date(row: dict) -> str:
@@ -1433,6 +1477,8 @@ def _with_computed(row: dict) -> dict:
     enriched["balance_due"] = balance
     enriched["payment_status"] = status
     enriched["needs_followup"] = balance > 0
+    enriched["closure_date"] = _clean_str(row.get("closure_date"))[:10]
+    enriched["closure_month"] = _row_closure_month(row)
     base_commission = referrer_commission_amount(row)
     referrer_bonus = referrer_complimentary_amount(row)
     admin_bonus = admin_complimentary_amount(row)
@@ -5359,6 +5405,10 @@ def _carry_forward_balances(
             prior_complimentary_count[comp_key] = (
                 prior_complimentary_count.get(comp_key, 0) + 1
             )
+            # Credit the month the profile actually closed, so the reason shown
+            # against an opening balance names the closure month rather than
+            # the month the lead happened to be registered in.
+            _note_month(comp_key, _row_closure_month(r))
 
     # ── Cumulative salary from prior months ──
     prior_salary: dict[str, int] = {}
