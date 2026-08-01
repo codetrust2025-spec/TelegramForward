@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Spinner } from '../Loader.jsx'
 import { SubmitSlotFileDrop } from './SubmitSlotFileDrop.jsx'
+import { TwelveHourTimePicker } from './TwelveHourTimePicker.jsx'
 
 const API_BASE = typeof window !== 'undefined' && window.location.port === '3000'
   ? ''
@@ -86,7 +87,7 @@ function normalizeTo12h(val) {
 }
 
 /** Convert 12h "02:00 PM" to 24h "14:00" for native inputs or submission */
-function to24h(val) {
+export function to24h(val) {
   if (!val) return ''
   val = val.trim()
   // Already 24h?
@@ -945,20 +946,16 @@ export function SubmitSlotPage() {
                   )}
                   <div className="sbs-manual__grid">
                     <label className="sbs-field"><span className="sbs-label">Interview date</span><input ref={manualDateRef} className="sbs-input" type="date" value={manualDate || parsedSlot?.date || ''} onChange={e => { setManualDate(e.target.value); setUserEditedFields(f => ({...f, date: true})); if (e.target.value && (manualTime || parsedSlot?.time)) clearValidationError('invite_datetime') }} disabled={busy || parsing} /></label>
-                    <label className="sbs-field">
+                    <div className="sbs-field">
                       <span className="sbs-label">Start time</span>
-                      <input
+                      <TwelveHourTimePicker
                         ref={manualTimeRef}
-                        className="sbs-input sbs-time-input"
-                        type="time"
-                        step="300"
-                        aria-label="Start time"
-                        value={to24h(manualTime || parsedSlot?.time || '')}
-                        onChange={e => { setManualTime(e.target.value); setUserEditedFields(f => ({...f, time: true})); if (e.target.value && (manualDate || parsedSlot?.date)) clearValidationError('invite_datetime') }}
+                        value={manualTime || parsedSlot?.time || ''}
+                        onChange={value => { setManualTime(value); setUserEditedFields(f => ({...f, time: true})); if (value && (manualDate || parsedSlot?.date)) clearValidationError('invite_datetime') }}
                         disabled={busy || parsing}
                       />
-                      <span className="sbs-hint">Tap the clock to choose the interview time.</span>
-                    </label>
+                      <span className="sbs-hint">Choose the hour, minutes, and AM or PM.</span>
+                    </div>
                   </div>
                   {inlineError('invite_datetime')}
                 </div>

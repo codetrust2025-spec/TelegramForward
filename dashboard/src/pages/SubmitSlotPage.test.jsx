@@ -3,7 +3,7 @@ import React from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { SubmitSlotPage } from './SubmitSlotPage.jsx'
+import { SubmitSlotPage, to24h } from './SubmitSlotPage.jsx'
 
 function jsonResponse(payload) {
   return Promise.resolve({
@@ -15,6 +15,11 @@ function jsonResponse(payload) {
 }
 
 describe('Book Interview Slot flow', () => {
+  it('converts the displayed 12-hour selection to the existing API format', () => {
+    expect(to24h('02:15 PM')).toBe('14:15')
+    expect(to24h('12:05 AM')).toBe('00:05')
+  })
+
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn(url => {
       if (String(url).includes('/public/slots/booked')) {
@@ -126,12 +131,14 @@ describe('Book Interview Slot flow', () => {
       target: { files: [invite] },
     })
 
-    const timeInput = await screen.findByLabelText('Start time')
-    expect(timeInput).toHaveAttribute('type', 'time')
-    expect(timeInput).toHaveAttribute('step', '300')
-    expect(timeInput).toHaveValue('13:30')
+    const timePicker = await screen.findByRole('button', { name: 'Start time: 1:30 PM' })
+    expect(container.querySelector('input[type="time"]')).not.toBeInTheDocument()
 
-    fireEvent.change(timeInput, { target: { value: '14:15' } })
-    expect(timeInput).toHaveValue('14:15')
+    fireEvent.click(timePicker)
+    expect(screen.getByRole('dialog', { name: 'Choose start time' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '2 hour' }))
+    fireEvent.click(screen.getByRole('button', { name: '15 minutes' }))
+    expect(screen.getByRole('button', { name: 'Start time: 2:15 PM' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'PM' })).toHaveAttribute('aria-pressed', 'true')
   })
 })
