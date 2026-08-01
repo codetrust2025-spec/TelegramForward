@@ -14,9 +14,11 @@ from core import public_slot_api as api
 NGINX_PROXY_READ_TIMEOUT = 300
 
 
-def test_default_timeout_is_ninety_seconds(monkeypatch):
+def test_default_timeout_is_two_hundred_and_forty_seconds(monkeypatch):
+    """90s cut the vision model off mid-work; 240s still beats the proxy."""
     monkeypatch.delenv("INVITE_EXTRACTION_TIMEOUT", raising=False)
-    assert api.invite_extraction_timeout_seconds() == 90
+    assert api.invite_extraction_timeout_seconds() == 240
+    assert api.invite_extraction_timeout_seconds() < NGINX_PROXY_READ_TIMEOUT
 
 
 def test_timeout_is_configurable(monkeypatch):
@@ -36,7 +38,7 @@ def test_timeout_is_clamped_below_the_proxy_timeout(monkeypatch, value):
 @pytest.mark.parametrize("value", ["", "abc", "0", "-5", "  "])
 def test_invalid_timeout_falls_back_to_the_default(monkeypatch, value):
     monkeypatch.setenv("INVITE_EXTRACTION_TIMEOUT", value)
-    assert api.invite_extraction_timeout_seconds() == 90
+    assert api.invite_extraction_timeout_seconds() == 240
 
 
 def test_fallback_payload_is_sanitized_and_requires_manual_entry():
@@ -94,7 +96,7 @@ def test_model_timeout_never_outlives_the_endpoint_budget(monkeypatch):
 
     monkeypatch.setenv("OLLAMA_TIMEOUT", "900")
     monkeypatch.delenv("INVITE_EXTRACTION_TIMEOUT", raising=False)
-    assert extract._invite_model_timeout() == 90
+    assert extract._invite_model_timeout() == 240
 
     monkeypatch.setenv("INVITE_EXTRACTION_TIMEOUT", "120")
     assert extract._invite_model_timeout() == 120
@@ -119,3 +121,30 @@ def test_model_timeout_stays_under_the_proxy_limit(monkeypatch):
         else:
             monkeypatch.delenv("INVITE_EXTRACTION_TIMEOUT", raising=False)
         assert extract._invite_model_timeout() < NGINX_PROXY_READ_TIMEOUT
+
+
+def test_endpoint_and_model_budgets_agree(monkeypatch):
+    """A mismatch would let one layer abandon work the other is still doing."""
+    from features import ollama_invite_extract as extract
+
+    monkeypatch.setenv("OLLAMA_TIMEOUT", "900")
+    for value in ["", "120", "240", "9999", "abc"]:
+        if value:
+            monkeypatch.setenv("INVITE_EXTRACTION_TIMEOUT", value)
+        else:
+            monkeypatch.delenv("INVITE_EXTRACTION_TIMEOUT", raising=False)
+        endpoint = api.invite_extraction_timeout_seconds()
+        model = extract._invite_model_timeout()
+        assert model <= endpoint, f"model {model} outlives endpoint {endpoint}"
+        assert endpoint < NGINX_PROXY_READ_TIMEOUT
+        assert model < NGINX_PROXY_READ_TIMEOUT
+
+
+def test_no_model_work_outlives_the_endpoint_budget(monkeypatch):
+    """asyncio.to_thread cannot be cancelled, so the model call must self-bound."""
+    from features import ollama_invite_extract as extract
+
+    monkeypatch.setenv("OLLAMA_TIMEOUT", "900")
+    monkeypatch.delenv("INVITE_EXTRACTION_TIMEOUT", raising=False)
+    assert extract._invite_model_timeout() == 240
+    assert extract._invite_model_timeout() <= api.invite_extraction_timeout_seconds()

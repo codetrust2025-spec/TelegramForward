@@ -48,7 +48,9 @@ def _invite_model_timeout() -> int:
     except (TypeError, ValueError):
         budget = 0
     if budget <= 0:
-        budget = 90
+        # Mirrors INVITE_EXTRACTION_TIMEOUT_DEFAULT; both must stay under the
+        # 300s proxy read timeout so the app answers before Nginx does.
+        budget = 240
     # Mirror the endpoint's own ceiling so an over-large override cannot push
     # the model call back past the proxy read timeout.
     budget = min(budget, 240)
