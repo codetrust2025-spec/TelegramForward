@@ -777,11 +777,13 @@ def extract_interview_invite_with_ollama(
     # Fail closed: a single parser or model cannot authorize an automatic
     # booking. OCR/text and vision must independently agree on date + start.
     extracted["auto_booking_safe"] = False
-    if (
-        ocr_candidate
-        and _date_time_agree(ocr_candidate, extracted)
-        and _timezone_agrees(ocr_candidate, extracted)
-    ):
+    date_time_agree = bool(
+        ocr_candidate and _date_time_agree(ocr_candidate, extracted)
+    )
+    timezone_agrees = bool(
+        ocr_candidate and _timezone_agrees(ocr_candidate, extracted)
+    )
+    if date_time_agree and timezone_agrees:
         extracted["auto_booking_safe"] = True
         extracted["manual_fields_required"] = False
         extracted["confidence_score"] = 95
@@ -802,7 +804,7 @@ def extract_interview_invite_with_ollama(
         extracted["confidence_score"] = 0
         extracted["manual_fields_required"] = True
         extracted["failure_stage"] = "cross_source_verification"
-        if ocr_candidate:
+        if ocr_candidate and not date_time_agree:
             extracted["verification_conflict"] = {
                 "ocr": {
                     "interview_date": ocr_candidate.get("interview_date", ""),
@@ -817,15 +819,34 @@ def extract_interview_invite_with_ollama(
                     ),
                 },
             }
-        extracted.setdefault("warnings", []).append(
-            "OCR and AI did not independently agree on the booking date/time. "
-            "Automatic booking is blocked; enter the fields manually."
-        )
-        extracted["failure_reason"] = (
-            "OCR and vision returned different date or start-time values."
-            if ocr_candidate
-            else "OCR did not independently extract a supported date and start time."
-        )
+            extracted.setdefault("warnings", []).append(
+                "OCR and AI did not independently agree on the booking date/time. "
+                "Automatic booking is blocked; enter the fields manually."
+            )
+            extracted["failure_reason"] = (
+                "OCR and vision returned different date or start-time values."
+            )
+        elif ocr_candidate:
+            # Date/start agreement is not a conflict. Keep the fail-closed
+            # manual path, but report the actual missing safety evidence so
+            # the UI does not display two identical values as a mismatch.
+            extracted.pop("verification_conflict", None)
+            extracted.setdefault("warnings", []).append(
+                "OCR and AI did not independently agree on a supported timezone. "
+                "Automatic booking is blocked; enter the fields manually."
+            )
+            extracted["failure_reason"] = (
+                "OCR and vision agreed on the date and start time, but did not "
+                "independently agree on a supported timezone."
+            )
+        else:
+            extracted.setdefault("warnings", []).append(
+                "OCR did not independently confirm a supported date and start time. "
+                "Automatic booking is blocked; enter the fields manually."
+            )
+            extracted["failure_reason"] = (
+                "OCR did not independently extract a supported date and start time."
+            )
     
     return validate_invite_extraction(extracted)
 
