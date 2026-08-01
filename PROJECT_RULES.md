@@ -20,6 +20,8 @@ This is the single authoritative policy for TelegramForward. It governs humans, 
 - Merge approval and deployment approval are separate.
 - Never deploy a branch, dirty tree, local patch, or uncommitted file.
 
+GitHub `main` must remain protected with no direct pushes or force-pushes, administrator enforcement, at least one approving review, stale-review dismissal, resolved review conversations, a strict up-to-date requirement, and passing `Backend tests` and `Frontend tests` status checks.
+
 ## 3. Protected data
 
 Never commit or overwrite `.env`/secrets, credentials, uploads/resumes/evidence, databases, sessions, logs, caches, temporary/runtime JSON, queues/workers, backups, rollback archives, or forensic evidence. Use sanitized templates and fixtures; Production values never appear in source, tests, commits, PRs, screenshots, commands, or reports.
@@ -75,6 +77,7 @@ Never commit or overwrite `.env`/secrets, credentials, uploads/resumes/evidence,
 ## 9. Deployment
 
 - Deploy only the exact reviewed GitHub `main` commit from a clean artifact.
+- Deployment automation must fail unless the target commit exactly equals the merged `origin/main` commit; it must never deploy a feature branch or PR head.
 - Use immutable `/opt/telegramforward/releases/<commit>/` directories and atomic `/opt/telegramforward/current`.
 - Keep the previous verified release and verify a restorable backup first.
 - Preserve all protected runtime paths outside releases.

@@ -74,6 +74,15 @@ A PR includes the problem, intended behavior, implementation, tests/builds, scre
 
 Merge normally through GitHub review. Do not bypass review with direct pushes.
 
+GitHub branch protection requires:
+
+- at least one approving review from someone other than the author;
+- dismissal of stale approvals when new commits change the reviewed diff;
+- all review conversations resolved;
+- required checks `Backend tests` and `Frontend tests` passing on the current head;
+- an up-to-date branch before merge;
+- no direct pushes, force-pushes, or deletion of `main`, including by administrators.
+
 ## Security reporting
 
 Do not put credentials, candidate data, payment evidence, session contents, or Production diagnostics in public issues. Notify the owner privately, rotate exposed credentials, and follow `RECOVERY.md`.

@@ -35,6 +35,7 @@ from scripts.prod_sync_common import (  # noqa: E402
     write_manifest,
     write_vps_deploy_marker,
 )
+from scripts.git_deploy_gate import require_git_pushed  # noqa: E402
 
 STATIC_DIR = REPO / "static"
 
@@ -88,13 +89,7 @@ def main() -> int:
         print("Set VPS_PASSWORD", file=sys.stderr)
         return 1
 
-    branch = git("rev-parse", "--abbrev-ref", "HEAD")
-    if branch != "main":
-        print(f"WARNING: not on main (on {branch})", file=sys.stderr)
-
-    dirty_before = git("status", "--porcelain")
-    if dirty_before and not args.no_commit:
-        print("Note: uncommitted changes will be included in deploy commit.")
+    require_git_pushed("main")
 
     # ── Build ──────────────────────────────────────────────────────────
     if not args.skip_build:
@@ -140,7 +135,10 @@ def main() -> int:
     if not args.skip_push:
         run(["git", "push", "origin", "main"], timeout=120)
 
-    head = git("rev-parse", "HEAD")
+    # Recheck after optional build/commit/push actions. This prevents local
+    # build output, feature branches, unreviewed commits, and stale main from
+    # reaching Production even if the initial preflight passed.
+    head = require_git_pushed("main")
     print(f"Deploying commit {head[:7]}...")
 
     # ── VPS: upload git-tracked tree (private repo — no git pull on VPS) ─

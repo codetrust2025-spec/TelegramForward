@@ -105,6 +105,9 @@ Stage explicit files rather than indiscriminately adding the repository.
 - Resolve findings with focused commits.
 - Do not rewrite reviewed history unless reviewers explicitly request it.
 - Merge normally without force-pushing.
+- Confirm the protected-branch checks named `Backend tests` and `Frontend tests` pass on the latest PR commit.
+- Obtain at least one approval from a reviewer other than the author and resolve every review conversation.
+- Never bypass branch protection or temporarily disable required checks to merge.
 
 ## 8. Synchronize after merge
 

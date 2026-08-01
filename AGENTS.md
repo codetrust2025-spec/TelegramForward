@@ -93,6 +93,8 @@ Templates contain placeholders or safe defaults only. Production values must not
 - Never deploy a dirty tree, local patch, or unreviewed branch.
 - Never claim a marker is authoritative unless it matches the running release and GitHub `main`.
 
+GitHub `main` is protected. Every change must use a Pull Request, obtain at least one approval, resolve review conversations, and pass the required `Backend tests` and `Frontend tests` checks. Never attempt to bypass, weaken, or temporarily disable these protections.
+
 ## Production prohibitions
 
 - Never deploy without explicit authorization and a verified, restorable backup.

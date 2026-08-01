@@ -51,13 +51,14 @@ All items must pass:
 1. Explicit deployment authorization exists.
 2. Local `main` is clean and equals `origin/main`.
 3. The target is the reviewed merge commit.
-4. Required GitHub checks, backend tests, frontend tests/build, and Python import/compile checks passed.
-5. Secret and runtime-data scans passed.
-6. The artifact was built from a clean checkout of the exact commit.
-7. Its manifest records commit, release ID, timestamp, operator, build hash, package hash, and critical file hashes.
-8. The previous release is identifiable and healthy.
-9. A backup outside `/opt/telegramforward` was created and verified.
-10. Rollback commands and the responsible operator are known.
+4. GitHub branch protection was satisfied, including an approving review and passing `Backend tests` and `Frontend tests` checks on the merged change.
+5. Backend tests, frontend tests/build, and Python import/compile checks passed for the exact release artifact.
+6. Secret and runtime-data scans passed.
+7. The artifact was built from a clean checkout of the exact commit.
+8. Its manifest records commit, release ID, timestamp, operator, build hash, package hash, and critical file hashes.
+9. The previous release is identifiable and healthy.
+10. A backup outside `/opt/telegramforward` was created and verified.
+11. Rollback commands and the responsible operator are known.
 
 Python lockfiles must be generated and verified on the target Linux platform. If they are absent, dependency reproducibility remains an explicit release blocker or documented risk. Frontend installs use `dashboard/package-lock.json` with `npm ci`.
 

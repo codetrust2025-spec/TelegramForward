@@ -48,6 +48,8 @@ Application/frontend source, migrations, dependency declarations/locks, sanitize
 
 Keep Production and GitHub `main` untouched until explicit merge/deployment approval.
 
+Recovery work does not waive branch protection. Recovery branches still require the protected `main` Pull Request, independent approval, resolved conversations, and required passing checks. Any emergency protection change must be separately authorized, time-bounded, logged, restored immediately, and reviewed afterward.
+
 ## Data restoration
 
 Verify inventory and checksums before restoring. Restore to an isolated location first whenever possible.
