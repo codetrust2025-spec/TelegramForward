@@ -12,7 +12,8 @@ flowchart LR
     T --> C[Commit]
     C --> P[Push]
     P --> PR[Pull Request]
-    PR --> RV[Review]
+    PR --> CI[Required CI]
+    CI --> RV[Optional review]
     RV --> M[Merge to main]
     M --> BK[Verify backup]
     BK --> DP[Deploy exact merge commit]
@@ -72,7 +73,7 @@ npm test
 npm run build
 ```
 
-Documentation-only changes also run the standard backend and frontend suites, plus link, command, formatting, policy-consistency, and `git diff --check` validation. A missing toolchain or infrastructure failure must be reported and resolved or explicitly waived during review; it must not be silently skipped.
+Documentation-only changes also run the standard backend and frontend suites, plus link, command, formatting, policy-consistency, and `git diff --check` validation. A missing toolchain or infrastructure failure must be reported and resolved or explicitly documented in the Pull Request; it must not be silently skipped.
 
 ## 5. Review the diff
 
@@ -97,17 +98,17 @@ git push -u origin <branch>
 
 Stage explicit files rather than indiscriminately adding the repository.
 
-## 7. Pull Request and review
+## 7. Pull Request, required CI, and optional review
 
 - Open a PR into `main`.
 - Include requirements, behavior, tests, risks, screenshots, and rollback notes.
-- Wait for required checks and review.
-- Resolve findings with focused commits.
+- Wait for the required checks. Independent review is optional for this single-owner repository.
+- If review occurs, resolve findings with focused commits and resolve every conversation.
 - Do not rewrite reviewed history unless reviewers explicitly request it.
 - Merge normally without force-pushing.
 - Confirm the protected-branch checks named `Backend tests` and `Frontend tests` pass on the latest PR commit.
-- Obtain at least one approval from a reviewer other than the author and resolve every review conversation.
-- Never bypass branch protection or temporarily disable required checks to merge.
+- Merge only after the Pull Request is up to date and both required checks pass.
+- Never bypass branch protection or temporarily disable the Pull Request or required checks to merge.
 
 ## 8. Synchronize after merge
 

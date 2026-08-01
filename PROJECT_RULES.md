@@ -4,7 +4,7 @@ This is the single authoritative policy for TelegramForward. It governs humans, 
 
 ## 1. Source of truth
 
-- Reviewed GitHub `main` is canonical application source.
+- Pull-Request-merged, CI-validated GitHub `main` is canonical application source.
 - Production runtime data is operational data, not source code.
 - Build artifacts are valid only when tied reproducibly to an exact Git commit.
 - Production markers/manifests are evidence, not substitutes for Git.
@@ -12,15 +12,15 @@ This is the single authoritative policy for TelegramForward. It governs humans, 
 
 ## 2. Mandatory lifecycle
 
-`Requirements -> Feature branch from main -> Development -> Backend/Frontend tests -> Commit -> Push -> Pull Request -> Review -> Merge to main -> Backup verification -> Production deployment -> Verification -> Monitoring`
+`Requirements -> Feature branch from main -> Development -> Backend/Frontend tests -> Commit -> Push -> Pull Request -> Required CI -> Optional review -> Merge to main -> Backup verification -> Production deployment -> Verification -> Monitoring`
 
 - Never develop, commit, or push directly on `main`.
 - Never force-push or rewrite shared history.
-- Never bypass PR review.
-- Merge approval and deployment approval are separate.
+- Never bypass the Pull Request or required CI checks.
+- Pull Request merge and deployment approval are separate.
 - Never deploy a branch, dirty tree, local patch, or uncommitted file.
 
-GitHub `main` must remain protected with no direct pushes or force-pushes, administrator enforcement, at least one approving review, stale-review dismissal, resolved review conversations, a strict up-to-date requirement, and passing `Backend tests` and `Frontend tests` status checks.
+GitHub `main` must remain protected with no direct pushes or force-pushes, administrator enforcement, a strict up-to-date requirement, and passing `Backend tests` and `Frontend tests` status checks. Independent approval is optional for this single-owner repository. If review occurs, all review conversations must be resolved before merge.
 
 ## 3. Protected data
 
@@ -76,7 +76,7 @@ Never commit or overwrite `.env`/secrets, credentials, uploads/resumes/evidence,
 
 ## 9. Deployment
 
-- Deploy only the exact reviewed GitHub `main` commit from a clean artifact.
+- Deploy only the exact Pull-Request-merged, CI-validated GitHub `main` commit from a clean artifact.
 - Deployment automation must fail unless the target commit exactly equals the merged `origin/main` commit; it must never deploy a feature branch or PR head.
 - Use immutable `/opt/telegramforward/releases/<commit>/` directories and atomic `/opt/telegramforward/current`.
 - Keep the previous verified release and verify a restorable backup first.
@@ -103,4 +103,4 @@ Never commit or overwrite `.env`/secrets, credentials, uploads/resumes/evidence,
 - `ARCHITECTURE.md` is technical documentation and does not override policy.
 - Older operational docs are historical unless they explicitly defer to this manual set.
 
-Changes to these rules require a dedicated reviewed PR. Emergency pressure, convenience, or tool limitations do not waive them.
+Changes to these rules require a dedicated Pull Request with passing required CI. Independent review is optional for this single-owner repository. Emergency pressure, convenience, or tool limitations do not waive the Pull Request or CI gates.

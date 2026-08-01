@@ -4,7 +4,7 @@ This is the authoritative Production deployment policy. Legacy guides and script
 
 ## Principles
 
-- Production is built only from committed, reviewed GitHub `main` code.
+- Production is built only from committed, Pull-Request-merged, CI-validated GitHub `main` code.
 - The deployed commit exactly equals `origin/main`.
 - Builds occur in a disposable clean checkout, never a developer worktree.
 - Releases are immutable and stored in versioned directories.
@@ -42,7 +42,7 @@ Each release links to required protected runtime paths; it never contains copies
 
 ## Authorization
 
-The change owner prepares the reviewed PR, the reviewer validates behavior and rollback, the release operator verifies backup and deployment evidence, and the incident owner decides rollback. Merge approval is not deployment approval.
+The change owner prepares the Pull Request and validates behavior and rollback; independent review is optional for this single-owner repository. The release operator verifies backup and deployment evidence, and the incident owner decides rollback. Pull Request merge is not deployment approval.
 
 ## Pre-deployment gate
 
@@ -50,8 +50,8 @@ All items must pass:
 
 1. Explicit deployment authorization exists.
 2. Local `main` is clean and equals `origin/main`.
-3. The target is the reviewed merge commit.
-4. GitHub branch protection was satisfied, including an approving review and passing `Backend tests` and `Frontend tests` checks on the merged change.
+3. The target is the Pull-Request-merged commit on `origin/main`.
+4. GitHub branch protection was satisfied, including passing `Backend tests` and `Frontend tests` checks on the merged change. Independent review is optional.
 5. Backend tests, frontend tests/build, and Python import/compile checks passed for the exact release artifact.
 6. Secret and runtime-data scans passed.
 7. The artifact was built from a clean checkout of the exact commit.

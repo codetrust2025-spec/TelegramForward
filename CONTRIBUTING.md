@@ -1,6 +1,6 @@
 # Contributing to TelegramForward
 
-All contributors, including maintainers and AI assistants, use the same review and safety process.
+All contributors, including maintainers and AI assistants, use the same Pull Request, CI, and safety process.
 
 ## Read first
 
@@ -64,24 +64,23 @@ Never develop on `main` and never force-push shared branches.
 
 ## Tests and quality gates
 
-Every change runs the complete backend and frontend suites before review. Behavior changes additionally require focused regression tests, import/compile checks for startup changes, and security review for authentication, payment, booking, PII, upload, and integration paths.
+Every change runs the complete backend and frontend suites before merge. Behavior changes additionally require focused regression tests, import/compile checks for startup changes, and security assessment for authentication, payment, booking, PII, upload, and integration paths.
 
 Baseline failures must be proven unrelated and documented. New failures block the change.
 
 ## Pull Requests
 
-A PR includes the problem, intended behavior, implementation, tests/builds, screenshots for UI changes, migration/rollback notes, security/data impact, limitations, and follow-up work. Reviewers verify requirements, regression coverage, and absence of protected runtime data.
+A PR includes the problem, intended behavior, implementation, tests/builds, screenshots for UI changes, migration/rollback notes, security/data impact, limitations, and follow-up work. The author verifies requirements, regression coverage, and absence of protected runtime data; an independent reviewer may additionally verify them.
 
-Merge normally through GitHub review. Do not bypass review with direct pushes.
+Merge normally through a GitHub Pull Request after required CI passes. Do not bypass the Pull Request with direct pushes.
 
 GitHub branch protection requires:
 
-- at least one approving review from someone other than the author;
-- dismissal of stale approvals when new commits change the reviewed diff;
-- all review conversations resolved;
 - required checks `Backend tests` and `Frontend tests` passing on the current head;
 - an up-to-date branch before merge;
 - no direct pushes, force-pushes, or deletion of `main`, including by administrators.
+
+Independent approval is optional for this single-owner repository. If review occurs, stale approvals are dismissed when the reviewed diff changes and all review conversations are resolved before merge.
 
 ## Security reporting
 
