@@ -8,6 +8,8 @@ import { SubmitSlotPage } from './SubmitSlotPage.jsx'
 function jsonResponse(payload) {
   return Promise.resolve({
     ok: true,
+    status: 200,
+    headers: { get: () => 'application/json' },
     json: () => Promise.resolve(payload),
   })
 }
@@ -94,5 +96,42 @@ describe('Book Interview Slot flow', () => {
       )
     })
     expect(screen.getAllByRole('alert')).toHaveLength(1)
+  })
+
+  it('uses a time-only picker for manually verified invite times', async () => {
+    fetch.mockImplementation(url => {
+      if (String(url).includes('/public/slots/extract-invite-ai')) {
+        return jsonResponse({
+          status: 'ok',
+          data: {
+            looks_like_interview_invite: true,
+            auto_booking_safe: true,
+            manual_fields_required: true,
+            interview_date: '2026-08-01',
+            start_time: '1:30 PM',
+            failure_reason: 'Enter the date and time shown in the invite.',
+          },
+        })
+      }
+      if (String(url).includes('/public/slots/booked')) {
+        return jsonResponse({ status: 'ok', slots: [] })
+      }
+      return jsonResponse({ status: 'ok', candidates: [] })
+    })
+
+    const { container } = render(<SubmitSlotPage />)
+    await screen.findByRole('button', { name: 'Profile service' })
+    const invite = new File(['invite'], 'invite.png', { type: 'image/png' })
+    fireEvent.change(container.querySelector('input[type="file"]'), {
+      target: { files: [invite] },
+    })
+
+    const timeInput = await screen.findByLabelText('Start time')
+    expect(timeInput).toHaveAttribute('type', 'time')
+    expect(timeInput).toHaveAttribute('step', '300')
+    expect(timeInput).toHaveValue('13:30')
+
+    fireEvent.change(timeInput, { target: { value: '14:15' } })
+    expect(timeInput).toHaveValue('14:15')
   })
 })
