@@ -185,3 +185,89 @@ def test_zero_movements_do_not_name_a_month(monkeypatch, tmp_path):
     carry = candidate_store._carry_forward_balances("2026-07")["thrilok"]
 
     assert "2026-01" not in carry["prior_months"]
+
+
+def test_reports_the_closure_complimentary_inside_a_carried_balance(
+    monkeypatch, tmp_path
+):
+    """A profile closure grants the closure admin a complimentary amount.
+
+    That grant can come from another handler's candidate, so a balance made of
+    it must be reported as complimentary rather than as ordinary arrears.
+    """
+    closure_row = _row("closure", "2026-06-20")
+    closure_row["reference"] = "Pavan Kalyan"
+    closure_row["stage"] = "completed"
+
+    _arrange(
+        monkeypatch,
+        tmp_path,
+        rows=[closure_row],
+        expenses=[],
+        salaries={},
+    )
+    monkeypatch.setattr(
+        candidate_store, "admin_complimentary_amount", lambda _r: 5_000
+    )
+    monkeypatch.setattr(
+        candidate_store, "referrer_complimentary_amount", lambda _r: 0
+    )
+    monkeypatch.setattr(
+        candidate_store,
+        "handler_earning_allocations",
+        lambda _r: {"pavan kalyan": 16_000, "thrilok": 5_000},
+    )
+
+    carry = candidate_store._carry_forward_balances("2026-07")["thrilok"]
+
+    assert carry["prior_complimentary"] == 5_000
+    assert carry["prior_complimentary_count"] == 1
+    assert carry["prior_balance"] == 5_000
+    # Complimentary is part of the commission figure, never added on top of it.
+    assert carry["prior_complimentary"] <= carry["prior_commission"]
+    assert (
+        carry["prior_owed"] - carry["prior_paid"] - carry["prior_recoveries"]
+        == carry["prior_balance"]
+    )
+
+
+def test_no_complimentary_reported_when_none_was_granted(monkeypatch, tmp_path):
+    _arrange(
+        monkeypatch,
+        tmp_path,
+        rows=[_row("june", "2026-06-15")],
+        expenses=[],
+        salaries=SALARY,
+    )
+    monkeypatch.setattr(
+        candidate_store, "admin_complimentary_amount", lambda _r: 0
+    )
+    monkeypatch.setattr(
+        candidate_store, "referrer_complimentary_amount", lambda _r: 0
+    )
+
+    carry = candidate_store._carry_forward_balances("2026-07")["thrilok"]
+
+    assert carry["prior_complimentary"] == 0
+    assert carry["prior_complimentary_count"] == 0
+
+
+def test_referrer_complimentary_is_credited_to_the_referrer(monkeypatch, tmp_path):
+    _arrange(
+        monkeypatch,
+        tmp_path,
+        rows=[_row("june", "2026-06-15")],
+        expenses=[],
+        salaries={},
+    )
+    monkeypatch.setattr(
+        candidate_store, "admin_complimentary_amount", lambda _r: 0
+    )
+    monkeypatch.setattr(
+        candidate_store, "referrer_complimentary_amount", lambda _r: 2_000
+    )
+
+    carry = candidate_store._carry_forward_balances("2026-07")["thrilok"]
+
+    assert carry["prior_complimentary"] == 2_000
+    assert carry["prior_complimentary_count"] == 1

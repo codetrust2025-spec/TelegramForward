@@ -249,14 +249,26 @@ export default function EarningsBreakdown({
               const priorPaid = Number(p.prior_paid) || 0;
               const priorRecoveries = Number(p.prior_recoveries) || 0;
               const priorMonths = Array.isArray(p.prior_months) ? p.prior_months : [];
+              const priorComplimentary = Number(p.prior_complimentary) || 0;
+              const priorComplimentaryCount = Number(p.prior_complimentary_count) || 0;
               const priorSpan = monthSpanLabel(priorMonths);
-              const openingReason = priorSpan
-                ? `${priorBalance > 0 ? "unpaid from" : "overpaid in"} ${priorSpan}`
+              const whenSuffix = priorSpan ? ` from ${priorSpan}` : " from earlier months";
+              // Profile-closure complimentary is granted on a candidate closing,
+              // sometimes on another handler's candidate, so "unpaid commission"
+              // is the wrong story for it. Name it whenever it is what is owed.
+              const balanceIsComplimentary =
+                priorBalance > 0 && priorComplimentary > 0 && priorBalance <= priorComplimentary;
+              const openingReason = balanceIsComplimentary
+                ? `unpaid profile-closure complimentary${whenSuffix}`
                 : priorBalance > 0
-                  ? "unpaid from earlier months"
-                  : "overpaid in earlier months";
+                  ? `unpaid${whenSuffix}`
+                  : `overpaid${priorSpan ? ` in ${priorSpan}` : " in earlier months"}`;
               const openingDetail = [
                 `Earned ${fmt(priorOwed)}`,
+                priorComplimentary > 0
+                  ? `incl. ${fmt(priorComplimentary)} profile-closure complimentary`
+                    + (priorComplimentaryCount > 1 ? ` (${priorComplimentaryCount} closures)` : "")
+                  : null,
                 `paid ${fmt(priorPaid)}`,
                 priorRecoveries > 0 ? `recovered ${fmt(priorRecoveries)}` : null,
               ]
@@ -374,7 +386,10 @@ export default function EarningsBreakdown({
                                       <span className="earn-summary-metric earn-summary-opening">
                                         <span className="earn-summary-label">Opening balance</span>
                                         <strong>{signedCurrency(priorBalance)}</strong>
-                                        <span className="earn-summary-note" title={openingDetail}>
+                                        <span
+                                          className={`earn-summary-note${balanceIsComplimentary ? " earn-summary-note--complimentary" : ""}`}
+                                          title={openingDetail}
+                                        >
                                           {openingReason}
                                         </span>
                                       </span>
