@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 from threading import Lock
 from typing import Any
 
@@ -13,6 +14,52 @@ from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 _booking_confirmation_lock = Lock()
+
+# Invite extraction must always answer with JSON. Nginx gives the app 300s
+# (proxy_read_timeout) before serving its own HTML 504, which the browser
+# cannot parse, so the application deadline is deliberately well below that.
+INVITE_EXTRACTION_TIMEOUT_DEFAULT = 90
+INVITE_EXTRACTION_TIMEOUT_CEILING = 240
+
+
+def invite_extraction_timeout_seconds() -> int:
+    """Seconds to wait for invite extraction before falling back to manual entry.
+
+    Configurable via INVITE_EXTRACTION_TIMEOUT, but always clamped below the
+    proxy read timeout so the proxy can never answer before the application.
+    """
+    raw = os.environ.get("INVITE_EXTRACTION_TIMEOUT", "")
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        value = INVITE_EXTRACTION_TIMEOUT_DEFAULT
+    if value <= 0:
+        value = INVITE_EXTRACTION_TIMEOUT_DEFAULT
+    return min(value, INVITE_EXTRACTION_TIMEOUT_CEILING)
+
+
+def _invite_extraction_fallback(warning: str) -> dict:
+    """Sanitized manual-entry payload. Creates no candidate and no booking."""
+    return {
+        "status": "ok",
+        "success": False,
+        "extraction_source": "error",
+        "data": {
+            "candidate_name": "",
+            "interview_date": "",
+            "start_time": "",
+            "end_time": "",
+            "interview_round": "",
+            "technology": "",
+            "meeting_platform": "",
+            "confidence_score": 0,
+            "missing_fields": ["interview_date", "start_time", "interview_round"],
+            "warnings": [warning],
+            "is_payment_screenshot": False,
+            "looks_like_interview_invite": True,
+            "manual_fields_required": True,
+        },
+    }
 
 
 def _json_error(message: str, status: int = 400, **extra: Any) -> JSONResponse:
@@ -180,30 +227,25 @@ def install_public_slot_routes(app) -> None:
         try:
             from features.ollama_invite_extract import extract_interview_invite_with_ollama
 
-            result = await asyncio.to_thread(extract_interview_invite_with_ollama, raw, mime)
+            # Bound the wait so this endpoint always answers with JSON. The
+            # extractor's own OLLAMA_TIMEOUT defaults to 900s, far beyond the
+            # 300s proxy read timeout, so a slow model used to let Nginx reply
+            # first with an HTML 504 that the browser could not parse as JSON.
+            result = await asyncio.wait_for(
+                asyncio.to_thread(extract_interview_invite_with_ollama, raw, mime),
+                timeout=invite_extraction_timeout_seconds(),
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "AI invite extraction exceeded %ss; returning manual-entry fallback",
+                invite_extraction_timeout_seconds(),
+            )
+            return _invite_extraction_fallback(
+                "Invite reading took too long. Retry or enter the date and time manually."
+            )
         except Exception as exc:
             logger.exception("AI invite extraction failed")
-            # Return graceful fallback
-            return {
-                "status": "ok",
-                "success": False,
-                "extraction_source": "error",
-                "data": {
-                    "candidate_name": "",
-                    "interview_date": "",
-                    "start_time": "",
-                    "end_time": "",
-                    "interview_round": "",
-                    "technology": "",
-                    "meeting_platform": "",
-                    "confidence_score": 0,
-                    "missing_fields": ["interview_date", "start_time", "interview_round"],
-                    "warnings": [f"AI extraction failed: {exc}. Use manual entry."],
-                    "is_payment_screenshot": False,
-                    "looks_like_interview_invite": True,
-                    "manual_fields_required": True,
-                },
-            }
+            return _invite_extraction_fallback(f"AI extraction failed: {exc}. Use manual entry.")
         
         is_success = bool(result and result.get("confidence_score", 0) > 0)
         if not result.get("auto_booking_safe"):
