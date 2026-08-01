@@ -20,6 +20,44 @@ This is the single authoritative policy for TelegramForward. It governs humans, 
 - Pull Request merge and deployment approval are separate.
 - Never deploy a branch, dirty tree, local patch, or uncommitted file.
 
+### Definition of done
+
+A task is complete only when the change is implemented, tested, built, merged to
+`main`, deployed to Production, and verified in Production. A merged Pull
+Request, a green CI run, or an opened Pull Request is progress, not completion.
+Work reported as done without Production verification is not done.
+
+A change that produces no Production artifact — documentation, repository
+policy, or CI configuration — is complete at merge, because there is nothing to
+deploy or verify. Everything that ships code or assets follows the full
+lifecycle.
+
+### Continuous delivery obligation
+
+Whoever owns a change — human or agent — carries it through the whole lifecycle
+without waiting for routine confirmation between gates: fix, tests, build, Pull
+Request, CI, merge, deploy, Production verification. Do not pause after opening
+or merging a Pull Request when deployment is otherwise permitted.
+
+This obligation never overrides the gates themselves. Required CI must pass,
+protected-branch settings stand, backups must be verified before deployment, and
+only the exact merged commit may be deployed.
+
+### Legitimate blockers
+
+Stop only for a real blocker:
+
+- failing CI or a failing deployment
+- missing permission, credential, or access
+- an approval this policy explicitly requires
+- unverified backup, data-loss risk, or destructive migration without rollback
+- ambiguous business behavior with materially different valid outcomes
+
+When blocked, state the blocker plainly, state exactly what is needed to clear
+it, and stop. Resume automatically once it is resolved. Routine test failures,
+lint errors, flaky tooling, and ordinary merge or build problems are not
+blockers; fix them and continue.
+
 GitHub `main` must remain protected with no direct pushes or force-pushes, administrator enforcement, a strict up-to-date requirement, and passing `Backend tests` and `Frontend tests` status checks. Independent approval is optional for this single-owner repository. If review occurs, all review conversations must be resolved before merge.
 
 ## 3. Protected data

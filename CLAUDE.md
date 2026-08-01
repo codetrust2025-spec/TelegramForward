@@ -24,6 +24,10 @@ Read `PROJECT_RULES.md`, `AGENTS.md`, `DEVELOPMENT_WORKFLOW.md`, and `CONTRIBUTI
 
 `Requirements -> Feature branch -> Development -> Tests -> Commit -> Push -> PR -> Required CI -> Optional review -> Merge -> Backup -> Deploy -> Verify -> Monitor`
 
+Run this through to the end without pausing between gates. A change is done only
+once deployed and verified in Production; see *Definition of done* and
+*Continuous delivery obligation* in `PROJECT_RULES.md`.
+
 ## Project invariants
 
 - `/bookings/confirm` is the only public booking creation boundary.

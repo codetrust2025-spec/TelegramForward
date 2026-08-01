@@ -2,6 +2,10 @@
 
 This document defines the mandatory lifecycle for every repository change. `PROJECT_RULES.md` contains the governing policy.
 
+The lifecycle below runs to completion without pausing between gates. A change
+is done only once it is deployed and verified in Production — see *Definition of
+done* and *Continuous delivery obligation* in `PROJECT_RULES.md`.
+
 ## Workflow overview
 
 ```mermaid
