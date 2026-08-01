@@ -90,7 +90,15 @@ function to24h(val) {
   if (!val) return ''
   val = val.trim()
   // Already 24h?
-  if (/^\d{1,2}:\d{2}$/.test(val)) return val
+  const m24 = val.match(/^(\d{1,2}):(\d{2})$/)
+  if (m24) {
+    const hour = Number(m24[1])
+    const minute = Number(m24[2])
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+    }
+    return val
+  }
   const m = val.match(/^(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)$/i)
   if (!m) return val
   let h = parseInt(m[1]), min = m[2], ap = m[3].toUpperCase()
@@ -937,7 +945,20 @@ export function SubmitSlotPage() {
                   )}
                   <div className="sbs-manual__grid">
                     <label className="sbs-field"><span className="sbs-label">Interview date</span><input ref={manualDateRef} className="sbs-input" type="date" value={manualDate || parsedSlot?.date || ''} onChange={e => { setManualDate(e.target.value); setUserEditedFields(f => ({...f, date: true})); if (e.target.value && (manualTime || parsedSlot?.time)) clearValidationError('invite_datetime') }} disabled={busy || parsing} /></label>
-                    <label className="sbs-field"><span className="sbs-label">Start time</span><input ref={manualTimeRef} className="sbs-input" type="text" placeholder="e.g. 02:00 PM" value={normalizeTo12h(manualTime || parsedSlot?.time || '')} onChange={e => { setManualTime(e.target.value); setUserEditedFields(f => ({...f, time: true})); if (e.target.value && (manualDate || parsedSlot?.date)) clearValidationError('invite_datetime') }} disabled={busy || parsing} /></label>
+                    <label className="sbs-field">
+                      <span className="sbs-label">Start time</span>
+                      <input
+                        ref={manualTimeRef}
+                        className="sbs-input sbs-time-input"
+                        type="time"
+                        step="300"
+                        aria-label="Start time"
+                        value={to24h(manualTime || parsedSlot?.time || '')}
+                        onChange={e => { setManualTime(e.target.value); setUserEditedFields(f => ({...f, time: true})); if (e.target.value && (manualDate || parsedSlot?.date)) clearValidationError('invite_datetime') }}
+                        disabled={busy || parsing}
+                      />
+                      <span className="sbs-hint">Tap the clock to choose the interview time.</span>
+                    </label>
                   </div>
                   {inlineError('invite_datetime')}
                 </div>

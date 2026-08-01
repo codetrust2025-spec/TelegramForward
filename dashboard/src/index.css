@@ -16660,6 +16660,14 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   transition: border-color 0.15s;
 }
 .sbs-input:focus { border-color: rgba(99,102,241,0.45); }
+.sbs-time-input {
+  color-scheme: dark;
+  cursor: pointer;
+}
+.sbs-time-input::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.85;
+}
 /* Name picker */
 .sbs-picker { position: relative; }
 .sbs-picker__input-wrap {
