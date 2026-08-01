@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react";
+import AiProcessingStatus from "../components/AiProcessingStatus.jsx";
 import ReferrerPaymentAccounts, {
   fetchReferrerRegistryJson,
 } from "./ReferrerPaymentAccounts.jsx";
@@ -89,6 +90,9 @@ export default function PayoutModal({
     date: todayInputValue(),
   }));
   const [saving, setSaving] = useState(false);
+  // Saving a proof runs Ollama payment verification server-side, so the
+  // button alone cannot explain the wait. Null when no AI work is running.
+  const [aiState, setAiState] = useState(null);
   const [proofFile, setProofFile] = useState(null);
   const proofInputRef = useRef(null);
   const [previewProof, setPreviewProof] = useState(null);
@@ -390,6 +394,7 @@ export default function PayoutModal({
       : window.confirm(confirmationMessage);
     if (!confirmed) return;
     setSaving(true);
+    if (proofFile) setAiState("processing");
     setError("");
     try {
       let res;
@@ -428,7 +433,11 @@ export default function PayoutModal({
       setHandlerStatsRevision((revision) => revision + 1);
       setSuccess(`Expense added successfully. ${Jc(amt)} was deducted from the amount owed.`);
       onChanged?.();
-    } catch (err) { setError(err.message || "Network error"); }
+      if (proofFile) setAiState("success");
+    } catch (err) {
+      setError(err.message || "Network error");
+      if (proofFile) setAiState(/timed out|timeout/i.test(String(err.message || "")) ? "timeout" : "error");
+    }
     finally { setSaving(false); }
   }
 
@@ -606,6 +615,23 @@ export default function PayoutModal({
                 >
                   {saving ? "Saving…" : editId ? "Save changes" : "Save expense"}
                 </button>
+                {aiState && (
+                  <AiProcessingStatus
+                    variant="inline"
+                    state={aiState}
+                    title="Verifying screenshot"
+                    onRetry={
+                      aiState === "error" || aiState === "timeout"
+                        ? () => { setAiState(null); setError(""); }
+                        : undefined
+                    }
+                    onCancel={
+                      aiState === "error" || aiState === "timeout"
+                        ? () => setAiState(null)
+                        : undefined
+                    }
+                  />
+                )}
               </div>
 
               {error && <div className="cand-modal-error payout-modal__error" role="alert">{error}</div>}
