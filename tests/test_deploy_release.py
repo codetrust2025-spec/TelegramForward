@@ -110,6 +110,21 @@ def test_clean_checkout_excludes_runtime_paths(tmp_path, monkeypatch):
         assert not (source / name).exists(), f"{name} leaked into the release"
 
 
+def test_backup_includes_verified_postgres_dump_inventory_and_checksums(monkeypatch):
+    client = FakeSSH()
+    monkeypatch.setattr(dr, "ssh", fake_ssh_factory(client))
+
+    target = dr.take_backup(client, "a" * 40)
+
+    assert target.startswith("/var/backups/telegramforward/")
+    assert ran(client, "pg_dump -Fc teleautomation")
+    assert ran(client, "pg_dump --schema-only teleautomation")
+    assert ran(client, "pg_restore --list")
+    assert ran(client, "INVENTORY.txt")
+    assert ran(client, "sha256sum -c SHA256SUMS")
+    assert all("\x00" not in command for command in client.commands)
+
+
 # ── manifest verification ────────────────────────────────────────────────────
 
 def test_manifest_hash_mismatch_aborts(tmp_path, monkeypatch):
@@ -173,6 +188,85 @@ def test_verify_release_passes_when_everything_matches(monkeypatch):
     ) == []
 
 
+def test_verify_live_release_checks_process_proxy_apis_and_public_assets(monkeypatch):
+    commit = "c" * 40
+    client = FakeSSH(answers={
+        "127.0.0.1:8000/health": '{"status":"ok"}',
+        "bookings/confirm'": "1",
+        "status=410": "1",
+        "sha256sum /rel/static/assets/a.js": "js-hash",
+        "sha256sum /rel/static/assets/a.css": "css-hash",
+        "readlink -f /opt/telegramforward/current": "/rel",
+        "production.manifest.json": "1",
+        "agreed on the date and start time": "1",
+        "pm2 pid": "/rel",
+        "nginx -t": "ok",
+        "teleautomation.online/health": '{"status":"ok"}',
+        "teleautomation.online/bookings/confirm": "422",
+        "teleautomation.online/public/slots/book": "410",
+        "teleautomation.online/assets/a.js": "js-hash",
+        "teleautomation.online/assets/a.css": "css-hash",
+        "curl -sf -m 15 https://teleautomation.online/": (
+            '<script src="assets/a.js"></script><link href="assets/a.css">'
+        ),
+    })
+    monkeypatch.setattr(dr, "ssh", fake_ssh_factory(client))
+
+    problems = dr.verify_live_release(
+        client,
+        "/rel",
+        {
+            "js": "assets/a.js",
+            "css": "assets/a.css",
+            "js_sha256": "js-hash",
+            "css_sha256": "css-hash",
+        },
+        commit,
+    )
+
+    assert problems == []
+    assert ran(client, "pm2 pid")
+    assert ran(client, "nginx -t")
+    assert ran(client, "/bookings/confirm")
+    assert ran(client, "/public/slots/book")
+
+
+def test_verify_live_release_reports_critical_runtime_failures(monkeypatch):
+    client = FakeSSH(answers={
+        "127.0.0.1:8000/health": '{"status":"ok"}',
+        "bookings/confirm'": "1",
+        "status=410": "1",
+        "sha256sum": "hash",
+        "readlink -f": "/wrong",
+        "production.manifest.json": "1",
+        "agreed on the date and start time": "1",
+        "pm2 pid": "",
+        "nginx -t": "failed",
+        "teleautomation.online/health": "",
+        "teleautomation.online/bookings/confirm": "500",
+        "teleautomation.online/public/slots/book": "200",
+    })
+    monkeypatch.setattr(dr, "ssh", fake_ssh_factory(client))
+
+    problems = dr.verify_live_release(
+        client,
+        "/rel",
+        {
+            "js": "assets/a.js",
+            "css": "assets/a.css",
+            "js_sha256": "hash",
+            "css_sha256": "hash",
+        },
+        "d" * 40,
+    )
+
+    assert any("current resolves" in problem for problem in problems)
+    assert any("PM2" in problem for problem in problems)
+    assert any("Nginx" in problem for problem in problems)
+    assert any("/bookings/confirm" in problem for problem in problems)
+    assert any("legacy booking" in problem for problem in problems)
+
+
 def test_switch_current_is_a_single_atomic_rename(monkeypatch):
     client = FakeSSH()
     monkeypatch.setattr(dr, "ssh", fake_ssh_factory(client))
@@ -184,23 +278,94 @@ def test_switch_current_is_a_single_atomic_rename(monkeypatch):
 def test_rollback_repoints_current_to_previous(monkeypatch):
     client = FakeSSH(answers={"curl": '{"status":"ok"}'})
     monkeypatch.setattr(dr, "ssh", fake_ssh_factory(client))
-    assert dr.rollback(client, "/opt/telegramforward/releases/prev", {}) is True
+    assert dr.rollback(client, "/opt/telegramforward/releases/prev", "previous-sha") is True
     assert ran(client, "/opt/telegramforward/releases/prev")
     assert ran(client, "mv -Tf")
     assert ran(client, "pm2 restart")
+    assert ran(client, "previous-sha")
 
 
 def test_marker_is_never_written_before_verification(monkeypatch):
     """The deploy marker must not appear anywhere except after success."""
     source = Path(dr.__file__).read_text(encoding="utf-8")
-    marker_line = next(
-        line for line in source.splitlines() if ".deploy-commit" in line and "printf" in line
-    )
     body = source.split("switch_current(client, release)")[-1]
-    assert marker_line.strip() in body, "marker is written before the switch"
-    assert body.index("verify_release") < body.index(".deploy-commit"), (
+    marker = "printf '%s' {q(commit)}"
+    assert marker in body, "marker is written before the switch"
+    assert body.index("verify_live_release") < body.index(".deploy-commit"), (
         "marker must be written only after post-switch verification"
     )
+
+
+def test_post_switch_failure_contract_runs_rollback_and_returns_failure():
+    source = Path(dr.__file__).read_text(encoding="utf-8")
+    body = source.split("switched = False", 1)[1]
+    assert "except BaseException" in body
+    assert "rollback(client, previous, previous_marker)" in body
+    assert "return 1 if recovered else 2" in body
+
+
+def test_activate_release_rolls_back_and_returns_failure(monkeypatch):
+    events = []
+    monkeypatch.setattr(dr, "switch_current", lambda *_args: events.append("switch"))
+    monkeypatch.setattr(dr, "reload_app", lambda *_args: events.append("reload"))
+    monkeypatch.setattr(
+        dr,
+        "verify_live_release",
+        lambda *_args: ["critical verification failure"],
+    )
+    monkeypatch.setattr(
+        dr,
+        "rollback",
+        lambda *_args: events.append("rollback") or True,
+    )
+
+    status = dr.activate_release(
+        FakeSSH(),
+        release="/new",
+        previous="/previous",
+        previous_marker="previous-sha",
+        manifest={},
+        commit="new-sha",
+    )
+
+    assert status == 1
+    assert events == ["switch", "reload", "rollback"]
+
+
+def test_activate_release_writes_marker_only_after_live_verification(monkeypatch):
+    events = []
+    client = FakeSSH()
+    monkeypatch.setattr(dr, "switch_current", lambda *_args: events.append("switch"))
+    monkeypatch.setattr(dr, "reload_app", lambda *_args: events.append("reload"))
+    monkeypatch.setattr(
+        dr,
+        "verify_live_release",
+        lambda *_args: events.append("verify") or [],
+    )
+
+    def record_ssh(_client, command, *, check=True, timeout=900):
+        events.append("marker" if ".deploy-commit" in command else "ssh")
+        return ""
+
+    monkeypatch.setattr(dr, "ssh", record_ssh)
+
+    status = dr.activate_release(
+        client,
+        release="/new",
+        previous="/previous",
+        previous_marker="previous-sha",
+        manifest={},
+        commit="new-sha",
+    )
+
+    assert status == 0
+    assert events == ["switch", "reload", "verify", "marker"]
+
+
+def test_existing_release_directory_is_never_overwritten():
+    source = Path(dr.__file__).read_text(encoding="utf-8")
+    assert "Refusing to overwrite immutable release directory" in source
+    assert "rm -rf {q(release)} && mkdir" not in source
 
 
 def test_previous_release_is_never_deleted(monkeypatch):
