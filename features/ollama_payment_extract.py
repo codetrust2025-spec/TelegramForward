@@ -246,17 +246,22 @@ def _normalize_amount_number(value: Any) -> int:
 def _extract_amount_candidates_from_text(text: str) -> list[int]:
     """Return every visible payment-like rupee amount found by OCR."""
     candidates: list[int] = []
+    # Amounts carrying an explicit currency marker are trustworthy; a bare
+    # comma-grouped number is not, because OCR reads the rupee sign as a 7.
+    marked: set[int] = set()
     patterns = (
-        r"₹\s*([\d,]+(?:\.\d{1,2})?)",
-        r"(?i)\b(?:INR|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)",
-        r"%\s*([\d,]+(?:\.\d{1,2})?)",
-        r"(?<![\d,])(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?)(?![\d,])",
+        (r"\u20b9\s*([\d,]+(?:\.\d{1,2})?)", True),
+        (r"(?i)\b(?:INR|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)", True),
+        (r"%\s*([\d,]+(?:\.\d{1,2})?)", True),
+        (r"(?<![\d,])(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?)(?![\d,])", False),
     )
-    for pattern in patterns:
+    for pattern, has_marker in patterns:
         for match in re.finditer(pattern, text or ""):
             amount = _normalize_amount_number(match.group(1))
             if 500 <= amount <= 1_000_000:
                 candidates.append(amount)
+                if has_marker:
+                    marked.add(amount)
     status_amount = re.search(
         r"(?i)(?:payment|transaction)\s+successful\s*\n+\s*([2%]?\d{3,7})\b",
         text or "",
@@ -268,7 +273,31 @@ def _extract_amount_candidates_from_text(text: str) -> list[int]:
         amount = _normalize_amount_number(raw_amount)
         if 500 <= amount <= 1_000_000:
             candidates.append(amount)
-    return candidates
+    return _drop_rupee_glyph_misreads(candidates, marked)
+
+
+def _drop_rupee_glyph_misreads(candidates: list[int], marked: set[int]) -> list[int]:
+    """Drop amounts that are only a misread rupee sign away from a real one.
+
+    OCR regularly reads the sign in a value like the rupee-prefixed 42,000 as
+    the digit 7, producing a phantom 742,000 beside the genuine figure. Both
+    then count as visible amounts, so the cross-check reports a conflict on a
+    receipt that only ever showed one number and blocks a valid expense.
+
+    A candidate is discarded only when it carried no currency marker of its own
+    and the same digits without the leading 7 were seen with one. A receipt
+    that genuinely shows a rupee-marked 742,000 keeps its marker, so a real
+    two-amount conflict is still reported.
+    """
+    return [
+        amount
+        for amount in candidates
+        if not (
+            amount not in marked
+            and str(amount).startswith("7")
+            and int(str(amount)[1:] or 0) in marked
+        )
+    ]
 
 
 def _amount_from_model(extracted: dict[str, Any]) -> int:

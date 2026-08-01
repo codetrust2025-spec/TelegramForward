@@ -111,3 +111,38 @@ def test_amount_disagreement_is_needs_review_and_raw_response_is_audited(monkeyp
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
     assert ledger["evidence"][0]["raw_ollama_response"] == raw_response
     assert ledger["evidence"][0]["normalized_extraction"]["amount_mismatch_reason"] == "OCR amount INR 10,000 disagrees with vision amount INR 1,000."
+
+
+def test_rupee_glyph_misread_does_not_create_a_phantom_conflict():
+    """OCR reads the rupee sign as a 7, inventing 742,000 beside 42,000.
+
+    A PhonePe receipt showing a single 42,000 was rejected with "OCR found
+    conflicting visible amounts: INR 42,000, INR 742,000", blocking a valid
+    referrer expense.
+    """
+    from features.ollama_payment_extract import _extract_amount_candidates_from_text
+
+    text = "Paid to\n\u20b942,000\nDebited from\n742,000"
+    assert sorted(set(_extract_amount_candidates_from_text(text))) == [42000]
+
+
+def test_two_genuinely_marked_amounts_still_conflict():
+    """The fix must not hide a real disagreement between two rupee amounts."""
+    from features.ollama_payment_extract import _extract_amount_candidates_from_text
+
+    text = "Paid \u20b942,000 and \u20b9742,000"
+    assert sorted(set(_extract_amount_candidates_from_text(text))) == [42000, 742000]
+
+
+def test_unrelated_bare_amounts_are_preserved():
+    from features.ollama_payment_extract import _extract_amount_candidates_from_text
+
+    text = "Paid \u20b942,000\nFee 5,500"
+    assert sorted(set(_extract_amount_candidates_from_text(text))) == [5500, 42000]
+
+
+def test_bare_seven_prefixed_amount_without_a_partner_is_kept():
+    """Only drop the 7 when the same digits appeared with a currency marker."""
+    from features.ollama_payment_extract import _extract_amount_candidates_from_text
+
+    assert sorted(set(_extract_amount_candidates_from_text("Total 742,000"))) == [742000]
