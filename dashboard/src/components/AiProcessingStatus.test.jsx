@@ -112,3 +112,26 @@ describe("AiProcessingStatus", () => {
     expect(screen.getByRole("status").textContent).toContain("Reading the invite…");
   });
 });
+
+describe("AiProcessingStatus mode badge", () => {
+  it("shows OCR + AI when that is the active mode", () => {
+    render(<AiProcessingStatus state="processing" mode="ocr+ai" />);
+    expect(screen.getByText("OCR + AI")).toBeInTheDocument();
+  });
+
+  it("shows AI only when OCR is globally off", () => {
+    render(<AiProcessingStatus state="processing" mode="ai" />);
+    expect(screen.getByText("AI only")).toBeInTheDocument();
+  });
+
+  it("omits the badge when no mode is supplied", () => {
+    render(<AiProcessingStatus state="processing" />);
+    expect(screen.queryByText("OCR + AI")).not.toBeInTheDocument();
+    expect(screen.queryByText("AI only")).not.toBeInTheDocument();
+  });
+
+  it("includes the mode in the accessible label", () => {
+    render(<AiProcessingStatus state="processing" mode="ai" title="Reading invite" />);
+    expect(screen.getByRole("status").getAttribute("aria-label")).toMatch(/AI only/);
+  });
+});

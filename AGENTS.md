@@ -66,6 +66,13 @@ git rev-parse origin/main
 - Preserve account isolation and the booking/payment invariants in `PROJECT_RULES.md`.
 - Update manuals when architecture, workflow, dependencies, deployment, recovery, or ownership changes.
 
+## AI and OCR features
+
+Before adding or changing anything that reads an image or document: gate OCR on
+`core.ocr_policy.ocr_enabled()`, render progress with `AiProcessingStatus` and
+pass the active mode, and fail to a friendly retry or manual-entry path. See
+*AI and OCR features* in `PROJECT_RULES.md`.
+
 ## Validation
 
 Run focused tests first, then the complete affected suites:
