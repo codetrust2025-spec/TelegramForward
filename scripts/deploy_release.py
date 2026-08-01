@@ -20,8 +20,9 @@ Guarantees enforced here, each mandated by DEPLOYMENT.md:
 
 Usage::
 
-    VPS_PASSWORD=... python scripts/deploy_release.py --commit <full-sha>
-    VPS_PASSWORD=... python scripts/deploy_release.py --commit <sha> --dry-run
+    python scripts/deploy_release.py --commit <full-sha>  # SSH key/agent
+    # For password auth, set VPS_PASSWORD in the protected environment first.
+    python scripts/deploy_release.py --commit <sha> --dry-run
 """
 from __future__ import annotations
 
@@ -30,6 +31,7 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -43,7 +45,9 @@ RELEASES = f"{REMOTE_ROOT}/releases"
 CURRENT = f"{REMOTE_ROOT}/current"
 BACKUP_ROOT = "/var/backups/telegramforward"
 HEALTH_URL = "http://127.0.0.1:8000/health"
+PUBLIC_ORIGIN = "https://teleautomation.online"
 PM2_APP = "telegram-backend"
+POSTGRES_DB = "teleautomation"
 
 # Runtime state lives outside releases and is linked in, never copied.
 RUNTIME_LINKS = (".env", "data", "uploads", "logs")
@@ -103,7 +107,7 @@ def clean_checkout(commit: str, workspace: Path) -> Path:
     for name in RUNTIME_LINKS:
         stale = source / name
         if stale.is_dir():
-            subprocess.run(["rm", "-rf", str(stale)], check=False)
+            shutil.rmtree(stale)
         elif stale.exists():
             stale.unlink()
     return source
@@ -116,6 +120,44 @@ def build_frontend(source: Path) -> None:
     subprocess.run([npm, "ci", "--ignore-scripts"], cwd=dashboard, check=True)
     log("building production assets")
     subprocess.run([npm, "run", "build"], cwd=dashboard, check=True)
+
+
+def verify_exact_source(source: Path) -> None:
+    """Run release-critical compile and invite regression checks on the archive."""
+    log("compiling exact archived Python source")
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "compileall",
+            "-q",
+            "server.py",
+            "core",
+            "features",
+            "services",
+            "workers",
+            "api",
+        ],
+        cwd=source,
+        check=True,
+    )
+    log("verifying invite mismatch regression on exact archived source")
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "tests/test_ollama_invite_extract.py",
+            "-k",
+            (
+                "matching_date_time_with_missing_timezone_is_not_reported_as_conflict "
+                "or different_start_times_still_report_verification_conflict"
+            ),
+        ],
+        cwd=source,
+        check=True,
+    )
 
 
 def write_and_verify_manifest(source: Path, commit: str) -> dict:
@@ -154,7 +196,7 @@ def write_and_verify_manifest(source: Path, commit: str) -> dict:
 
 # ── remote helpers ───────────────────────────────────────────────────────────
 
-def connect(password: str):
+def connect(password: str | None):
     sys.path.insert(0, str(REPO))
     from scripts.prod_sync_common import ssh_connect
 
@@ -185,10 +227,10 @@ def preflight(client) -> None:
 
 
 def take_backup(client, commit: str) -> str:
-    """Back up runtime state and the active release, then prove it is readable."""
+    """Back up runtime state and PostgreSQL, then prove every artifact is readable."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     target = f"{BACKUP_ROOT}/{stamp}-pre-{commit[:12]}"
-    ssh(client, f"mkdir -p {q(target)}")
+    ssh(client, f"install -d -m 700 {q(BACKUP_ROOT)} && mkdir -m 700 {q(target)}")
 
     log(f"backing up to {target}")
     for name in RUNTIME_LINKS:
@@ -208,15 +250,38 @@ def take_backup(client, commit: str) -> str:
     ssh(client, f"pm2 jlist > {q(target)}/pm2.json 2>/dev/null || true", check=False)
     ssh(client, f"cp -a {q(CURRENT)}/static/production.manifest.json {q(target)}/manifest.json 2>/dev/null || true", check=False)
 
-    # Validate: every archive must list without error, and record hashes.
+    # Database contents are protected runtime state and must be recoverable
+    # independently of the application tree.
+    dump = f"{target}/{POSTGRES_DB}.dump"
+    schema = f"{target}/{POSTGRES_DB}-schema.sql"
+    restore_list = f"{target}/{POSTGRES_DB}.restore-list"
+    ssh(client, f"sudo -u postgres pg_dump -Fc {q(POSTGRES_DB)} > {q(dump)}")
+    ssh(
+        client,
+        f"sudo -u postgres pg_dump --schema-only {q(POSTGRES_DB)} > {q(schema)}",
+    )
+    ssh(client, f"pg_restore --list {q(dump)} > {q(restore_list)}")
+
+    # Validate every archive and database dump, record an inventory, then
+    # verify the checksum manifest rather than merely creating it.
     archives = ssh(client, f"ls {q(target)}/*.tar.gz 2>/dev/null || true", check=False)
     for archive in [a for a in archives.splitlines() if a.strip()]:
         ssh(client, f"tar -tzf {q(archive)} > /dev/null")
-    ssh(client, f"cd {q(target)} && sha256sum * > SHA256SUMS 2>/dev/null || true", check=False)
-    listing = ssh(client, f"ls -la {q(target)}", check=False)
-    if "SHA256SUMS" not in listing:
-        raise SystemExit("Backup validation failed: no SHA256SUMS produced.")
-    log("backup validated (archives listable, hashes recorded)")
+    ssh(client, f"test -s {q(dump)} && test -s {q(schema)} && test -s {q(restore_list)}")
+    ssh(
+        client,
+        f"cd {q(target)} && find . -maxdepth 1 -type f "
+        "-printf '%P\\t%s bytes\\n' | sort > INVENTORY.txt",
+    )
+    ssh(
+        client,
+        f"cd {q(target)} && find . -maxdepth 1 -type f "
+        "! -name SHA256SUMS -printf '%P\\0' | sort -z | "
+        "xargs -0 sha256sum > SHA256SUMS",
+    )
+    ssh(client, f"cd {q(target)} && sha256sum -c SHA256SUMS > /dev/null")
+    ssh(client, f"test -s {q(target + '/INVENTORY.txt')} && test -s {q(target + '/SHA256SUMS')}")
+    log("backup validated (database restore list, archives, inventory, and hashes)")
     return target
 
 
@@ -298,6 +363,104 @@ def verify_release(client, release: str, manifest: dict) -> list[str]:
     return problems
 
 
+def verify_live_release(
+    client,
+    release: str,
+    manifest: dict,
+    commit: str,
+) -> list[str]:
+    """Verify the active process, proxy, APIs, and publicly served assets."""
+    problems = verify_release(client, release, manifest)
+
+    current = ssh(client, f"readlink -f {q(CURRENT)}", check=False).strip()
+    if current != release:
+        problems.append(f"current resolves to {current or 'nothing'}, expected release")
+
+    manifest_has_commit = ssh(
+        client,
+        f"grep -F -c {q(commit)} {q(release)}/static/production.manifest.json",
+        check=False,
+    ).strip()
+    if manifest_has_commit in ("", "0"):
+        problems.append("production manifest does not contain the target commit")
+
+    fix_present = ssh(
+        client,
+        f"grep -F -c 'agreed on the date and start time, but did not' "
+        f"{q(release)}/features/ollama_invite_extract.py",
+        check=False,
+    ).strip()
+    if fix_present in ("", "0"):
+        problems.append("invite mismatch fix missing from active release")
+
+    pm2_cwd = ssh(
+        client,
+        f"pid=$(pm2 pid {q(PM2_APP)} | tail -n 1); "
+        "test \"${pid:-0}\" -gt 0 && readlink -f /proc/$pid/cwd || true",
+        check=False,
+    ).strip()
+    if pm2_cwd != release:
+        problems.append("PM2 app is offline or running from the wrong release")
+
+    nginx = ssh(
+        client,
+        "nginx -t > /dev/null 2>&1 && echo ok || echo failed",
+        check=False,
+    ).strip()
+    if nginx != "ok":
+        problems.append("Nginx configuration test failed")
+
+    public_health = ssh(
+        client,
+        f"curl -sf -m 15 {q(PUBLIC_ORIGIN + '/health')} || true",
+        check=False,
+    )
+    if '"ok"' not in public_health:
+        problems.append("public /health did not return ok")
+
+    confirm_status = ssh(
+        client,
+        f"curl -sS -m 15 -o /dev/null -w '%{{http_code}}' -X POST "
+        f"{q(PUBLIC_ORIGIN + '/bookings/confirm')} || true",
+        check=False,
+    ).strip()
+    if confirm_status not in {"400", "422"}:
+        problems.append(
+            f"/bookings/confirm invalid-input guard returned {confirm_status or 'no status'}"
+        )
+
+    legacy_status = ssh(
+        client,
+        f"curl -sS -m 15 -o /dev/null -w '%{{http_code}}' -X POST "
+        f"{q(PUBLIC_ORIGIN + '/public/slots/book')} || true",
+        check=False,
+    ).strip()
+    if legacy_status != "410":
+        problems.append(
+            f"legacy booking endpoint returned {legacy_status or 'no status'}, expected 410"
+        )
+
+    public_index = ssh(
+        client,
+        f"curl -sf -m 15 {q(PUBLIC_ORIGIN + '/')} || true",
+        check=False,
+    )
+    for key, digest_key in (("js", "js_sha256"), ("css", "css_sha256")):
+        rel = manifest[key]
+        if rel not in public_index:
+            problems.append(f"public index does not reference {rel}")
+        public_hash = ssh(
+            client,
+            f"curl -sf -m 30 {q(PUBLIC_ORIGIN + '/' + rel)} | "
+            "sha256sum | awk '{print $1}'",
+            check=False,
+        ).strip()
+        if public_hash != manifest[digest_key]:
+            problems.append(f"public asset hash mismatch for {rel}")
+
+    return problems
+
+
 def switch_current(client, release: str) -> None:
     """Atomic pointer move: rename(2) replaces the symlink in one step."""
     ssh(client, f"ln -sfn {q(release)} {q(CURRENT)}.tmp && mv -Tf {q(CURRENT)}.tmp {q(CURRENT)}")
@@ -308,13 +471,53 @@ def reload_app(client) -> None:
     ssh(client, "sleep 3", check=False)
 
 
-def rollback(client, previous: str, manifest: dict) -> bool:
+def rollback(client, previous: str, previous_marker: str = "") -> bool:
     log(f"ROLLING BACK to {previous}")
     switch_current(client, previous)
     reload_app(client)
     ok = health_ok(client)
+    if ok and previous_marker:
+        ssh(
+            client,
+            f"printf '%s' {q(previous_marker)} > {q(REMOTE_ROOT)}/.deploy-commit",
+        )
     log(f"rollback health: {'ok' if ok else 'FAILED'}")
     return ok
+
+
+def activate_release(
+    client,
+    *,
+    release: str,
+    previous: str,
+    previous_marker: str,
+    manifest: dict,
+    commit: str,
+) -> int:
+    """Atomically activate, verify, and roll back on every critical failure."""
+    switched = False
+    try:
+        switch_current(client, release)
+        switched = True
+        reload_app(client)
+
+        problems = verify_live_release(client, release, manifest, commit)
+        if problems:
+            raise RuntimeError("; ".join(problems))
+
+        # Marker is written only once the release is proven good.
+        ssh(client, f"printf '%s' {q(commit)} > {q(REMOTE_ROOT)}/.deploy-commit")
+        return 0
+    except BaseException as exc:
+        log(f"POST-SWITCH VERIFICATION FAILED: {exc}")
+        recovered = False
+        if switched:
+            try:
+                recovered = rollback(client, previous, previous_marker)
+            except BaseException as rollback_exc:
+                log(f"ROLLBACK FAILED: {rollback_exc}")
+        log(f"failed release retained for diagnosis: {release}")
+        return 1 if recovered else 2
 
 
 # ── orchestration ────────────────────────────────────────────────────────────
@@ -330,6 +533,7 @@ def main(argv=None) -> int:
 
     workspace = Path(tempfile.mkdtemp(prefix="release-"))
     source = clean_checkout(commit, workspace)
+    verify_exact_source(source)
     build_frontend(source)
     manifest = write_and_verify_manifest(source, commit)
 
@@ -337,9 +541,9 @@ def main(argv=None) -> int:
         log("dry run: local build and manifest verification passed; host untouched")
         return 0
 
-    password = os.environ.get("VPS_PASSWORD", "")
-    if not password:
-        raise SystemExit("Set VPS_PASSWORD.")
+    # Paramiko also supports an existing SSH key or agent. A password remains
+    # available through the protected environment when key auth is not used.
+    password = os.environ.get("VPS_PASSWORD") or None
 
     release = f"{RELEASES}/{commit}"
     client = connect(password)
@@ -351,10 +555,24 @@ def main(argv=None) -> int:
         previous = ssh(client, f"readlink -f {q(CURRENT)}", check=False).strip()
         if not previous:
             raise SystemExit("No previous release resolved; refusing to continue.")
+        previous_marker = ssh(
+            client,
+            f"cat {q(REMOTE_ROOT)}/.deploy-commit 2>/dev/null || true",
+            check=False,
+        ).strip()
         log(f"previous release: {previous}")
 
         log(f"uploading release payload to {release}")
-        ssh(client, f"rm -rf {q(release)} && mkdir -p {q(release)}")
+        release_exists = ssh(
+            client,
+            f"test -e {q(release)} && echo yes || echo no",
+            check=False,
+        ).strip()
+        if release_exists == "yes":
+            raise SystemExit(
+                f"Refusing to overwrite immutable release directory: {release}"
+            )
+        ssh(client, f"mkdir -p {q(release)}")
         payload = workspace / "release.tar.gz"
         with tarfile.open(payload, "w:gz") as tar:
             tar.add(source, arcname=".")
@@ -371,18 +589,17 @@ def main(argv=None) -> int:
             raise SystemExit("Pre-switch verification failed: " + "; ".join(asset_problems))
         log("pre-switch verification passed")
 
-        switch_current(client, release)
-        reload_app(client)
+        activation_status = activate_release(
+            client,
+            release=release,
+            previous=previous,
+            previous_marker=previous_marker,
+            manifest=manifest,
+            commit=commit,
+        )
+        if activation_status:
+            return activation_status
 
-        problems = verify_release(client, release, manifest)
-        if problems:
-            log("POST-SWITCH VERIFICATION FAILED: " + "; ".join(problems))
-            recovered = rollback(client, previous, manifest)
-            log(f"failed release retained for diagnosis: {release}")
-            return 0 if recovered else 2
-
-        # Marker is written only once the release is proven good.
-        ssh(client, f"printf '%s' {q(commit)} > {q(REMOTE_ROOT)}/.deploy-commit")
         log(f"deployed and verified: {commit}")
         log(f"previous release retained for rollback: {previous}")
         return 0
