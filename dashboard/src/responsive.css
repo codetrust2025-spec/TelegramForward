@@ -671,6 +671,24 @@ body,
     min-height: var(--ta-touch-min);
     min-width: var(--ta-touch-min);
   }
+
+  /* Public booking screen — the one flow candidates run on their own phones.
+     Enforced across its controls rather than by naming each one: an allowlist
+     is why .sbs-picker__toggle shipped at 22x22, half the minimum this file
+     already declares. Measured against the live page at 320px and 390px — the
+     enlarged hit areas stay inside their fields and add no horizontal scroll. */
+  .submit-slot-screen button,
+  .submit-slot-screen [role="button"],
+  .submit-slot-screen select {
+    min-height: var(--ta-touch-min);
+  }
+
+  /* Icon-only controls need the width too; text buttons already size themselves. */
+  .sbs-picker__toggle,
+  .sbs-back-btn {
+    min-width: var(--ta-touch-min);
+    min-height: var(--ta-touch-min);
+  }
 }
 
 /* ── Landscape phones: short viewport ──────────────────────────────────── */
