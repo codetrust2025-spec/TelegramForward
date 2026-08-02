@@ -135,3 +135,27 @@ describe("the touch minimum survives a fine pointer at phone width", () => {
     expect(icon).toContain("min-height: var(--ta-touch-min)");
   });
 });
+
+describe("baseline target size for fine pointers", () => {
+  // Between 768px and a fine pointer neither the coarse block nor the
+  // phone-width block applies. Measured live at 768px: 22x22, under the 24x24
+  // WCAG 2.5.8 asks for at any pointer type.
+  it("sets an unconditional floor outside every media query", () => {
+    const beforeFirstMedia = responsive.slice(0, responsive.indexOf("@media"));
+    const baseline = responsive.slice(
+      responsive.indexOf("Baseline target size"),
+      responsive.indexOf("Phone-width booking screen"),
+    );
+    expect(baseline).toContain("min-width: 24px");
+    expect(baseline).toContain("min-height: 24px");
+    expect(baseline).toContain(".sbs-picker__toggle");
+    // Not nested inside a media query.
+    expect(baseline).not.toContain("@media");
+    expect(beforeFirstMedia.length).toBeGreaterThan(0);
+  });
+
+  it("still lets the touch minimum raise it on phones", () => {
+    // min-* floors compose: 24px baseline, 44px at phone width.
+    expect(responsive).toContain("--ta-touch-min: 44px");
+  });
+});
