@@ -5894,7 +5894,6 @@ function CandidatesPanelImpl() {
           stats={c}
           allStats={u}
           month={m}
-          onMonthChange={_}
           monthOptions={Le}
           onAddExpense={a ? ue : undefined}
           handlerView={n}
