@@ -93,3 +93,45 @@ describe("wide tables stay inside a scroll container", () => {
     expect(css).toMatch(/overflow-x:\s*auto|overflow:\s*auto/);
   });
 });
+
+describe("the touch minimum survives a fine pointer at phone width", () => {
+  // The coarse-pointer block alone left the 22x22 control in place on any
+  // browser reporting a fine pointer — a phone in desktop mode, or a tablet
+  // with a mouse. Verified live: matchMedia('(pointer: coarse)') was false at
+  // 320px while '(max-width: 767px)' was true.
+  // More than one max-width:767px block exists; take the one carrying the
+  // booking screen's rules.
+  const phone = (() => {
+    const extract = (at) => {
+      let depth = 0;
+      for (let i = responsive.indexOf("{", at); i < responsive.length; i += 1) {
+        if (responsive[i] === "{") depth += 1;
+        if (responsive[i] === "}") {
+          depth -= 1;
+          if (depth === 0) return responsive.slice(at, i + 1);
+        }
+      }
+      throw new Error("unterminated block");
+    };
+    let from = 0;
+    for (;;) {
+      const at = responsive.indexOf("@media (max-width: 767px)", from);
+      expect(at, "phone-width booking block missing").toBeGreaterThan(-1);
+      const block = extract(at);
+      if (block.includes(".submit-slot-screen")) return block;
+      from = at + 1;
+    }
+  })();
+
+  it("applies the minimum on width, not only on pointer type", () => {
+    expect(phone).toMatch(/\.submit-slot-screen button/);
+    expect(phone).toMatch(/\.sbs-picker__toggle/);
+    expect(phone).toContain("var(--ta-touch-min)");
+  });
+
+  it("still gives icon-only controls both dimensions", () => {
+    const icon = phone.slice(phone.indexOf(".sbs-picker__toggle"));
+    expect(icon).toContain("min-width: var(--ta-touch-min)");
+    expect(icon).toContain("min-height: var(--ta-touch-min)");
+  });
+});
