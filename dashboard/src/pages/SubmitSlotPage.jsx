@@ -341,6 +341,16 @@ export function SubmitSlotPage() {
     return null
   }, [parsedSlot, manualDate, manualTime, interviewRound])
 
+  // With the global OCR switch off there is no second reader, so nothing on
+  // this page may mention OCR or present an OCR cross-check as the reason a
+  // booking needs manual entry.
+  const isAiOnlyMode = aiExtraction?.processing_mode === 'ai'
+  const aiOnlyManualHint = (() => {
+    const reason = String(aiExtraction?.failure_reason || '')
+    if (reason && !reason.includes('OCR')) return reason
+    return 'The AI could not read the interview date and start time. Enter them exactly as shown in the invite.'
+  })()
+
   const highConfidenceAiResult = Boolean(
     aiExtraction
     && aiExtraction.auto_booking_safe === true
@@ -946,15 +956,17 @@ export function SubmitSlotPage() {
               {showManualSlotFields && (
                 <div className="sbs-manual">
                   <p className="sbs-manual__hint">
-                    {aiExtraction?.verification_conflict
-                      ? 'Automatic booking was blocked because OCR and AI read different values. Check the invite and enter the correct date and start time.'
-                      : aiExtraction?.manual_fields_required
-                        ? (aiExtraction.failure_reason || 'Automatic verification could not safely confirm the date and time. Enter the values exactly as shown in the invite.')
-                        : parsedSlot?.date
-                          ? 'Verify detected date & time — correct below if wrong.'
-                          : 'Include the date line in your screenshot or enter manually.'}
+                    {isAiOnlyMode
+                      ? aiOnlyManualHint
+                      : aiExtraction?.verification_conflict
+                        ? 'Automatic booking was blocked because OCR and AI read different values. Check the invite and enter the correct date and start time.'
+                        : aiExtraction?.manual_fields_required
+                          ? (aiExtraction.failure_reason || 'Automatic verification could not safely confirm the date and time. Enter the values exactly as shown in the invite.')
+                          : parsedSlot?.date
+                            ? 'Verify detected date & time — correct below if wrong.'
+                            : 'Include the date line in your screenshot or enter manually.'}
                   </p>
-                  {aiExtraction?.verification_conflict && (
+                  {!isAiOnlyMode && aiExtraction?.verification_conflict && (
                     <div className="sbs-verification-conflict" role="status">
                       <span>
                         OCR: {aiExtraction.verification_conflict.ocr?.interview_date || 'date not found'}

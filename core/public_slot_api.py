@@ -265,8 +265,11 @@ def install_public_slot_routes(app) -> None:
         return {
             "status": "ok",
             "success": is_success,
-            # Which engine read the file, so the page can say so plainly.
-            "processing_mode": processing_mode(),
+            # Which engine actually read the file. Prefer the mode the
+            # extractor snapshotted at the start of this request over a fresh
+            # read, so an admin toggling the switch mid-extraction cannot make
+            # the response describe a mode this result was not produced under.
+            "processing_mode": result.get("processing_mode") or processing_mode(),
             "extraction_source": result.get("extraction_source", "unknown"),
             "primary_model": result.get("primary_model", ""),
             "backup_model": result.get("backup_model", ""),

@@ -24,7 +24,7 @@ from typing import Any
 
 from core.ai_gateway import AIGatewayError, chat, health
 from core.ai_model_routing import model_for
-from core.ocr_policy import ocr_enabled
+from core.ocr_policy import ocr_enabled, processing_mode
 
 logger = logging.getLogger(__name__)
 
@@ -570,15 +570,43 @@ def extract_interview_invite_with_ollama(
     image_data: bytes,
     mime_type: str = "image/jpeg",
 ) -> dict[str, Any]:
+    """Read an interview invite, in whichever mode the admin switch selects.
+
+    The mode is snapshotted once here so a switch flipped mid-request cannot
+    leave one run half in each mode, and every result reports the mode it was
+    produced under.
+    """
+    mode = processing_mode()
+    if mode == "ai":
+        # AI-only means exactly that: Tesseract is never invoked, and the
+        # dual-source cross-check that would demand its corroboration is not
+        # applied. Requiring OCR to confirm what OCR is forbidden to read
+        # blocked every booking outright.
+        return _extract_with_ai_only(
+            image_data, mode=mode, ollama_only=_ollama_only_test_mode()
+        )
+
+    result = _extract_with_ocr_and_ai(image_data, mime_type, mode=mode)
+    result.setdefault("processing_mode", mode)
+    result.setdefault("ocr_used", True)
+    return result
+
+
+def _extract_with_ocr_and_ai(
+    image_data: bytes,
+    mime_type: str,
+    *,
+    mode: str,
+) -> dict[str, Any]:
     """Extract interview invite details using hybrid OCR + AI approach.
-    
+
     Hybrid flow (optimized for speed):
       1. OCR image → raw text (Tesseract, instant)
       2. If OCR gets enough text, send to qwen2.5:7b text model for JSON cleanup (~10-30s)
       3. Only if OCR fails or text cleanup fails, call qwen2.5vl:7b vision model (~5 min)
       4. If vision fails, try moondream backup
       5. If all AI fails, fall back to regex OCR parsing
-    
+
     Ollama runs on the developer's laptop, tunneled to VPS via SSH.
     """
     ocr_candidate: dict[str, Any] | None = None
@@ -849,8 +877,11 @@ def extract_interview_invite_with_ollama(
             extracted["failure_reason"] = (
                 "OCR did not independently extract a supported date and start time."
             )
-    
-    return validate_invite_extraction(extracted)
+
+    verified = validate_invite_extraction(extracted)
+    verified["processing_mode"] = mode
+    verified["ocr_used"] = True
+    return verified
 
 
 def _run_tesseract_ocr(image_data: bytes) -> str:
@@ -878,6 +909,126 @@ def _try_text_model_cleanup(ocr_text: str) -> dict[str, Any] | None:
     
     extracted = parse_strict_json_response(response)
     return extracted
+
+
+def _ai_only_vision_extraction(image_data: bytes) -> tuple[dict[str, Any] | None, str]:
+    """Run only the vision models. Returns (extraction, model_used)."""
+    img_b64 = base64.b64encode(image_data).decode("utf-8")
+    used_model = OLLAMA_VISION_MODEL
+    response = call_ollama_vision_model(
+        OLLAMA_VISION_MODEL, img_b64, _get_invite_prompt(), timeout=OLLAMA_TIMEOUT
+    )
+    extracted = parse_strict_json_response(response) if response else None
+    if response and not extracted:
+        extracted = retry_invalid_json_once(OLLAMA_VISION_MODEL, img_b64, response)
+    if (
+        not extracted
+        and OLLAMA_BACKUP_VISION_MODEL
+        and OLLAMA_BACKUP_VISION_MODEL != OLLAMA_VISION_MODEL
+    ):
+        backup = call_ollama_vision_model(
+            OLLAMA_BACKUP_VISION_MODEL, img_b64, _get_invite_prompt(), timeout=OLLAMA_TIMEOUT
+        )
+        if backup:
+            extracted = parse_strict_json_response(backup)
+            if extracted:
+                used_model = OLLAMA_BACKUP_VISION_MODEL
+    return extracted, used_model
+
+
+def _extract_with_ai_only(
+    image_data: bytes,
+    *,
+    mode: str,
+    ollama_only: bool = False,
+) -> dict[str, Any]:
+    """Invite extraction with OCR globally disabled.
+
+    The admin switch says Tesseract must not run anywhere, so there is no
+    second source to cross-check against and no OCR failure worth reporting.
+    The vision model's own date and start time are the evidence; when it cannot
+    supply them the operator confirms the booking by hand.
+    """
+    def _finish(result: dict[str, Any]) -> dict[str, Any]:
+        result["processing_mode"] = mode
+        result["ocr_used"] = False
+        # Nothing here consulted OCR, so no OCR wording may reach the operator.
+        result["warnings"] = [
+            w for w in (result.get("warnings") or []) if "OCR" not in str(w)
+        ]
+        return result
+
+    if not _is_ollama_available():
+        result = _empty_extraction()
+        result["extraction_source"] = "ollama"
+        result["extraction_method"] = "ai_only"
+        result["auto_booking_safe"] = False
+        result["manual_fields_required"] = True
+        result["failure_stage"] = "ollama_unavailable"
+        result["failure_reason"] = "The AI model is unavailable."
+        result["warnings"] = [
+            "The AI could not be reached, so the invite was not read. "
+            "Enter the interview date and start time to continue."
+        ]
+        return _finish(result)
+
+    extracted, used_model = _ai_only_vision_extraction(image_data)
+
+    if not extracted:
+        result = _empty_extraction()
+        result["extraction_source"] = "ollama"
+        result["extraction_method"] = "ai_only"
+        result["primary_model"] = used_model
+        result["auto_booking_safe"] = False
+        result["manual_fields_required"] = True
+        result["failure_stage"] = "vision"
+        result["failure_reason"] = "The AI could not read this screenshot."
+        result["warnings"] = [
+            "The AI could not read this screenshot. "
+            "Enter the interview date and start time to continue."
+        ]
+        return _finish(result)
+
+    extracted = validate_invite_extraction(extracted)
+    extracted["extraction_source"] = "ollama"
+    extracted["primary_model"] = used_model
+    extracted["backup_model"] = "" if ollama_only else OLLAMA_BACKUP_VISION_MODEL
+    extracted["detected_by"] = f"{used_model} (AI only)"
+    extracted["extraction_method"] = "ai_only"
+    if ollama_only:
+        extracted["ollama_only_test"] = True
+
+    has_date = bool(str(extracted.get("interview_date") or "").strip())
+    has_start = bool(normalize_time_to_12h(str(extracted.get("start_time") or "")))
+    if has_date and has_start and not ollama_only:
+        extracted["auto_booking_safe"] = True
+        extracted["manual_fields_required"] = False
+        extracted["failure_stage"] = ""
+        extracted["failure_reason"] = ""
+        extracted["confidence_score"] = max(
+            int(extracted.get("confidence_score") or 0), 85
+        )
+    else:
+        extracted["auto_booking_safe"] = False
+        extracted["manual_fields_required"] = True
+        extracted["failure_stage"] = "ai_incomplete"
+        missing = [
+            label
+            for label, present in (("date", has_date), ("start time", has_start))
+            if not present
+        ]
+        extracted["failure_reason"] = (
+            "The AI did not return a complete " + " and ".join(missing) + "."
+            if missing
+            else "Automatic booking is disabled for this run."
+        )
+        if missing:
+            extracted.setdefault("warnings", []).append(
+                "The AI could not read the interview "
+                + " and ".join(missing)
+                + ". Enter it to continue."
+            )
+    return _finish(extracted)
 
 
 def _fallback_to_existing_ocr(image_data: bytes, mime_type: str) -> dict[str, Any]:
