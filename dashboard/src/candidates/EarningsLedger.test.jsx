@@ -284,3 +284,90 @@ describe("totals row agrees with the rows above it", () => {
     expect(item.textContent).toMatch(/30 Jul 2026/);
   });
 });
+
+/**
+ * The calculation used to render as a narrow card pinned to the right of the
+ * expanded row, leaving the area between the Total row and the bottom border
+ * empty. It must sit in normal flow, immediately after the Total row, at full
+ * width.
+ */
+describe("expanded row layout", () => {
+  it("places the summary immediately after the Total row in document flow", async () => {
+    renderRows([THRILOK]);
+    const ledger = await expand("Thrilok");
+    const list = document.querySelector(".candidate-list");
+    const total = document.querySelector(".candidate-total");
+
+    expect(list).toBeInTheDocument();
+    expect(total.closest("ul")).toBe(list);
+    // The summary is the element right after the candidate list.
+    expect(list.nextElementSibling).toBe(ledger);
+    expect(ledger).toHaveClass("earnings-calculation-summary");
+  });
+
+  it("carries no rule that pins it to the right or reserves empty height", async () => {
+    renderRows([THRILOK]);
+    const ledger = await expand("Thrilok");
+    const style = getComputedStyle(ledger);
+
+    expect(style.position).not.toBe("absolute");
+    expect(style.position).not.toBe("fixed");
+    expect(style.float).not.toBe("right");
+    expect(style.marginLeft).not.toBe("auto");
+    expect(["", "none", "auto", "0px"]).toContain(style.minHeight || "");
+    expect(["", "none"]).toContain(style.maxWidth || "");
+  });
+
+  it("stays inside the expanded cell rather than escaping it", async () => {
+    renderRows([THRILOK]);
+    const ledger = await expand("Thrilok");
+
+    expect(ledger.closest("td")).not.toBeNull();
+    expect(ledger.closest(".earn-detail")).not.toBeNull();
+  });
+
+  it("shows the referral earnings total on the Total row", async () => {
+    renderRows([THRILOK]);
+    await expand("Thrilok");
+    const total = document.querySelector(".candidate-total");
+
+    expect(total.textContent).toContain("Total (4 candidates)");
+    expect(total.textContent).toContain("Referral earnings");
+    expect(total.querySelector(".earn-breakdown-total-earnings strong").textContent)
+      .toBe(fmt(27000));
+  });
+
+  it("puts the opening-balance reason under its own label", async () => {
+    renderRows([THRILOK]);
+    const ledger = await expand("Thrilok");
+    const openingRow = within(ledger).getByText("Opening balance").closest(".earn-ledger-row");
+
+    expect(openingRow.querySelector(".earn-ledger-note").textContent).toMatch(
+      /profile-closure complimentary from Jun 2026|unpaid from Jun 2026/,
+    );
+  });
+
+  it("keeps every calculation item as a sibling in one band", async () => {
+    renderRows([THRILOK]);
+    const ledger = await expand("Thrilok");
+    const band = ledger.querySelector(".earn-ledger-rows");
+    // Text nodes only, so the info glyph inside the label is ignored.
+    const labels = [...band.querySelectorAll(".earn-ledger-row .earn-ledger-label")].map((el) =>
+      [...el.childNodes]
+        .filter((n) => n.nodeType === Node.TEXT_NODE)
+        .map((n) => n.textContent)
+        .join("")
+        .trim(),
+    );
+
+    expect(labels).toEqual([
+      "Opening balance",
+      "Referral earnings",
+      "Salary",
+      "Paid out",
+      "Closing balance",
+    ]);
+    // The outcome sentence sits outside the band, below it.
+    expect(ledger.querySelector(".earn-ledger-outcome").parentElement).toBe(ledger);
+  });
+});
