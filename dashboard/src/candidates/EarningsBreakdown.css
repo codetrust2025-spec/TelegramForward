@@ -283,54 +283,27 @@
   white-space: normal;
 }
 .earn-breakdown-total-title {
-  flex: 1 1 150px;
   color: var(--text, #eef2f7);
 }
-.earn-breakdown-summary {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex: 1 1 620px;
-  gap: 0;
-  min-width: 0;
-}
-.earn-summary-metric {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 0 16px;
-  border-left: 1px solid rgba(255,255,255,.1);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.earn-summary-label {
-  color: var(--text-dim, #7b8a9e);
-  font-size: 11px;
+/* The Total row now carries the month's referral earnings on its right. */
+.earn-breakdown-total-earnings {
+  flex-shrink: 0;
+  margin-left: 16px;
+  color: var(--text-muted, #a8b4c4);
+  font-size: 13px;
   font-weight: 600;
+  white-space: nowrap;
 }
-.earn-summary-metric strong {
+.earn-breakdown-total-earnings strong {
+  color: #4ade80;
   font-size: 14px;
   font-weight: 800;
+  font-variant-numeric: tabular-nums;
 }
-.earn-summary-note {
-  color: var(--text-dim, #7b8a9e);
-  font-size: 10px;
-  font-weight: 600;
-}
-/* A complimentary grant is a different kind of debt from ordinary arrears —
-   tint it so it reads as its own thing at a glance. */
+/* The old right-aligned summary strip is gone; only the complimentary tint
+   survives it, now applied to the opening-balance note in the calculation. */
 .earn-summary-note--complimentary {
   color: #fbbf24;
-}
-.earn-summary-opening strong { color: #7dd3fc; }
-.earn-summary-earnings strong { color: #4ade80; }
-.earn-summary-recoveries strong { color: #fca5a5; }
-.earn-summary-expenses strong { color: #fca5a5; }
-.earn-summary-balance--positive strong { color: #4ade80; }
-.earn-summary-balance--negative strong { color: #f87171; }
-.earn-summary-balance--zero strong { color: var(--text-muted, #a8b4c4); }
-.earn-summary-balance .earn-status {
-  margin-left: 2px;
 }
 .earn-breakdown-empty {
   color: var(--text-dim, #7b8a9e);
@@ -359,15 +332,11 @@
   .earn-header { flex-direction: column; }
   .earn-detail-grid { gap: 6px; }
   .earn-detail-card { min-width: 80px; padding: 6px 8px; }
-  .earn-breakdown-summary {
-    justify-content: flex-start;
+  .earn-breakdown-total {
     flex-wrap: wrap;
-    row-gap: 8px;
+    row-gap: 6px;
   }
-  .earn-summary-metric {
-    flex: 1 1 145px;
-    padding: 0 10px;
-  }
+  .earn-breakdown-total-earnings { margin-left: 0; }
 }
 
 /* Carry-forward indicator */
@@ -403,47 +372,53 @@
   vertical-align: middle;
 }
 
-/* ── Per-handler calculation, inside the expanded row ────────────────────── */
+/* ── Per-handler calculation, directly under the Total row ───────────────
+   Full width and in normal flow. It was a narrow right-aligned card, which
+   left the rest of the expanded row empty from the Total row to the border. */
 .earn-ledger {
-  margin-top: 12px;
+  display: block;
+  width: 100%;
+  margin: 10px 0 0;
   padding: 12px 14px;
   border: 1px solid rgba(255, 255, 255, .09);
   border-radius: 10px;
   background: rgba(255, 255, 255, .022);
-  max-width: 420px;
-  margin-left: auto;
   font-variant-numeric: tabular-nums;
+}
+/* Desktop: one compact horizontal band across the full width. Columns size
+   themselves to the content, so nothing reserves empty space. */
+.earn-ledger-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 4px 18px;
+  align-items: start;
 }
 .earn-ledger-row {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 24px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
   padding: 4px 0;
-  font-size: 12px;
 }
 .earn-ledger-label {
   color: var(--text-dim, #7b8a9e);
   font-weight: 600;
+  font-size: 11px;
 }
 .earn-ledger-value {
   font-weight: 700;
-  font-size: 13px;
+  font-size: 14px;
 }
 .earn-ledger-note {
+  display: block;
   font-size: 10px;
   font-weight: 600;
   color: var(--text-dim, #7b8a9e);
-  margin: -2px 0 4px;
-}
-.earn-ledger-row--total {
-  margin-top: 6px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, .14);
+  line-height: 1.35;
 }
 .earn-ledger-row--total .earn-ledger-label,
 .earn-ledger-row--total .earn-ledger-value {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 800;
 }
 .earn-ledger-row--total .earn-status {
@@ -451,16 +426,32 @@
 }
 .earn-ledger-outcome {
   margin: 10px 0 0;
+  padding-top: 9px;
+  border-top: 1px solid rgba(255, 255, 255, .1);
   font-size: 12px;
   font-weight: 600;
   color: var(--text-muted, #a8b4c4);
 }
 
-@media (max-width: 760px) {
-  .earn-ledger {
-    max-width: none;
-    margin-left: 0;
+/* Mobile: one item per row, label left, amount right, no sideways scroll. */
+@media (max-width: 768px) {
+  .earn-ledger-rows {
+    grid-template-columns: 1fr;
+    gap: 0;
   }
+  .earn-ledger-row {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, .05);
+  }
+  .earn-ledger-row:last-child { border-bottom: none; }
+  .earn-ledger-label { font-size: 12px; }
+  .earn-ledger-value { text-align: right; }
+  .earn-ledger-note { flex: 1 0 100%; }
 }
 
 /* Carry-forward detail box (inside expanded row) */

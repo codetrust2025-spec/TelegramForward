@@ -318,11 +318,10 @@ export default function EarningsBreakdown({
                       <strong title={CLOSING_BALANCE_FORMULA}>{net > 0 ? "+" : ""}{fmt(net)}</strong>
                       {/* "c/f" was an abbreviation nobody had to know. Spell the
                           opening balance out under the closing figure instead. */}
+                      {/* Amount only. The reason belongs to the expanded
+                          calculation, where there is room to read it. */}
                       {showOpeningBalance && (
-                        <span
-                          className="earn-carry-fwd"
-                          title={`${openingReason}. ${openingDetail}.`}
-                        >
+                        <span className="earn-carry-fwd">
                           Opening balance: {signedCurrency(priorBalance)}
                         </span>
                       )}
@@ -340,7 +339,7 @@ export default function EarningsBreakdown({
                             const rows = currentCandidates.filter(c => Number(c.payment) > 0);
                             const pct = (p.commission_pct || 50) / 100;
                             return (
-                              <ul className="earn-breakdown-list">
+                              <ul className="earn-breakdown-list candidate-list">
                                 {rows.length === 0 && (
                                   <li className="earn-breakdown-item earn-breakdown-empty">
                                     No candidate payments received in this period.
@@ -396,66 +395,74 @@ export default function EarningsBreakdown({
                                     <strong className="earn-breakdown-amount">{fmt(adminComplimentary)}</strong>
                                   </li>
                                 )}
-                                <li className="earn-breakdown-item earn-breakdown-total">
+                                <li className="earn-breakdown-item earn-breakdown-total candidate-total">
                                   <span className="earn-breakdown-total-title">
                                     <strong>Total ({Number(p.count) || rows.length} candidates)</strong>
+                                  </span>
+                                  <span className="earn-breakdown-total-earnings">
+                                    Referral earnings <strong>{fmt(commission)}</strong>
                                   </span>
                                 </li>
                               </ul>
                             );
                           })()}
-                          {/* One vertical sum, in the order the money moves, so the
-                              closing balance can be checked line by line rather than
-                              inferred from figures scattered across the row. */}
-                          <div className="earn-ledger" role="table" aria-label={`Payment calculation for ${p.name}`}>
-                            <div className="earn-ledger-row" role="row">
-                              <span className="earn-ledger-label" role="rowheader">Opening balance</span>
-                              <span className="earn-ledger-value" role="cell">{signedCurrency(priorBalance)}</span>
-                            </div>
-                            {showOpeningBalance && (
-                              <div className="earn-ledger-note">
-                                <span
-                                  className={balanceIsComplimentary ? "earn-summary-note--complimentary" : undefined}
-                                  title={openingDetail}
-                                >
-                                  {openingReason}
+                          {/* Full width, in normal flow, immediately after the Total
+                              row. Each term of the sum is one item, so the closing
+                              balance can be checked across the band rather than
+                              inferred from figures scattered around the row. */}
+                          <div
+                            className="earn-ledger earnings-calculation-summary"
+                            role="table"
+                            aria-label={`Payment calculation for ${p.name}`}
+                          >
+                            <div className="earn-ledger-rows">
+                              <div className="earn-ledger-row" role="row">
+                                <span className="earn-ledger-label" role="rowheader">Opening balance</span>
+                                <span className="earn-ledger-value" role="cell">{signedCurrency(priorBalance)}</span>
+                                {showOpeningBalance && (
+                                  <span
+                                    className={`earn-ledger-note${balanceIsComplimentary ? " earn-summary-note--complimentary" : ""}`}
+                                    title={openingDetail}
+                                  >
+                                    {openingReason}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="earn-ledger-row" role="row">
+                                <span className="earn-ledger-label" role="rowheader">Referral earnings</span>
+                                <span className="earn-ledger-value earn-green" role="cell">{fmt(commission)}</span>
+                              </div>
+                              <div className="earn-ledger-row" role="row">
+                                <span className="earn-ledger-label" role="rowheader">Salary</span>
+                                <span className="earn-ledger-value" role="cell">{fmt(salary)}</span>
+                              </div>
+                              {/* Only shown when non-zero, but never omitted when it
+                                  exists — otherwise the band would not add up. */}
+                              {recoveries > 0 && (
+                                <div className="earn-ledger-row" role="row">
+                                  <span className="earn-ledger-label" role="rowheader">Recoveries</span>
+                                  <span className="earn-ledger-value earn-red" role="cell">−{fmt(recoveries)}</span>
+                                </div>
+                              )}
+                              <div className="earn-ledger-row" role="row">
+                                <span className="earn-ledger-label" role="rowheader">Paid out</span>
+                                <span className="earn-ledger-value earn-red" role="cell">
+                                  {paid > 0 ? `−${fmt(paid)}` : fmt(0)}
                                 </span>
                               </div>
-                            )}
-                            <div className="earn-ledger-row" role="row">
-                              <span className="earn-ledger-label" role="rowheader">Referral earnings</span>
-                              <span className="earn-ledger-value earn-green" role="cell">{fmt(commission)}</span>
-                            </div>
-                            <div className="earn-ledger-row" role="row">
-                              <span className="earn-ledger-label" role="rowheader">Salary</span>
-                              <span className="earn-ledger-value" role="cell">{fmt(salary)}</span>
-                            </div>
-                            {/* Only shown when non-zero, but never omitted when it
-                                exists — otherwise the column would not add up. */}
-                            {recoveries > 0 && (
-                              <div className="earn-ledger-row" role="row">
-                                <span className="earn-ledger-label" role="rowheader">Recoveries</span>
-                                <span className="earn-ledger-value earn-red" role="cell">−{fmt(recoveries)}</span>
+                              <div className="earn-ledger-row earn-ledger-row--total" role="row">
+                                <span className="earn-ledger-label" role="rowheader" title={CLOSING_BALANCE_FORMULA}>
+                                  Closing balance
+                                  <span className="earn-info" aria-hidden="true">i</span>
+                                </span>
+                                <span
+                                  className={`earn-ledger-value ${net > 0 ? "earn-green" : net < 0 ? "earn-red" : "earn-settled"}`}
+                                  role="cell"
+                                >
+                                  {signedCurrency(net)}
+                                  <span className={`earn-status ${status.cls}`}>{status.label}</span>
+                                </span>
                               </div>
-                            )}
-                            <div className="earn-ledger-row" role="row">
-                              <span className="earn-ledger-label" role="rowheader">Paid out</span>
-                              <span className="earn-ledger-value earn-red" role="cell">
-                                {paid > 0 ? `−${fmt(paid)}` : fmt(0)}
-                              </span>
-                            </div>
-                            <div className="earn-ledger-row earn-ledger-row--total" role="row">
-                              <span className="earn-ledger-label" role="rowheader" title={CLOSING_BALANCE_FORMULA}>
-                                Closing balance
-                                <span className="earn-info" aria-hidden="true">i</span>
-                              </span>
-                              <span
-                                className={`earn-ledger-value ${net > 0 ? "earn-green" : net < 0 ? "earn-red" : "earn-settled"}`}
-                                role="cell"
-                              >
-                                {signedCurrency(net)}
-                                <span className={`earn-status ${status.cls}`}>{status.label}</span>
-                              </span>
                             </div>
                             <p className="earn-ledger-outcome">{settlementSentence(p.name, net)}</p>
                           </div>
