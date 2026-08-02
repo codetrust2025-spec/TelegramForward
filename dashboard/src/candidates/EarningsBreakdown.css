@@ -373,12 +373,94 @@
 /* Carry-forward indicator */
 .earn-carry-fwd {
   display: block;
-  font-size: 9px;
+  /* Was 9px as a "c/f" abbreviation nobody read. It now carries a full label,
+     so it needs to be legible rather than merely present. */
+  font-size: 10px;
   font-weight: 600;
   color: var(--text-dim, #7b8a9e);
-  margin-top: 2px;
-  opacity: .85;
+  margin-top: 3px;
+  opacity: .95;
   letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+/* Info affordance next to "Closing balance"; the formula lives in the title. */
+.earn-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  margin-left: 5px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 8px;
+  font-style: italic;
+  font-weight: 700;
+  line-height: 1;
+  opacity: .6;
+  cursor: help;
+  vertical-align: middle;
+}
+
+/* ── Per-handler calculation, inside the expanded row ────────────────────── */
+.earn-ledger {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, .09);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .022);
+  max-width: 420px;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.earn-ledger-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+.earn-ledger-label {
+  color: var(--text-dim, #7b8a9e);
+  font-weight: 600;
+}
+.earn-ledger-value {
+  font-weight: 700;
+  font-size: 13px;
+}
+.earn-ledger-note {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim, #7b8a9e);
+  margin: -2px 0 4px;
+}
+.earn-ledger-row--total {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, .14);
+}
+.earn-ledger-row--total .earn-ledger-label,
+.earn-ledger-row--total .earn-ledger-value {
+  font-size: 14px;
+  font-weight: 800;
+}
+.earn-ledger-row--total .earn-status {
+  margin-left: 8px;
+}
+.earn-ledger-outcome {
+  margin: 10px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted, #a8b4c4);
+}
+
+@media (max-width: 760px) {
+  .earn-ledger {
+    max-width: none;
+    margin-left: 0;
+  }
 }
 
 /* Carry-forward detail box (inside expanded row) */

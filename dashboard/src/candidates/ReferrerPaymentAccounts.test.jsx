@@ -374,13 +374,17 @@ describe("referrer payment accounts", () => {
 
     const summary = within(container.querySelector(".earn-breakdown-total"));
     expect(summary.getByText("Total (5 candidates)")).toBeInTheDocument();
-    expect(summary.getByText("Earnings")).toBeInTheDocument();
-    expect(summary.getByText("₹36,000")).toBeInTheDocument();
-    expect(summary.getByText("Expenses")).toBeInTheDocument();
-    expect(summary.getByText("−₹29,000")).toBeInTheDocument();
-    expect(summary.getByText("Net balance")).toBeInTheDocument();
-    expect(summary.getByText("+₹7,000")).toBeInTheDocument();
-    expect(summary.getByText("Owe")).toBeInTheDocument();
+    // The money now reads as one vertical calculation below the candidate list.
+    const ledger = within(container.querySelector(".earn-ledger"));
+    expect(ledger.getByText("Referral earnings")).toBeInTheDocument();
+    expect(ledger.getByText("₹36,000")).toBeInTheDocument();
+    expect(ledger.getByText("Paid out")).toBeInTheDocument();
+    expect(ledger.getByText("−₹29,000")).toBeInTheDocument();
+    expect(ledger.getByText(/^Closing balance/)).toBeInTheDocument();
+    expect(ledger.getByText("+₹7,000")).toBeInTheDocument();
+    // "Owe" never said who owed whom; the status now states the direction.
+    expect(ledger.getByText("To pay")).toBeInTheDocument();
+    expect(ledger.getByText(/^Company needs to pay/)).toBeInTheDocument();
     expect(summary.queryByText("₹5,000")).not.toBeInTheDocument();
 
     rerender(
@@ -405,11 +409,11 @@ describe("referrer payment accounts", () => {
       "/api/candidates?month=2026-08&reference=Sample+Referrer",
       { credentials: "include" },
     ));
-    const refreshedSummary = within(container.querySelector(".earn-breakdown-total"));
-    expect(refreshedSummary.getByText("Opening balance")).toBeInTheDocument();
-    expect(refreshedSummary.getByText("+₹7,000")).toBeInTheDocument();
-    expect(refreshedSummary.getByText("Closing balance")).toBeInTheDocument();
-    expect(refreshedSummary.getByText("+₹14,000")).toBeInTheDocument();
+    const refreshedLedger = within(container.querySelector(".earn-ledger"));
+    expect(refreshedLedger.getByText("Opening balance")).toBeInTheDocument();
+    expect(refreshedLedger.getByText("+₹7,000")).toBeInTheDocument();
+    expect(refreshedLedger.getByText(/^Closing balance/)).toBeInTheDocument();
+    expect(refreshedLedger.getByText("+₹14,000")).toBeInTheDocument();
   });
 
   it("confirms before clearing unsaved fields when switching referrers", async () => {

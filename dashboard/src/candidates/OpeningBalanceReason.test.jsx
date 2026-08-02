@@ -1,5 +1,5 @@
 import React from "react";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import EarningsBreakdown from "./EarningsBreakdown.jsx";
@@ -46,11 +46,14 @@ async function openRow(performer) {
   );
   const nameCell = screen.getAllByText(performer.name).find((el) => el.closest("tr.earn-row"));
   fireEvent.click(nameCell.closest("tr"));
-  const strip = (await screen.findByText(/^Total \(/)).closest("li");
-  return {
-    strip,
-    opening: within(strip).getByText("Opening balance").closest(".earn-summary-metric"),
-  };
+  // The opening balance and its explanation now live in the calculation
+  // ledger below the candidate list rather than in the old summary strip.
+  const ledger = await waitFor(() => {
+    const el = document.querySelector(".earn-ledger");
+    expect(el).toBeInTheDocument();
+    return el;
+  });
+  return { ledger, opening: ledger };
 }
 
 describe("opening balance states its reason", () => {
@@ -61,7 +64,7 @@ describe("opening balance states its reason", () => {
 
   it("shows the earned/paid split behind the figure", async () => {
     const { opening } = await openRow(THRILOK);
-    const note = opening.querySelector(".earn-summary-note");
+    const note = opening.querySelector(".earn-ledger-note [title]");
     expect(note.getAttribute("title")).toBe("Earned ₹45,000 · paid ₹40,000 before Jul 2026");
   });
 
@@ -80,7 +83,7 @@ describe("opening balance states its reason", () => {
       prior_balance: 2000,
       net_payable: 2000,
     });
-    const note = opening.querySelector(".earn-summary-note");
+    const note = opening.querySelector(".earn-ledger-note [title]");
     expect(note.getAttribute("title")).toContain("recovered ₹3,000");
   });
 
@@ -128,7 +131,7 @@ describe("opening balance made of an unpaid closure complimentary", () => {
 
   it("names the complimentary amount in the hover detail", async () => {
     const { opening } = await openRow(CLOSURE);
-    expect(opening.querySelector(".earn-summary-note").getAttribute("title")).toBe(
+    expect(opening.querySelector(".earn-ledger-note [title]").getAttribute("title")).toBe(
       "Earned ₹50,000 · incl. ₹5,000 profile-closure complimentary · paid ₹45,000 before Jul 2026",
     );
   });
@@ -147,7 +150,7 @@ describe("opening balance made of an unpaid closure complimentary", () => {
       prior_balance: 10000,
       net_payable: 10000,
     });
-    expect(opening.querySelector(".earn-summary-note").getAttribute("title")).toContain(
+    expect(opening.querySelector(".earn-ledger-note [title]").getAttribute("title")).toContain(
       "incl. ₹10,000 profile-closure complimentary (2 closures)",
     );
   });
@@ -162,7 +165,7 @@ describe("opening balance made of an unpaid closure complimentary", () => {
     expect(opening.textContent).toContain("unpaid from Jun 2026");
     expect(opening.textContent).not.toContain("profile-closure complimentary from");
     // The complimentary is still disclosed, just not claimed as the whole reason.
-    expect(opening.querySelector(".earn-summary-note").getAttribute("title")).toContain(
+    expect(opening.querySelector(".earn-ledger-note [title]").getAttribute("title")).toContain(
       "incl. ₹5,000 profile-closure complimentary",
     );
     expect(opening.querySelector(".earn-summary-note--complimentary")).toBeNull();

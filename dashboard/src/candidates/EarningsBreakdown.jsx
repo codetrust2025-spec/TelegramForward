@@ -111,21 +111,39 @@ export default function EarningsBreakdown({
 
   // Totals
   const totals = useMemo(() => {
-    let commission = 0, salary = 0, owed = 0, paid = 0;
+    let commission = 0, salary = 0, owed = 0, paid = 0, opening = 0, net = 0;
     for (const p of performers) {
       commission += Number(p.commission_total ?? p.auto_earnings_total) || 0;
       salary += Number(p.salary_total) || 0;
       owed += Number(p.auto_earnings_total) || 0;
       paid += Number(p.paid_out_total) || 0;
+      opening += Number(p.prior_balance) || 0;
+      // Sum the per-handler closing balances rather than recomputing from the
+      // column totals. `owed - paid` silently dropped every opening balance and
+      // every recovery, so the footer disagreed with the column above it.
+      net += Number(p.net_payable) || 0;
     }
-    return { commission, salary, owed, paid, net: owed - paid };
+    return { commission, salary, owed, paid, opening, net };
   }, [performers]);
 
+  // "Owe" never said who owed whom. The closing balance is money the company
+  // still has to hand over, so the label states the direction outright.
   function getStatus(net) {
-    if (net > 0) return { label: "Owe", cls: "earn-status--owe" };
+    if (net > 0) return { label: "To pay", cls: "earn-status--owe" };
     if (net < 0) return { label: "Overpaid", cls: "earn-status--over" };
     return { label: "Settled", cls: "earn-status--settled" };
   }
+
+  /** Plain-English outcome for one handler's closing balance. */
+  function settlementSentence(name, net) {
+    const who = name || "this handler";
+    if (net > 0) return `Company needs to pay ${who} ${fmt(net)}.`;
+    if (net < 0) return `${who} has been paid ${fmt(Math.abs(net))} more than earned.`;
+    return `${who} is fully settled — nothing to pay.`;
+  }
+
+  const CLOSING_BALANCE_FORMULA =
+    "Opening balance + earnings + salary − paid out";
 
   const scopeLabel = useMemo(() => {
     if (!month || month === "all") return null;
@@ -165,9 +183,9 @@ export default function EarningsBreakdown({
           {scopeLabel && <span className="earn-scope">{scopeLabel}</span>}
           <p className="earn-sub">
             {performers.length} handler{performers.length !== 1 ? "s" : ""} ·
-            Total owed <strong className="earn-green">{fmt(totals.owed)}</strong> ·
-            Paid <strong className="earn-red">{fmt(totals.paid)}</strong> ·
-            Net <strong className={totals.net > 0 ? "earn-green" : totals.net < 0 ? "earn-red" : "earn-settled"}>{totals.net > 0 ? "Owe " : totals.net < 0 ? "Overpaid " : ""}{fmt(Math.abs(totals.net))}</strong>
+            Current payable <strong className="earn-green">{fmt(totals.owed)}</strong> ·
+            Paid out <strong className="earn-red">{fmt(totals.paid)}</strong> ·
+            Closing balance <strong className={totals.net > 0 ? "earn-green" : totals.net < 0 ? "earn-red" : "earn-settled"}>{totals.net > 0 ? "To pay " : totals.net < 0 ? "Overpaid " : ""}{fmt(Math.abs(totals.net))}</strong>
           </p>
         </div>
         <div className="earn-header-right">
@@ -208,9 +226,12 @@ export default function EarningsBreakdown({
               <th className="earn-th--money">Revenue</th>
               <th className="earn-th--money">Earnings</th>
               <th className="earn-th--money">Salary</th>
-              <th className="earn-th--money">Total Owed</th>
-              <th className="earn-th--money">Paid Out</th>
-              <th className="earn-th--money">Balance</th>
+              <th className="earn-th--money">Current payable</th>
+              <th className="earn-th--money">Paid out</th>
+              <th className="earn-th--money" title={CLOSING_BALANCE_FORMULA}>
+                Closing balance
+                <span className="earn-info" aria-hidden="true">i</span>
+              </th>
               <th className="earn-th--status">Status</th>
             </tr>
           </thead>
@@ -294,13 +315,15 @@ export default function EarningsBreakdown({
                     <td className="earn-td--money"><strong>{fmt(owed)}</strong></td>
                     <td className="earn-td--money earn-red">{paid > 0 ? fmt(paid) : "₹0"}</td>
                     <td className={`earn-td--money ${net > 0 ? "earn-green" : net < 0 ? "earn-red" : "earn-settled"}`}>
-                      <strong>{net > 0 ? "+" : ""}{fmt(net)}</strong>
-                      {priorBalance !== 0 && month && month !== "all" && (
+                      <strong title={CLOSING_BALANCE_FORMULA}>{net > 0 ? "+" : ""}{fmt(net)}</strong>
+                      {/* "c/f" was an abbreviation nobody had to know. Spell the
+                          opening balance out under the closing figure instead. */}
+                      {showOpeningBalance && (
                         <span
                           className="earn-carry-fwd"
-                          title={`Carry-forward ${signedCurrency(priorBalance)} — ${openingReason}. ${openingDetail}.`}
+                          title={`${openingReason}. ${openingDetail}.`}
                         >
-                          {priorBalance > 0 ? "↑" : "↓"}{fmt(Math.abs(priorBalance))} c/f
+                          Opening balance: {signedCurrency(priorBalance)}
                         </span>
                       )}
                     </td>
@@ -377,52 +400,65 @@ export default function EarningsBreakdown({
                                   <span className="earn-breakdown-total-title">
                                     <strong>Total ({Number(p.count) || rows.length} candidates)</strong>
                                   </span>
-                                  <span className="earn-breakdown-summary">
-                                    {showOpeningBalance && (
-                                      <span className="earn-summary-metric earn-summary-opening">
-                                        <span className="earn-summary-label">Opening balance</span>
-                                        <strong>{signedCurrency(priorBalance)}</strong>
-                                        <span
-                                          className={`earn-summary-note${balanceIsComplimentary ? " earn-summary-note--complimentary" : ""}`}
-                                          title={openingDetail}
-                                        >
-                                          {openingReason}
-                                        </span>
-                                      </span>
-                                    )}
-                                    {/* Earnings is the full amount owed for the month —
-                                        commission AND salary. Showing commission alone
-                                        made the strip contradict itself: the numbers no
-                                        longer added up to the closing balance beside them. */}
-                                    <span className="earn-summary-metric earn-summary-earnings">
-                                      <span className="earn-summary-label">Earnings</span>
-                                      <strong>{fmt(owed)}</strong>
-                                      {salary > 0 && (
-                                        <span className="earn-summary-note" title="Monthly salary included in this month's earnings">
-                                          incl. {fmt(salary)} salary
-                                        </span>
-                                      )}
-                                    </span>
-                                    {recoveries > 0 && (
-                                      <span className="earn-summary-metric earn-summary-recoveries">
-                                        <span className="earn-summary-label">Recoveries</span>
-                                        <strong>−{fmt(recoveries)}</strong>
-                                      </span>
-                                    )}
-                                    <span className="earn-summary-metric earn-summary-expenses">
-                                      <span className="earn-summary-label">Expenses</span>
-                                      <strong>{paid > 0 ? `−${fmt(paid)}` : fmt(0)}</strong>
-                                    </span>
-                                    <span className={`earn-summary-metric earn-summary-balance ${net > 0 ? "earn-summary-balance--positive" : net < 0 ? "earn-summary-balance--negative" : "earn-summary-balance--zero"}`}>
-                                      <span className="earn-summary-label">{showOpeningBalance ? "Closing balance" : "Net balance"}</span>
-                                      <strong>{signedCurrency(net)}</strong>
-                                      <span className={`earn-status ${status.cls}`}>{status.label}</span>
-                                    </span>
-                                  </span>
                                 </li>
                               </ul>
                             );
                           })()}
+                          {/* One vertical sum, in the order the money moves, so the
+                              closing balance can be checked line by line rather than
+                              inferred from figures scattered across the row. */}
+                          <div className="earn-ledger" role="table" aria-label={`Payment calculation for ${p.name}`}>
+                            <div className="earn-ledger-row" role="row">
+                              <span className="earn-ledger-label" role="rowheader">Opening balance</span>
+                              <span className="earn-ledger-value" role="cell">{signedCurrency(priorBalance)}</span>
+                            </div>
+                            {showOpeningBalance && (
+                              <div className="earn-ledger-note">
+                                <span
+                                  className={balanceIsComplimentary ? "earn-summary-note--complimentary" : undefined}
+                                  title={openingDetail}
+                                >
+                                  {openingReason}
+                                </span>
+                              </div>
+                            )}
+                            <div className="earn-ledger-row" role="row">
+                              <span className="earn-ledger-label" role="rowheader">Referral earnings</span>
+                              <span className="earn-ledger-value earn-green" role="cell">{fmt(commission)}</span>
+                            </div>
+                            <div className="earn-ledger-row" role="row">
+                              <span className="earn-ledger-label" role="rowheader">Salary</span>
+                              <span className="earn-ledger-value" role="cell">{fmt(salary)}</span>
+                            </div>
+                            {/* Only shown when non-zero, but never omitted when it
+                                exists — otherwise the column would not add up. */}
+                            {recoveries > 0 && (
+                              <div className="earn-ledger-row" role="row">
+                                <span className="earn-ledger-label" role="rowheader">Recoveries</span>
+                                <span className="earn-ledger-value earn-red" role="cell">−{fmt(recoveries)}</span>
+                              </div>
+                            )}
+                            <div className="earn-ledger-row" role="row">
+                              <span className="earn-ledger-label" role="rowheader">Paid out</span>
+                              <span className="earn-ledger-value earn-red" role="cell">
+                                {paid > 0 ? `−${fmt(paid)}` : fmt(0)}
+                              </span>
+                            </div>
+                            <div className="earn-ledger-row earn-ledger-row--total" role="row">
+                              <span className="earn-ledger-label" role="rowheader" title={CLOSING_BALANCE_FORMULA}>
+                                Closing balance
+                                <span className="earn-info" aria-hidden="true">i</span>
+                              </span>
+                              <span
+                                className={`earn-ledger-value ${net > 0 ? "earn-green" : net < 0 ? "earn-red" : "earn-settled"}`}
+                                role="cell"
+                              >
+                                {signedCurrency(net)}
+                                <span className={`earn-status ${status.cls}`}>{status.label}</span>
+                              </span>
+                            </div>
+                            <p className="earn-ledger-outcome">{settlementSentence(p.name, net)}</p>
+                          </div>
                         </div>
                       </td>
                     </tr>
@@ -441,7 +477,14 @@ export default function EarningsBreakdown({
               <td className="earn-td--money">{fmt(totals.salary)}</td>
               <td className="earn-td--money"><strong>{fmt(totals.owed)}</strong></td>
               <td className="earn-td--money">{fmt(totals.paid)}</td>
-              <td className={`earn-td--money ${totals.net > 0 ? "earn-green" : totals.net < 0 ? "earn-red" : "earn-settled"}`}><strong>{fmt(totals.net)}</strong></td>
+              <td className={`earn-td--money ${totals.net > 0 ? "earn-green" : totals.net < 0 ? "earn-red" : "earn-settled"}`}>
+                <strong title={CLOSING_BALANCE_FORMULA}>{fmt(totals.net)}</strong>
+                {totals.opening !== 0 && month && month !== "all" && (
+                  <span className="earn-carry-fwd">
+                    Opening balance: {totals.opening > 0 ? "+" : "−"}{fmt(Math.abs(totals.opening))}
+                  </span>
+                )}
+              </td>
               <td></td>
             </tr>
           </tfoot>

@@ -37,12 +37,17 @@ async function renderStrip(performer) {
   );
   const nameCell = screen.getAllByText(performer.name).find((el) => el.closest("tr.earn-row"));
   fireEvent.click(nameCell.closest("tr"));
-  return await screen.findByText(/^Total \(/).then((el) => el.closest("li"));
+  await screen.findByText(/^Total \(/);
+  return await waitFor(() => {
+    const ledger = document.querySelector(".earn-ledger");
+    expect(ledger).toBeInTheDocument();
+    return ledger;
+  });
 }
 
-function amountFor(strip, label) {
-  const metric = within(strip).getByText(label).closest(".earn-summary-metric");
-  return metric.querySelector("strong").textContent;
+function amountFor(ledger, label) {
+  const row = within(ledger).getByText(label).closest(".earn-ledger-row");
+  return row.querySelector(".earn-ledger-value").textContent;
 }
 
 function toNumber(text) {
@@ -51,7 +56,7 @@ function toNumber(text) {
   return negative ? -digits : digits;
 }
 
-describe("earnings summary strip reconciles with the closing balance", () => {
+describe("the handler calculation reconciles with the closing balance", () => {
   // Thrilok, Jul 2026: commission 27,000 + salary 15,000 = 42,000 owed,
   // 42,000 paid out, 5,000 carried in. Closing must stay +5,000.
   const SALARIED = {
@@ -68,41 +73,40 @@ describe("earnings summary strip reconciles with the closing balance", () => {
     net_payable: 5000,
   };
 
-  it("counts salary in Earnings so the arithmetic holds", async () => {
+  it("keeps salary in the sum so the arithmetic holds", async () => {
     const strip = await renderStrip(SALARIED);
 
-    expect(amountFor(strip, "Earnings")).toBe(fmt(42000));
+    // Salary is now its own line rather than folded into a single "Earnings"
+    // figure, but it must still be counted — dropping it was the original bug.
+    expect(amountFor(strip, "Referral earnings")).toBe(fmt(27000));
+    expect(amountFor(strip, "Salary")).toBe(fmt(15000));
 
     const opening = toNumber(amountFor(strip, "Opening balance"));
-    const earnings = toNumber(amountFor(strip, "Earnings"));
-    const expenses = toNumber(amountFor(strip, "Expenses"));
-    const closing = toNumber(amountFor(strip, "Closing balance"));
+    const earnings = toNumber(amountFor(strip, "Referral earnings"));
+    const salary = toNumber(amountFor(strip, "Salary"));
+    const paidOut = toNumber(amountFor(strip, "Paid out"));
+    const closing = toNumber(amountFor(strip, /^Closing balance/));
 
-    expect(opening + earnings + expenses).toBe(closing);
+    expect(opening + earnings + salary + paidOut).toBe(closing);
     expect(closing).toBe(5000);
   });
 
-  it("says which part of Earnings is salary", async () => {
-    const strip = await renderStrip(SALARIED);
-    expect(within(strip).getByText(/incl\. ₹15,000 salary/)).toBeInTheDocument();
-  });
-
-  it("omits the salary note when the referrer has no salary", async () => {
+  it("shows a zero salary line rather than hiding it", async () => {
     const strip = await renderStrip({
       ...SALARIED,
       salary_total: 0,
       auto_earnings_total: 27000,
       paid_out_total: 27000,
     });
-    expect(within(strip).queryByText(/salary/)).toBeNull();
-    expect(amountFor(strip, "Earnings")).toBe(fmt(27000));
+    expect(amountFor(strip, "Salary")).toBe(fmt(0));
+    expect(amountFor(strip, "Referral earnings")).toBe(fmt(27000));
   });
 
   it("shows recoveries as a deduction and still reconciles", async () => {
     const strip = await renderStrip({
       ...SALARIED,
       recoveries_total: 3000,
-      // (27000 + 15000) − 3000 − 42000 + 5000
+      // 5000 + 27000 + 15000 − 3000 − 42000
       net_payable: 2000,
     });
 
@@ -110,24 +114,25 @@ describe("earnings summary strip reconciles with the closing balance", () => {
 
     const total =
       toNumber(amountFor(strip, "Opening balance")) +
-      toNumber(amountFor(strip, "Earnings")) +
+      toNumber(amountFor(strip, "Referral earnings")) +
+      toNumber(amountFor(strip, "Salary")) +
       toNumber(amountFor(strip, "Recoveries")) +
-      toNumber(amountFor(strip, "Expenses"));
-    expect(total).toBe(toNumber(amountFor(strip, "Closing balance")));
+      toNumber(amountFor(strip, "Paid out"));
+    expect(total).toBe(toNumber(amountFor(strip, /^Closing balance/)));
   });
 
-  it("hides the recoveries metric when there are none", async () => {
+  it("hides the recoveries line when there are none", async () => {
     const strip = await renderStrip(SALARIED);
     expect(within(strip).queryByText("Recoveries")).toBeNull();
   });
 
-  it("labels the total 'Net balance' when nothing was carried in", async () => {
+  it("still shows a zero opening balance when nothing was carried in", async () => {
     const strip = await renderStrip({
       ...SALARIED,
       prior_balance: 0,
       net_payable: 0,
     });
-    expect(within(strip).getByText("Net balance")).toBeInTheDocument();
-    expect(within(strip).queryByText("Opening balance")).toBeNull();
+    expect(amountFor(strip, "Opening balance")).toBe(fmt(0));
+    expect(within(strip).getByText("Settled")).toBeInTheDocument();
   });
 });
