@@ -691,6 +691,25 @@ body,
   }
 }
 
+/* ── Phone-width booking screen, whatever the pointer reports ──────────────
+   The block above only fires for a coarse pointer. A phone in desktop mode, a
+   tablet with a mouse, or any browser that reports a fine pointer still gets a
+   phone-width layout — and there the 22x22 control came back. Width is the
+   honest signal for this screen, so the minimum is applied on width too. */
+@media (max-width: 767px) {
+  .submit-slot-screen button,
+  .submit-slot-screen [role="button"],
+  .submit-slot-screen select {
+    min-height: var(--ta-touch-min);
+  }
+
+  .sbs-picker__toggle,
+  .sbs-back-btn {
+    min-width: var(--ta-touch-min);
+    min-height: var(--ta-touch-min);
+  }
+}
+
 /* ── Landscape phones: short viewport ──────────────────────────────────── */
 @media (max-width: 767px) and (max-height: 500px) and (orientation: landscape) {
   .app-header {
