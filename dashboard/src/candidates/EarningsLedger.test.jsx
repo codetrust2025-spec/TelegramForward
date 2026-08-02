@@ -1,0 +1,286 @@
+import React from "react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import EarningsBreakdown from "./EarningsBreakdown.jsx";
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+const fmt = (v) => `₹${Number(v).toLocaleString("en-IN")}`;
+
+const MONTHS = [{ value: "2026-07", label: "Jul 2026" }];
+
+/**
+ * Every handler row must satisfy the one published formula:
+ *
+ *   opening + referral earnings + salary − recoveries − paid out = closing
+ *
+ * These figures are the real Jul 2026 Production values, checked against
+ * `stats()` before this screen was changed.
+ */
+const THRILOK = {
+  name: "Thrilok",
+  count: 4,
+  completed: 0,
+  revenue_total: 54000,
+  commission_total: 27000,
+  salary_total: 15000,
+  auto_earnings_total: 42000,
+  paid_out_total: 42000,
+  recoveries_total: 0,
+  prior_balance: 5000,
+  prior_owed: 50000,
+  prior_paid: 45000,
+  prior_months: ["2026-06"],
+  net_payable: 5000,
+};
+
+const PAVAN = {
+  name: "Pavan Kalyan",
+  count: 2,
+  completed: 0,
+  revenue_total: 10000,
+  commission_total: 5000,
+  salary_total: 0,
+  auto_earnings_total: 5000,
+  paid_out_total: 6000,
+  recoveries_total: 0,
+  prior_balance: 12000,
+  prior_months: ["2026-06"],
+  net_payable: 11000,
+};
+
+function renderRows(performers) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ status: "ok", candidates: [] }) })),
+  );
+  return render(
+    <EarningsBreakdown
+      stats={{ top_performers: performers }}
+      month="2026-07"
+      monthOptions={MONTHS}
+      formatCurrency={fmt}
+      apiBase="/api"
+    />,
+  );
+}
+
+async function expand(name) {
+  const cell = screen.getAllByText(name).find((el) => el.closest("tr.earn-row"));
+  fireEvent.click(cell.closest("tr"));
+  return await waitFor(() => {
+    const ledger = document.querySelector(".earn-ledger");
+    expect(ledger).toBeInTheDocument();
+    return ledger;
+  });
+}
+
+function line(ledger, label) {
+  const row = within(ledger).getByText(label).closest(".earn-ledger-row");
+  return row.querySelector(".earn-ledger-value").textContent;
+}
+
+function toNumber(text) {
+  const negative = text.startsWith("−") || text.startsWith("-");
+  const digits = Number(String(text).replace(/[^0-9]/g, "")) || 0;
+  return negative ? -digits : digits;
+}
+
+function assertLedgerAddsUp(ledger) {
+  const opening = toNumber(line(ledger, "Opening balance"));
+  const earnings = toNumber(line(ledger, "Referral earnings"));
+  const salary = toNumber(line(ledger, "Salary"));
+  const paid = toNumber(line(ledger, "Paid out"));
+  const recoveries = within(ledger).queryByText("Recoveries")
+    ? toNumber(line(ledger, "Recoveries"))
+    : 0;
+  const closing = toNumber(line(ledger, /^Closing balance/));
+  expect(opening + earnings + salary + recoveries + paid).toBe(closing);
+  return closing;
+}
+
+describe("handler payment calculation", () => {
+  it("shows the full sum for a handler with salary and an opening balance", async () => {
+    renderRows([THRILOK]);
+    const ledger = await expand("Thrilok");
+
+    expect(line(ledger, "Opening balance")).toBe("+₹5,000");
+    expect(line(ledger, "Referral earnings")).toBe("₹27,000");
+    expect(line(ledger, "Salary")).toBe("₹15,000");
+    expect(line(ledger, "Paid out")).toBe("−₹42,000");
+    expect(assertLedgerAddsUp(ledger)).toBe(5000);
+  });
+
+  it("states plainly who has to pay whom", async () => {
+    renderRows([THRILOK]);
+    const ledger = await expand("Thrilok");
+
+    expect(ledger.querySelector(".earn-ledger-outcome").textContent).toBe(
+      "Company needs to pay Thrilok ₹5,000.",
+    );
+  });
+
+  it("shows a zero salary rather than omitting the line", async () => {
+    renderRows([PAVAN]);
+    const ledger = await expand("Pavan Kalyan");
+
+    expect(line(ledger, "Opening balance")).toBe("+₹12,000");
+    expect(line(ledger, "Referral earnings")).toBe("₹5,000");
+    expect(line(ledger, "Salary")).toBe("₹0");
+    expect(line(ledger, "Paid out")).toBe("−₹6,000");
+    expect(assertLedgerAddsUp(ledger)).toBe(11000);
+  });
+
+  it("adds up for a settled handler", async () => {
+    renderRows([{ ...PAVAN, name: "Settled One", paid_out_total: 17000, net_payable: 0 }]);
+    const ledger = await expand("Settled One");
+
+    expect(assertLedgerAddsUp(ledger)).toBe(0);
+    expect(within(ledger).getByText("Settled")).toBeInTheDocument();
+    expect(ledger.querySelector(".earn-ledger-outcome").textContent).toMatch(/fully settled/i);
+  });
+
+  it("adds up for an overpaid handler and says so", async () => {
+    renderRows([
+      { ...PAVAN, name: "Over One", prior_balance: 0, paid_out_total: 10000, net_payable: -5000 },
+    ]);
+    const ledger = await expand("Over One");
+
+    expect(assertLedgerAddsUp(ledger)).toBe(-5000);
+    expect(within(ledger).getByText("Overpaid")).toBeInTheDocument();
+    expect(ledger.querySelector(".earn-ledger-outcome").textContent).toMatch(
+      /paid ₹5,000 more than earned/i,
+    );
+  });
+
+  it("adds up for a handler with no salary and no opening balance", async () => {
+    renderRows([
+      {
+        name: "Venugopal",
+        count: 3,
+        commission_total: 20000,
+        salary_total: 0,
+        auto_earnings_total: 20000,
+        paid_out_total: 0,
+        recoveries_total: 0,
+        prior_balance: 0,
+        net_payable: 20000,
+      },
+    ]);
+    const ledger = await expand("Venugopal");
+
+    expect(line(ledger, "Opening balance")).toBe("₹0");
+    expect(assertLedgerAddsUp(ledger)).toBe(20000);
+  });
+
+  it("keeps recoveries in the sum when there are any", async () => {
+    renderRows([{ ...THRILOK, name: "Rec One", recoveries_total: 3000, net_payable: 2000 }]);
+    const ledger = await expand("Rec One");
+
+    expect(line(ledger, "Recoveries")).toBe("−₹3,000");
+    expect(assertLedgerAddsUp(ledger)).toBe(2000);
+  });
+});
+
+describe("terminology and status", () => {
+  it("uses the renamed column headings", () => {
+    const { container } = renderRows([THRILOK]);
+    const heads = [...container.querySelectorAll("th")].map((th) => th.textContent);
+
+    expect(heads.some((h) => h.startsWith("Current payable"))).toBe(true);
+    expect(heads.some((h) => h.startsWith("Closing balance"))).toBe(true);
+    expect(heads).not.toContain("Total Owed");
+    expect(heads).not.toContain("Balance");
+  });
+
+  it("spells out the opening balance in the collapsed row instead of 'c/f'", () => {
+    const { container } = renderRows([THRILOK]);
+    const chip = container.querySelector(".earn-carry-fwd");
+
+    expect(chip.textContent).toBe("Opening balance: +₹5,000");
+    expect(container.textContent).not.toMatch(/c\/f/);
+  });
+
+  it("labels a positive closing balance 'To pay', never 'Owe'", () => {
+    const { container } = renderRows([THRILOK]);
+
+    expect(within(container).getAllByText("To pay").length).toBeGreaterThan(0);
+    expect(container.textContent).not.toMatch(/\bOwe\b/);
+  });
+
+  it("explains the closing balance formula on hover", () => {
+    const { container } = renderRows([THRILOK]);
+    const head = [...container.querySelectorAll("th")].find((th) =>
+      th.textContent.startsWith("Closing balance"));
+
+    expect(head.getAttribute("title")).toBe(
+      "Opening balance + earnings + salary − paid out",
+    );
+    expect(head.querySelector(".earn-info")).not.toBeNull();
+  });
+
+  it("says 'Paid out' in the ledger, not 'Expenses'", async () => {
+    renderRows([THRILOK]);
+    const ledger = await expand("Thrilok");
+
+    expect(within(ledger).getByText("Paid out")).toBeInTheDocument();
+    expect(ledger.textContent).not.toMatch(/Expenses/);
+  });
+});
+
+describe("totals row agrees with the rows above it", () => {
+  it("sums the closing balances including opening balances", () => {
+    const { container } = renderRows([THRILOK, PAVAN]);
+    const footCells = [...container.querySelectorAll(".earn-foot td")];
+    const closing = footCells[footCells.length - 2].querySelector("strong").textContent;
+
+    // 5,000 + 11,000 — the old footer showed 19,000 by dropping both openings.
+    expect(closing).toBe(fmt(16000));
+  });
+
+  it("shows the combined opening balance under the total", () => {
+    const { container } = renderRows([THRILOK, PAVAN]);
+
+    expect(container.querySelector(".earn-foot .earn-carry-fwd").textContent).toBe(
+      "Opening balance: +₹17,000",
+    );
+  });
+
+  it("keeps the candidate breakdown inside the expanded row", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              status: "ok",
+              candidates: [
+                { id: "c1", name: "raju", payment: 6000, handler_commission: 3000, logged_date: "2026-07-30" },
+              ],
+            }),
+        }),
+      ),
+    );
+    render(
+      <EarningsBreakdown
+        stats={{ top_performers: [THRILOK] }}
+        month="2026-07"
+        monthOptions={MONTHS}
+        formatCurrency={fmt}
+        apiBase="/api"
+      />,
+    );
+    const cell = screen.getAllByText("Thrilok").find((el) => el.closest("tr.earn-row"));
+    fireEvent.click(cell.closest("tr"));
+
+    const item = await screen.findByText(/raju/);
+    expect(item.textContent).toContain("₹6,000 received");
+    expect(item.textContent).toContain("₹3,000 referral");
+    expect(item.textContent).toMatch(/30 Jul 2026/);
+  });
+});
