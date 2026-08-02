@@ -691,6 +691,18 @@ body,
   }
 }
 
+/* ── Baseline target size for every pointer ──────────────────────────
+   44px is the touch minimum, but between 768px and a fine pointer neither the
+   coarse block nor the phone-width block applies, and this control measured
+   22x22 there — under the 24x24 that WCAG 2.5.8 asks for at any pointer type.
+   The floor below is unconditional; the touch minimum still raises it to 44px
+   on phones and touch screens. */
+.sbs-picker__toggle,
+.sbs-back-btn {
+  min-width: 24px;
+  min-height: 24px;
+}
+
 /* ── Phone-width booking screen, whatever the pointer reports ──────────────
    The block above only fires for a coarse pointer. A phone in desktop mode, a
    tablet with a mouse, or any browser that reports a fine pointer still gets a
