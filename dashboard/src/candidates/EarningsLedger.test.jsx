@@ -364,6 +364,8 @@ describe("expanded row layout", () => {
       "Opening balance",
       "Referral earnings",
       "Salary",
+      "Total earned",
+      "Gross payable",
       "Paid out",
       "Closing balance",
     ]);
@@ -381,5 +383,115 @@ describe("the reason stays a sentence fragment in the data", () => {
     // Capitalisation is applied by ::first-letter; the text itself is unchanged.
     expect(note.textContent.startsWith("unpaid")).toBe(true);
     expect(note.getAttribute("title")).toMatch(/^Earned /);
+  });
+});
+
+/**
+ * The band now carries two running subtotals, so the chain can be followed
+ * step by step instead of the reader adding four figures in their head:
+ *
+ *   earnings + salary            = total earned
+ *   opening  + total earned      = gross payable
+ *   gross payable − paid out     = closing balance
+ */
+describe("running subtotals", () => {
+  function chain(ledger) {
+    const n = (label) => toNumber(line(ledger, label));
+    return {
+      opening: n("Opening balance"),
+      earnings: n("Referral earnings"),
+      salary: n("Salary"),
+      totalEarned: n("Total earned"),
+      gross: n("Gross payable"),
+      paid: n("Paid out"),
+      recoveries: within(ledger).queryByText("Recoveries") ? n("Recoveries") : 0,
+      closing: n(/^Closing balance/),
+    };
+  }
+
+  it("shows the reported Thrilok figures", async () => {
+    renderRows([THRILOK]);
+    const ledger = await expand("Thrilok");
+
+    expect(line(ledger, "Total earned")).toBe(fmt(42000));
+    expect(line(ledger, "Gross payable")).toBe("+₹47,000");
+  });
+
+  it("keeps each step of the chain consistent", async () => {
+    renderRows([THRILOK]);
+    const c = chain(await expand("Thrilok"));
+
+    expect(c.earnings + c.salary).toBe(c.totalEarned);
+    expect(c.opening + c.totalEarned).toBe(c.gross);
+    expect(c.gross + c.paid + c.recoveries).toBe(c.closing);
+  });
+
+  it("matches Current payable in the collapsed row", async () => {
+    const { container } = renderRows([THRILOK]);
+    const ledger = await expand("Thrilok");
+    const cells = [...container.querySelectorAll("tr.earn-row td")].map((td) => td.textContent);
+
+    // Total earned is the same figure the Current payable column reports.
+    expect(cells).toContain(fmt(42000));
+    expect(line(ledger, "Total earned")).toBe(fmt(42000));
+  });
+
+  it("holds for a handler with no salary", async () => {
+    renderRows([PAVAN]);
+    const c = chain(await expand("Pavan Kalyan"));
+
+    expect(c.totalEarned).toBe(5000);
+    expect(c.gross).toBe(17000);
+    expect(c.closing).toBe(11000);
+    expect(c.earnings + c.salary).toBe(c.totalEarned);
+    expect(c.opening + c.totalEarned).toBe(c.gross);
+    expect(c.gross + c.paid).toBe(c.closing);
+  });
+
+  it("holds when the handler is overpaid", async () => {
+    renderRows([
+      { ...PAVAN, name: "Over One", prior_balance: 0, paid_out_total: 10000, net_payable: -5000 },
+    ]);
+    const c = chain(await expand("Over One"));
+
+    expect(c.gross).toBe(5000);
+    expect(c.closing).toBe(-5000);
+    expect(c.gross + c.paid).toBe(c.closing);
+  });
+
+  it("keeps recoveries after paid out and still balances", async () => {
+    renderRows([{ ...THRILOK, name: "Rec One", recoveries_total: 3000, net_payable: 2000 }]);
+    const ledger = await expand("Rec One");
+    const c = chain(ledger);
+
+    expect(c.totalEarned).toBe(42000);
+    expect(c.gross).toBe(47000);
+    expect(c.gross + c.paid + c.recoveries).toBe(c.closing);
+
+    const order = [...ledger.querySelectorAll(".earn-ledger-row")].map((el) =>
+      el.querySelector(".earn-ledger-label").textContent.replace(/i$/, "").trim(),
+    );
+    expect(order.indexOf("Recoveries")).toBeGreaterThan(order.indexOf("Paid out"));
+    expect(order.indexOf("Recoveries")).toBeLessThan(order.indexOf("Closing balance"));
+  });
+
+  it("marks the subtotals as results rather than inputs", async () => {
+    renderRows([THRILOK]);
+    const ledger = await expand("Thrilok");
+
+    for (const label of ["Total earned", "Gross payable"]) {
+      const row = within(ledger).getByText(label).closest(".earn-ledger-row");
+      expect(row).toHaveClass("earn-ledger-row--subtotal");
+    }
+  });
+
+  it("explains how each subtotal is reached", async () => {
+    renderRows([THRILOK]);
+    const ledger = await expand("Thrilok");
+
+    expect(within(ledger).getByText("Total earned").getAttribute("title"))
+      .toBe("Referral earnings + salary");
+    expect(within(ledger).getByText("Gross payable").getAttribute("title"))
+      .toBe("Opening balance + total earned");
   });
 });
