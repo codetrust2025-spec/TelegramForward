@@ -34,7 +34,7 @@ export default function EarningsBreakdown({
   stats,
   allStats = null,
   month,
-  onMonthChange,
+  // Read-only here: used to render the month's friendly name, not to change it.
   monthOptions,
   onAddExpense,
   handlerView = false,
@@ -171,14 +171,10 @@ export default function EarningsBreakdown({
           </p>
         </div>
         <div className="earn-header-right">
-          {monthOptions && onMonthChange && (
-            <label className="earn-filter">
-              <span className="earn-filter-label">Month</span>
-              <select className="cand-input cand-input--compact" value={month || "all"} onChange={ev => onMonthChange(ev.target.value)}>
-                {monthOptions.map(m => <option value={m.value} key={m.value}>{m.label}</option>)}
-              </select>
-            </label>
-          )}
+          {/* The month is chosen once, in the page's filter bar. A second
+              selector here drove the same state from the same options, so two
+              controls appeared to filter independently when they never did.
+              `scopeLabel` above still names the month this table is showing. */}
           <label className="earn-filter">
             <span className="earn-filter-label">Sort by</span>
             <select className="cand-input cand-input--compact" value={sortBy} onChange={ev => setSortBy(ev.target.value)}>
