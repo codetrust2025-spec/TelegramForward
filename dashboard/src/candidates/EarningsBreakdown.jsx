@@ -265,6 +265,11 @@ export default function EarningsBreakdown({
               const priorOwed = Number(p.prior_owed) || 0;
               const priorPaid = Number(p.prior_paid) || 0;
               const priorRecoveries = Number(p.prior_recoveries) || 0;
+              // Running subtotals, derived from the figures already on this row.
+              // `owed` is what the Current payable column shows, so "Total earned"
+              // and that column can never disagree.
+              const totalEarned = owed;
+              const grossPayable = priorBalance + totalEarned;
               const priorMonths = Array.isArray(p.prior_months) ? p.prior_months : [];
               const priorComplimentary = Number(p.prior_complimentary) || 0;
               const priorComplimentaryCount = Number(p.prior_complimentary_count) || 0;
@@ -436,6 +441,28 @@ export default function EarningsBreakdown({
                                 <span className="earn-ledger-label" role="rowheader">Salary</span>
                                 <span className="earn-ledger-value" role="cell">{fmt(salary)}</span>
                               </div>
+                              {/* Two running subtotals. Both are derived here from
+                                  figures already on the row — nothing new is fetched
+                                  or computed server-side. "Total earned" is the same
+                                  number as the Current payable column above. */}
+                              <div className="earn-ledger-row earn-ledger-row--subtotal" role="row">
+                                <span className="earn-ledger-label" role="rowheader" title="Referral earnings + salary">
+                                  Total earned
+                                </span>
+                                <span className="earn-ledger-value" role="cell">{fmt(totalEarned)}</span>
+                              </div>
+                              <div className="earn-ledger-row earn-ledger-row--subtotal" role="row">
+                                <span className="earn-ledger-label" role="rowheader" title="Opening balance + total earned">
+                                  Gross payable
+                                </span>
+                                <span className="earn-ledger-value" role="cell">{signedCurrency(grossPayable)}</span>
+                              </div>
+                              <div className="earn-ledger-row" role="row">
+                                <span className="earn-ledger-label" role="rowheader">Paid out</span>
+                                <span className="earn-ledger-value earn-red" role="cell">
+                                  {paid > 0 ? `−${fmt(paid)}` : fmt(0)}
+                                </span>
+                              </div>
                               {/* Only shown when non-zero, but never omitted when it
                                   exists — otherwise the band would not add up. */}
                               {recoveries > 0 && (
@@ -444,12 +471,6 @@ export default function EarningsBreakdown({
                                   <span className="earn-ledger-value earn-red" role="cell">−{fmt(recoveries)}</span>
                                 </div>
                               )}
-                              <div className="earn-ledger-row" role="row">
-                                <span className="earn-ledger-label" role="rowheader">Paid out</span>
-                                <span className="earn-ledger-value earn-red" role="cell">
-                                  {paid > 0 ? `−${fmt(paid)}` : fmt(0)}
-                                </span>
-                              </div>
                               <div className="earn-ledger-row earn-ledger-row--total" role="row">
                                 <span className="earn-ledger-label" role="rowheader" title={CLOSING_BALANCE_FORMULA}>
                                   Closing balance

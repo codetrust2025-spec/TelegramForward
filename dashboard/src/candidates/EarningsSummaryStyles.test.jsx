@@ -21,6 +21,21 @@ function rule(selector) {
   return css.slice(at, css.indexOf("}", at)).replace(/\s+/g, " ");
 }
 
+/** The brace-balanced body of the first block starting with `head`. */
+function blockAt(head) {
+  const at = css.indexOf(head);
+  expect(at, `block not found: ${head}`).toBeGreaterThan(-1);
+  let depth = 0;
+  for (let i = css.indexOf("{", at); i < css.length; i += 1) {
+    if (css[i] === "{") depth += 1;
+    if (css[i] === "}") {
+      depth -= 1;
+      if (depth === 0) return css.slice(at, i + 1);
+    }
+  }
+  throw new Error(`unterminated block: ${head}`);
+}
+
 /** Every `@media (max-width: 768px)` block joined — there is more than one. */
 function mobileBlock() {
   const blocks = [];
@@ -125,5 +140,21 @@ describe("amounts share one line across the band", () => {
 
   it("sizes the card border-box so padding cannot overflow the row", () => {
     expect(rule(".earn-ledger")).toContain("box-sizing: border-box");
+  });
+});
+
+describe("seven terms still fit at every width", () => {
+  it("wraps to equal four-across rows between mobile and full width", () => {
+    const block = blockAt("@media (max-width: 1180px) and (min-width: 769px)");
+    expect(block).toContain("grid-auto-flow: row");
+    // Equal tracks, so wrapping never makes the columns ragged.
+    expect(block).toContain("grid-template-columns: repeat(4, minmax(0, 1fr))");
+  });
+
+  it("styles the running subtotals as results", () => {
+    expect(rule(".earn-ledger-row--subtotal .earn-ledger-value")).toContain("font-weight: 800");
+    expect(rule(".earn-ledger-row--subtotal .earn-ledger-label")).toContain("font-weight: 700");
+    // Same size as the rest, so they cannot break the shared line.
+    expect(rule(".earn-ledger-row--subtotal .earn-ledger-label")).not.toContain("font-size");
   });
 });

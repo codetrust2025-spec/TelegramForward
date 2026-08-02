@@ -433,6 +433,16 @@
 .earn-ledger-note::first-letter {
   text-transform: uppercase;
 }
+/* Running subtotals read as results, not as further inputs. */
+.earn-ledger-row--subtotal .earn-ledger-label {
+  color: var(--text-muted, #a8b4c4);
+  font-weight: 700;
+}
+.earn-ledger-row--subtotal .earn-ledger-value {
+  color: var(--text, #eef2f7);
+  font-weight: 800;
+}
+
 /* The total's label keeps the same size as the others so every amount in the
    band sits on one line; only the figure itself is emphasised. */
 .earn-ledger-row--total .earn-ledger-label {
@@ -466,6 +476,16 @@
   flex-shrink: 0;
   color: #a5b4fc;
   font-weight: 800;
+}
+
+/* Between full width and mobile there are too many terms for one line. Wrap to
+   equal four-across rows rather than letting the columns shrink unevenly. */
+@media (max-width: 1180px) and (min-width: 769px) {
+  .earn-ledger-rows {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    row-gap: 10px;
+  }
 }
 
 /* Mobile: a stacked card — one item per row, label left, amount right, and

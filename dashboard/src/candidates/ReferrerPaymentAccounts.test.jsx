@@ -375,13 +375,17 @@ describe("referrer payment accounts", () => {
     const summary = within(container.querySelector(".earn-breakdown-total"));
     expect(summary.getByText("Total (5 candidates)")).toBeInTheDocument();
     // The money now reads as one vertical calculation below the candidate list.
+    // Read each amount from its own row — with no salary, referral earnings and
+    // the "Total earned" subtotal are the same figure.
     const ledger = within(container.querySelector(".earn-ledger"));
-    expect(ledger.getByText("Referral earnings")).toBeInTheDocument();
-    expect(ledger.getByText("₹36,000")).toBeInTheDocument();
-    expect(ledger.getByText("Paid out")).toBeInTheDocument();
-    expect(ledger.getByText("−₹29,000")).toBeInTheDocument();
-    expect(ledger.getByText(/^Closing balance/)).toBeInTheDocument();
-    expect(ledger.getByText("+₹7,000")).toBeInTheDocument();
+    const amountFor = (label) =>
+      ledger.getByText(label).closest(".earn-ledger-row")
+        .querySelector(".earn-ledger-value").textContent;
+
+    expect(amountFor("Referral earnings")).toBe("₹36,000");
+    expect(amountFor("Total earned")).toBe("₹36,000");
+    expect(amountFor("Paid out")).toBe("−₹29,000");
+    expect(amountFor(/^Closing balance/)).toContain("+₹7,000");
     // "Owe" never said who owed whom; the status now states the direction.
     expect(ledger.getByText("To pay")).toBeInTheDocument();
     expect(ledger.getByText(/^Company needs to pay/)).toBeInTheDocument();
