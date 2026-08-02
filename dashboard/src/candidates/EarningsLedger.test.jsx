@@ -371,3 +371,15 @@ describe("expanded row layout", () => {
     expect(ledger.querySelector(".earn-ledger-outcome").parentElement).toBe(ledger);
   });
 });
+
+describe("the reason stays a sentence fragment in the data", () => {
+  it("is not capitalised in the DOM, so tooltips can reuse it mid-sentence", async () => {
+    renderRows([THRILOK]);
+    const ledger = await expand("Thrilok");
+    const note = ledger.querySelector(".earn-ledger-note");
+
+    // Capitalisation is applied by ::first-letter; the text itself is unchanged.
+    expect(note.textContent.startsWith("unpaid")).toBe(true);
+    expect(note.getAttribute("title")).toMatch(/^Earned /);
+  });
+});

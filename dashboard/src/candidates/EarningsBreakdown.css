@@ -378,6 +378,9 @@
 .earn-ledger {
   display: block;
   width: 100%;
+  /* Explicit, so the padding and border cannot push it past its container if
+     the global reset is ever scoped away. */
+  box-sizing: border-box;
   margin: 10px 0 0;
   padding: 12px 14px;
   border: 1px solid rgba(255, 255, 255, .09);
@@ -385,11 +388,13 @@
   background: rgba(255, 255, 255, .022);
   font-variant-numeric: tabular-nums;
 }
-/* Desktop: one compact horizontal band across the full width. Columns size
-   themselves to the content, so nothing reserves empty space. */
+/* Desktop: one compact horizontal band across the full width. Every term gets
+   an identical column whatever the count, so the labels and amounts line up
+   down the band instead of drifting with their own text width. */
 .earn-ledger-rows {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 4px 18px;
   align-items: start;
 }
@@ -404,10 +409,16 @@
   color: var(--text-dim, #7b8a9e);
   font-weight: 600;
   font-size: 11px;
+  /* Fixed, so the info badge inside the closing-balance label cannot make that
+     one label taller and drop its amount below the rest of the band. */
+  line-height: 16px;
 }
 .earn-ledger-value {
   font-weight: 700;
   font-size: 14px;
+  /* Fixed, so the larger closing-balance figure still shares one line box with
+     the rest of the band and every amount sits on the same line. */
+  line-height: 20px;
 }
 .earn-ledger-note {
   display: block;
@@ -416,7 +427,18 @@
   color: var(--text-dim, #7b8a9e);
   line-height: 1.35;
 }
-.earn-ledger-row--total .earn-ledger-label,
+/* The reason is generated as a sentence fragment ("unpaid from Jun 2026") so
+   it can also be used mid-sentence in tooltips. Capitalise it here rather than
+   in the data, so the one string stays correct in both places. */
+.earn-ledger-note::first-letter {
+  text-transform: uppercase;
+}
+/* The total's label keeps the same size as the others so every amount in the
+   band sits on one line; only the figure itself is emphasised. */
+.earn-ledger-row--total .earn-ledger-label {
+  color: var(--text, #eef2f7);
+  font-weight: 700;
+}
 .earn-ledger-row--total .earn-ledger-value {
   font-size: 15px;
   font-weight: 800;
@@ -424,18 +446,37 @@
 .earn-ledger-row--total .earn-status {
   margin-left: 8px;
 }
+/* The one line a reader acts on. It was the quietest thing in the card. */
 .earn-ledger-outcome {
-  margin: 10px 0 0;
-  padding-top: 9px;
-  border-top: 1px solid rgba(255, 255, 255, .1);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted, #a8b4c4);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 9px 12px;
+  border-left: 3px solid rgba(99, 102, 241, .75);
+  border-radius: 0 8px 8px 0;
+  background: rgba(99, 102, 241, .1);
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text, #eef2f7);
+  letter-spacing: .01em;
+}
+.earn-ledger-outcome::before {
+  content: "→";
+  flex-shrink: 0;
+  color: #a5b4fc;
+  font-weight: 800;
 }
 
-/* Mobile: one item per row, label left, amount right, no sideways scroll. */
+/* Mobile: a stacked card — one item per row, label left, amount right, and
+   nothing wide enough to scroll sideways. */
 @media (max-width: 768px) {
+  .earn-ledger {
+    padding: 10px 12px;
+  }
   .earn-ledger-rows {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
     grid-template-columns: 1fr;
     gap: 0;
   }
@@ -445,13 +486,30 @@
     align-items: baseline;
     justify-content: space-between;
     gap: 12px;
-    padding: 6px 0;
+    padding: 7px 0;
     border-bottom: 1px solid rgba(255, 255, 255, .05);
   }
   .earn-ledger-row:last-child { border-bottom: none; }
   .earn-ledger-label { font-size: 12px; }
-  .earn-ledger-value { text-align: right; }
-  .earn-ledger-note { flex: 1 0 100%; }
+  .earn-ledger-value {
+    text-align: right;
+    white-space: nowrap;
+  }
+  /* The reason drops to its own full-width line under the label. */
+  .earn-ledger-note {
+    flex: 1 0 100%;
+    order: 3;
+    margin-top: 2px;
+  }
+  .earn-ledger-row--total {
+    margin-top: 4px;
+    padding-top: 9px;
+    border-top: 1px solid rgba(255, 255, 255, .14);
+  }
+  .earn-ledger-outcome {
+    align-items: flex-start;
+    font-size: 13px;
+  }
 }
 
 /* Carry-forward detail box (inside expanded row) */
