@@ -25,6 +25,7 @@ from services import booking_block_reasons  # noqa: E402
 # The most recent audit for a notification is the decision that row reflects.
 SELECT = """
 SELECT n.id, n.candidate_status, n.booking_status, n.interview_date, n.interview_time,
+       n.booking_block_reason_code,
        a.failure_code, a.failure_message
   FROM mail_monitoring_notifications n
   LEFT JOIN LATERAL (
@@ -33,7 +34,11 @@ SELECT n.id, n.candidate_status, n.booking_status, n.interview_date, n.interview
          WHERE id = n.booking_audit_id
          LIMIT 1
   ) a ON true
- WHERE n.booking_block_reason IS NULL
+ WHERE (n.booking_block_reason IS NULL
+        -- A row that landed on the generic fallback is revisited: the mapping
+        -- grows as new validator branches are classified, and a stale
+        -- "requires manual review" hides an answer that now exists.
+        OR n.booking_block_reason_code = 'MANUAL_REVIEW_REQUIRED')
    AND n.booking_status IN ('Blocked', 'Processing Failed', 'Review Required')
  ORDER BY n.created_at DESC
 """
@@ -55,7 +60,7 @@ def main() -> int:
         cur.execute(SELECT)
         rows = [dict(zip([d.name for d in cur.description], row)) for row in cur.fetchall()]
 
-        print(f"rows without a blocking reason: {len(rows)}")
+        print(f"rows without a specific blocking reason: {len(rows)}")
         updates = []
         for row in rows:
             described = booking_block_reasons.describe(
@@ -64,6 +69,8 @@ def main() -> int:
                 # which is what makes a slot or duplicate reason concrete.
                 schedule={"date": row.get("interview_date"), "time": row.get("interview_time")},
             )
+            if described["reason_code"] == row.get("booking_block_reason_code"):
+                continue  # already says the best thing the mapping knows
             updates.append((described, row))
             print(
                 f"  {row['id']}  {row.get('booking_status')}"
@@ -83,7 +90,7 @@ def main() -> int:
                       SET booking_block_reason_code=%s, booking_block_reason=%s,
                           booking_failure_code=COALESCE(booking_failure_code,%s),
                           updated_at=now()
-                    WHERE id=%s AND booking_block_reason IS NULL""",
+                    WHERE id=%s""",
                 (described["reason_code"], described["reason"],
                  described["internal_code"] or None, row["id"]),
             )
