@@ -202,3 +202,123 @@ def test_creation_still_works_without_the_registry(monkeypatch, tmp_path):
     monkeypatch.setattr(rr, "resolve_referrer", _boom)
 
     assert auth.admin_add_handler("someone", "Some One", "z") is None
+
+
+# ── carry-forward continuity ────────────────────────────────────────────────
+
+def _month_env(monkeypatch, tmp_path, *, rows, expenses, recovery_referrer, recovery_month):
+    """A handler with candidates, a payout and one aliased recovery."""
+    import json
+    from features import handler_expenses as he, handler_salaries as hs
+    from features import payment_verification_engine as pve
+
+    _registry(monkeypatch, [
+        {"id": "referrer-pavan", "name": "Pavan Kalyan", "aliases": ["LUKKA PAVAN KALYAN"]},
+    ])
+    (tmp_path / "s.json").write_text(json.dumps({"salaries": {}}), encoding="utf-8")
+    (tmp_path / "e.json").write_text(json.dumps({"expenses": expenses}), encoding="utf-8")
+    monkeypatch.setattr(hs, "_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(he, "_FILE", str(tmp_path / "e.json"))
+    monkeypatch.setattr(cs, "_load", lambda **_k: {"candidates": rows})
+    monkeypatch.setattr(cs, "_stats_rows_deduped", lambda r: r)
+
+    entry = {
+        "referrer": recovery_referrer,
+        "receiver_registry_name": recovery_referrer,
+        "amount": 5_000,
+        "total_payout_adjustment": 5_000,
+        "payment_date": f"{recovery_month}-22",
+        "status": "posted",
+    }
+    monkeypatch.setattr(
+        pve, "ledger_entries",
+        lambda month=None, action=None, **_k: (
+            [entry] if (action in (None, "referrer_recovery")
+                        and (month is None or month == recovery_month)) else []
+        ),
+    )
+    monkeypatch.setattr(
+        pve, "recovery_summary_by_referrer",
+        lambda *, month=None: (
+            {recovery_referrer.lower(): {
+                "name": recovery_referrer, "total": 5_000, "count": 1,
+                "commission_already_received": 0, "recoverable_company_share": 0,
+            }} if month in (None, recovery_month) else {}
+        ),
+    )
+
+
+def _pavan(month):
+    for p in cs.stats(month).get("top_performers", []):
+        if "pavan" in str(p.get("name", "")).lower():
+            return p
+    return None
+
+
+def test_a_recovery_recorded_under_an_alias_is_counted_in_its_own_month(
+    monkeypatch, tmp_path
+):
+    """It used to vanish from July and silently shrink August's opening."""
+    _month_env(
+        monkeypatch, tmp_path,
+        rows=[{"id": "c1", "name": "X", "reference": "Pavan Kalyan", "payment": 10_000,
+               "logged_date": "2026-07-05", "date": "2026-07-05", "stage": "in_progress"}],
+        expenses=[],
+        recovery_referrer="LUKKA PAVAN KALYAN",
+        recovery_month="2026-07",
+    )
+    monkeypatch.setattr(cs, "referrer_commission_amount", lambda _r: 5_000)
+
+    july = _pavan("2026-07")
+
+    assert july is not None
+    # The recovery belongs to the month it was posted in, on the canonical row.
+    assert july["recoveries_total"] == 5_000
+
+
+def test_opening_balance_equals_the_previous_month_closing(monkeypatch, tmp_path):
+    """The governing rule: this month opens where last month closed."""
+    _month_env(
+        monkeypatch, tmp_path,
+        rows=[{"id": "c1", "name": "X", "reference": "Pavan Kalyan", "payment": 10_000,
+               "logged_date": "2026-07-05", "date": "2026-07-05", "stage": "in_progress"}],
+        expenses=[{"id": "p1", "reference": "Pavan Kalyan", "amount": 6_000,
+                   "category": "commission", "date": "2026-07-30"}],
+        recovery_referrer="LUKKA PAVAN KALYAN",
+        recovery_month="2026-07",
+    )
+    monkeypatch.setattr(cs, "referrer_commission_amount", lambda _r: 5_000)
+
+    july = _pavan("2026-07")
+    august = _pavan("2026-08")
+
+    july_closing = july["net_payable"]
+    assert august is not None
+    assert august["prior_balance"] == july_closing, (
+        f"August opened at {august['prior_balance']} but July closed at {july_closing}"
+    )
+    # And August opens where July closed rather than re-deriving a different number.
+    assert august["net_payable"] == august["prior_balance"]
+
+
+def test_the_recovery_is_applied_once_not_in_both_months(monkeypatch, tmp_path):
+    # A payout keeps the carried balance non-zero, so August still has a row.
+    _month_env(
+        monkeypatch, tmp_path,
+        rows=[{"id": "c1", "name": "X", "reference": "Pavan Kalyan", "payment": 10_000,
+               "logged_date": "2026-07-05", "date": "2026-07-05", "stage": "in_progress"}],
+        expenses=[{"id": "p1", "reference": "Pavan Kalyan", "amount": 6_000,
+                   "category": "commission", "date": "2026-07-30"}],
+        recovery_referrer="LUKKA PAVAN KALYAN",
+        recovery_month="2026-07",
+    )
+    monkeypatch.setattr(cs, "referrer_commission_amount", lambda _r: 5_000)
+
+    july = _pavan("2026-07")
+    august = _pavan("2026-08")
+
+    # Counted in July's own month; August sees it only through the opening
+    # balance, never as a second deduction.
+    assert july["recoveries_total"] == 5_000
+    assert august["recoveries_total"] == 0
+    assert august["prior_balance"] == july["net_payable"]
