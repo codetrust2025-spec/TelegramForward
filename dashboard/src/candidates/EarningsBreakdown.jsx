@@ -285,6 +285,16 @@ export default function EarningsBreakdown({
                 : priorBalance > 0
                   ? `unpaid${whenSuffix}`
                   : `overpaid${priorSpan ? ` in ${priorSpan}` : " in earlier months"}`;
+              // A referrer's complimentary arrives alongside their commission, so
+              // it is never the whole balance and used to be named only in a
+              // tooltip — which read as though the bonus had gone to the closure
+              // admin alone. Say it on the row whenever there is one, unless the
+              // line above already says the balance is nothing else.
+              const complimentaryNote =
+                priorComplimentary > 0 && !balanceIsComplimentary
+                  ? `Includes ${fmt(priorComplimentary)} profile-closure complimentary`
+                    + (priorComplimentaryCount > 1 ? ` (${priorComplimentaryCount} closures)` : "")
+                  : null;
               const openingDetail = [
                 `Earned ${fmt(priorOwed)}`,
                 priorComplimentary > 0
@@ -430,6 +440,14 @@ export default function EarningsBreakdown({
                                     title={openingDetail}
                                   >
                                     {openingReason}
+                                  </span>
+                                )}
+                                {showOpeningBalance && complimentaryNote && (
+                                  <span
+                                    className="earn-ledger-note earn-summary-note--complimentary"
+                                    title={openingDetail}
+                                  >
+                                    {complimentaryNote}
                                   </span>
                                 )}
                               </div>
