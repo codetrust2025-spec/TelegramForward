@@ -2178,6 +2178,31 @@
   border-radius: 50%;
   background: currentColor;
 }
+/* Why a booking was blocked, directly under its badge. The badge alone tells
+   an operator nothing they can act on, so this is part of the row rather than
+   something behind a click. Long reasons wrap and then clamp, so one verbose
+   entry cannot stretch the whole table. */
+.mail-status__reason {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  margin-top: 6px;
+  max-width: 22rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.35;
+  color: rgba(226, 232, 240, 0.72);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: help;
+}
+@media (prefers-color-scheme: light) {
+  .mail-status__reason {
+    color: rgba(30, 41, 59, 0.78);
+  }
+}
 .mail-status--success {
   border-color: rgba(52, 211, 153, 0.34);
   background: rgba(16, 185, 129, 0.16);

@@ -56,6 +56,18 @@ export function mailStatusTone(item = {}) {
   return "neutral";
 }
 
+// Why a booking was blocked, as the backend decided it. Never reconstructed
+// here from the status text: the row must show the actual decision, and only
+// the validator knows which of several blocks applied.
+export function blockingReason(item = {}) {
+  if (!item.booking_block_reason && !item.booking_block_reason_code) return null;
+  return {
+    text: item.booking_block_reason || "Booking requires manual review",
+    code: item.booking_block_reason_code || "",
+    internal: item.booking_failure_code || "",
+  };
+}
+
 async function request(path, options = {}) {
   const response = await fetch(`${API}${path}`, {
     credentials: "include",
@@ -217,7 +229,15 @@ function NotificationDetail({ item, onClose, onChanged }) {
   return <div className="mail-detail-backdrop" role="presentation" onClick={(event) => event.target === event.currentTarget && onClose()}>
     <section className="mail-detail" role="dialog" aria-modal="true" aria-label="Mail monitoring notification">
       <header><div><h3>{item.candidate_status || human(item.classification)}</h3><p>{item.candidate_name || "Candidate"} · {item.company_name || "Company unavailable"}</p></div><button type="button" onClick={onClose} aria-label="Close">×</button></header>
-      <dl><div><dt>Email</dt><dd>{item.email_subject || "No subject"}</dd></div><div><dt>From</dt><dd>{item.sender_name || item.sender_email || "Unknown"}</dd></div><div><dt>Mail received</dt><dd>{when(item.email_received_at)}</dd></div><div><dt>Tool detected</dt><dd>{when(item.created_at)}</dd></div><div><dt>AI confidence</dt><dd>{confidence(item.ai_confidence)}</dd></div>{item.booking_status && <div><dt>Booking</dt><dd>{item.booking_status}</dd></div>}{item.interview_date && <div><dt>Interview</dt><dd>{formatScheduleDateTime(item.interview_date, item.interview_time, item.interview_timezone)}</dd></div>}{item.interview_round && <div><dt>Round</dt><dd>{item.interview_round}</dd></div>}</dl>
+      <dl><div><dt>Email</dt><dd>{item.email_subject || "No subject"}</dd></div><div><dt>From</dt><dd>{item.sender_name || item.sender_email || "Unknown"}</dd></div><div><dt>Mail received</dt><dd>{when(item.email_received_at)}</dd></div><div><dt>Tool detected</dt><dd>{when(item.created_at)}</dd></div><div><dt>AI confidence</dt><dd>{confidence(item.ai_confidence)}</dd></div>{item.booking_status && <div><dt>Booking</dt><dd>{item.booking_status}</dd></div>}{item.interview_date && <div><dt>Interview</dt><dd>{formatScheduleDateTime(item.interview_date, item.interview_time, item.interview_timezone)}</dd></div>}{item.interview_round && <div><dt>Round</dt><dd>{item.interview_round}</dd></div>}{(() => {
+        const reason = blockingReason(item);
+        if (!reason) return null;
+        return <>
+          <div><dt>Blocking reason</dt><dd>{reason.text}</dd></div>
+          <div><dt>Reason code</dt><dd><code>{reason.code}</code>{reason.internal && reason.internal !== reason.code ? <> · <code>{reason.internal}</code></> : null}</dd></div>
+          <div><dt>Attempted booking</dt><dd>{item.booking_status || "Not attempted"} — no slot was created</dd></div>
+        </>;
+      })()}</dl>
       <section className="mail-detail__original" aria-label="Original email">
         <strong>Original email</strong>
         {item.detail_loading
@@ -345,7 +365,16 @@ export function MailMonitoringNotifications() {
           event.preventDefault();
           openNotification(item);
         }}
-      ><td><strong>{item.candidate_name || "Candidate"}</strong><small>{item.candidate_email || ""}</small></td><td>{item.company_name || "—"}<small>{item.job_role || ""}</small></td><td><span className={`mail-status mail-status--${mailStatusTone(item)}`}>{item.candidate_status || human(item.classification)}</span></td><td>{item.email_subject || "(no subject)"}</td><td>{confidence(item.ai_confidence)}</td><td>{when(item.email_received_at)}</td><td>{when(item.created_at)}</td><td>{item.is_reviewed ? "Reviewed" : "Pending"}</td><td onClick={(event) => event.stopPropagation()}><button onClick={() => openNotification(item)}>Open</button><button onClick={() => act(item,item.is_read ? "unread" : "read")}>{item.is_read ? "Unread" : "Read"}</button><button onClick={() => act(item,"dismiss")}>Dismiss</button></td></tr>)}
+      ><td><strong>{item.candidate_name || "Candidate"}</strong><small>{item.candidate_email || ""}</small></td><td>{item.company_name || "—"}<small>{item.job_role || ""}</small></td><td><span className={`mail-status mail-status--${mailStatusTone(item)}`}>{item.candidate_status || human(item.classification)}</span>{(() => {
+        const reason = blockingReason(item);
+        if (!reason) return null;
+        // Shown in the row itself: a blocked booking is unusable information
+        // until you know why, and making that a click away hides it.
+        return <span
+          className="mail-status__reason"
+          title={reason.internal ? `${reason.text} (${reason.code} / ${reason.internal})` : `${reason.text} (${reason.code})`}
+        >Reason: {reason.text}</span>;
+      })()}</td><td>{item.email_subject || "(no subject)"}</td><td>{confidence(item.ai_confidence)}</td><td>{when(item.email_received_at)}</td><td>{when(item.created_at)}</td><td>{item.is_reviewed ? "Reviewed" : "Pending"}</td><td onClick={(event) => event.stopPropagation()}><button onClick={() => openNotification(item)}>Open</button><button onClick={() => act(item,item.is_read ? "unread" : "read")}>{item.is_read ? "Unread" : "Read"}</button><button onClick={() => act(item,"dismiss")}>Dismiss</button></td></tr>)}
       {!loading && !items.length && <tr><td colSpan={9} className="mail-empty">No notifications match these filters.</td></tr>}
     </tbody></table></div>
     {total > 20 && <footer className="mail-pagination"><span>{total} notifications</span><button disabled={page===0} onClick={() => setPage((value) => value-1)}>Previous</button><span>Page {page+1}</span><button disabled={(page+1)*20>=total} onClick={() => setPage((value) => value+1)}>Next</button></footer>}

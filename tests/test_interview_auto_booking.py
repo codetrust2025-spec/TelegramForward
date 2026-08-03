@@ -528,3 +528,113 @@ def test_duplicate_gmail_message_does_not_mutate_booking_twice(monkeypatch):
     monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", lambda **kwargs: pytest.fail("must not book twice"))
     outcome = execute(result())
     assert outcome["duplicate"] is True
+
+
+# ── the blocked row must carry why ──────────────────────────────────────────
+
+def test_a_blocked_booking_tells_the_notification_why(monkeypatch):
+    """The reason reaching the UI is the one the validator decided, not a
+    guess reconstructed from the status text."""
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch, conflicts=[{"id": "other"}])
+
+    outcome = execute(result())
+
+    assert outcome["status"] == "Blocked"
+    assert outcome["failure_code"] == "SLOT_CONFLICT"
+    assert outcome["block_reason"]["reason_code"] == "NO_MATCHING_SLOT"
+    reason = outcome["notification"]["block_reason"]
+    assert reason["reason"] == (
+        "No available slot matches the invite time (20 Jul 2099, 3:00 PM)"
+    )
+    assert reason["reason_code"] == "NO_MATCHING_SLOT"
+    # The exact validator branch survives alongside the operator-facing text.
+    assert reason["internal_code"] == "SLOT_CONFLICT"
+
+
+def test_a_duplicate_booking_names_the_round_it_clashes_with(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch, rows=[{
+        "id": "c1", "slot_confirmed": True,
+        "date": "2099-07-20", "time": "15:00",
+    }])
+
+    outcome = execute(result())
+
+    assert outcome["failure_code"] == "DUPLICATE_BOOKING"
+    assert outcome["notification"]["block_reason"]["reason_code"] == "DUPLICATE_BOOKING"
+    assert "Candidate already has a booking for this round" in (
+        outcome["notification"]["block_reason"]["reason"]
+    )
+
+
+def test_a_low_confidence_block_reads_as_confidence_not_as_a_schedule_problem(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch)
+
+    outcome = execute(result(confidence=.10))
+
+    assert outcome["failure_code"] == "LOW_CONFIDENCE"
+    assert outcome["notification"]["block_reason"] == {
+        "reason_code": "LOW_CONFIDENCE",
+        "reason": "AI confidence is below the required threshold",
+        "internal_code": "LOW_CONFIDENCE",
+    }
+
+
+def test_a_past_interview_block_names_the_date_that_already_passed(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch)
+
+    outcome = execute(result(date="2020-01-02", time="09:30 AM"))
+
+    assert outcome["failure_code"] == "PAST_INTERVIEW"
+    assert outcome["notification"]["block_reason"]["reason"] == (
+        "Interview date is in the past (2 Jan 2020, 9:30 AM)"
+    )
+
+
+def test_an_unparseable_schedule_reads_as_a_missing_date_or_time(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch)
+
+    outcome = execute(result(date="20th July"))
+
+    assert outcome["failure_code"] == "INVALID_DATE"
+    assert outcome["notification"]["block_reason"]["reason_code"] == "MISSING_DATE_TIME"
+
+
+def test_an_unknown_candidate_reads_as_a_candidate_problem(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch)
+    monkeypatch.setattr(booking.candidate_store, "get_candidate", lambda _cid: None)
+
+    outcome = execute(result())
+
+    assert outcome["failure_code"] == "CANDIDATE_MAPPING_FAILED"
+    assert outcome["notification"]["block_reason"]["reason_code"] == "CANDIDATE_NOT_FOUND"
+
+
+def test_a_payment_block_is_not_reported_as_a_scheduling_problem(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch, payment_reason="Balance pending")
+
+    outcome = execute(result())
+
+    assert outcome["failure_code"] == "PAYMENT_VALIDATION_FAILED"
+    assert outcome["notification"]["block_reason"]["reason_code"] == "PAYMENT_NOT_CLEARED"
+
+
+def test_a_successful_booking_carries_no_blocking_reason(monkeypatch):
+    """A row that later books must not keep showing why it once failed."""
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch)
+    monkeypatch.setattr(
+        booking.candidate_store, "assign_interview_slot",
+        lambda **kwargs: {"id": "slot1", **kwargs},
+    )
+
+    outcome = execute(result())
+
+    assert outcome["status"] == "Auto Booked"
+    assert "block_reason" not in outcome["notification"]
