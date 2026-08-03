@@ -5828,6 +5828,27 @@ def stats(
         recovery_summary = recovery_summary_by_referrer(
             month=month if month and month != "all" else None,
         )
+        # That helper keys on referrer.lower(); the carry-forward keys through
+        # _reference_key(), which resolves registry aliases. The mismatch made a
+        # recovery recorded under an alias invisible in the month it happened
+        # while still reducing the next month's opening balance, so the two
+        # months disagreed by the recovery amount. Re-key here so a recovery is
+        # counted once, in its own month, against the canonical handler.
+        merged: dict[str, dict] = {}
+        for raw_key, bucket in recovery_summary.items():
+            key = _reference_key(bucket.get("name") or raw_key)
+            target = merged.get(key)
+            if target is None:
+                merged[key] = dict(bucket)
+                continue
+            for field in (
+                "total",
+                "count",
+                "commission_already_received",
+                "recoverable_company_share",
+            ):
+                target[field] = int(target.get(field) or 0) + int(bucket.get(field) or 0)
+        recovery_summary = merged
     except Exception:
         recovery_summary = {}
     if scope_key:
