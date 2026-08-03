@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useConfirm } from '../context/ConfirmContext.jsx'
+import { useDialogA11y } from '../hooks/useDialogA11y.js'
 import { useAuth } from '../context/AuthContext.jsx'
 import { formatIstDateTime } from '../utils/istTime.js'
 import { DataRoomAccountsTab } from './DataRoomAccountsTab.jsx'
@@ -177,9 +178,11 @@ const EMPTY_HANDLER_FORM = { username: '', password: '', reference: '', notes: '
 const EMPTY_ADMIN_FORM = { username: '', password: '', reference: '' }
 
 function HandlerModal({ mode, form, onChange, onSave, onClose, error }) {
+  // Mounted only while open, so the dialog is open for its whole life.
+  const dialogRef = useDialogA11y(true, onClose)
   return (
     <div className="dr-modal-backdrop" role="presentation" onClick={onClose}>
-      <div className="dr-modal cand-card" role="dialog" aria-labelledby="dr-handler-modal-title" onClick={(e) => e.stopPropagation()}>
+      <div className="dr-modal cand-card" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="dr-handler-modal-title" onClick={(e) => e.stopPropagation()}>
         <h2 id="dr-handler-modal-title" className="cand-title">
           {mode === 'create' ? 'Add handler login' : 'Edit handler login'}
         </h2>
@@ -216,9 +219,11 @@ function HandlerModal({ mode, form, onChange, onSave, onClose, error }) {
 }
 
 function AdminModal({ form, onChange, onSave, onClose, error }) {
+  // Mounted only while open, so the dialog is open for its whole life.
+  const dialogRef = useDialogA11y(true, onClose)
   return (
     <div className="dr-modal-backdrop" role="presentation" onClick={onClose}>
-      <div className="dr-modal cand-card" role="dialog" aria-labelledby="dr-admin-modal-title" onClick={(e) => e.stopPropagation()}>
+      <div className="dr-modal cand-card" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="dr-admin-modal-title" onClick={(e) => e.stopPropagation()}>
         <h2 id="dr-admin-modal-title" className="cand-title">Edit admin login</h2>
         {error && <p className="dr-error">{error}</p>}
         <div className="dr-form-grid">
@@ -433,6 +438,8 @@ export function DataRoomPanel() {
   const [typeFilter, setTypeFilter] = useState('')
   const [search, setSearch] = useState('')
   const [editor, setEditor] = useState(null)
+  const closeEditor = useCallback(() => setEditor(null), [])
+  const editorDialogRef = useDialogA11y(Boolean(editor), closeEditor)
   const [activeTab, setActiveTab] = useState('accounts')
 
   const visibleTabs = useMemo(
@@ -777,7 +784,9 @@ export function DataRoomPanel() {
         <div className="dr-modal-backdrop" role="presentation" onClick={() => setEditor(null)}>
           <div
             className="dr-modal cand-card"
+            ref={editorDialogRef}
             role="dialog"
+            aria-modal="true"
             aria-labelledby="dr-modal-title"
             onClick={(e) => e.stopPropagation()}
           >

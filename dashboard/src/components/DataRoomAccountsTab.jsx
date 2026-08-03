@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useConfirm } from '../context/ConfirmContext.jsx'
+import { useDialogA11y } from '../hooks/useDialogA11y.js'
 import { copyToClipboard } from '../utils/copyToClipboard.js'
 
 const API_BASE =
@@ -54,6 +55,8 @@ const SVC_FIELDS = [
 ]
 
 function VaultModal({ title, fields, form, onChange, onSave, onClose, error }) {
+  // Mounted only while open, so the dialog is open for its whole life.
+  const dialogRef = useDialogA11y(true, onClose)
   useEffect(() => {
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
@@ -71,7 +74,7 @@ function VaultModal({ title, fields, form, onChange, onSave, onClose, error }) {
     <div className="dr-modal-backdrop" role="presentation" onClick={onClose}>
       <div
         className="dr-modal cand-card"
-        role="dialog"
+        ref={dialogRef} role="dialog"
         aria-modal="true"
         aria-labelledby="dr-vault-modal-title"
         onClick={(e) => e.stopPropagation()}
