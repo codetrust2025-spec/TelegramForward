@@ -17,6 +17,7 @@ from threading import RLock
 from typing import Any
 
 from core.config import DATA_DIR
+from features import transaction_identity
 
 SUCCESS_STATUSES = {"success", "successful", "completed", "complete", "paid"}
 FAILED_STATUSES = {"failed", "failure", "declined", "rejected", "reversed"}
@@ -1039,6 +1040,19 @@ def _record_verification_unlocked(
                 "payment_scope": payment_scope,
                 "payment_date": result.get("payment_date") or "",
                 "payment_time": result.get("payment_time") or "",
+                # Identity of the underlying bank transaction. The extractor has
+                # always read these off the receipt; until now they were dropped
+                # once verification finished, which left nothing to match a
+                # ledger row against when the same receipt was filed a second
+                # time in another module.
+                "external_transaction_id": transaction_identity.normalize_external_id(reference),
+                "payer": result.get("sender_name") or result.get("sender_upi_id") or "",
+                "sender_name": result.get("sender_name") or "",
+                "sender_upi_id": result.get("sender_upi_id") or "",
+                "receiver": result.get("receiver_registry_name")
+                or result.get("receiver_name")
+                or "",
+                "screenshot_hash": digest,
                 "gross_amount": _rupees(allocations["gross_amount_minor"]),
                 "company_share": _rupees(allocations["company_share_minor"]),
                 "referrer_share": _rupees(allocations["referrer_share_minor"]),

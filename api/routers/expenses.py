@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from core import broadcast
 from core.config import ACCOUNTS, ACCOUNT_SLOTS, BASE_DIR, DATA_DIR, GROUPS_FILE, MESSAGE_FILE
+from features import transaction_identity
 from core.groups_store import (
     _normalize_group_name,
     build_group_lists,
@@ -166,7 +167,33 @@ async def handler_expenses_create(
     except Exception as exc:
         logger.exception("Central payment verification failed for handler expense")
         return {"status": "error", "message": f"Payment screenshot could not be verified: {exc}"}
-    row = handler_expenses.create_expense(body)
+
+    # The verifier has just read the transaction reference and the payer off
+    # this screenshot. Storing them is what lets the same money be recognised
+    # if it was already recorded as a recovery or a payout somewhere else.
+    body["external_transaction_id"] = (
+        verification.get("utr_number")
+        or verification.get("transaction_id")
+        or verification.get("reference_number")
+        or ""
+    )
+    body["payer"] = (
+        verification.get("sender_name") or verification.get("sender_upi_id") or ""
+    )
+    try:
+        row = handler_expenses.create_expense(body)
+    except transaction_identity.DuplicateTransactionError as exc:
+        return {
+            "status": "error",
+            "message": str(exc),
+            "duplicate_of": {
+                "record_id": exc.existing.get("record_id"),
+                "kind": exc.existing.get("kind"),
+                "source_module": exc.existing.get("source_module"),
+                "date": exc.existing.get("date"),
+                "amount": exc.existing.get("amount"),
+            },
+        }
 
     # Attach the proof to the newly created expense
     try:
@@ -186,6 +213,49 @@ async def handler_expenses_create(
         row,
     )
     return {"status": "ok", "expense": updated}
+@router.get(
+    "/handler-expenses/reconciliation",
+    dependencies=[Depends(_require_fleet_admin)],
+)
+async def handler_expenses_reconciliation():
+    """Read-only: which transactions are recorded in more than one place.
+
+    Reports only. Correcting a finding is a separate, deliberate action so the
+    numbers can be reviewed before any balance moves.
+    """
+    from features import financial_reconciliation
+
+    try:
+        return {"status": "ok", "report": financial_reconciliation.reconciliation_report()}
+    except Exception as exc:
+        logger.exception("Financial reconciliation scan failed")
+        return {"status": "error", "message": f"Reconciliation scan failed: {exc}"}
+
+
+@router.post(
+    "/handler-expenses/{eid}/void",
+    dependencies=[Depends(_require_fleet_admin)],
+)
+async def handler_expenses_void(eid: str, body: dict = Body(default=None)):
+    """Stop an expense counting as money paid, keeping the record for audit."""
+    from features import handler_expenses
+
+    payload = body or {}
+    try:
+        row = handler_expenses.void_expense(
+            eid,
+            status=str(payload.get("status") or "VOIDED_DUPLICATE"),
+            reason=str(payload.get("reason") or ""),
+            actor=str(payload.get("actor") or "admin"),
+            ledger_ref=str(payload.get("ledger_ref") or ""),
+        )
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+    if row is None:
+        return {"status": "error", "message": "Expense not found"}
+    return {"status": "ok", "expense": row}
+
+
 @router.patch("/handler-expenses/{eid}", dependencies=[Depends(_require_fleet_admin)])
 async def handler_expenses_update(eid: str, body: dict):
     from features import handler_expenses
