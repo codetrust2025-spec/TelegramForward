@@ -31,6 +31,8 @@ from services import booking_block_reasons as reasons
          "Interview date or time could not be detected"),
         ("HISTORICAL_SCHEDULE_INCOMPLETE", "MISSING_DATE_TIME",
          "Interview date or time could not be detected"),
+        ("INCOMPLETE_SCHEDULE", "MISSING_DATE_TIME",
+         "Interview date or time could not be detected"),
         ("PAST_INTERVIEW", "PAST_INTERVIEW_DATE",
          "Interview date is in the past"),
         ("CANDIDATE_MAPPING_FAILED", "CANDIDATE_NOT_FOUND",
@@ -145,3 +147,19 @@ def test_every_reason_code_has_text():
     # A code without a sentence would surface as a blank row.
     for code in reasons._INTERNAL_TO_REASON.values():
         assert reasons.REASON_TEXT.get(code)
+
+
+def test_no_validator_code_is_left_without_a_mapping():
+    """A new block would otherwise silently read as "requires manual review",
+    which is safe but tells an operator nothing. This caught INCOMPLETE_SCHEDULE
+    only after it had already reached Production."""
+    import pathlib
+    import re
+
+    source = pathlib.Path(__file__).resolve().parents[1] / "services" / "interview_auto_booking.py"
+    text = source.read_text(encoding="utf-8")
+    raised = set(re.findall(r'BookingValidationError\(\s*"([A-Z_]+)"', text))
+    raised |= set(re.findall(r'"failure_code":\s*"([A-Z_]+)"', text))
+
+    unmapped = sorted(raised - set(reasons._INTERNAL_TO_REASON))
+    assert not unmapped, f"these blocking codes have no operator-facing reason: {unmapped}"
