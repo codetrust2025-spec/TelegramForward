@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from threading import Lock
 
 from core.config import DATA_DIR
+from features import transaction_identity
 
 _FILE = os.path.join(DATA_DIR, "handler_expenses.json")
 PROOFS_DIR = os.path.join(DATA_DIR, "handler_expense_proofs")
@@ -136,7 +137,18 @@ def _row_month(row: dict) -> str:
     return ""
 
 
-_ALLOWED_FIELDS = {"reference", "amount", "category", "note", "date"}
+_ALLOWED_FIELDS = {
+    "reference", "amount", "category", "note", "date",
+    # Identity of the underlying bank transaction, so an expense can be matched
+    # against a recovery or payout recorded elsewhere for the same money.
+    "external_transaction_id", "payer",
+}
+
+
+# A candidate payment received in a referrer's own account is a recovery, not
+# an expense. When one has been filed as an expense it is reclassified rather
+# than deleted, so the audit trail survives.
+VOID_STATUSES = frozenset({"VOIDED_DUPLICATE", "RECLASSIFIED_TO_RECOVERY"})
 
 
 def _normalise(record: dict, *, existing: dict | None = None) -> dict:
@@ -157,15 +169,54 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         "created_at": base.get("created_at") or _now_iso(),
         "updated_at": _now_iso(),
     }
+    out["external_transaction_id"] = transaction_identity.normalize_external_id(
+        record.get("external_transaction_id", base.get("external_transaction_id"))
+    )
+    # Who the money came from. For a reimbursed expense that is the company;
+    # for a misfiled candidate payment it is the candidate, which is what makes
+    # the duplicate detectable against the recovery.
+    out["payer"] = _clean_str(record.get("payer", base.get("payer")))[:160]
+    # Hash of the first proof image, carried forward across edits.
+    out["screenshot_hash"] = _clean_str(base.get("screenshot_hash"))
+    # Void state. An expense is never deleted when it turns out to be a
+    # duplicate or a misfiling: it keeps its row, its proof and its timestamps,
+    # and simply stops counting as money paid out.
+    void_status = _clean_str(record.get("void_status", base.get("void_status"))).upper()
+    if void_status in VOID_STATUSES:
+        out["void_status"] = void_status
+        out["void_reason"] = _clean_str(
+            record.get("void_reason", base.get("void_reason"))
+        )[:240]
+        out["voided_at"] = base.get("voided_at") or _now_iso()
+        out["voided_by"] = _clean_str(record.get("voided_by", base.get("voided_by")))[:120]
+        out["voided_ledger_ref"] = _clean_str(
+            record.get("voided_ledger_ref", base.get("voided_ledger_ref"))
+        )[:64]
     return out
+
+
+def is_voided(row: dict) -> bool:
+    """Voided rows stay in the file for audit but never count as money paid."""
+    return _clean_str((row or {}).get("void_status")).upper() in VOID_STATUSES
 
 
 # ── Public API ──────────────────────────────────────────────────────────────
 
-def list_expenses(*, reference: str | None = None, month: str | None = None) -> list[dict]:
+def list_expenses(
+    *,
+    reference: str | None = None,
+    month: str | None = None,
+    include_voided: bool = False,
+) -> list[dict]:
     """Most-recent first. Filter by reference (case-insensitive exact match)
-    and/or by month ('YYYY-MM')."""
+    and/or by month ('YYYY-MM').
+
+    Voided rows are excluded by default: every caller that sums this list is
+    computing money paid out. Pass include_voided=True for audit views.
+    """
     rows = list((_load().get("expenses") or []))
+    if not include_voided:
+        rows = [r for r in rows if not is_voided(r)]
     if reference:
         ref_lc = reference.strip().lower()
         rows = [r for r in rows if (r.get("reference") or "").strip().lower() == ref_lc]
@@ -175,12 +226,94 @@ def list_expenses(*, reference: str | None = None, month: str | None = None) -> 
     return rows
 
 
+def as_transaction(row: dict) -> dict:
+    """This expense in the shape the cross-module duplicate scan compares.
+
+    The handler is the receiver: an expense row records money that ended up
+    with them, whoever actually sent it.
+    """
+    return {
+        "record_id": row.get("id"),
+        "kind": "expense",
+        "source_module": "handler_expenses",
+        "amount": row.get("amount"),
+        "date": row.get("date"),
+        "payer": row.get("payer"),
+        "receiver": row.get("reference"),
+        "handler": row.get("reference"),
+        "external_transaction_id": row.get("external_transaction_id"),
+        "screenshot_hash": row.get("screenshot_hash"),
+        "voided": is_voided(row),
+        "created_at": row.get("created_at"),
+        "note": row.get("note"),
+    }
+
+
 def create_expense(record: dict) -> dict:
+    """Add an expense, refusing one that double-counts money already recorded.
+
+    A handler expense is the last step in most money flows, so it is where the
+    same transaction most often lands twice — typically a candidate payment
+    that the engine already posted as a recovery, re-entered by hand from the
+    same screenshot.
+    """
     data = _load()
     row = _normalise(record)
+
+    from features import financial_reconciliation
+
+    existing = financial_reconciliation.collect_transactions(exclude_expense_id=row["id"])
+    incoming = financial_reconciliation.canonical_transaction(as_transaction(row))
+    clash = transaction_identity.duplicate_of(incoming, existing)
+    if clash is not None:
+        raise transaction_identity.DuplicateTransactionError(
+            transaction_identity.duplicate_message(clash), existing=clash
+        )
+
     data.setdefault("expenses", []).append(row)
     _save(data)
     return row
+
+
+def void_expense(
+    eid: str,
+    *,
+    status: str,
+    reason: str,
+    actor: str = "",
+    ledger_ref: str = "",
+) -> dict | None:
+    """Stop an expense counting as money paid, without losing the record.
+
+    Used when an expense turns out to duplicate another entry or to have been
+    the wrong classification for the money. The row, its proofs and its
+    timestamps all survive; only its effect on the balance goes away.
+    """
+    normalized = _clean_str(status).upper()
+    if normalized not in VOID_STATUSES:
+        raise ValueError(f"Unknown void status: {status!r}")
+    if not _clean_str(reason):
+        raise ValueError("A void needs a reason so the audit trail explains itself")
+    data = _load()
+    rows = data.get("expenses") or []
+    for i, r in enumerate(rows):
+        if r.get("id") != eid:
+            continue
+        if is_voided(r):
+            return rows[i]
+        rows[i] = {
+            **r,
+            "void_status": normalized,
+            "void_reason": _clean_str(reason)[:240],
+            "voided_at": _now_iso(),
+            "voided_by": _clean_str(actor)[:120],
+            "voided_ledger_ref": _clean_str(ledger_ref)[:64],
+            "updated_at": _now_iso(),
+        }
+        data["expenses"] = rows
+        _save(data)
+        return rows[i]
+    return None
 
 
 def update_expense(eid: str, patch: dict) -> dict | None:
@@ -327,12 +460,14 @@ def add_proof(eid: str, *, data: bytes, original_name: str, mime_type: str,
         f.write(data)
     os.replace(tmp, path)
 
+    digest = transaction_identity.screenshot_hash(data)
     entry = {
         "id":            pid,
         "filename":      filename,
         "original_name": (original_name or filename)[:160],
         "mime_type":     mime_type or f"image/{ext}",
         "size":          len(data),
+        "sha256":        digest,
         "note":          _clean_str(note)[:200],
         "uploaded_at":   _now_iso(),
         "url":           f"/handler-expenses/{eid}/proofs/{pid}",
@@ -340,6 +475,10 @@ def add_proof(eid: str, *, data: bytes, original_name: str, mime_type: str,
     proofs = list(rows[idx].get("proofs") or [])
     proofs.append(entry)
     rows[idx]["proofs"] = proofs
+    # The first proof is the one that documents the transaction; later uploads
+    # are usually supporting context, so they do not redefine its identity.
+    if not rows[idx].get("screenshot_hash"):
+        rows[idx]["screenshot_hash"] = digest
     rows[idx]["updated_at"] = _now_iso()
     store["expenses"] = rows
     _save(store)
