@@ -367,3 +367,48 @@ describe("shared mobile header controls", () => {
     expect(responsive).toContain(sel);
   });
 });
+
+describe("dialogs and drawers lock the page behind them", () => {
+  // CommonModal already stores/restores focus, traps Tab, closes on Escape and
+  // scrolls its own card. What no dialog did was stop the page behind it from
+  // scrolling, so a drag over the backdrop scrolled the list underneath.
+  const lock = responsive.slice(
+    responsive.indexOf("/* ── Background scroll lock"),
+    responsive.indexOf("/* ── Landscape phones: short viewport"),
+  );
+
+  it.each([
+    ".cm-backdrop",
+    ".confirm-backdrop",
+    ".cand-modal-backdrop",
+    ".crm-modal-backdrop",
+    ".ai-settings-overlay",
+    ".fwd-drawer-backdrop",
+    ".mobile-drawer--open",
+  ])("locks the background for %s", (sel) => {
+    expect(lock).toContain(sel);
+  });
+
+  it("hides body overflow rather than moving the page", () => {
+    expect(lock).toContain("overflow: hidden");
+    expect(lock).toContain("touch-action: none");
+    // position: fixed on body would jump the scroll position to the top.
+    expect(lock).not.toContain("position: fixed");
+  });
+
+  it("keeps the dialog surfaces scrollable and contained", () => {
+    expect(lock).toContain("overscroll-behavior: contain");
+    for (const sel of [".cm-card", ".crm-modal", ".fwd-drawer", ".mobile-drawer__panel"]) {
+      expect(lock).toContain(sel);
+    }
+  });
+});
+
+describe("segmented controls on phones", () => {
+  it("raises only the segment role, not every compact button", () => {
+    expect(responsive).toContain(".app-shell .btn--segment");
+    // .btn--xs is used in 54 places, many in dense rows; growing all of them
+    // would cost more than it gains.
+    expect(responsive).not.toMatch(/^\s*\.app-shell \.btn--xs\s*{/m);
+  });
+});

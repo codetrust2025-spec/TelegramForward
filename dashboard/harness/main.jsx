@@ -15,10 +15,20 @@ import { installMockApi } from "./mockApi.js";
 const params = new URLSearchParams(location.search);
 installMockApi(params.get("data") || "normal");
 
-// Styles exactly as the app loads them.
-import "../src/teleautomation.css";
+// Styles in exactly the order main.jsx loads them. Import order decides which
+// rule wins at equal specificity, and an omitted sheet makes a control fall
+// back to user-agent defaults — .tg-sidebar-fab measured 4x4 that way, which
+// looked like a defect and was not one.
 import "../src/index.css";
+import "../src/teleautomation.css";
+import "../src/inbox/inboxLayout.css";
+import "../src/components/ui/CommonModal.css";
+import "../src/inbox/outgoingCall.css";
+import "../src/admin.css";
 import "../src/responsive.css";
+import "../src/desktop/desktopDashboard.css";
+import "../src/mobile/mobileDashboard.css";
+import "../src/dailyOps.css";
 
 import { AuthProvider } from "../src/context/AuthContext.jsx";
 import { ConfirmProvider } from "../src/context/ConfirmContext.jsx";
