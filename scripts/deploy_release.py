@@ -53,6 +53,13 @@ POSTGRES_DB = "teleautomation"
 RUNTIME_LINKS = (".env", "data", "uploads", "logs")
 RUNTIME_GLOBS = ("session_*.session",)
 
+# Runtime state that lives inside a git-tracked directory, so the directory
+# itself cannot be linked. These files are gitignored because they hold
+# secrets, so they never arrive with the release payload. Without an explicit
+# link a new release simply has no handler accounts and every handler login
+# fails while the admin login — which reads .env — keeps working.
+RUNTIME_FILE_LINKS = ("config/dashboard_handlers.yaml",)
+
 # Minimum free space required on the target filesystem before deploying.
 MIN_FREE_MB = 2048
 
@@ -332,6 +339,17 @@ def link_runtime(client, release: str) -> None:
             f"[ -e \"$f\" ] && ln -sfn {q(REMOTE_ROOT)}/\"$f\" {q(release)}/\"$f\" || true; done",
             check=False,
         )
+    for rel in RUNTIME_FILE_LINKS:
+        src = f"{REMOTE_ROOT}/{rel}"
+        dest = f"{release}/{rel}"
+        # The parent is a real directory shipped with the release; only the
+        # file itself is replaced by a link to the shared copy.
+        ssh(client, f"mkdir -p {q(os.path.dirname(dest))}", check=False)
+        if ssh(client, f"test -e {q(src)} && echo yes || echo no", check=False).strip() == "yes":
+            ssh(client, f"rm -rf {q(dest)} && ln -sfn {q(src)} {q(dest)}")
+            log(f"linked runtime file: {rel}")
+        else:
+            log(f"WARNING: runtime file absent on the host, not linked: {rel}")
 
 
 def health_ok(client, url: str = HEALTH_URL) -> bool:
@@ -352,6 +370,26 @@ def verify_release(client, release: str, manifest: dict) -> list[str]:
     legacy = ssh(client, f"grep -c 'status=410' {q(release)}/core/public_slot_api.py", check=False)
     if legacy.strip() in ("", "0"):
         problems.append("legacy /public/slots/book 410 guard missing")
+
+    # Handler sign-in reads config/dashboard_handlers.yaml from the release.
+    # The file is gitignored, so it only exists via the runtime link. Without
+    # it every handler is locked out while the admin login keeps working, which
+    # is exactly how this went unnoticed across twenty-three releases.
+    for rel in RUNTIME_FILE_LINKS:
+        present = ssh(client, f"test -r {q(release)}/{rel} && echo yes || echo no", check=False)
+        if present.strip() != "yes":
+            problems.append(f"runtime file not readable in release: {rel}")
+
+    accounts = ssh(
+        client,
+        f"cd {q(release)} && {q(REMOTE_ROOT)}/venv/bin/python -c "
+        "\"import sys;sys.path.insert(0,'.');"
+        "from core.dashboard_auth_vps import _handler_accounts;"
+        "print(len(_handler_accounts()))\" 2>/dev/null || echo 0",
+        check=False,
+    )
+    if accounts.strip() in ("", "0"):
+        problems.append("no handler accounts resolvable in release — handler login would fail")
 
     for key, digest_key in (("js", "js_sha256"), ("css", "css_sha256")):
         rel = manifest[key]

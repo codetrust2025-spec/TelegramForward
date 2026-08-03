@@ -179,6 +179,10 @@ def test_verify_release_passes_when_everything_matches(monkeypatch):
         "bookings/confirm": "1",
         "status=410": "1",
         "sha256sum": "abc",
+        # Handler accounts must be reachable from the release or every handler
+        # login fails; the deployer now refuses to switch without them.
+        "dashboard_handlers.yaml": "yes",
+        "_handler_accounts": "9",
     })
     monkeypatch.setattr(dr, "ssh", fake_ssh_factory(client))
     assert dr.verify_release(
@@ -192,6 +196,10 @@ def test_verify_live_release_checks_process_proxy_apis_and_public_assets(monkeyp
     commit = "c" * 40
     client = FakeSSH(answers={
         "127.0.0.1:8000/health": '{"status":"ok"}',
+        # Handler accounts must be reachable from the release; without them
+        # every handler login fails while the admin login keeps working.
+        "dashboard_handlers.yaml": "yes",
+        "_handler_accounts": "9",
         "bookings/confirm'": "1",
         "status=410": "1",
         "sha256sum /rel/static/assets/a.js": "js-hash",
@@ -234,6 +242,10 @@ def test_verify_live_release_checks_process_proxy_apis_and_public_assets(monkeyp
 def test_verify_live_release_reports_critical_runtime_failures(monkeypatch):
     client = FakeSSH(answers={
         "127.0.0.1:8000/health": '{"status":"ok"}',
+        # Handler accounts must be reachable from the release; without them
+        # every handler login fails while the admin login keeps working.
+        "dashboard_handlers.yaml": "yes",
+        "_handler_accounts": "9",
         "bookings/confirm'": "1",
         "status=410": "1",
         "sha256sum": "hash",
