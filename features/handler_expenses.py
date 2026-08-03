@@ -226,6 +226,31 @@ def list_expenses(
     return rows
 
 
+def proof_hashes(row: dict) -> list[str]:
+    """sha256 of every proof image on this expense, newest capture last.
+
+    Proofs uploaded before hashing was introduced carry no stored digest, so
+    those are read off disk. An unreadable file is skipped rather than raised:
+    a missing image must not stop a reconciliation scan.
+    """
+    digests: list[str] = []
+    stored = _clean_str(row.get("screenshot_hash"))
+    if stored:
+        digests.append(stored)
+    for proof in (row.get("proofs") or []):
+        digest = _clean_str(proof.get("sha256"))
+        if not digest:
+            path = os.path.join(_proof_dir(str(row.get("id") or "")), proof.get("filename", ""))
+            try:
+                with open(path, "rb") as handle:
+                    digest = transaction_identity.screenshot_hash(handle.read())
+            except OSError:
+                continue
+        if digest and digest not in digests:
+            digests.append(digest)
+    return digests
+
+
 def as_transaction(row: dict) -> dict:
     """This expense in the shape the cross-module duplicate scan compares.
 

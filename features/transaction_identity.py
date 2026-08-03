@@ -129,14 +129,24 @@ def fingerprint(record: dict) -> str:
 
 
 def identity_of(record: dict) -> dict[str, str]:
-    """Everything comparable about one financial record."""
+    """Everything comparable about one financial record.
+
+    `payment_id` outranks everything else. The verification engine assigns one
+    payment record per real transaction and reuses it when a second screenshot
+    of the same transfer is uploaded, so two records sharing a payment_id are
+    the same money by the engine's own reckoning — no inference needed. That
+    matters most for historical rows, where the operator's typed date can
+    differ from the date on the receipt and the fingerprint therefore misses.
+    """
+    payment_id = str(record.get("payment_id") or "").strip()
     external = external_id_of(record)
     return {
+        "payment_id": payment_id,
         "external_id": external,
         "fingerprint": fingerprint(record),
         "screenshot_hash": str(record.get("screenshot_hash") or record.get("proof_sha256") or ""),
         # The strongest identity this record can offer.
-        "identity": external or fingerprint(record),
+        "identity": (f"pay:{payment_id}" if payment_id else "") or external or fingerprint(record),
     }
 
 
@@ -199,9 +209,20 @@ def find_duplicates(records: Iterable[dict]) -> list[dict]:
             ),
         )
         canonical, *duplicates = ordered
+        # Only an engine-assigned payment or a bank reference, backed by
+        # matching amounts, is safe to correct without a human looking. A
+        # shared screenshot with differing amounts usually means a proof was
+        # attached to the wrong record, not that money moved twice; and a
+        # fingerprint match alone cannot rule out two genuine payments of the
+        # same amount between the same parties on the same day.
+        amounts_agree = len({normalize_amount(r.get("amount")) for r in active}) == 1
+        confidence = (
+            "high" if basis in {"payment_id", "external_id"} and amounts_agree else "review"
+        )
         groups.append(
             {
                 "basis": basis,
+                "confidence": confidence,
                 "identity": canonical.get("identity"),
                 "canonical": canonical,
                 "duplicates": duplicates,
@@ -217,7 +238,13 @@ def find_duplicates(records: Iterable[dict]) -> list[dict]:
         )
 
     for identity, rows in by_identity.items():
-        _emit(rows, "external_id" if not identity.startswith("fp:") else "fingerprint")
+        if identity.startswith("pay:"):
+            basis = "payment_id"
+        elif identity.startswith("fp:"):
+            basis = "fingerprint"
+        else:
+            basis = "external_id"
+        _emit(rows, basis)
     for _hash, rows in by_screenshot.items():
         _emit(rows, "screenshot_hash")
     return groups

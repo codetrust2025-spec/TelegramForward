@@ -63,9 +63,50 @@ def canonical_transaction(tx: dict[str, Any]) -> dict[str, Any]:
     return {**tx, "receiver": _canonical(tx.get("receiver"))}
 
 
+def _evidence_index() -> dict[str, str]:
+    """evidence_id -> screenshot sha256.
+
+    Evidence rows have always carried the hash; the ledger entries built from
+    them did not. Joining here recovers the identity of every historical row
+    without rewriting stored data.
+    """
+    from features import payment_verification_engine
+
+    ledger = payment_verification_engine._load_ledger()
+    return {
+        str(row.get("evidence_id") or ""): str(row.get("sha256") or "")
+        for row in (ledger.get("evidence") or [])
+        if row.get("evidence_id")
+    }
+
+
+def _payment_id_by_screenshot() -> dict[str, str]:
+    """screenshot sha256 -> the payment the engine matched it to.
+
+    The engine reuses one payment record when a second screenshot of the same
+    transfer is uploaded, so this is how a hand-filed expense is tied back to
+    the recovery that already recorded the same money.
+    """
+    from features import payment_verification_engine
+
+    ledger = payment_verification_engine._load_ledger()
+    evidence_to_payment: dict[str, str] = {}
+    for payment in ledger.get("payments") or []:
+        evidence_id = str(payment.get("evidence_id") or "")
+        if evidence_id:
+            evidence_to_payment[evidence_id] = str(payment.get("payment_id") or "")
+    out: dict[str, str] = {}
+    for evidence_id, digest in _evidence_index().items():
+        payment_id = evidence_to_payment.get(evidence_id)
+        if digest and payment_id:
+            out[digest] = payment_id
+    return out
+
+
 def _ledger_transactions() -> list[dict[str, Any]]:
     from features import payment_verification_engine
 
+    evidence = _evidence_index()
     rows: list[dict[str, Any]] = []
     for entry in payment_verification_engine.ledger_entries():
         kind = _LEDGER_KINDS.get(str(entry.get("transaction_type") or "").upper())
@@ -86,7 +127,9 @@ def _ledger_transactions() -> list[dict[str, Any]]:
                 ),
                 "handler": entry.get("referrer") or entry.get("receiver_registry_name"),
                 "external_transaction_id": entry.get("external_transaction_id"),
-                "screenshot_hash": entry.get("screenshot_hash"),
+                "screenshot_hash": entry.get("screenshot_hash")
+                or evidence.get(str(entry.get("evidence_id") or "")),
+                "payment_id": entry.get("payment_id"),
                 # A reversed or pending entry is not currently moving money.
                 "voided": str(entry.get("status") or "").lower() != "posted",
                 "created_at": entry.get("created_at"),
@@ -100,14 +143,25 @@ def _ledger_transactions() -> list[dict[str, Any]]:
 def _handler_expense_transactions(*, exclude_id: str = "") -> list[dict[str, Any]]:
     from features import handler_expenses
 
-    return [
-        {**tx, "receiver": _canonical(tx.get("receiver"))}
-        for tx in (
-            handler_expenses.as_transaction(row)
-            for row in handler_expenses.list_expenses(include_voided=True)
-            if row.get("id") != exclude_id
-        )
-    ]
+    by_screenshot = _payment_id_by_screenshot()
+    rows = []
+    for row in handler_expenses.list_expenses(include_voided=True):
+        if row.get("id") == exclude_id:
+            continue
+        tx = handler_expenses.as_transaction(row)
+        tx["receiver"] = _canonical(tx.get("receiver"))
+        # An expense filed from a screenshot the engine has already seen
+        # inherits that screenshot's payment, which is what links it to a
+        # recovery recorded from the same receipt.
+        if not tx.get("payment_id"):
+            for digest in handler_expenses.proof_hashes(row):
+                payment_id = by_screenshot.get(digest)
+                if payment_id:
+                    tx["payment_id"] = payment_id
+                    tx.setdefault("screenshot_hash", digest)
+                    break
+        rows.append(tx)
+    return rows
 
 
 def _company_expense_transactions() -> list[dict[str, Any]]:
@@ -188,10 +242,21 @@ def reconciliation_report(
         )
         bucket["groups"] += 1
         bucket["impact"] += int(group.get("financial_impact") or 0)
+    confirmed = [g for g in groups if g.get("confidence") == "high"]
+    review = [g for g in groups if g.get("confidence") != "high"]
     return {
         "scanned": len(rows),
         "sources": source_status(),
         "duplicate_groups": len(groups),
+        # Safe to correct without a human: an engine-assigned payment or a bank
+        # reference, with amounts that agree.
+        "confirmed": confirmed,
+        # Everything else. Same amount and day is not proof, and a shared
+        # screenshot with different amounts is usually a mis-attached proof.
+        "requires_review": review,
+        "confirmed_financial_impact": sum(
+            int(g.get("financial_impact") or 0) for g in confirmed
+        ),
         "total_financial_impact": sum(
             int(g.get("financial_impact") or 0) for g in groups
         ),
