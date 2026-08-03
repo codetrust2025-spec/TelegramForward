@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Responsive audit harness build output (dev tooling, never deployed)
+.harness-dist/
