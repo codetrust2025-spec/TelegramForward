@@ -778,3 +778,46 @@ def test_an_invite_without_a_calendar_uid_behaves_exactly_as_before(monkeypatch)
 
     assert execute(result())["status"] == "Auto Booked"
     assert saved[-1]["interview_calendar_uid"] == ""
+
+
+def test_booking_metadata_is_accepted_by_the_real_slot_functions():
+    """Every booking splats _booking_metadata into the candidate store. The
+    other tests here mock those functions, so a key the store does not accept
+    passes them and still raises TypeError in Production on every booking."""
+    import inspect
+
+    from features import candidate_store
+
+    meta = booking._booking_metadata(
+        {"calendar": {"uid": "UID-1", "sequence": 4}}, {}, {},
+    )
+    for name in ("assign_interview_slot", "update_interview_slot"):
+        parameters = inspect.signature(getattr(candidate_store, name)).parameters
+        unsupported = sorted(set(meta) - set(parameters))
+        assert not unsupported, f"{name} cannot accept {unsupported}"
+
+
+def test_the_calendar_identity_actually_persists(tmp_path, monkeypatch):
+    """Storing a field the record normaliser drops would leave every revision
+    unable to find the booking it supersedes."""
+    from features import candidate_store
+
+    monkeypatch.setattr(candidate_store, "_FILE", str(tmp_path / "candidates.json"))
+    row = candidate_store.create_candidate({"name": "Slot Owner", "phone": "9000000001"})
+    candidate_store.assign_interview_slot(
+        candidate_id=row["id"], date="2099-07-20", time="15:30", time_end="16:00",
+        interview_round="L1", interview_calendar_uid="UID-1",
+        interview_calendar_sequence="0",
+    )
+    stored = candidate_store.get_candidate(row["id"])
+    assert stored["interview_calendar_uid"] == "UID-1"
+    assert stored["interview_calendar_sequence"] == "0"
+
+    candidate_store.update_interview_slot(
+        candidate_id=row["id"], date="2099-07-20", time="11:30", time_end="12:00",
+        interview_calendar_sequence="4",
+    )
+    moved = candidate_store.get_candidate(row["id"])
+    assert moved["time"] == "11:30"
+    assert moved["interview_calendar_uid"] == "UID-1"   # identity survives the move
+    assert moved["interview_calendar_sequence"] == "4"
