@@ -821,3 +821,27 @@ def test_the_calendar_identity_actually_persists(tmp_path, monkeypatch):
     assert moved["time"] == "11:30"
     assert moved["interview_calendar_uid"] == "UID-1"   # identity survives the move
     assert moved["interview_calendar_sequence"] == "4"
+
+
+def test_a_second_slot_for_one_candidate_keeps_the_calendar_identity(tmp_path, monkeypatch):
+    """Booking a candidate who already has a confirmed slot clones the record.
+    If the clone drops the calendar identity, a revision cannot find it and a
+    replay books the same event twice."""
+    from features import candidate_store
+
+    monkeypatch.setattr(candidate_store, "_FILE", str(tmp_path / "candidates.json"))
+    row = candidate_store.create_candidate({"name": "Two Slots", "phone": "9000000002"})
+    candidate_store.assign_interview_slot(
+        candidate_id=row["id"], date="2099-07-20", time="13:00", time_end="13:30",
+        interview_round="L1", interview_calendar_uid="UID-FIRST",
+        interview_calendar_sequence="0",
+    )
+    second = candidate_store.assign_interview_slot(
+        candidate_id=row["id"], date="2099-07-21", time="17:00", time_end="18:00",
+        interview_round="L2", interview_calendar_uid="UID-SECOND",
+        interview_calendar_sequence="0",
+    )
+    assert second["id"] != row["id"], "a second slot clones the candidate record"
+    assert second["interview_calendar_uid"] == "UID-SECOND"
+    stored = candidate_store.get_candidate(second["id"])
+    assert stored["interview_calendar_uid"] == "UID-SECOND"

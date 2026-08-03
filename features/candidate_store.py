@@ -4001,6 +4001,10 @@ def assign_interview_slot(
             interview_source_thread_id=interview_source_thread_id,
             interview_source_message_id=interview_source_message_id,
             interview_source_timezone=interview_source_timezone,
+            # Without these the clone loses the calendar identity, so a later
+            # revision cannot find it and a re-run books the event twice.
+            interview_calendar_uid=interview_calendar_uid,
+            interview_calendar_sequence=interview_calendar_sequence,
             interview_booking_source=interview_booking_source,
         )
 
