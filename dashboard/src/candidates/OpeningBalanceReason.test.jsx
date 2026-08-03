@@ -168,11 +168,13 @@ describe("opening balance made of an unpaid closure complimentary", () => {
     });
     expect(opening.textContent).toContain("unpaid from Jun 2026");
     expect(opening.textContent).not.toContain("profile-closure complimentary from");
-    // The complimentary is still disclosed, just not claimed as the whole reason.
+    // The complimentary is still disclosed, just not claimed as the whole
+    // reason — and it is disclosed on the row, because leaving it in a tooltip
+    // made the bonus look like something only the closure admin received.
     expect(opening.querySelector(".earn-ledger-note").getAttribute("title")).toContain(
       "incl. ₹5,000 profile-closure complimentary",
     );
-    expect(opening.querySelector(".earn-summary-note--complimentary")).toBeNull();
+    expect(opening.textContent).toContain("Includes ₹5,000 profile-closure complimentary");
   });
 
   it("does not call an overpayment a complimentary", async () => {
@@ -183,5 +185,75 @@ describe("opening balance made of an unpaid closure complimentary", () => {
       net_payable: -5000,
     });
     expect(opening.textContent).toContain("overpaid in Jun 2026");
+  });
+});
+
+// A referrer's complimentary arrives alongside their commission, so it is
+// never the whole balance. Naming it only in a tooltip made it look as though
+// the closure admin was the only one who received the bonus.
+describe("opening balance mixing commission and closure complimentary", () => {
+  // Pavan Kalyan: ₹11,000 commission + ₹5,000 complimentary earned before
+  // July, ₹4,000 paid, leaving ₹12,000 carried in.
+  const REFERRER = {
+    ...THRILOK,
+    name: "Pavan Kalyan",
+    prior_owed: 16000,
+    prior_paid: 4000,
+    prior_balance: 12000,
+    prior_complimentary: 5000,
+    prior_complimentary_count: 1,
+    prior_months: ["2026-06", "2026-07"],
+    net_payable: 12000,
+  };
+
+  it("says the balance is unpaid arrears, since it is not only a bonus", async () => {
+    const { opening } = await openRow(REFERRER);
+    expect(opening.textContent).toContain("unpaid from Jun 2026 – Jul 2026");
+  });
+
+  it("still names the complimentary on the row, not only on hover", async () => {
+    const { opening } = await openRow(REFERRER);
+    expect(opening.textContent).toContain(
+      "Includes ₹5,000 profile-closure complimentary",
+    );
+  });
+
+  it("marks the complimentary line as its own kind of debt", async () => {
+    const { opening } = await openRow(REFERRER);
+    const note = [...opening.querySelectorAll(".earn-summary-note--complimentary")]
+      .find((el) => el.textContent.startsWith("Includes"));
+    expect(note).not.toBeUndefined();
+  });
+
+  it("counts the closures when a handler earned more than one", async () => {
+    const { opening } = await openRow({
+      ...REFERRER, prior_complimentary: 10000, prior_complimentary_count: 2,
+    });
+    expect(opening.textContent).toContain(
+      "Includes ₹10,000 profile-closure complimentary (2 closures)",
+    );
+  });
+
+  it("does not repeat itself when the balance is complimentary all the way", async () => {
+    // The line above already says the balance is nothing else.
+    const { opening } = await openRow({
+      ...THRILOK,
+      prior_owed: 50000, prior_paid: 45000, prior_balance: 5000,
+      prior_complimentary: 5000, prior_complimentary_count: 1,
+    });
+    expect(opening.textContent).toContain("unpaid profile-closure complimentary");
+    expect(opening.textContent).not.toContain("Includes ₹5,000");
+  });
+
+  it("says nothing extra when no complimentary was earned", async () => {
+    const { opening } = await openRow(THRILOK);
+    expect(opening.textContent).not.toContain("Includes");
+    expect(opening.textContent).not.toContain("profile-closure complimentary");
+  });
+
+  it("leaves the figures alone", async () => {
+    const { ledger } = await openRow(REFERRER);
+    // Opening balance and every derived subtotal are untouched by the label.
+    expect(ledger.textContent).toContain("+₹12,000");
   });
 });
