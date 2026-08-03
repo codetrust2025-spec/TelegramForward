@@ -417,9 +417,24 @@ def trusted_interview_result(decoded: dict[str, Any], attachments: list[dict[str
     calendars = [item for item in attachments if str(item.get("filename") or "").lower().endswith(".ics")]
     if not calendars:
         return _plain_text_interview_result(decoded)
-    if len(calendars) != 1:
+    # Google Calendar attaches the invitation twice: once inline as
+    # text/calendar and once as a named invite.ics. Two copies of one event are
+    # not the ambiguous multi-event mail this guard exists for, so identical
+    # invitations are collapsed before counting. A mail carrying genuinely
+    # different events is still refused.
+    distinct: dict[Any, dict[str, Any]] = {}
+    for item in calendars:
+        text = str(item.get("text") or "")
+        parsed = parse_calendar(text)
+        key = (
+            (parsed["uid"], parsed["sequence"], parsed["method"])
+            if parsed and parsed.get("uid")
+            else ("unparsed", " ".join(text.split()))
+        )
+        distinct.setdefault(key, item)
+    if len(distinct) != 1:
         return None
-    invite = parse_calendar(str(calendars[0].get("text") or ""))
+    invite = parse_calendar(str(next(iter(distinct.values())).get("text") or ""))
     if not invite or not invite["uid"] or invite["method"] not in {"REQUEST", "CANCEL"}:
         return None
     sender = _email(str(decoded.get("sender_email") or ""))

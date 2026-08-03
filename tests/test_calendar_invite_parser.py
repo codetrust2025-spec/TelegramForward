@@ -255,3 +255,56 @@ def test_cancelled_subject_is_not_trusted_without_sender_authentication():
     )
 
     assert trusted_interview_result(value, []) is None
+
+
+# ── Google Calendar attaches the invitation twice ───────────────────────────
+#
+# Reproduces the Mindstix invite that reached Production: Google sends the same
+# event as an inline text/calendar part and again as a named invite.ics, so the
+# message carries two byte-identical copies. Counting parts rather than events
+# made that look like ambiguous multi-event mail and the invite was dropped as
+# not recruitment-related, with no booking and no notification.
+
+def test_google_calendar_duplicate_invite_parts_are_one_event():
+    text = invite()
+    result = trusted_interview_result(decoded(), [
+        {"filename": "invite.ics", "mime_type": "text/calendar", "text": text},
+        {"filename": "invite.ics", "mime_type": "text/calendar", "text": text},
+    ])
+    assert result is not None
+    assert result["classification"] == "interview_confirmed"
+    assert result["interview"]["time"] == "05:30 PM"
+
+
+def test_copies_that_differ_only_in_whitespace_are_still_one_event():
+    text = invite()
+    result = trusted_interview_result(decoded(), [
+        {"filename": "invite.ics", "mime_type": "text/calendar", "text": text},
+        {"filename": "invite.ics", "mime_type": "text/calendar", "text": text + "\r\n"},
+    ])
+    assert result is not None
+
+
+def test_two_genuinely_different_events_are_still_refused():
+    # The ambiguity this guard exists for: nothing may pick one silently.
+    first = invite()
+    second = invite().replace("UID:ram-charan-interview@example",
+                              "UID:some-other-meeting@example")
+    assert trusted_interview_result(decoded(), [
+        {"filename": "invite.ics", "mime_type": "text/calendar", "text": first},
+        {"filename": "invite.ics", "mime_type": "text/calendar", "text": second},
+    ]) is None
+
+
+def test_two_revisions_of_one_event_in_one_mail_are_refused():
+    # Same UID, different SEQUENCE: which one is current is not ours to guess.
+    first = invite()
+    second = invite().replace("SEQUENCE:0", "SEQUENCE:2")
+    assert trusted_interview_result(decoded(), [
+        {"filename": "invite.ics", "mime_type": "text/calendar", "text": first},
+        {"filename": "invite.ics", "mime_type": "text/calendar", "text": second},
+    ]) is None
+
+
+def test_a_single_invite_is_unaffected():
+    assert trusted_interview_result(decoded(), attachment()) is not None
