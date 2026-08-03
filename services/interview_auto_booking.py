@@ -367,9 +367,15 @@ def _resolve_existing_slot(
         (result.get("job") or {}).get("title"),
         *((result.get("interview") or {}).get("stable_ids") or []),
     )
+    calendar_uid = _calendar_uid(result)
     ranked: list[tuple[int, dict[str, Any]]] = []
     for row in slots:
         score = 0
+        if calendar_uid and _same_text(row.get("interview_calendar_uid"), calendar_uid):
+            # The organiser's own identifier for the event. Nothing else here
+            # comes close: threads fork and subjects repeat, but a UID match is
+            # the same meeting by definition.
+            score += 500
         if thread_id and _same_text(row.get("interview_source_thread_id"), thread_id):
             score += 100
         row_ids = _stable_interview_ids(
@@ -407,7 +413,47 @@ def _booking_metadata(result: dict[str, Any], message: dict[str, Any], schedule:
         "interview_source_thread_id": str(message.get("provider_thread_id") or ""),
         "interview_source_message_id": str(message.get("provider_message_id") or ""),
         "interview_source_timezone": str((schedule or {}).get("source_timezone") or ""),
+        # The calendar event this slot came from. An organiser who moves the
+        # meeting sends the same UID with a higher SEQUENCE, and without these
+        # the revision looks like an unrelated second interview.
+        "interview_calendar_uid": _calendar_uid(result),
+        "interview_calendar_sequence": str(_calendar_sequence(result)),
     }
+
+
+def _calendar_uid(result: dict[str, Any]) -> str:
+    return str((result.get("calendar") or {}).get("uid") or "").strip()
+
+
+def _calendar_sequence(result: dict[str, Any]) -> int:
+    try:
+        return max(0, int((result.get("calendar") or {}).get("sequence") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _calendar_revision_of(slots: list[dict[str, Any]], result: dict[str, Any]) -> dict[str, Any] | None:
+    """The booking this invite supersedes, if it is a revision of one.
+
+    RFC 5545 identifies an event by UID; SEQUENCE increments each time the
+    organiser changes it. A higher sequence for a UID we already booked is the
+    same interview moved, so it must update that booking rather than compete
+    with it for a slot.
+    """
+    uid = _calendar_uid(result)
+    if not uid:
+        return None
+    incoming = _calendar_sequence(result)
+    for row in slots:
+        if not _same_text(row.get("interview_calendar_uid"), uid):
+            continue
+        try:
+            booked = int(row.get("interview_calendar_sequence") or 0)
+        except (TypeError, ValueError):
+            booked = 0
+        if incoming >= booked:
+            return row
+    return None
 
 
 def _evidence_font(size: int, *, bold: bool = False):
@@ -654,6 +700,12 @@ def _execute_auto_booking(
         if classification != "interview_cancelled":
             _payment_check(candidate, schedule); payment_status = "PASSED"
         slots = _confirmed_slots(candidate)
+        # An organiser moving an interview re-sends the same calendar UID with a
+        # higher SEQUENCE. Booking that as a fresh interview leaves the old time
+        # standing and makes the new one fight the old for a slot, so a revision
+        # of something already booked is handled as the reschedule it is.
+        if classification == "interview_confirmed" and _calendar_revision_of(slots, result):
+            classification = "interview_rescheduled"
         if classification == "interview_confirmed":
             duplicate = next((row for row in slots if str(row.get("date"))[:10] == schedule["date"] and str(row.get("time"))[:5] == schedule["time"]), None)
             if duplicate:

@@ -1103,10 +1103,19 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
     from services.mail_attachment_processor import extract_attachment
     decoded["body"] = clean_email(decoded.get("body") or "")
     decoded["message_hash"] = content_hash("|".join([decoded.get("sender_email") or "", decoded.get("subject") or "", str(decoded.get("sent_at"))]))
-    decoded["body_hash"] = content_hash(decoded["body"])
     processed = [extract_attachment(item) if item.get("data") is not None else item for item in (attachment_texts or [])]
     safe = [{key: item.get(key) for key in ("filename", "mime_type", "text", "attachment_type", "extraction_status", "checksum")} for item in processed]
     decoded["attachments"] = safe
+    # Attachments are part of what makes a message distinct. A calendar
+    # organiser who moves a meeting re-sends the identical covering note with a
+    # new invite.ics; hashing the body alone made that revision look like a
+    # resend and dropped it before anything read the new time.
+    fingerprint = "|".join(sorted(
+        str(item.get("checksum") or "") for item in safe if item.get("checksum")
+    ))
+    decoded["body_hash"] = content_hash(
+        decoded["body"] + ("#attachments:" + fingerprint if fingerprint else "")
+    )
     critical_attachment_failure = any(
         str(item.get("attachment_type") or "") in {"OFFER_LETTER","APPOINTMENT_LETTER","JOINING_LETTER","COMPENSATION_BREAKUP"}
         and str(item.get("extraction_status") or "") in {"FAILED","MANUAL_REVIEW_REQUIRED"}
