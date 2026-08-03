@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react";
 import AiProcessingStatus from "../components/AiProcessingStatus.jsx";
+import { useDialogA11y } from "../hooks/useDialogA11y.js";
 import ReferrerPaymentAccounts, {
   fetchReferrerRegistryJson,
 } from "./ReferrerPaymentAccounts.jsx";
@@ -140,11 +141,10 @@ export default function PayoutModal({
     return () => { cancelled = true; };
   }, [ve]);
 
-  useEffect(() => {
-    const handler = (ev) => { if (ev.key === "Escape" && !editId) onClose?.(); };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [onClose, editId]);
+  // Escape, the Tab trap and focus restoration all come from the shared
+  // hook. Escape is suppressed while an inline row edit is open so it
+  // cancels the edit rather than discarding the whole dialog.
+  const dialogRef = useDialogA11y(true, onClose, { closeOnEscape: !editId });
 
   // ── Derived data ──
   const filtered = useMemo(() => {
@@ -471,10 +471,16 @@ export default function PayoutModal({
 
   return <Fragment>
     <div className="cand-modal-backdrop" onClick={ev => ev.target === ev.currentTarget && onClose?.()}>
-      <div className="payout-modal payout-modal--expense">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="payout-modal-title"
+        className="payout-modal payout-modal--expense"
+      >
         <header className="payout-modal__header payout-modal__header--expense">
           <div className="payout-modal__heading">
-            <h3 className="payout-modal__title">
+            <h3 className="payout-modal__title" id="payout-modal-title">
               {showPaymentAccounts ? "Manage payment accounts" : "Add Referrer Expense"}
             </h3>
             {!showPaymentAccounts && selectedName && (

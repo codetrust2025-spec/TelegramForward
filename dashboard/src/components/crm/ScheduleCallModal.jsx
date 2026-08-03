@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { useDialogA11y } from '../../hooks/useDialogA11y.js'
 import { createPortal } from 'react-dom'
 import { CALL_TYPES, toLocalISO } from '../../utils/calls.js'
 
@@ -12,6 +13,10 @@ function defaultDateTime() {
 }
 
 export function ScheduleCallModal({ open, leadName, onConfirm, onClose, saving }) {
+  // Focus in, Tab trapped, focus restored to the trigger. Escape stays
+  // below so this dialog's own guard keeps its exact behaviour.
+  const dialogRef = useDialogA11y(open, onClose, { closeOnEscape: false })
+
   const defaults = useMemo(() => defaultDateTime(), [open])
   const [date, setDate] = useState(defaults.date)
   const [time, setTime] = useState(defaults.time)
@@ -45,6 +50,7 @@ export function ScheduleCallModal({ open, leadName, onConfirm, onClose, saving }
     <div className="crm-modal-backdrop" role="presentation" onClick={onClose}>
       <div
         className="crm-modal"
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="schedule-call-title"

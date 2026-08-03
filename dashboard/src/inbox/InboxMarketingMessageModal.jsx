@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import { useDialogA11y } from '../hooks/useDialogA11y.js'
 import { createPortal } from 'react-dom'
 import { API } from '../config.js'
 import { Spinner } from '../Loader.jsx'
@@ -12,6 +13,10 @@ export function InboxMarketingMessageModal({
   slot,
   postingModeConfig,
 }) {
+  // Focus in, Tab trapped, focus restored to the trigger. Escape stays
+  // below so this dialog's own guard keeps its exact behaviour.
+  const dialogRef = useDialogA11y(open, onClose, { closeOnEscape: false })
+
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -102,6 +107,7 @@ export function InboxMarketingMessageModal({
     <div className="crm-modal-backdrop" role="presentation" onClick={onClose}>
       <div
         className="crm-modal crm-modal--marketing"
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="inbox-marketing-title"

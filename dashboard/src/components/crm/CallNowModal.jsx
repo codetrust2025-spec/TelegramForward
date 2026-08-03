@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo } from 'react'
+import { useDialogA11y } from '../../hooks/useDialogA11y.js'
 import { createPortal } from 'react-dom'
 import { buildLiveCallOptions } from '../../utils/calls.js'
 
@@ -10,6 +11,10 @@ export function CallNowModal({
   onClose,
   loading,
 }) {
+  // Focus in, Tab trapped, focus restored to the trigger. Escape stays
+  // below so this dialog's own guard keeps its exact behaviour.
+  const dialogRef = useDialogA11y(open, onClose, { closeOnEscape: false })
+
   const options = useMemo(
     () => buildLiveCallOptions(contact || {}),
     [contact],
@@ -30,6 +35,7 @@ export function CallNowModal({
     <div className="crm-modal-backdrop" role="presentation" onClick={onClose}>
       <div
         className="crm-modal crm-modal--compact"
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="call-now-title"

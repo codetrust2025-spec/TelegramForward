@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { useDialogA11y } from '../hooks/useDialogA11y.js'
 import { Spinner } from '../Loader.jsx'
 
 const API_BASE = typeof window !== 'undefined' && window.location.port === '3000'
@@ -6,6 +7,10 @@ const API_BASE = typeof window !== 'undefined' && window.location.port === '3000
   : (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.host}` : '')
 
 export function ChangePasswordModal({ open, onClose, onSuccess }) {
+  // Focus in, Tab trapped, focus restored to the trigger. Escape stays
+  // below so this dialog's own guard keeps its exact behaviour.
+  const dialogRef = useDialogA11y(open, onClose, { closeOnEscape: false })
+
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -81,6 +86,7 @@ export function ChangePasswordModal({ open, onClose, onSuccess }) {
     <div className="modal-backdrop confirm-backdrop" onClick={busy ? undefined : onClose} role="presentation">
       <div
         className="cand-modal cand-modal--narrow"
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="change-pw-title"

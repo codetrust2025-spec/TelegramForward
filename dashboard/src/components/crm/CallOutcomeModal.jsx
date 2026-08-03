@@ -1,4 +1,5 @@
 import React from 'react'
+import { useDialogA11y } from '../../hooks/useDialogA11y.js'
 
 const OUTCOMES = [
   { id: 'interested', label: 'Interested' },
@@ -7,13 +8,18 @@ const OUTCOMES = [
 ]
 
 export function CallOutcomeModal({ open, leadName, onSelect, onDismiss, saving }) {
+  // This dialog had no Escape handling and no focus management at all.
+  const dialogRef = useDialogA11y(open, onDismiss)
+
   if (!open) return null
 
   return (
     <div className="crm-modal-backdrop" role="presentation" onClick={onDismiss}>
       <div
+        ref={dialogRef}
         className="crm-modal crm-modal--compact"
         role="dialog"
+        aria-modal="true"
         aria-labelledby="call-outcome-title"
         onClick={e => e.stopPropagation()}
       >
