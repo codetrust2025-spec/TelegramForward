@@ -747,13 +747,15 @@ body,
 /* Settings disclosure and inbox sidebar controls, measured 12-21px tall. */
 .app-shell .shutdown-list-help-summary,
 .app-shell .tg-sidebar-dashboard-btn,
-.tg-sidebar-notify-close {
+.app-shell .tg-sidebar-notify-close,
+/* Only rendered in the empty state, measured 39x15 there. */
+.app-shell .cand-link {
   min-height: 24px;
 }
 
 /* Icon-only versions of the above need the width too. */
 .app-shell .tg-sidebar-dashboard-btn,
-.tg-sidebar-notify-close {
+.app-shell .tg-sidebar-notify-close {
   min-width: 24px;
 }
 
@@ -790,7 +792,8 @@ body,
   .app-shell .pending-works-strip__cta,
   .app-shell .shutdown-list-help-summary,
   .app-shell .tg-sidebar-dashboard-btn,
-  .tg-sidebar-notify-close {
+  .app-shell .tg-sidebar-notify-close,
+  .app-shell .cand-link {
     min-height: var(--ta-touch-min);
   }
 
@@ -826,6 +829,16 @@ body,
 
   /* The header brand doubles as the go-to-dashboard control; measured 24px. */
   .app-shell .mobile-header__brand {
+    min-height: var(--ta-touch-min);
+  }
+
+  /* Segmented controls are primary toggles, not dense table actions, and
+     measured 175x40 at 390px — wide enough that 4px more costs nothing. The
+     .btn--xs variant is deliberately left alone: it is used in 54 places,
+     many of them dense rows where growing every instance would hurt more than
+     it helps. Only the segment role is raised. */
+  .app-shell .btn--segment,
+  .app-shell .btn--segment.btn--xs {
     min-height: var(--ta-touch-min);
   }
 
@@ -870,6 +883,41 @@ body,
   .cand-table .cand-cell-actions .cand-btn {
     min-height: var(--ta-touch-min);
   }
+}
+
+/* ── Background scroll lock while a dialog or drawer is open ───────────
+   CommonModal already stores and restores focus, traps Tab, closes on Escape
+   and scrolls its own card (max-height: calc(100dvh - 48px)). What no dialog
+   did was stop the page behind it from scrolling, so a touch drag over a
+   backdrop scrolled the list underneath. :has() applies this to every dialog
+   and drawer at once, including the hand-rolled ones that do not share
+   CommonModal. Browsers without :has() simply behave as they do today. */
+body:has(> #root .cm-backdrop),
+body:has(> #root .modal-backdrop),
+body:has(> #root .confirm-backdrop),
+body:has(> #root .cand-modal-backdrop),
+body:has(> #root .cand-roster-backdrop),
+body:has(> #root .crm-modal-backdrop),
+body:has(> #root .dr-modal-backdrop),
+body:has(> #root .contact-modal-backdrop),
+body:has(> #root .demo-tools-modal-backdrop),
+body:has(> #root .ai-settings-overlay),
+body:has(> #root .account-mini-switch-overlay),
+body:has(> #root .fwd-drawer-backdrop),
+body:has(> #root .mobile-drawer--open) {
+  overflow: hidden;
+  touch-action: none;
+}
+
+/* The dialog and drawer surfaces keep their own scrolling. */
+.cm-card,
+.modal-card,
+.confirm-card,
+.crm-modal,
+.fwd-drawer,
+.mobile-drawer__panel,
+.ops-dash-filters-drawer {
+  overscroll-behavior: contain;
 }
 
 /* ── Landscape phones: short viewport ──────────────────────────────────── */
