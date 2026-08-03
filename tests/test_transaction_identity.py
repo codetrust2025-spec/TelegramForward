@@ -243,3 +243,19 @@ def test_a_shared_payment_with_disagreeing_amounts_is_not_auto_correctable():
         ]
     )
     assert groups[0]["confidence"] == "review"
+
+
+def test_a_mirror_sharing_the_payment_is_not_listed_as_a_duplicate():
+    # Listing the audit copy alongside the expense would double the reported
+    # financial impact of the finding.
+    groups = ti.find_duplicates(
+        [
+            _tx(record_id="rec1", kind="recovery", payment_id="pay_1",
+                source_module="public_slot_payment_proof"),
+            _tx(record_id="mirror", kind="ledger_mirror", payment_id="pay_1"),
+            _tx(record_id="exp1", kind="expense", payment_id="pay_1", date="2026-07-28"),
+        ]
+    )
+    assert len(groups) == 1
+    assert [d["record_id"] for d in groups[0]["duplicates"]] == ["exp1"]
+    assert groups[0]["financial_impact"] == 5000

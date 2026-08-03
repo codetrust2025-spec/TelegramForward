@@ -185,7 +185,12 @@ def find_duplicates(records: Iterable[dict]) -> list[dict]:
     seen_pairs: set[tuple[str, str]] = set()
 
     def _emit(rows: list[dict], basis: str) -> None:
-        active = [r for r in rows if not r.get("voided")]
+        # Only records that move the balance belong in a group. A ledger mirror
+        # shares the payment but is the audit copy of an expense, so listing it
+        # as a duplicate would double the reported financial impact.
+        active = [
+            r for r in rows if not r.get("voided") and r.get("kind") in MONEY_KINDS
+        ]
         if len(active) < 2:
             return
         conflicts = [
