@@ -1,7 +1,7 @@
 import React from "react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MailMonitoringNotifications, MailNotificationBell, mailStatusTone } from "./MailMonitoringNotifications.jsx";
+import { MailMonitoringNotifications, MailNotificationBell, mailStatusTone, blockingReason } from "./MailMonitoringNotifications.jsx";
 import { ConfirmProvider } from "../context/ConfirmContext.jsx";
 
 class FakeWebSocket {
@@ -107,5 +107,99 @@ describe("mail monitoring notifications", () => {
       "/api/mail-monitoring/notifications/clear-all",
       expect.objectContaining({ method: "POST" }),
     ));
+  });
+});
+
+describe("blocked booking reasons", () => {
+  const blocked = {
+    ...notification,
+    id: "notification-blocked",
+    classification: "interview_confirmed",
+    candidate_status: "Automatic Booking Blocked",
+    booking_status: "Blocked",
+    booking_block_reason: "No available slot matches the invite time (3 Aug 2026, 4:30 PM)",
+    booking_block_reason_code: "NO_MATCHING_SLOT",
+    booking_failure_code: "SLOT_CONFLICT",
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("fetch", vi.fn((url) => {
+      if (String(url).includes("/config")) return response({ enabled: true });
+      if (String(url).includes("/summary")) return response({ summary: { unread: 0, new_offers: 0, selections: 0, joining_confirmations: 0, needs_review: 1 } });
+      if (String(url).includes("/notifications")) return response({ notifications: [blocked], total: 1 });
+      return response({ status: "ok" });
+    }));
+  });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  it("takes the reason from the backend rather than inferring it", () => {
+    // A status of "Blocked" says nothing about which check failed, so the
+    // component must never manufacture a reason of its own.
+    expect(blockingReason({ candidate_status: "Automatic Booking Blocked" })).toBeNull();
+    expect(blockingReason(blocked)).toEqual({
+      text: "No available slot matches the invite time (3 Aug 2026, 4:30 PM)",
+      code: "NO_MATCHING_SLOT",
+      internal: "SLOT_CONFLICT",
+    });
+  });
+
+  it("falls back to manual review when only a code arrives", () => {
+    expect(blockingReason({ booking_block_reason_code: "MANUAL_REVIEW_REQUIRED" })).toEqual({
+      text: "Booking requires manual review",
+      code: "MANUAL_REVIEW_REQUIRED",
+      internal: "",
+    });
+  });
+
+  it("shows the reason in the row without opening the notification", async () => {
+    renderNotifications();
+    const reason = await screen.findByText(/^Reason: No available slot matches the invite time/);
+    expect(reason).toBeInTheDocument();
+    // Same cell as the badge, so the two are read together.
+    expect(reason.closest("td")).toContainElement(screen.getByText("Automatic Booking Blocked"));
+  });
+
+  it("offers the technical codes as a tooltip", async () => {
+    renderNotifications();
+    const reason = await screen.findByText(/^Reason: No available slot matches/);
+    expect(reason).toHaveAttribute(
+      "title",
+      "No available slot matches the invite time (3 Aug 2026, 4:30 PM) (NO_MATCHING_SLOT / SLOT_CONFLICT)",
+    );
+  });
+
+  it("clamps a long reason instead of stretching the table", async () => {
+    renderNotifications();
+    const reason = await screen.findByText(/^Reason: No available slot matches/);
+    expect(reason).toHaveClass("mail-status__reason");
+  });
+
+  it("repeats the reason, both codes and the attempted result in the detail view", async () => {
+    renderNotifications();
+    fireEvent.click(await screen.findByText("Automatic Booking Blocked"));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Blocking reason");
+    expect(dialog).toHaveTextContent("No available slot matches the invite time (3 Aug 2026, 4:30 PM)");
+    expect(dialog).toHaveTextContent("NO_MATCHING_SLOT");
+    expect(dialog).toHaveTextContent("SLOT_CONFLICT");
+    expect(dialog).toHaveTextContent("Attempted booking");
+    // Detected candidate, round and schedule stay visible alongside the reason.
+    expect(dialog).toHaveTextContent("Rahul Kumar");
+  });
+
+  it("shows no reason row for a booking that succeeded", async () => {
+    vi.stubGlobal("fetch", vi.fn((url) => {
+      if (String(url).includes("/config")) return response({ enabled: true });
+      if (String(url).includes("/summary")) return response({ summary: { unread: 0, new_offers: 0, selections: 0, joining_confirmations: 0, needs_review: 0 } });
+      if (String(url).includes("/notifications")) return response({
+        notifications: [{ ...blocked, candidate_status: "Interview Automatically Booked", booking_status: "Auto Booked", booking_block_reason: null, booking_block_reason_code: null, booking_failure_code: null }],
+        total: 1,
+      });
+      return response({ status: "ok" });
+    }));
+    renderNotifications();
+    await screen.findByText("Interview Automatically Booked");
+    expect(screen.queryByText(/^Reason:/)).toBeNull();
   });
 });

@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core import recruitment_mail_store as mail_store
 from features import candidate_store
+from services import booking_block_reasons
 
 logger = logging.getLogger("teleautomation.interview_auto_booking")
 
@@ -620,6 +621,9 @@ def _execute_auto_booking(
             notification.get("id"), audit_id=audit["id"], booking_id=None,
             booking_status=historical["status"], result=result, priority=historical["priority"],
             display_status=historical["display_status"], detail=historical["message"],
+            block_reason=booking_block_reasons.describe(
+                historical["failure_code"], interview=(result.get("interview") or {}),
+            ),
         ) if notification.get("id") else {}
         logger.info(
             "Historical interview disposition correlation_id=%s code=%s",
@@ -751,14 +755,28 @@ def _execute_auto_booking(
             conflict_status=conflict_status, booking_status=booking_status, failure_code=exc.code,
             failure_message=exc.message, correlation_id=correlation_id,
         )
+        # The operator-facing reason is decided here, beside the decision
+        # itself, so the notification carries why the booking was blocked
+        # instead of leaving the UI to infer it from a status string.
+        block_reason = booking_block_reasons.describe(
+            exc.code, schedule=schedule, interview=(result.get("interview") or {}),
+        )
         updated_notification = mail_store.attach_booking_to_notification(
             notification.get("id"), audit_id=audit["id"], booking_id=None,
             booking_status=booking_status, result=result, priority=priority,
             schedule=schedule,
             display_status=display_status, detail=exc.message,
+            block_reason=block_reason,
         ) if notification.get("id") else {}
-        logger.info("Interview booking blocked correlation_id=%s code=%s", correlation_id, exc.code)
-        return {"status": booking_status, "event_type": event_type, "failure_code": exc.code, "message": exc.message, "audit": audit, "notification": updated_notification}
+        logger.info(
+            "Interview booking blocked correlation_id=%s code=%s reason=%s",
+            correlation_id, exc.code, block_reason["reason_code"],
+        )
+        return {
+            "status": booking_status, "event_type": event_type, "failure_code": exc.code,
+            "message": exc.message, "block_reason": block_reason,
+            "audit": audit, "notification": updated_notification,
+        }
     except Exception as exc:
         code = type(exc).__name__
         audit = mail_store.record_booking_audit(
@@ -774,6 +792,11 @@ def _execute_auto_booking(
             booking_status="Processing Failed", result=result, priority="review_required",
             display_status="Automatic Booking Processing Failed",
             detail="Review the mail analysis and retry after the underlying error is resolved.",
+            # An unexpected error is not a classified block, so it reads as
+            # manual review - which is what it needs.
+            block_reason=booking_block_reasons.describe(
+                code, interview=(result.get("interview") or {}),
+            ),
         ) if notification.get("id") else {}
         logger.exception("Interview booking processing failed correlation_id=%s code=%s", correlation_id, code)
         return {"status": "Processing Failed", "event_type": "slot_booking_blocked", "failure_code": code,

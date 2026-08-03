@@ -1707,6 +1707,7 @@ def attach_booking_to_notification(
     booking_status: str, result: dict[str, Any], priority: str | None = None,
     display_status: str | None = None, detail: str | None = None,
     schedule: dict[str, str] | None = None,
+    block_reason: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     interview = result.get("interview") or {}
     # A successful booking is always stored in the operational Asia/Kolkata
@@ -1722,12 +1723,20 @@ def attach_booking_to_notification(
               interview_date=%s,interview_time=%s,interview_timezone=%s,interview_mode=%s,
               meeting_link=%s,priority=COALESCE(%s,priority),
               candidate_status=COALESCE(%s,candidate_status),
-              recommended_action=COALESCE(%s,recommended_action),updated_at=now()
+              recommended_action=COALESCE(%s,recommended_action),
+              booking_block_reason_code=%s,booking_block_reason=%s,
+              booking_failure_code=%s,updated_at=now()
               WHERE id=%s RETURNING *""",
             (booking_id, audit_id, booking_status, interview.get("round"),
              display_date, display_time, display_timezone,
              interview.get("mode"), interview.get("meeting_link"), priority,
-             display_status, detail, notification_id),
+             display_status, detail,
+             # Written unconditionally, not COALESCEd: a booking that later
+             # succeeds must clear the reason it was previously blocked for.
+             (block_reason or {}).get("reason_code"),
+             (block_reason or {}).get("reason"),
+             (block_reason or {}).get("internal_code"),
+             notification_id),
         )
         rows = _rows(cur)
     return rows[0] if rows else {}
