@@ -95,6 +95,15 @@ def _payment_id_by_screenshot() -> dict[str, str]:
         evidence_id = str(payment.get("evidence_id") or "")
         if evidence_id:
             evidence_to_payment[evidence_id] = str(payment.get("payment_id") or "")
+    # A payment row records only the first screenshot it was created from. When
+    # a second copy of the same receipt arrives the engine reuses the payment
+    # but files new evidence, and only the ledger entry links the two — which
+    # is precisely the case a refiled receipt produces.
+    for entry in ledger.get("entries") or []:
+        evidence_id = str(entry.get("evidence_id") or "")
+        payment_id = str(entry.get("payment_id") or "")
+        if evidence_id and payment_id:
+            evidence_to_payment[evidence_id] = payment_id
     out: dict[str, str] = {}
     for evidence_id, digest in _evidence_index().items():
         payment_id = evidence_to_payment.get(evidence_id)

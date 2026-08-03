@@ -147,3 +147,27 @@ def test_an_unreadable_source_does_not_abort_the_scan(monkeypatch):
     report = fr.reconciliation_report()
     assert report["scanned"] == 1
     assert report["sources"]["payment_ledger"].startswith("unavailable")
+
+
+def test_a_second_copy_of_a_receipt_resolves_to_the_same_payment(monkeypatch):
+    # The payment row keeps only the first screenshot it was created from. The
+    # ledger entry written from the second copy is the only thing linking that
+    # copy back to the payment, so the join has to go through entries too.
+    from features import payment_verification_engine
+
+    monkeypatch.setattr(
+        payment_verification_engine,
+        "_load_ledger",
+        lambda: {
+            "evidence": [
+                {"evidence_id": "ev_first", "sha256": "aaa"},
+                {"evidence_id": "ev_second", "sha256": "bbb"},
+            ],
+            "payments": [{"payment_id": "pay_1", "evidence_id": "ev_first"}],
+            "entries": [
+                {"evidence_id": "ev_first", "payment_id": "pay_1"},
+                {"evidence_id": "ev_second", "payment_id": "pay_1"},
+            ],
+        },
+    )
+    assert fr._payment_id_by_screenshot() == {"aaa": "pay_1", "bbb": "pay_1"}
