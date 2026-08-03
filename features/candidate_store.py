@@ -1131,6 +1131,10 @@ _ALLOWED_FIELDS = {
     "interview_round",
     "interview_company", "interview_role", "interview_source_thread_id",
     "interview_source_message_id", "interview_source_timezone",
+    # The calendar event a slot came from. An organiser who moves the meeting
+    # re-sends the same UID with a higher SEQUENCE, and these are what let a
+    # revision find the booking it supersedes instead of creating a second one.
+    "interview_calendar_uid", "interview_calendar_sequence",
     "interview_booking_source",
     "booking_idempotency_key",
     "previousBookingId", "reusedPaymentId", "paymentReusedByBookingId",
@@ -1353,6 +1357,8 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         "interview_source_thread_id": _clean_str(record.get("interview_source_thread_id", base.get("interview_source_thread_id"))),
         "interview_source_message_id": _clean_str(record.get("interview_source_message_id", base.get("interview_source_message_id"))),
         "interview_source_timezone": _clean_str(record.get("interview_source_timezone", base.get("interview_source_timezone"))),
+        "interview_calendar_uid": _clean_str(record.get("interview_calendar_uid", base.get("interview_calendar_uid"))),
+        "interview_calendar_sequence": _clean_str(record.get("interview_calendar_sequence", base.get("interview_calendar_sequence"))),
         "interview_booking_source": _clean_str(record.get("interview_booking_source", base.get("interview_booking_source"))).lower(),
         "booking_idempotency_key": _clean_str(
             record.get("booking_idempotency_key", base.get("booking_idempotency_key"))
@@ -3897,6 +3903,8 @@ def _duplicate_candidate_slot(
     interview_source_thread_id: str = "",
     interview_source_message_id: str = "",
     interview_source_timezone: str = "",
+    interview_calendar_uid: str = "",
+    interview_calendar_sequence: str = "",
     interview_booking_source: str = "candidate_booked",
 ) -> dict:
     """Clone an in-progress candidate so a second interview slot keeps prior rows."""
@@ -3931,6 +3939,8 @@ def _duplicate_candidate_slot(
         "interview_company": _clean_str(interview_company),
         "interview_role": _clean_str(interview_role),
         "interview_source_thread_id": _clean_str(interview_source_thread_id),
+        "interview_calendar_uid": _clean_str(interview_calendar_uid),
+        "interview_calendar_sequence": _clean_str(interview_calendar_sequence),
         "interview_source_message_id": _clean_str(interview_source_message_id),
         "interview_source_timezone": _clean_str(interview_source_timezone),
         "interview_booking_source": _clean_str(interview_booking_source).lower() or "candidate_booked",
@@ -3960,6 +3970,8 @@ def assign_interview_slot(
     interview_source_thread_id: str = "",
     interview_source_message_id: str = "",
     interview_source_timezone: str = "",
+    interview_calendar_uid: str = "",
+    interview_calendar_sequence: str = "",
     interview_booking_source: str = "candidate_booked",
 ) -> dict:
     """Schedule an existing candidate — first slot updates the record; later slots clone."""
@@ -4030,6 +4042,8 @@ def assign_interview_slot(
         "interview_company": _clean_str(interview_company),
         "interview_role": _clean_str(interview_role),
         "interview_source_thread_id": _clean_str(interview_source_thread_id),
+        "interview_calendar_uid": _clean_str(interview_calendar_uid),
+        "interview_calendar_sequence": _clean_str(interview_calendar_sequence),
         "interview_source_message_id": _clean_str(interview_source_message_id),
         "interview_source_timezone": _clean_str(interview_source_timezone),
         "interview_booking_source": _clean_str(interview_booking_source).lower() or "candidate_booked",
@@ -4052,6 +4066,8 @@ def update_interview_slot(
     interview_source_thread_id: str | None = None,
     interview_source_message_id: str | None = None,
     interview_source_timezone: str | None = None,
+    interview_calendar_uid: str | None = None,
+    interview_calendar_sequence: str | None = None,
     interview_booking_source: str | None = None,
 ) -> dict:
     """Reschedule an existing confirmed slot — updates date/time and optional notes."""
@@ -4095,6 +4111,8 @@ def update_interview_slot(
         ("interview_source_thread_id", interview_source_thread_id),
         ("interview_source_message_id", interview_source_message_id),
         ("interview_source_timezone", interview_source_timezone),
+        ("interview_calendar_uid", interview_calendar_uid),
+        ("interview_calendar_sequence", interview_calendar_sequence),
         ("interview_booking_source", interview_booking_source),
     ):
         if value is not None:
