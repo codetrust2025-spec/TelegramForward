@@ -159,3 +159,93 @@ describe("baseline target size for fine pointers", () => {
     expect(responsive).toContain("--ta-touch-min: 44px");
   });
 });
+
+describe("authenticated screens meet the touch minimum on phones", () => {
+  // Every selector here was measured under 44px in a real browser at 320-600px
+  // with the app's own shells and wrappers in place. The harness that produced
+  // those numbers lives in dashboard/harness.
+  const measured = [
+    ".cand-tabs__btn",
+    ".cand-btn",
+    ".cand-phone-trigger",
+    ".admin-tab",
+    ".dr-tab",
+    ".kai-prompts button",
+    ".kai-message-actions button",
+  ];
+
+  const block = (() => {
+    const extract = (at) => {
+      let depth = 0;
+      for (let i = responsive.indexOf("{", at); i < responsive.length; i += 1) {
+        if (responsive[i] === "{") depth += 1;
+        if (responsive[i] === "}") { depth -= 1; if (depth === 0) return responsive.slice(at, i + 1); }
+      }
+      throw new Error("unterminated block");
+    };
+    let from = 0;
+    for (;;) {
+      const at = responsive.indexOf("@media (max-width: 767px)", from);
+      expect(at, "authenticated touch-target block missing").toBeGreaterThan(-1);
+      const b = extract(at);
+      if (b.includes(".cand-tabs__btn")) return b;
+      from = at + 1;
+    }
+  })();
+
+  it.each(measured)("raises %s to the declared minimum", (sel) => {
+    expect(block).toContain(sel);
+  });
+
+  it("uses the variable rather than a hard-coded height", () => {
+    expect(block).toContain("min-height: var(--ta-touch-min)");
+  });
+
+  it("leaves desktop untouched by staying inside the phone breakpoint", () => {
+    expect(block.startsWith("@media (max-width: 767px)")).toBe(true);
+  });
+});
+
+describe("dense dashboard controls clear the pointer minimum", () => {
+  // Measured at 21px tall at every width from 320 to 2560.
+  it("floors the Daily Ops controls at 24px for any pointer", () => {
+    const at = responsive.indexOf("Pointer-target floor");
+    expect(at, "pointer-target floor missing").toBeGreaterThan(-1);
+    const slice = responsive.slice(at, at + 600);
+    for (const sel of [".ops-dash-kpi", ".ops-booking-pie__open", ".pending-works-pill"]) {
+      expect(slice).toContain(sel);
+    }
+    expect(slice).toContain("min-height: 24px");
+    // Unconditional: these were undersized on desktop too.
+    expect(slice.slice(0, slice.indexOf("}"))).not.toContain("@media");
+  });
+});
+
+describe("cascade order lets the phone minimum win", () => {
+  // The unconditional 24px floor and the 44px phone rule share specificity, so
+  // whichever comes last wins. With the floor written after the phone block,
+  // Daily Ops controls stayed at 24px on phones.
+  it("declares the unconditional floor before the phone-width block", () => {
+    const floor = responsive.indexOf("Pointer-target floor");
+    const phone = responsive.indexOf("Authenticated screens: measured");
+    expect(floor).toBeGreaterThan(-1);
+    expect(phone).toBeGreaterThan(-1);
+    expect(floor).toBeLessThan(phone);
+  });
+});
+
+describe("form controls clear the minimum on phones", () => {
+  it("raises the app-wide tap-friendly rule from 40px to the declared minimum", () => {
+    // index.css sets 40px under 900px with this exact selector; matching it is
+    // what makes every filter select and search field comply.
+    const at = responsive.indexOf("tap-friendly");
+    expect(at, "form-control note missing").toBeGreaterThan(-1);
+    const slice = responsive.slice(at, at + 700);
+    expect(slice).toContain("input:not([type='checkbox'])");
+    expect(slice).toContain("min-height: var(--ta-touch-min)");
+  });
+
+  it("also matches the toolbar's own 26px rule", () => {
+    expect(responsive).toContain(".cand-toolbar select.cand-input");
+  });
+});

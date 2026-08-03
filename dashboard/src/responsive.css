@@ -722,6 +722,84 @@ body,
   }
 }
 
+/* ── Pointer-target floor on dense dashboards ────────────────────────
+   These Daily Ops controls measured 21px tall at every width from 320 to
+   2560 — under the 24x24 WCAG 2.5.8 asks for at any pointer type. Raising the
+   floor only; their padding and layout are unchanged. */
+.ops-dash-kpi,
+.ops-booking-pie__open,
+.pending-works-pill,
+.ops-date-range__preset,
+.ops-roster-refresh,
+.ops-roster-search input {
+  min-height: 24px;
+}
+
+/* ── Authenticated screens: measured touch targets ──────────────────────
+   Each selector below was measured under 44px in a real browser at 320-600px,
+   with the app's own shells and wrappers in place. Sizes come from the
+   declared minimum so the contract stays in one place. Desktop layouts are
+   untouched: these apply only at phone widths. */
+@media (max-width: 767px) {
+  .cand-tabs__btn,
+  .cand-btn,
+  .cand-phone-trigger,
+  .admin-tab,
+  .dr-tab,
+  .kai-prompts button,
+  .kai-message-actions button,
+  .ops-dash-kpi,
+  .ops-booking-pie__open,
+  .pending-works-pill,
+  .ops-date-range__preset,
+  .ops-roster-refresh,
+  .ops-roster-search input {
+    min-height: var(--ta-touch-min);
+  }
+
+  /* Measured 39px wide with an adequate height. */
+  .ops-date-range__preset {
+    min-width: var(--ta-touch-min);
+  }
+
+  /* Anchors styled as buttons collapse to their line box without this. */
+  .cand-phone-trigger {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* index.css sizes form controls to 40px under 900px ("tap-friendly"), which
+     is 4px short of the minimum this file declares and was the rule actually
+     winning on every filter select and search field measured. Matching its
+     selector exactly raises the floor for every form control on phones in one
+     place, instead of chasing each screen's classes. */
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  textarea,
+  select {
+    min-height: var(--ta-touch-min);
+  }
+
+  /* The bare `select` above is specificity (0,0,1) and loses to the toolbar's
+     own 26px rule, so the filter selects need a selector that matches it. */
+  .cand-toolbar .cand-input,
+  .cand-toolbar .cand-input--search,
+  .cand-toolbar select.cand-input {
+    min-height: var(--ta-touch-min);
+  }
+
+  /* Icon-only actions measured 28-31px wide with an adequate height. */
+  .cand-cell-actions .cand-btn,
+  .cand-btn--icon {
+    min-width: var(--ta-touch-min);
+  }
+
+  /* index.css caps table action buttons at 38px with a more specific
+     selector, so it is matched here rather than fought with !important. */
+  .cand-table .cand-cell-actions .cand-btn {
+    min-height: var(--ta-touch-min);
+  }
+}
+
 /* ── Landscape phones: short viewport ──────────────────────────────────── */
 @media (max-width: 767px) and (max-height: 500px) and (orientation: landscape) {
   .app-header {
