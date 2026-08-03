@@ -977,9 +977,59 @@ def _clean_str(value, *, default: str = "") -> str:
     return s or default
 
 
+_ALIAS_CACHE: dict[str, str] | None = None
+
+
+def _reference_alias_map() -> dict[str, str]:
+    """alias key -> canonical key, from the referrer registry.
+
+    The registry already records that "LUKKA PAVAN KALYAN" is an alias of
+    "Pavan Kalyan" and that the payment account under that holder name belongs
+    to referrer-pavan. Nothing consumed it: reference buckets were built from
+    the raw string, so a recovery recorded against the account-holder name
+    became a second handler with its own opening balance.
+
+    Cached because this runs once per row; call reload_reference_aliases()
+    after the registry changes.
+    """
+    global _ALIAS_CACHE
+    if _ALIAS_CACHE is not None:
+        return _ALIAS_CACHE
+    mapping: dict[str, str] = {}
+    try:
+        from features import referrer_registry as _rr
+
+        for row in _rr.list_referrers(include_inactive=True):
+            canonical = str(row.get("name") or "").strip().lower()
+            if not canonical:
+                continue
+            for alias in row.get("aliases") or []:
+                key = str(alias or "").strip().lower()
+                if key and key != canonical:
+                    mapping[key] = canonical
+    except Exception:
+        # Registry unavailable — fall back to raw keys, exactly as before.
+        mapping = {}
+    _ALIAS_CACHE = mapping
+    return mapping
+
+
+def reload_reference_aliases() -> None:
+    """Drop the cached alias map after the referrer registry is written."""
+    global _ALIAS_CACHE
+    _ALIAS_CACHE = None
+
+
 def _reference_key(ref: str) -> str:
-    """Case-insensitive bucket key for handler / reference names."""
-    return (ref or "").strip().lower() or "unknown"
+    """Case-insensitive bucket key for handler / reference names.
+
+    Aliases resolve to their canonical handler so one person cannot appear as
+    two rows. Names with no alias entry are unchanged.
+    """
+    key = (ref or "").strip().lower()
+    if not key:
+        return "unknown"
+    return _reference_alias_map().get(key, key)
 
 
 def _reference_matches_scope(ref: str, scope_key: str | None) -> bool:
@@ -994,12 +1044,20 @@ def _payout_excluded_handler(ref: str) -> bool:
 
 
 def _canonical_reference_name(ref: str) -> str:
-    """Normalize spelling for storage — 'PAVAN KALYAN' → 'Referrer One'."""
+    """Normalize spelling for display — 'PAVAN KALYAN' → 'Pavan Kalyan'.
+
+    An alias resolves to the registry's name for that referrer, so the merged
+    row is labelled with the canonical handler rather than whichever spelling
+    happened to be typed first.
+    """
     s = " ".join((ref or "").split()).strip()
     if not s:
         return ""
     if s.lower() == "unknown":
         return "Unknown"
+    canonical = _reference_alias_map().get(s.lower())
+    if canonical:
+        return canonical.title()
     return s.title()
 
 

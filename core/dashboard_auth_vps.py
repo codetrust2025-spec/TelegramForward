@@ -179,6 +179,29 @@ def admin_add_handler(username: str, reference: str, password: str) -> str | Non
     key = user.lower()
     if any(r["username"].lower() == key for r in rows):
         return f"Handler already exists: {user}"
+    # Earnings buckets by reference, so a second spelling of an existing person
+    # splits their balance across two rows. That is exactly how
+    # "LUKKA PAVAN KALYAN" became a handler separate from "Pavan Kalyan".
+    ref_key = ref.strip().lower()
+    existing = next((r for r in rows if r["reference"].strip().lower() == ref_key), None)
+    if existing:
+        return (
+            f"Reference '{ref}' already belongs to handler '{existing['username']}'. "
+            "Use that login, or choose a different reference."
+        )
+    try:
+        from features import referrer_registry as _rr
+
+        known = _rr.resolve_referrer(ref)
+        canonical = str((known or {}).get("name") or "").strip()
+        if canonical and canonical.lower() != ref_key:
+            return (
+                f"'{ref}' is recorded as an alias of referrer '{canonical}'. "
+                f"Use '{canonical}' as the reference so their earnings stay on one row."
+            )
+    except Exception:
+        # Registry unavailable — the username and reference checks above still apply.
+        pass
     rows.append({"username": user, "reference": ref, "password": pwd})
     rows.sort(key=lambda r: r["reference"].lower())
     _save_handlers_yaml(rows)
