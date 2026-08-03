@@ -46,7 +46,7 @@ import os
 import re
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date as _date, datetime, timedelta, timezone
 from threading import Lock
 
 from core.config import DATA_DIR
@@ -3388,11 +3388,23 @@ def interview_global_summary(
         overview_levels[level_label] = overview_levels.get(level_label, 0) + 1
         overview_technologies[technology_label] = overview_technologies.get(technology_label, 0) + 1
 
+    # Month options are offered only for days a real interview actually sits on.
+    # `all_rows` has already dropped cancelled, failed and unconfirmed records;
+    # what remained was a shape check loose enough to admit "2027-99", so the
+    # full date is parsed and anything that is not a real calendar day is
+    # ignored rather than turned into a filter nobody can use.
     month_counts: dict[str, int] = {}
     for row in all_rows:
-        month_key = (row.get("date") or "").strip()[:7]
-        if len(month_key) == 7 and month_key[4] == "-":
-            month_counts[month_key] = month_counts.get(month_key, 0) + 1
+        slot_day = str(row.get("date") or "").strip()[:10]
+        try:
+            parsed_day = _date.fromisoformat(slot_day)
+        except ValueError:
+            continue
+        # Taken from the parsed date rather than sliced off the string:
+        # fromisoformat also accepts the dash-less "20260804", whose first
+        # seven characters are not a month at all.
+        month_key = f"{parsed_day.year:04d}-{parsed_day.month:02d}"
+        month_counts[month_key] = month_counts.get(month_key, 0) + 1
     current_dt = datetime.now(timezone.utc)
     current_month = current_dt.strftime("%Y-%m")
     previous_year = current_dt.year if current_dt.month > 1 else current_dt.year - 1
