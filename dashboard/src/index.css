@@ -4121,7 +4121,7 @@ body {
   padding: 20px 24px;
   width: 100%;
   max-width: 640px;
-  max-height: 85vh;
+  max-height: 85dvh;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border-strong);
@@ -6432,7 +6432,7 @@ body {
 }
 .crm-modal {
   width: min(420px, 100%);
-  max-height: 90vh;
+  max-height: 90dvh;
   overflow-y: auto;
   background: var(--bg-panel);
   border: 1px solid var(--border);
@@ -12595,7 +12595,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   border-radius: 14px;
   width: 100%;
   max-width: 640px;
-  max-height: 90vh;
+  max-height: 90dvh;
   display: flex;
   flex-direction: column;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
@@ -13367,7 +13367,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
      (which uses `flex: 1 1 0`) has something to grow into. Without this
      the modal collapses to its header + footer height and the chart
      pancakes to a few pixels. min() makes sure we never exceed the
-     viewport on short windows — .cand-modal's `max-height: 90vh` is a
+     viewport on short windows — .cand-modal's `max-height: 90dvh` is a
      belt-and-braces cap on top of this. */
   height: min(720px, 90vh);
   min-height: 480px;
@@ -13377,7 +13377,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 @media (max-height: 560px) {
   .cand-earn-modal {
     min-height: 0;
-    height: 90vh;
+    height: 90dvh;
   }
 }
 .cand-modal-scope {
@@ -14932,7 +14932,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   position: relative;
   isolation: isolate;
   width: min(560px, 100%);
-  max-height: 90vh;
+  max-height: 90dvh;
   overflow: auto;
   padding: 20px;
   color: #e5edf8;
@@ -17494,7 +17494,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   .cand-modal {
     width: min(900px, 96vw);
     max-width: 900px;
-    max-height: 90vh;
+    max-height: 90dvh;
     display: flex;
     flex-direction: column;
     overflow: hidden;

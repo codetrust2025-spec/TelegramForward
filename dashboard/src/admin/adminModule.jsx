@@ -6,6 +6,7 @@ import { Spinner } from '../Loader.jsx'
 import { formatIstDateTime as fmtIstDt } from '../utils/istTime.js'
 import { AiEconomyPresetSection } from './AiEconomyPresetSection.jsx'
 import { OcrPolicySection } from './OcrPolicySection.jsx'
+import { useDialogA11y } from '../hooks/useDialogA11y.js'
 
 const w = React
 const s = { Fragment: React.Fragment }
@@ -312,6 +313,9 @@ export function AiSmartReplySettingsModal({
   };
   const W = Array.isArray(n == null ? undefined : n.knowledge_entries) ? n.knowledge_entries : [];
   const H = i && !i.api_key_present;
+  // The AI settings dialog had neither Escape nor focus management.
+  const dialogRef = useDialogA11y(e, t)
+
   const Ne = q => {
     if (q.config) {
       J(q);
@@ -320,7 +324,7 @@ export function AiSmartReplySettingsModal({
       r(q.config, q.health);
     }
   };
-  return <div className="ai-settings-overlay" role="dialog" aria-label="AI smart reply settings"><div className="ai-settings-card"><header className="ai-settings-header"><div><div className="ai-settings-title">AI Smart Reply</div><div className="ai-settings-sub">Auto-respond to inbound DMs and qualify leads toward WhatsApp.</div></div><button type="button" className="ai-settings-close" onClick={t} aria-label="Close">×</button></header><div className="ai-settings-standalone"><OcrPolicySection apiBase={ve} setError={h} /></div>{!n && f && <div className="ai-settings-error" role="alert">{f}</div>}{c && !n && <div className="empty-state">Loading…</div>}{n && <div className="ai-settings-body">{H && <div className="ai-settings-warning" role="alert"><strong>API key missing.</strong> Set the <code>AI_API_KEY</code> (or <code>OPENAI_API_KEY</code>) environment variable on the backend, then restart the service.</div>}<AiEconomyPresetSection apiBase={ve} config={n} onConfigPatched={Ne} setError={h} /><label className="ai-settings-row ai-settings-row--toggle"><span><strong>Enable Karthik (suggestion mode)</strong><span className="ai-settings-row-hint">When on, the inbox shows a "Suggest reply" button that drafts a message for you to review. <strong>Nothing is ever sent automatically</strong> — every outbound goes out only when you click Send.</span></span><input type="checkbox" checked={!!n.enabled} onChange={q => Z({
+  return <div ref={dialogRef} className="ai-settings-overlay" role="dialog" aria-modal="true" aria-label="AI smart reply settings"><div className="ai-settings-card"><header className="ai-settings-header"><div><div className="ai-settings-title">AI Smart Reply</div><div className="ai-settings-sub">Auto-respond to inbound DMs and qualify leads toward WhatsApp.</div></div><button type="button" className="ai-settings-close" onClick={t} aria-label="Close">×</button></header><div className="ai-settings-standalone"><OcrPolicySection apiBase={ve} setError={h} /></div>{!n && f && <div className="ai-settings-error" role="alert">{f}</div>}{c && !n && <div className="empty-state">Loading…</div>}{n && <div className="ai-settings-body">{H && <div className="ai-settings-warning" role="alert"><strong>API key missing.</strong> Set the <code>AI_API_KEY</code> (or <code>OPENAI_API_KEY</code>) environment variable on the backend, then restart the service.</div>}<AiEconomyPresetSection apiBase={ve} config={n} onConfigPatched={Ne} setError={h} /><label className="ai-settings-row ai-settings-row--toggle"><span><strong>Enable Karthik (suggestion mode)</strong><span className="ai-settings-row-hint">When on, the inbox shows a "Suggest reply" button that drafts a message for you to review. <strong>Nothing is ever sent automatically</strong> — every outbound goes out only when you click Send.</span></span><input type="checkbox" checked={!!n.enabled} onChange={q => Z({
             enabled: q.target.checked
           })} /></label><label className="ai-settings-row ai-settings-row--toggle"><span><strong>Karthik group post rewrite</strong><span className="ai-settings-row-hint">Each posting cycle, Karthik rephrases your saved group broadcast (same offer, different wording). Phone / WhatsApp lines stay fixed.{i != null && i.group_rewrite_ready ? <em> Ready — active on next cycle.</em> : (i == null ? undefined : i.group_rewrite_enabled) === false ? <em> Off.</em> : i != null && i.api_key_present ? <em> Falls back to emoji shuffle if unavailable.</em> : <em> Needs AI_API_KEY on the server.</em>}</span></span><input type="checkbox" checked={n.group_rewrite_enabled !== false} onChange={q => Z({
             group_rewrite_enabled: q.target.checked
