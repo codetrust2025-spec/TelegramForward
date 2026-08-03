@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { API } from '../config.js'
 import './dailyBriefing.css'
+import { useDialogA11y } from "../hooks/useDialogA11y.js";
 
 const METRICS = [
   ['interviews_today', "Today's Interviews", 'normal'],
@@ -25,6 +26,8 @@ export function DailyBriefingCard() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [expanded, setExpanded] = useState(false)
+  const closeBriefing = useCallback(() => setExpanded(false), []);
+  const briefingDialogRef = useDialogA11y(expanded, closeBriefing);
   const [selected, setSelected] = useState('interviews_today')
   const [speaking, setSpeaking] = useState(false)
   const utterance = useRef(null)
@@ -96,7 +99,7 @@ export function DailyBriefingCard() {
     </section>
     {expanded&&briefing&&<div className="daily-briefing-modal" role="presentation">
       <button className="daily-briefing-modal__backdrop" onClick={()=>setExpanded(false)} aria-label="Close full briefing"/>
-      <section className="daily-briefing-modal__panel" role="dialog" aria-modal="true" aria-labelledby="daily-briefing-modal-title">
+      <section ref={briefingDialogRef} className="daily-briefing-modal__panel" role="dialog" aria-modal="true" aria-labelledby="daily-briefing-modal-title">
         <header><div><h2 id="daily-briefing-modal-title">Daily AI Briefing</h2><p>{briefing.date} · {briefing.timezone}</p></div><button onClick={()=>setExpanded(false)} aria-label="Close">×</button></header>
         <div className="daily-briefing-modal__tabs">{METRICS.map(([key,label])=><button key={key} className={selected===key?'active':''} onClick={()=>setSelected(key)}>{label}<strong>{metrics[key]||0}</strong></button>)}</div>
         <div className="daily-briefing-modal__details"><h3>{activeLabel}</h3>{activeRows.length?<ul>{activeRows.map((row,i)=><li key={`${row.id}-${i}`}><strong>{row.name}</strong><span>{row.detail}</span></li>)}</ul>:<p>No records require attention in this section.</p>}</div>

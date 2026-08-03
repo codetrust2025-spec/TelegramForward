@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from 'react'
 import { useConfirm } from '../context/ConfirmContext.jsx'
+import { useDialogA11y } from '../hooks/useDialogA11y.js'
 import { copyToClipboard } from '../utils/copyToClipboard.js'
 
 const API_BASE =
@@ -21,9 +22,11 @@ const PROMPT_FIELDS = [
 ]
 
 function VaultModal({ title, fields, form, onChange, onSave, onClose, error }) {
+  // Mounted only while open, so the dialog is open for its whole life.
+  const dialogRef = useDialogA11y(true, onClose)
   return (
     <div className="dr-modal-backdrop" role="presentation" onClick={onClose}>
-      <div className="dr-modal cand-card" role="dialog" onClick={(e) => e.stopPropagation()}>
+      <div className="dr-modal cand-card" ref={dialogRef} role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <h2 className="cand-title">{title}</h2>
         {error && <p className="dr-error">{error}</p>}
         <div className="dr-form-grid">

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { API } from '../../config.js'
 import { ButtonContent } from '../../Loader.jsx'
+import { useDialogA11y } from "../../hooks/useDialogA11y.js";
 
 /**
  * Compact modal that lets the operator turn AI auto-reply on/off, swap the
@@ -10,6 +11,7 @@ import { ButtonContent } from '../../Loader.jsx'
  * The API key itself lives in env vars (never round-tripped through the UI).
  */
 export function AISmartReplySettings({ open, onClose, onChange }) {
+  const dialogRef = useDialogA11y(open, onClose);
   const [config, setConfig] = useState(null)
   const [health, setHealth] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -74,7 +76,7 @@ export function AISmartReplySettings({ open, onClose, onChange }) {
   const apiKeyMissing = health && !health.api_key_present
 
   return (
-    <div className="ai-settings-overlay" role="dialog" aria-label="AI smart reply settings">
+    <div ref={dialogRef} className="ai-settings-overlay" role="dialog" aria-modal="true" aria-label="AI smart reply settings">
       <div className="ai-settings-card">
         <header className="ai-settings-header">
           <div>

@@ -6,6 +6,7 @@ import {
   playMailAlertSound,
   showMailAlertNotification,
 } from "../utils/mailAlertSound.js";
+import { useDialogA11y } from "../hooks/useDialogA11y.js";
 import { formatIstDateTime, formatScheduleDateTime } from "../utils/istTime.js";
 import { useConfirm } from "../context/ConfirmContext.jsx";
 import { InlineLoader, OverlayLoader } from "../Loader.jsx";
@@ -212,6 +213,8 @@ export function MailNotificationBell({ compact = false }) {
 }
 
 function NotificationDetail({ item, onClose, onChanged }) {
+  // Mounted only while open, so the dialog is open for its whole life.
+  const dialogRef = useDialogA11y(true, onClose);
   const [note, setNote] = useState(item.review_notes || "");
   const [classification, setClassification] = useState(item.classification);
   const [candidateStatus, setCandidateStatus] = useState(item.candidate_status || "Needs Review");
@@ -227,7 +230,7 @@ function NotificationDetail({ item, onClose, onChanged }) {
   };
   const originalEmail = item.event_detail?.received_email;
   return <div className="mail-detail-backdrop" role="presentation" onClick={(event) => event.target === event.currentTarget && onClose()}>
-    <section className="mail-detail" role="dialog" aria-modal="true" aria-label="Mail monitoring notification">
+    <section ref={dialogRef} className="mail-detail" role="dialog" aria-modal="true" aria-label="Mail monitoring notification">
       <header><div><h3>{item.candidate_status || human(item.classification)}</h3><p>{item.candidate_name || "Candidate"} · {item.company_name || "Company unavailable"}</p></div><button type="button" onClick={onClose} aria-label="Close">×</button></header>
       <dl><div><dt>Email</dt><dd>{item.email_subject || "No subject"}</dd></div><div><dt>From</dt><dd>{item.sender_name || item.sender_email || "Unknown"}</dd></div><div><dt>Mail received</dt><dd>{when(item.email_received_at)}</dd></div><div><dt>Tool detected</dt><dd>{when(item.created_at)}</dd></div><div><dt>AI confidence</dt><dd>{confidence(item.ai_confidence)}</dd></div>{item.booking_status && <div><dt>Booking</dt><dd>{item.booking_status}</dd></div>}{item.interview_date && <div><dt>Interview</dt><dd>{formatScheduleDateTime(item.interview_date, item.interview_time, item.interview_timezone)}</dd></div>}{item.interview_round && <div><dt>Round</dt><dd>{item.interview_round}</dd></div>}{(() => {
         const reason = blockingReason(item);
