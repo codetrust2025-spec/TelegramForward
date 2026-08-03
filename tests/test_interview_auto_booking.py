@@ -638,3 +638,143 @@ def test_a_successful_booking_carries_no_blocking_reason(monkeypatch):
 
     assert outcome["status"] == "Auto Booked"
     assert "block_reason" not in outcome["notification"]
+
+
+# ── an organiser moving the meeting ─────────────────────────────────────────
+#
+# Reproduces the Capgemini invite that reached Production: one calendar UID
+# sent three times as SEQUENCE 0 (15:30), 2 (13:00) and 4 (11:30). Only the
+# first was booked; the second fought the first for a slot and was blocked;
+# the third never got read at all.
+
+CAL_UID = "040000008200E00074C5B7101A82E00800000000E0C705AD6123DD01"
+
+
+def revision(sequence, time, **over):
+    value = result(time=time, **over)
+    value["calendar"] = {"uid": CAL_UID, "sequence": sequence, "method": "REQUEST"}
+    return value
+
+
+def booked_slot(time, sequence, **over):
+    row = {
+        "id": "c1", "slot_confirmed": True, "date": "2099-07-20", "time": time,
+        "interview_round": "L1", "interview_calendar_uid": CAL_UID,
+        "interview_calendar_sequence": str(sequence),
+        "interview_source_thread_id": "gt1",
+    }
+    row.update(over)
+    return row
+
+
+def test_a_later_revision_moves_the_booking_instead_of_making_a_second_one(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch, rows=[booked_slot("15:30", 0)])
+    updates = []
+    monkeypatch.setattr(
+        booking.candidate_store, "update_interview_slot",
+        lambda **kwargs: updates.append(kwargs) or {"id": "c1", **kwargs},
+    )
+    monkeypatch.setattr(
+        booking.candidate_store, "assign_interview_slot",
+        lambda **kwargs: pytest.fail("a revision must not create a second booking"),
+    )
+
+    outcome = execute(revision(4, "11:30 AM"))
+
+    assert outcome["status"] == "Rescheduled"
+    assert updates[-1]["time"] == "11:30"
+    assert updates[-1]["time_end"] == "12:00"
+    assert updates[-1]["candidate_id"] == "c1"          # same candidate
+    assert updates[-1]["interview_round"] == "L1"       # same round
+
+
+def test_the_calendar_identity_is_carried_onto_the_booking(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch)
+    saved = []
+    monkeypatch.setattr(
+        booking.candidate_store, "assign_interview_slot",
+        lambda **kwargs: saved.append(kwargs) or {"id": "slot1", **kwargs},
+    )
+
+    execute(revision(0, "03:30 PM"))
+
+    assert saved[-1]["interview_calendar_uid"] == CAL_UID
+    assert saved[-1]["interview_calendar_sequence"] == "0"
+
+
+def test_each_revision_in_turn_lands_on_the_final_time(monkeypatch):
+    """0 -> 15:30 books; 2 -> 13:00 moves it; 4 -> 11:30 moves it again."""
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    state = {"time": None, "sequence": None}
+    rows = []
+
+    def _assign(**kwargs):
+        state.update(time=kwargs["time"], sequence=kwargs["interview_calendar_sequence"])
+        rows.append(booked_slot(kwargs["time"], kwargs["interview_calendar_sequence"]))
+        return {"id": "c1", **kwargs}
+
+    def _update(**kwargs):
+        state.update(time=kwargs["time"], sequence=kwargs["interview_calendar_sequence"])
+        rows[:] = [booked_slot(kwargs["time"], kwargs["interview_calendar_sequence"])]
+        return {"id": "c1", **kwargs}
+
+    install_store_fakes(monkeypatch, rows=rows)
+    monkeypatch.setattr(booking.candidate_store, "list_candidates", lambda **kw: list(rows))
+    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", _assign)
+    monkeypatch.setattr(booking.candidate_store, "update_interview_slot", _update)
+
+    assert execute(revision(0, "03:30 PM"))["status"] == "Auto Booked"
+    assert state["time"] == "15:30"
+    assert execute(revision(2, "01:00 PM"))["status"] == "Rescheduled"
+    assert state["time"] == "13:00"
+    assert execute(revision(4, "11:30 AM"))["status"] == "Rescheduled"
+    assert state["time"] == "11:30"
+    # One booking throughout, never two.
+    assert len(rows) == 1
+
+
+def test_a_revision_still_refuses_to_overlap_another_candidate(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(
+        monkeypatch, rows=[booked_slot("15:30", 0)], conflicts=[{"id": "someone-else"}],
+    )
+    monkeypatch.setattr(
+        booking.candidate_store, "update_interview_slot",
+        lambda **kwargs: pytest.fail("must not save over another candidate's slot"),
+    )
+
+    outcome = execute(revision(2, "01:00 PM"))
+
+    assert outcome["status"] == "Blocked"
+    assert outcome["failure_code"] == "SLOT_CONFLICT"
+
+
+def test_an_unrelated_calendar_event_is_still_a_new_booking(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(
+        monkeypatch,
+        rows=[booked_slot("15:30", 0, interview_calendar_uid="some-other-event")],
+    )
+    saved = []
+    monkeypatch.setattr(
+        booking.candidate_store, "assign_interview_slot",
+        lambda **kwargs: saved.append(kwargs) or {"id": "slot2", **kwargs},
+    )
+
+    assert execute(revision(1, "11:30 AM"))["status"] == "Auto Booked"
+    assert saved, "a different event must still create its own booking"
+
+
+def test_an_invite_without_a_calendar_uid_behaves_exactly_as_before(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    install_store_fakes(monkeypatch)
+    saved = []
+    monkeypatch.setattr(
+        booking.candidate_store, "assign_interview_slot",
+        lambda **kwargs: saved.append(kwargs) or {"id": "slot1", **kwargs},
+    )
+
+    assert execute(result())["status"] == "Auto Booked"
+    assert saved[-1]["interview_calendar_uid"] == ""

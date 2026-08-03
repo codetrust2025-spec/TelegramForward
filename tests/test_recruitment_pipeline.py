@@ -474,3 +474,61 @@ def test_legacy_offer_cleanups_protect_and_restore_interview_reviews():
     guard=(migrations / "013_recruitment_mail_restore_review_guard.sql").read_text("utf-8").lower()
     assert "review_status='rejected'" in guard
     assert "validation_status in ('rejected','false_positive')" in guard
+
+
+# ── calendar revisions must survive deduplication ───────────────────────────
+
+def _body_hash_for(monkeypatch, attachments):
+    """The identity process_message computes for a message with these parts."""
+    captured = {}
+    monkeypatch.setattr(
+        agent.store, "insert_message",
+        lambda mailbox, decoded, score: captured.update(decoded) or ({"id": "m"}, True),
+    )
+    monkeypatch.setattr(agent.store, "is_duplicate_content", lambda *args: True)
+    monkeypatch.setattr(agent.store, "mark_message_status", lambda *a, **k: None)
+    agent.process_message(
+        {"id": "mailbox-1", "candidate_id": "candidate-1"},
+        message("#CGO#_Round L1_React", "Hi,\nPlease be available."),
+        attachments,
+    )
+    return captured["body_hash"]
+
+
+def test_an_updated_invite_is_not_mistaken_for_a_resend(monkeypatch):
+    """An organiser moving a meeting re-sends the identical covering note with
+    a new invite.ics. Hashing the body alone dropped that revision before
+    anything read the new time."""
+    first = _body_hash_for(monkeypatch, [
+        {"filename": "invite.ics", "data": None, "checksum": "ics-sequence-2"},
+        {"filename": "cv.pdf", "data": None, "checksum": "cv-unchanged"},
+    ])
+    second = _body_hash_for(monkeypatch, [
+        {"filename": "invite.ics", "data": None, "checksum": "ics-sequence-4"},
+        {"filename": "cv.pdf", "data": None, "checksum": "cv-unchanged"},
+    ])
+    assert first != second
+
+
+def test_a_genuine_resend_is_still_one_message(monkeypatch):
+    attachments = [{"filename": "invite.ics", "data": None, "checksum": "ics-sequence-2"}]
+    assert _body_hash_for(monkeypatch, attachments) == _body_hash_for(monkeypatch, attachments)
+
+
+def test_attachment_order_does_not_change_the_identity(monkeypatch):
+    forward = _body_hash_for(monkeypatch, [
+        {"filename": "invite.ics", "data": None, "checksum": "aaa"},
+        {"filename": "cv.pdf", "data": None, "checksum": "bbb"},
+    ])
+    reversed_order = _body_hash_for(monkeypatch, [
+        {"filename": "cv.pdf", "data": None, "checksum": "bbb"},
+        {"filename": "invite.ics", "data": None, "checksum": "aaa"},
+    ])
+    assert forward == reversed_order
+
+
+def test_a_message_without_attachments_hashes_on_its_body_alone(monkeypatch):
+    # Unchanged behaviour for the ordinary case.
+    assert _body_hash_for(monkeypatch, []) == agent.content_hash(
+        agent.clean_email("Hi,\nPlease be available.")
+    )
