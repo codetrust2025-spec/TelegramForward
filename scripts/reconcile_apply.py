@@ -98,13 +98,6 @@ def main() -> int:
         print("\nDry run: nothing was written.")
         return 0
 
-    # Expected movement: each voided expense stops counting as money paid.
-    expected = dict(before)
-    for target in targets:
-        key = str(target["handler"] or "").strip().lower()
-        if key in expected:
-            expected[key] = expected[key] - target["amount"]
-
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup = f"{handler_expenses._FILE}.pre-reconcile-{stamp}"
     shutil.copy2(handler_expenses._FILE, backup)
@@ -129,6 +122,15 @@ def main() -> int:
             if row is None:
                 raise RuntimeError(f"expense {target['expense_id']} not found")
             applied.append(row)
+
+        # Expected movement, derived from the rows actually voided rather than
+        # from the finding's handler name: a group is named after the record
+        # being kept, whose spelling of the handler can differ from the
+        # expense's own, and the balance is keyed on the expense's spelling.
+        expected = dict(before)
+        for row in applied:
+            key = str(row.get("reference") or "").strip().lower()
+            expected[key] = expected.get(key, 0) - int(row.get("amount") or 0)
 
         after = _balances()
         drift = {
