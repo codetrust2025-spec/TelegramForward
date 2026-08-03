@@ -722,17 +722,39 @@ body,
   }
 }
 
+/* NOTE ON SPECIFICITY
+   Component stylesheets are imported by the components themselves, so they can
+   appear after this file in the bundle and win at equal specificity. The
+   target-size floors below are scoped to .app-shell so they outrank a bare
+   class selector regardless of import order, rather than relying on !important. */
+
 /* ── Pointer-target floor on dense dashboards ────────────────────────
    These Daily Ops controls measured 21px tall at every width from 320 to
    2560 — under the 24x24 WCAG 2.5.8 asks for at any pointer type. Raising the
    floor only; their padding and layout are unchanged. */
-.ops-dash-kpi,
-.ops-booking-pie__open,
-.pending-works-pill,
-.ops-date-range__preset,
-.ops-roster-refresh,
-.ops-roster-search input {
+.app-shell .ops-dash-kpi,
+.app-shell .ops-booking-pie__open,
+.app-shell .pending-works-pill,
+.app-shell .ops-date-range__preset,
+.app-shell .ops-roster-refresh,
+.ops-roster-search input,
+/* Link-styled buttons carry padding: 0, so their box is just the text line —
+   measured 16-21px on Dashboard, Accounts and Forwarding at every width. */
+.app-shell .desk-panel__link,
+.app-shell .fwd-link,
+.app-shell .mob-section-head__link,
+.app-shell .pending-works-strip__cta,
+/* Settings disclosure and inbox sidebar controls, measured 12-21px tall. */
+.app-shell .shutdown-list-help-summary,
+.app-shell .tg-sidebar-dashboard-btn,
+.tg-sidebar-notify-close {
   min-height: 24px;
+}
+
+/* Icon-only versions of the above need the width too. */
+.app-shell .tg-sidebar-dashboard-btn,
+.tg-sidebar-notify-close {
+  min-width: 24px;
 }
 
 /* ── Authenticated screens: measured touch targets ──────────────────────
@@ -741,19 +763,69 @@ body,
    declared minimum so the contract stays in one place. Desktop layouts are
    untouched: these apply only at phone widths. */
 @media (max-width: 767px) {
-  .cand-tabs__btn,
-  .cand-btn,
-  .cand-phone-trigger,
-  .admin-tab,
-  .dr-tab,
+  .app-shell .cand-tabs__btn,
+  .app-shell .cand-btn,
+  .app-shell .cand-phone-trigger,
+  .app-shell .admin-tab,
+  .app-shell .dr-tab,
   .kai-prompts button,
   .kai-message-actions button,
-  .ops-dash-kpi,
-  .ops-booking-pie__open,
-  .pending-works-pill,
-  .ops-date-range__preset,
-  .ops-roster-refresh,
-  .ops-roster-search input {
+  .app-shell .ops-dash-kpi,
+  .app-shell .ops-booking-pie__open,
+  .app-shell .pending-works-pill,
+  .app-shell .ops-date-range__preset,
+  .app-shell .ops-roster-refresh,
+  .ops-roster-search input,
+  /* Shared mobile shell: these appear on every route, so one miss here is a
+     miss on all eleven. Measured 34-40px. */
+  .app-shell .mobile-header__menu,
+  .app-shell .mobile-header__bell,
+  .app-shell .mobile-header__util-btn,
+  .app-shell .mobile-header__bulk,
+  .app-shell .mail-bell__button,
+  .app-shell .btn--segment,
+  .app-shell .desk-panel__link,
+  .app-shell .fwd-link,
+  .app-shell .mob-section-head__link,
+  .app-shell .pending-works-strip__cta,
+  .app-shell .shutdown-list-help-summary,
+  .app-shell .tg-sidebar-dashboard-btn,
+  .tg-sidebar-notify-close {
+    min-height: var(--ta-touch-min);
+  }
+
+  /* Icon-only shell controls need width as well. */
+  .app-shell .mobile-header__menu,
+  .app-shell .mobile-header__bell,
+  .app-shell .mobile-header__util-btn,
+  .mail-bell__button {
+    min-width: var(--ta-touch-min);
+  }
+
+  /* The header action cluster was flex-shrink: 0, so at 320px it could not
+     give way and pushed itself and the drawer past the viewport edge. */
+  .app-shell .mobile-header__actions {
+    flex-shrink: 1;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  /* Remaining measured controls: drawer items 42px, log actions 32px,
+     segmented buttons 40px, and a section link 42px wide. */
+  .app-shell .mobile-drawer__item,
+  .app-shell .btn--danger,
+  .app-shell .btn--ghost,
+  .app-shell .btn--segment {
+    min-height: var(--ta-touch-min);
+  }
+
+  .app-shell .mob-section-head__link {
+    min-width: var(--ta-touch-min);
+  }
+
+  /* The header brand doubles as the go-to-dashboard control; measured 24px. */
+  .app-shell .mobile-header__brand {
     min-height: var(--ta-touch-min);
   }
 
