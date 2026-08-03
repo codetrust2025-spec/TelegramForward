@@ -31,6 +31,9 @@ def _render(report: dict) -> str:
         lines.append(f"  {name:<20}: {status}")
     lines += [
         f"duplicate groups       : {report['duplicate_groups']}",
+        f"  auto-correctable     : {len(report['confirmed'])}"
+        f"  (Rs {report['confirmed_financial_impact']:,})",
+        f"  needs manual review  : {len(report['requires_review'])}",
         f"total financial impact : Rs {report['total_financial_impact']:,}",
     ]
     if not report["groups"]:
@@ -43,23 +46,33 @@ def _render(report: dict) -> str:
             f"  {bucket['handler']:<28} {bucket['groups']} group(s)"
             f"  Rs {bucket['impact']:,}"
         )
-    lines.append("\ndetail:")
-    for group in report["groups"]:
-        keep = group["canonical"]
-        lines.append(
-            f"\n  [matched on {group['basis']}] {group['handler']}"
-            f" - Rs {group['amount']:,} ({group['month']})"
-        )
-        lines.append(
-            f"    keep      {keep['kind']:<16} {keep['record_id']}"
-            f"  {keep.get('source_module')}  {keep.get('date')}"
-        )
-        for dup in group["duplicates"]:
-            note = str(dup.get("note") or "")[:40]
+
+    def _detail(groups: list, heading: str) -> None:
+        if not groups:
+            return
+        lines.append(f"\n{heading}")
+        for group in groups:
+            keep = group["canonical"]
             lines.append(
-                f"    duplicate {dup['kind']:<16} {dup['record_id']}"
-                f"  {dup.get('source_module')}  {dup.get('date')}  {note!r}"
+                f"\n  [matched on {group['basis']}] {group['handler']}"
+                f" - Rs {group['amount']:,} ({group['month']})"
             )
+            lines.append(
+                f"    keep      {keep['kind']:<16} {keep['record_id']}"
+                f"  {keep.get('source_module')}  {keep.get('date')}"
+            )
+            for dup in group["duplicates"]:
+                note = str(dup.get("note") or "")[:40]
+                lines.append(
+                    f"    duplicate {dup['kind']:<16} {dup['record_id']}"
+                    f"  {dup.get('source_module')}  {dup.get('date')}  {note!r}"
+                )
+
+    _detail(report["confirmed"], "CONFIRMED - safe to correct automatically:")
+    _detail(
+        report["requires_review"],
+        "REQUIRES MANUAL REVIEW - not corrected, evidence is not conclusive:",
+    )
     lines.append(
         "\nTo correct a finding, void the duplicate — it keeps the row and its"
         "\nproof and only stops it counting as money paid:"

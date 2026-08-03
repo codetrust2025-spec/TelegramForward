@@ -170,3 +170,76 @@ def test_the_operator_is_told_what_the_money_is_already_recorded_as():
     message = ti.duplicate_message(_tx(kind="recovery"))
     assert "already recorded as a candidate-payment recovery" in message
     assert "2026-07-22" in message
+
+
+# ── engine-assigned payment identity ────────────────────────────────────────
+
+def test_the_engine_payment_outranks_every_other_signal():
+    # The verification engine reuses one payment record when a second
+    # screenshot of the same transfer is uploaded, so it is the ground truth.
+    identity = ti.identity_of(_tx(payment_id="pay_36b6", upi_transaction_id="484653160050"))
+    assert identity["identity"] == "pay:pay_36b6"
+
+
+def test_a_refiled_expense_is_caught_even_when_the_typed_date_is_wrong():
+    # The operator typed the day they filed it, not the day on the receipt, so
+    # the fingerprint cannot match. The shared payment still does.
+    groups = ti.find_duplicates(
+        [
+            _tx(record_id="rec1", kind="recovery", date="2026-07-22",
+                payment_id="pay_36b6", source_module="public_slot_payment_proof"),
+            _tx(record_id="exp1", kind="expense", date="2026-07-28",
+                payment_id="pay_36b6"),
+        ]
+    )
+    assert len(groups) == 1
+    assert groups[0]["basis"] == "payment_id"
+    assert groups[0]["confidence"] == "high"
+    assert groups[0]["canonical"]["record_id"] == "rec1"
+
+
+def test_a_ledger_mirror_is_never_the_duplicate_of_the_expense_it_mirrors():
+    # Filing an expense also writes a COMMISSION_PAYOUT against the same
+    # payment. Only the expense store feeds the balance.
+    groups = ti.find_duplicates(
+        [
+            _tx(record_id="mirror", kind="ledger_mirror", payment_id="pay_71d7"),
+            _tx(record_id="exp1", kind="expense", payment_id="pay_71d7"),
+        ]
+    )
+    assert groups == []
+
+
+def test_a_fingerprint_only_match_is_never_auto_correctable():
+    groups = ti.find_duplicates(
+        [
+            _tx(record_id="rec1", kind="recovery"),
+            _tx(record_id="exp1", kind="expense"),
+        ]
+    )
+    assert groups[0]["basis"] == "fingerprint"
+    assert groups[0]["confidence"] == "review"
+
+
+def test_one_screenshot_on_two_records_of_different_amounts_needs_review():
+    # Usually a proof attached to the wrong record, not money moved twice.
+    groups = ti.find_duplicates(
+        [
+            _tx(record_id="exp1", kind="expense", amount=1500, date="2026-06-22",
+                screenshot_hash="4e9c"),
+            _tx(record_id="pay1", kind="candidate_payment", amount=2000,
+                date="2026-06-11", screenshot_hash="4e9c"),
+        ]
+    )
+    assert len(groups) == 1
+    assert groups[0]["confidence"] == "review"
+
+
+def test_a_shared_payment_with_disagreeing_amounts_is_not_auto_correctable():
+    groups = ti.find_duplicates(
+        [
+            _tx(record_id="rec1", kind="recovery", amount=5000, payment_id="pay_1"),
+            _tx(record_id="exp1", kind="expense", amount=2500, payment_id="pay_1"),
+        ]
+    )
+    assert groups[0]["confidence"] == "review"
