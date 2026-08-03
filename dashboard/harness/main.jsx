@@ -30,6 +30,7 @@ import { KnowledgeAssistantPanel } from "../src/components/KnowledgeAssistantPan
 import { DailyOpsPanel } from "../src/dailyOps/DailyOpsPanel.jsx";
 import { InboxPanel } from "../src/components/InboxPanel.jsx";
 import RecruitmentMailPanel from "../src/components/RecruitmentMailPanelRedesign.jsx";
+import App from "../src/App.jsx";
 
 const PANELS = {
   candidates: () => <CandidatesPanel />,
@@ -52,6 +53,11 @@ const PANELS = {
     />
   ),
   recruitment: () => <RecruitmentMailPanel />,
+  // The whole app, so routes whose panels take large internally-built props
+  // (Dashboard, Accounts, Forwarding, Campaigns, Logs, Settings, Daily
+  // briefing, Mail alerts, AI Mail Review) are measured through the real
+  // shells rather than through hand-made props that could differ.
+  app: () => <App />,
 };
 
 function Harness() {
@@ -75,13 +81,17 @@ function Harness() {
           {/* Reproduce the real content wrappers. Without them a panel is
               measured in a container the app never gives it, which reports
               widths that cannot happen in production. */}
-          <div className="app-shell" data-harness-panel={name}>
-            {mobile ? (
-              <main className="mobile-app__main">{render()}</main>
-            ) : (
-              <div className="desktop-body">{render()}</div>
-            )}
-          </div>
+          {name === "app" ? (
+            <div data-harness-panel={name}>{render()}</div>
+          ) : (
+            <div className="app-shell" data-harness-panel={name}>
+              {mobile ? (
+                <main className="mobile-app__main">{render()}</main>
+              ) : (
+                <div className="desktop-body">{render()}</div>
+              )}
+            </div>
+          )}
         </PendingWorksProvider>
       </ConfirmProvider>
     </AuthProvider>

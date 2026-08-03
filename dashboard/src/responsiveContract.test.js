@@ -211,7 +211,9 @@ describe("dense dashboard controls clear the pointer minimum", () => {
   it("floors the Daily Ops controls at 24px for any pointer", () => {
     const at = responsive.indexOf("Pointer-target floor");
     expect(at, "pointer-target floor missing").toBeGreaterThan(-1);
-    const slice = responsive.slice(at, at + 600);
+    // Slice to the next section rather than a fixed length: the selector list
+    // grows as more undersized controls are found.
+    const slice = responsive.slice(at, responsive.indexOf("Authenticated screens: measured"));
     for (const sel of [".ops-dash-kpi", ".ops-booking-pie__open", ".pending-works-pill"]) {
       expect(slice).toContain(sel);
     }
@@ -247,5 +249,121 @@ describe("form controls clear the minimum on phones", () => {
 
   it("also matches the toolbar's own 26px rule", () => {
     expect(responsive).toContain(".cand-toolbar select.cand-input");
+  });
+});
+
+describe("shared mobile shell targets", () => {
+  // These live in the mobile header and drawer, so they appear on every route:
+  // one miss here is a miss on all eleven. Measured 34-40px at 320px.
+  const shell = [
+    ".mobile-header__menu",
+    ".mobile-header__bell",
+    ".mobile-header__util-btn",
+    ".mobile-header__bulk",
+    ".mail-bell__button",
+    ".btn--segment",
+  ];
+
+  const phone = (() => {
+    const extract = (at) => {
+      let depth = 0;
+      for (let i = responsive.indexOf("{", at); i < responsive.length; i += 1) {
+        if (responsive[i] === "{") depth += 1;
+        if (responsive[i] === "}") { depth -= 1; if (depth === 0) return responsive.slice(at, i + 1); }
+      }
+      throw new Error("unterminated block");
+    };
+    let from = 0;
+    for (;;) {
+      const at = responsive.indexOf("@media (max-width: 767px)", from);
+      expect(at, "shell touch-target block missing").toBeGreaterThan(-1);
+      const b = extract(at);
+      if (b.includes(".mobile-header__bulk")) return b;
+      from = at + 1;
+    }
+  })();
+
+  it.each(shell)("raises %s on phones", (sel) => {
+    expect(phone).toContain(sel);
+  });
+
+  it("lets the header action cluster shrink instead of overflowing", () => {
+    // flex-shrink: 0 meant it could not give way at 320px and pushed itself
+    // and the drawer past the viewport edge.
+    const rule = phone.slice(phone.indexOf(".mobile-header__actions"));
+    expect(rule).toContain("flex-shrink: 1");
+    expect(rule).toContain("min-width: 0");
+  });
+});
+
+describe("link-styled buttons clear the pointer minimum", () => {
+  // padding: 0 leaves the box as just the text line — 16-21px tall on
+  // Dashboard, Accounts, Forwarding, Campaigns, Settings and Inbox.
+  const linkish = [
+    ".desk-panel__link",
+    ".fwd-link",
+    ".mob-section-head__link",
+    ".pending-works-strip__cta",
+    ".shutdown-list-help-summary",
+    ".tg-sidebar-dashboard-btn",
+    ".tg-sidebar-notify-close",
+  ];
+
+  it.each(linkish)("floors %s at 24px for any pointer", (sel) => {
+    const at = responsive.indexOf("Pointer-target floor");
+    const slice = responsive.slice(at, responsive.indexOf("Authenticated screens: measured"));
+    expect(slice).toContain(sel);
+  });
+});
+
+describe("floors survive component stylesheet import order", () => {
+  // Component CSS is imported by the components, so it can land after this
+  // file in the bundle and win at equal specificity. .mobile-header__actions
+  // stayed flex-shrink:0 for exactly that reason until it was scoped.
+  it("scopes the target floors to .app-shell rather than using !important", () => {
+    expect(responsive).toContain("NOTE ON SPECIFICITY");
+    // Only the floors this audit added. The file has pre-existing !important
+    // rules for the inbox single-pane layout that predate it.
+    const floors = responsive
+      // Start at the comment opener, or the stripper below cannot match the
+      // first (then unterminated) comment.
+      .slice(
+        responsive.indexOf("/* NOTE ON SPECIFICITY"),
+        responsive.indexOf("/* ── Landscape phones: short viewport"),
+      )
+      // Strip comments: they mention !important to explain why it is avoided.
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(floors).not.toContain("!important");
+  });
+
+  it.each([
+    ".app-shell .mobile-header__actions",
+    ".app-shell .mobile-drawer__item",
+    ".app-shell .btn--danger",
+    ".app-shell .btn--ghost",
+    ".app-shell .btn--segment",
+    ".app-shell .mob-section-head__link",
+  ])("scopes %s", (sel) => {
+    expect(responsive).toContain(sel);
+  });
+
+  it("lets the header cluster shrink so it cannot push past the viewport", () => {
+    const at = responsive.indexOf(".app-shell .mobile-header__actions");
+    const rule = responsive.slice(at, responsive.indexOf("}", at));
+    expect(rule).toContain("flex-shrink: 1");
+    expect(rule).toContain("min-width: 0");
+  });
+});
+
+describe("shared mobile header controls", () => {
+  // The header and drawer are part of every route's shell, so a miss here is a
+  // miss on all eleven. All measured under 44px at 320px.
+  it.each([
+    ".app-shell .mobile-header__brand",
+    ".app-shell .mobile-drawer__item",
+    ".app-shell .btn--danger",
+    ".app-shell .btn--ghost",
+  ])("raises %s on phones", (sel) => {
+    expect(responsive).toContain(sel);
   });
 });
