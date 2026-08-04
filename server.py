@@ -1066,15 +1066,32 @@ def _resolve_resume_hit(cid: str, rid: str):
     if hit is not None:
         return hit
     # File on disk but JSON metadata missing (e.g. after partial restore).
-    folder = os.path.join(candidate_store.RESUMES_DIR, cid)
-    if not os.path.isdir(folder):
-        return None
-    for fname in os.listdir(folder):
-        if not fname.startswith(rid):
+    # A person can own several rows and a file sits under whichever row it was
+    # uploaded against, so every folder that person could own is searched
+    # rather than only the id that happens to be in the URL.
+    folders = []
+    try:
+        folders = [
+            os.path.join(candidate_store.RESUMES_DIR, str(row.get("id")))
+            for row in candidate_store._resume_owner_rows(cid)
+        ]
+    except Exception:
+        folders = []
+    folders.append(os.path.join(candidate_store.RESUMES_DIR, cid))
+
+    matches = []
+    for folder in dict.fromkeys(folders):
+        if not os.path.isdir(folder):
             continue
-        path = os.path.join(folder, fname)
-        if not os.path.isfile(path):
-            continue
+        for name in os.listdir(folder):
+            full = os.path.join(folder, name)
+            if name.startswith(rid) and os.path.isfile(full):
+                matches.append(full)
+    # A resume id is unique. More than one match means something is wrong, and
+    # guessing which file to serve would be worse than saying nothing.
+    if len(matches) == 1:
+        path = matches[0]
+        fname = os.path.basename(path)
         ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
         mime = {
             "pdf": "application/pdf",
