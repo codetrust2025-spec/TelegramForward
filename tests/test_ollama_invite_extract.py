@@ -1,4 +1,5 @@
 import json
+from datetime import date, timedelta
 
 import features.ollama_invite_extract as invite_extract
 
@@ -52,6 +53,10 @@ def test_disabling_ocr_does_not_enable_ollama_test_mode(monkeypatch):
 
 
 def test_ollama_only_mode_never_calls_ocr(monkeypatch):
+    # The extractor rewrites a date more than a week in the past to next year,
+    # so a hard-coded day only survives for seven days after it. Anchor the
+    # fixture to a future day instead of a calendar date that expires.
+    upcoming = (date.today() + timedelta(days=14)).isoformat()
     monkeypatch.setenv("INVITE_EXTRACTION_MODE", "ollama_only")
     monkeypatch.setattr(invite_extract, "_is_ollama_available", lambda: True)
 
@@ -64,7 +69,7 @@ def test_ollama_only_mode_never_calls_ocr(monkeypatch):
         "call_ollama_vision_model",
         lambda *_args, **_kwargs: json.dumps(
             {
-                "interview_date": "2026-07-27",
+                "interview_date": upcoming,
                 "start_time": "10:30 AM",
                 "end_time": "11:15 AM",
                 "interview_round": "L1",
@@ -81,7 +86,7 @@ def test_ollama_only_mode_never_calls_ocr(monkeypatch):
 
     assert result["ollama_only_test"] is True
     assert result["extraction_method"] == "ollama_only_test"
-    assert result["interview_date"] == "2026-07-27"
+    assert result["interview_date"] == upcoming
     assert result["auto_booking_safe"] is False
     assert result["manual_fields_required"] is True
     assert result["backup_model"] == ""

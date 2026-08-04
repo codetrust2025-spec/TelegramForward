@@ -1269,11 +1269,33 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
             outcome = execute_auto_booking(mailbox=mailbox, message=decoded, event=event, result=result)
             booking = outcome.get("booking") or {}
             audit = outcome.get("audit") or {}
+            # The schedule comes from the booking that was actually written,
+            # not from the model's reading of the email: the two can differ
+            # (a timezone is normalised, a reschedule moves an existing slot),
+            # and a notification that announces a time nobody is booked for is
+            # worse than no notification.
+            booked_round = booking.get("interview_round") or interview.get("round")
             booking_event = {
                 **common, "status": outcome.get("status"), "booking_id": booking.get("id"),
-                "booking_audit_id": audit.get("id"), "interview_round": interview.get("round"),
-                "interview_date": interview.get("date"), "interview_time": interview.get("time"),
-                "timezone": interview.get("timezone"), "failure_code": outcome.get("failure_code"),
+                "booking_audit_id": audit.get("id"),
+                "candidate_name": booking.get("name") or common.get("candidate_name"),
+                "company_name": booking.get("interview_company") or common.get("company_name"),
+                "interview_round": booked_round,
+                "interview_date": booking.get("date") or interview.get("date"),
+                "interview_time": booking.get("time") or interview.get("time"),
+                "start_time": booking.get("time") or interview.get("time"),
+                "end_time": booking.get("time_end") or interview.get("end_time"),
+                "timezone": (
+                    "Asia/Kolkata" if booking.get("date") else interview.get("timezone")
+                ),
+                "booking_url": (
+                    f"/daily-ops?bookingId={booking.get('id')}" if booking.get("id") else ""
+                ),
+                "failure_code": outcome.get("failure_code"),
+                # Present only when the booking was refused, and already phrased
+                # for a person by the validator.
+                "block_reason": (outcome.get("block_reason") or {}).get("reason"),
+                "block_reason_code": (outcome.get("block_reason") or {}).get("reason_code"),
             }
             _publish(outcome["event_type"], **booking_event)
             event["auto_booking"] = outcome
