@@ -6691,31 +6691,77 @@ def add_resume(cid: str, *, data: bytes, original_name: str, mime_type: str,
     return entry
 
 
-def get_resume(cid: str, rid: str) -> tuple[str, dict] | None:
-    for r in _load().get("candidates") or []:
-        if r.get("id") != cid:
+def _resume_owner_rows(cid: str) -> list[dict]:
+    """Every row that can legitimately hold this candidate's resumes.
+
+    One person often has several rows — a new one is cloned for each interview
+    slot — and the resume dialog lists all of their files together. A link
+    opened from that list therefore names whichever row was on screen, which
+    is frequently not the row the file was uploaded against.
+    """
+    rows = _load().get("candidates") or []
+    try:
+        identity = {str(value) for value in candidate_identity_ids(cid) if value}
+    except Exception:
+        identity = {str(cid)}
+    identity.add(str(cid))
+
+    row = next((r for r in rows if str(r.get("id")) == str(cid)), None)
+    phone_key = candidate_phone_identity(row.get("phone")) if row else ""
+    name_key = _normalise_candidate_name_key(row.get("name") or "") if row else ""
+
+    owners = []
+    for candidate in rows:
+        if str(candidate.get("id")) in identity:
+            owners.append(candidate)
             continue
-        for item in (r.get("resumes") or []):
-            if item.get("id") == rid:
-                storage_cid = _resume_storage_candidate_id(cid, item)
-                path = os.path.join(_resume_dir(storage_cid), item["filename"])
-                if not os.path.exists(path):
-                    return None
-                return path, dict(item)
-        return None
+        # Same person, different row: match the identity the candidate list
+        # itself uses to collapse duplicates.
+        if phone_key and candidate_phone_identity(candidate.get("phone")) == phone_key:
+            owners.append(candidate)
+        elif name_key and _normalise_candidate_name_key(candidate.get("name") or "") == name_key:
+            owners.append(candidate)
+    return owners
+
+
+def find_resume(cid: str, rid: str) -> tuple[str, dict, str] | None:
+    """Locate a resume by its immutable id. Returns (path, entry, owner_id).
+
+    The resume id is the stable handle; the candidate id in a URL only says
+    which row the reader was looking at. Resolving on the id alone is what
+    stops a preview answering "Resume not found" for a file that is present.
+    """
+    for row in _resume_owner_rows(cid):
+        for item in (row.get("resumes") or []):
+            if item.get("id") != rid:
+                continue
+            owner = str(row.get("id") or cid)
+            storage_cid = _resume_storage_candidate_id(owner, item)
+            path = os.path.join(_resume_dir(storage_cid), str(item.get("filename") or ""))
+            if not item.get("filename") or not os.path.exists(path):
+                return None
+            return path, dict(item), owner
     return None
+
+
+def get_resume(cid: str, rid: str) -> tuple[str, dict] | None:
+    found = find_resume(cid, rid)
+    return (found[0], found[1]) if found else None
 
 
 def delete_resume(cid: str, rid: str) -> bool:
     cdata = _load()
     rows = cdata.get("candidates") or []
+    owner_ids = {str(row.get("id")) for row in _resume_owner_rows(cid)}
     for r in rows:
-        if r.get("id") != cid:
+        if str(r.get("id")) not in owner_ids:
             continue
         resumes = list(r.get("resumes") or [])
         for i, item in enumerate(resumes):
             if item.get("id") == rid:
-                storage_cid = _resume_storage_candidate_id(cid, item)
+                # The row holding the entry owns the file, not the row the
+                # request came in on.
+                storage_cid = _resume_storage_candidate_id(str(r.get("id") or cid), item)
                 path = os.path.join(_resume_dir(storage_cid), item["filename"])
                 try:
                     if os.path.exists(path):
@@ -6728,15 +6774,19 @@ def delete_resume(cid: str, rid: str) -> bool:
                 cdata["candidates"] = rows
                 _save(cdata)
                 return True
-        return False
+        # Keep looking: the person's other rows may hold it.
     return False
 
 
 def update_resume_note(cid: str, rid: str, note: str) -> dict | None:
     cdata = _load()
     rows = cdata.get("candidates") or []
+    # Renaming touches the display note only. The stored filename and the
+    # folder it lives in are never derived from what the reader typed, so a
+    # rename cannot detach a record from its file.
+    owner_ids = {str(row.get("id")) for row in _resume_owner_rows(cid)}
     for r in rows:
-        if r.get("id") != cid:
+        if str(r.get("id")) not in owner_ids:
             continue
         for item in (r.get("resumes") or []):
             if item.get("id") == rid:
@@ -6745,7 +6795,6 @@ def update_resume_note(cid: str, rid: str, note: str) -> dict | None:
                 cdata["candidates"] = rows
                 _save(cdata)
                 return dict(item)
-        return None
     return None
 
 
