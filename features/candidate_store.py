@@ -41,6 +41,7 @@ the rest of the project (`crm/leads.json`, `ai_smart_reply.json`, etc.).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -6638,6 +6639,16 @@ def add_resume(cid: str, *, data: bytes, original_name: str, mime_type: str,
     if idx < 0:
         return None
 
+    existing = list(rows[idx].get("resumes") or [])
+    digest = hashlib.sha256(data).hexdigest()
+
+    # Re-uploading the same file is not a new version of anything. One
+    # candidate accumulated eight byte-identical copies over eighty minutes
+    # because every attempt appended a row.
+    for item in existing:
+        if item.get("sha256") == digest:
+            return dict(item)
+
     rid = uuid.uuid4().hex[:12]
     filename = f"{rid}.{ext}"
     folder = _resume_dir(cid)
@@ -6654,13 +6665,26 @@ def add_resume(cid: str, *, data: bytes, original_name: str, mime_type: str,
         "original_name": (original_name or filename)[:160],
         "mime_type":     mime_type or "application/octet-stream",
         "size":          len(data),
+        "sha256":        digest,
         "note":          _clean_str(note)[:200],
         "uploaded_at":   _now_iso(),
         "url":           f"/candidates/{cid}/resumes/{rid}",
     }
-    resumes = list(rows[idx].get("resumes") or [])
-    resumes.append(entry)
-    rows[idx]["resumes"] = resumes
+    # A candidate has one current resume. A newer one supersedes the last
+    # rather than joining a pile nobody can pick the right file out of; the
+    # superseded file is removed so the list cannot drift back into a stack.
+    for item in existing:
+        superseded = os.path.join(
+            _resume_dir(_resume_storage_candidate_id(cid, item)),
+            str(item.get("filename") or ""),
+        )
+        try:
+            if item.get("filename") and os.path.exists(superseded):
+                os.remove(superseded)
+        except OSError:
+            # A file we cannot delete must not stop the new resume landing.
+            pass
+    rows[idx]["resumes"] = [entry]
     rows[idx]["updated_at"] = _now_iso()
     cdata["candidates"] = rows
     _save(cdata)

@@ -789,13 +789,38 @@ async def candidates_upload_resume(
     if not existing:
         return {"status": "error", "message": "Candidate not found"}
     assert_candidate_row_access(request, existing)
+    raw = await file.read()
+    mime = file.content_type or ""
+
+    # Classify before storing. Running this afterwards meant a document that
+    # is plainly not a resume - an offer letter for a different person - was
+    # filed as one and stayed there: the verdict was computed, then only
+    # attached to the response.
+    ai_extraction = None
     try:
-        raw = await file.read()
+        if "pdf" in mime.lower():
+            from features.ollama_resume_extract import extract_resume_with_ollama
+            ai_extraction = await asyncio.to_thread(extract_resume_with_ollama, raw, mime)
+    except Exception:
+        # An unavailable model must never block a genuine resume, so a
+        # question that could not be asked counts as no objection.
+        ai_extraction = None
+    if ai_extraction is not None and ai_extraction.get("is_resume") is False:
+        return {
+            "status": "error",
+            "message": (
+                "This file does not look like a resume, so it was not saved. "
+                "Upload the candidate's resume instead."
+            ),
+            "ai_extraction": ai_extraction,
+        }
+
+    try:
         entry = candidate_store.add_resume(
             cid,
             data=raw,
             original_name=file.filename or "",
-            mime_type=file.content_type or "",
+            mime_type=mime,
             note=note or "",
         )
     except ValueError as e:
@@ -803,15 +828,6 @@ async def candidates_upload_resume(
     if entry is None:
         return {"status": "error", "message": "Candidate not found"}
     row = candidate_store.get_candidate(cid)
-    # AI-powered resume extraction (non-blocking enrichment)
-    ai_extraction = None
-    try:
-        mime = file.content_type or ""
-        if "pdf" in mime.lower():
-            from features.ollama_resume_extract import extract_resume_with_ollama
-            ai_extraction = await asyncio.to_thread(extract_resume_with_ollama, raw, mime)
-    except Exception:
-        pass
     resp = {"status": "ok", "resume": entry, "candidate": row}
     if ai_extraction and ai_extraction.get("is_resume"):
         resp["ai_extraction"] = ai_extraction
