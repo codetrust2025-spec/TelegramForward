@@ -1,0 +1,12 @@
+# Built frontend artifacts are bytes, not source.
+#
+# With core.autocrlf=true (the default on the Windows development machine) git
+# rewrites LF to CRLF on checkout for anything it considers text. That changes
+# the file's SHA-256 without changing a single line of code, so
+# scripts/verify_git_prod_sync.py compared a CRLF working-tree bundle against
+# the LF bundle production serves and reported drift on a deploy that was in
+# fact byte-identical. Marking these paths binary keeps the checked-out bytes
+# equal to the committed bytes on every platform.
+static/assets/** -text
+static/index.html -text
+static/production.manifest.json -text
