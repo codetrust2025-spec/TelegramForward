@@ -5093,7 +5093,6 @@ function CandidatesPanelImpl() {
   const [m, _] = w.useState(() => mR());
   const [y, k] = w.useState(false);
   const [service, setService] = w.useState("all");
-  const [aiFilter, setAiFilter] = w.useState("all");
   const [T, S] = w.useState("all");
   const [E, b] = w.useState("");
   const [A, O] = w.useState("");
@@ -5157,9 +5156,6 @@ function CandidatesPanelImpl() {
       if (A) {
         ge.set("search", A);
       }
-      if (aiFilter !== "all") {
-        ge.set("ai_filter", aiFilter);
-      }
       const Ge = new URLSearchParams();
       if (m !== "all") {
         Ge.set("month", m);
@@ -5204,7 +5200,7 @@ function CandidatesPanelImpl() {
     } finally {
       h(false);
     }
-  }, [g, m, y, service, T, A, a, aiFilter]);
+  }, [g, m, y, service, T, A, a]);
   w.useEffect(() => {
     fe();
   }, [fe]);
@@ -5251,48 +5247,6 @@ function CandidatesPanelImpl() {
   w.useEffect(() => {
     // Service filter is now rendered in React — no DOM manipulation needed
   }, [service]);
-  w.useEffect(() => {
-    if (!a || !window.__TA_AI_RECRUITMENT_ENABLED__) return;
-    const toolbar = document.querySelector(".cand-page .cand-toolbar");
-    if (!toolbar || toolbar.querySelector("[data-ai-recruitment-filter]"))
-      return;
-    const select = document.createElement("select");
-    select.className = "cand-input";
-    select.dataset.aiRecruitmentFilter = "1";
-    select.setAttribute("aria-label", "Filter by AI recruitment status");
-    const choices = [
-      ["all", "All AI statuses"],
-      ["MAILBOX_CONNECTED", "Mailbox connected"],
-      ["MAILBOX_MONITORING_ENABLED", "Mailbox monitored"],
-      ["MAILBOX_SYNC_FAILED", "Mailbox sync failed"],
-      ["INTERVIEW_SCHEDULED", "Interview scheduled"],
-      ["INTERVIEW_RESCHEDULED", "Interview rescheduled"],
-      ["INTERVIEW_CANCELLED", "Interview cancelled"],
-      ["SHORTLISTED", "Shortlisted"],
-      ["SELECTED", "Selected"],
-      ["OFFER_INDICATION", "Offer indication"],
-      ["OFFER_LETTER_RECEIVED", "Offer letter detected"],
-      ["OFFER_VERIFIED", "Offer verified"],
-      ["JOINING_CONFIRMED", "Joining confirmed"],
-      ["REJECTED", "Rejected"],
-      ["PENDING_AI_REVIEW", "Pending AI review"],
-      ["POTENTIAL_STATUS_CONFLICT", "Potential conflict"],
-    ];
-    for (const [value, optionLabel] of choices) {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = optionLabel;
-      select.append(option);
-    }
-    select.value = aiFilter;
-    select.onchange = (event) => setAiFilter(event.target.value);
-    const serviceSelect = toolbar.querySelector(
-      '[aria-label="Filter by service type"]',
-    );
-    if (serviceSelect) serviceSelect.after(select);
-    else toolbar.prepend(select);
-    return () => select.remove();
-  }, [a, aiFilter]);
   w.useEffect(() => {
     if (!c) return;
     const statsRoot = document.querySelector(".cand-page .cand-stats");
