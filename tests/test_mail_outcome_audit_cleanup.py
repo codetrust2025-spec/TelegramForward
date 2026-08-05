@@ -173,6 +173,40 @@ def test_repeated_thread_copies_of_one_outcome_count_once():
     assert result == {"b": engine.SUPPRESS_DUPLICATE, "c": engine.SUPPRESS_DUPLICATE}
 
 
+def test_a_reply_attaching_the_signed_offer_back_is_not_a_second_offer():
+    """The live case that survived the first cleanup pass.
+
+    One Kaivale offer letter, thread 19f46b4816321cbc: the recruiter's message
+    and the candidate's reply 25 minutes later carrying a re-signed copy. The
+    bodies differ, the two PDFs differ by a few bytes, and the reply resolves
+    to the candidate's own gmail.com rather than kaivale.com — so content,
+    attachment and company-scoped keys all miss. The thread is what makes them
+    one event.
+    """
+    rows = [
+        finding(engine.VERIFIED_OFFER_LETTER, id="recruiter",
+                received="2026-07-16T12:10:13+00:00", thread="19f46b4816321cbc",
+                company="kaivale.com", signature="sig-a", attachment="fp-a",
+                message="19f6ad5e1eb33a58"),
+        finding(engine.VERIFIED_OFFER_LETTER, id="candidate-reply",
+                received="2026-07-16T12:35:30+00:00", thread="19f46b4816321cbc",
+                company="gmail.com", signature="sig-b", attachment="fp-b",
+                message="19f6aeccaff1b324"),
+    ]
+    result = reasons(rows)
+    assert result == {"candidate-reply": engine.SUPPRESS_DUPLICATE}
+
+
+def test_thread_deduplication_ignores_the_sender_domain():
+    """Scoping the thread key by company is what split one offer into two."""
+    rows = [
+        finding(engine.OFFER_INDICATION, id="a", thread="t", company="acme.example"),
+        finding(engine.OFFER_INDICATION, id="b", thread="t", company="gmail.com",
+                received="2026-07-02"),
+    ]
+    assert reasons(rows) == {"b": engine.SUPPRESS_DUPLICATE}
+
+
 def test_different_outcomes_in_one_thread_are_not_duplicates():
     rows = [
         finding(engine.SHORTLISTED, id="a", thread="t-1", received="2026-07-01"),

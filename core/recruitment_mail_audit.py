@@ -218,7 +218,11 @@ def selection_suppressions(findings: Iterable[dict[str, Any]]) -> dict[str, dict
         if fingerprint:
             keys.append(("attachment", fingerprint, outcome))
         if thread:
-            keys.append(("thread", thread, outcome, _company_key(finding)))
+            # Deliberately not scoped by company. One thread is one
+            # conversation, and a reply that attaches the signed copy back
+            # resolves to the candidate's own domain rather than the
+            # recruiter's, so adding the company split one offer into two.
+            keys.append(("thread", thread, outcome))
         matched = next((seen[key] for key in keys if key in seen), None)
         if matched:
             suppress(finding, SUPPRESS_DUPLICATE,
