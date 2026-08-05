@@ -276,6 +276,18 @@ def selection_suppressions(findings: Iterable[dict[str, Any]]) -> dict[str, dict
     return decisions
 
 
+def application_key(finding: dict[str, Any]) -> str:
+    """Identify the application a finding belongs to.
+
+    One company plus one role is one application. Outcomes from different
+    companies are separate lifecycles and must never be merged, so a later
+    rejection from company B cannot cancel an offer from company A.
+    """
+    company = _company_key(finding)
+    role = re.sub(r"[^a-z0-9]+", "-", str(finding.get("job_title") or "").strip().lower()).strip("-")
+    return f"{company}:{role}" if role else company
+
+
 def normalize_mode(value: Any) -> str:
     mode = str(value or "").strip().upper()
     return mode if mode in MODES else MODE_SELECTION
@@ -493,6 +505,57 @@ _REJECTION_PHRASES = (
     "candidature has been rejected", "we are not proceeding",
 )
 
+# ── Provenance ───────────────────────────────────────────────────────────────
+#
+# Who is speaking matters more than what they say. A job portal writing "your
+# profile has been shortlisted for our top client" is running a campaign to
+# harvest profile details; a company writing the same words has made a
+# decision. These are the phrases that identify the campaign.
+
+_BULK_CAMPAIGN_PHRASES = (
+    "while reviewing top talents", "top talents on", "job invite from recruiter",
+    "you've been chosen from a large pool", "you have been chosen from a large pool",
+    "chosen from a large pool of jobseekers", "you're invited to apply",
+    "you are invited to apply", "invited to apply to this job",
+    "exciting career opportunities", "top applicant", "urgent vacancy",
+    "our top client", "for our top client", "posted by", "job description",
+    "apply now", "get app", "not disclosed", "unsubscribe",
+    "reviewing top talents on", "in your industry",
+)
+
+# Mail whose entire purpose is to collect or confirm the candidate's own
+# details. It reads like progress and is not.
+_PROFILE_DETAILS_PHRASES = (
+    "profile details required", "confirm your profile details",
+    "please confirm your profile details", "verify profile details",
+    "please verify profile details", "confirm details now",
+    "complete pending details", "pending details", "details required",
+    "update your profile details", "confirm your details",
+    "share your profile details", "we came up short on details",
+)
+
+# Boilerplate closing lines. They describe a policy for the general case and
+# say nothing about this candidate's application.
+_GENERIC_REJECTION_PHRASES = (
+    "assume that your profile has not been shortlisted",
+    "please assume that your profile", "if you don't hear back from us",
+    "if you do not hear back from us", "in case you don't hear back",
+    "in case you do not hear back", "unable to respond to every applicant",
+    "due to the volume of applications", "we get back to each candidate",
+    "get back to each candidate",
+)
+
+SOURCE_COMPANY = "COMPANY"
+SOURCE_PORTAL = "JOB_PORTAL"
+SOURCE_THIRD_PARTY = "THIRD_PARTY_RECRUITER"
+SOURCE_PERSONAL = "PERSONAL_MAIL"
+SOURCE_UNKNOWN = "UNKNOWN"
+
+STRENGTH_STRONG = "STRONG"
+STRENGTH_MODERATE = "MODERATE"
+STRENGTH_WEAK = "WEAK"
+
+
 # Recruiter interest and pipeline noise.  Present in mail that looks positive
 # but carries no company decision.
 _INTEREST_PHRASES = (
@@ -531,6 +594,9 @@ _DOCUMENT_SIGNALS = _compile(((("DOCUMENT_REQUEST"), _DOCUMENT_PHRASES),))
 _INTEREST_SIGNALS = _compile((("RECRUITER_INTEREST", _INTEREST_PHRASES),))
 _NOISE_SIGNALS = _compile((("NOISE", _NOISE_PHRASES),))
 _QUESTIONNAIRE_SIGNALS = _compile((("QUESTIONNAIRE", _QUESTIONNAIRE_PHRASES),))
+_BULK_SIGNALS = _compile((("BULK_CAMPAIGN", _BULK_CAMPAIGN_PHRASES),))
+_PROFILE_DETAILS_SIGNALS = _compile((("PROFILE_DETAILS_REQUEST", _PROFILE_DETAILS_PHRASES),))
+_GENERIC_REJECTION_SIGNALS = _compile((("GENERIC_REJECTION", _GENERIC_REJECTION_PHRASES),))
 _OFFER_DOC_CONTENT = _compile((("OFFER_DOC", _OFFER_DOC_CONTENT_PHRASES),))
 _NON_OFFER_DOC = _compile((("NON_OFFER_DOC", _NON_OFFER_DOC_PHRASES),))
 
@@ -598,12 +664,24 @@ def registrable_domain(domain: str) -> str:
     return ".".join(parts[-2:])
 
 
-def _matches(patterns: list[re.Pattern], text: str) -> list[str]:
+# "you have not been selected for the position" contains "selected for the
+# position". Without this guard a rejection also reads as a selection, and the
+# two together escalate to manual review instead of being reported as the
+# rejection it plainly is.
+_NEGATOR = re.compile(
+    r"(?i)\b(?:not|never|no longer|unable to|cannot|can't|couldn't|won't|unfortunately)\b"
+    r"[\w\s,'’-]{0,24}$"
+)
+
+
+def _matches(patterns: list[re.Pattern], text: str, *, negation_aware: bool = False) -> list[str]:
     found = []
     for pattern in patterns:
-        match = pattern.search(text)
-        if match:
+        for match in pattern.finditer(text):
+            if negation_aware and _NEGATOR.search(text[max(0, match.start() - 40):match.start()]):
+                continue
             found.append(match.group(0).strip())
+            break
     return found
 
 
@@ -674,6 +752,84 @@ def _detail_signals(text: str) -> dict[str, bool]:
     }
 
 
+def classify_source(sender_email: Any, company_domain: Any = None) -> str:
+    """Who sent this: the hiring company, a portal, an agency, or a person."""
+    root = registrable_domain(domain_of(sender_email))
+    if not root:
+        return SOURCE_UNKNOWN
+    if root in _KNOWN_RELAY_DOMAINS:
+        return SOURCE_PORTAL
+    if root in _FREE_MAIL_DOMAINS:
+        return SOURCE_PERSONAL
+    claimed = registrable_domain(str(company_domain or ""))
+    if claimed and claimed == root:
+        return SOURCE_COMPANY
+    if claimed:
+        return SOURCE_THIRD_PARTY
+    # No company to compare against; a corporate-looking domain is the best
+    # available evidence but is not confirmed to be the hiring company.
+    return SOURCE_THIRD_PARTY
+
+
+def evidence_strength(*, source: str, authenticity: str, bulk: bool,
+                      outcome: str = "", has_attachment_proof: bool = False) -> str:
+    """How much weight this finding can carry toward a status change.
+
+    A portal or agency relaying good news is not the company confirming it, so
+    that evidence is reported and never acted on by itself.
+    """
+    if bulk or source == SOURCE_PORTAL:
+        return STRENGTH_WEAK
+    if authenticity == AUTHENTICITY_SUSPICIOUS:
+        return STRENGTH_WEAK
+    if source == SOURCE_PERSONAL:
+        return STRENGTH_WEAK
+    if source == SOURCE_COMPANY:
+        if authenticity == AUTHENTICITY_PASS or has_attachment_proof:
+            return STRENGTH_STRONG
+        return STRENGTH_MODERATE
+    if source == SOURCE_THIRD_PARTY:
+        return STRENGTH_MODERATE if has_attachment_proof else STRENGTH_WEAK
+    return STRENGTH_WEAK
+
+
+INSUFFICIENT_EVIDENCE_MESSAGE = (
+    "Needs manual review — evidence is insufficient for a status change."
+)
+
+
+def approval_eligibility(finding: dict[str, Any], *,
+                         later_conflict: bool = False) -> dict[str, Any]:
+    """Whether one finding may be offered as an approvable status change.
+
+    Every condition must hold. Anything short of all of them returns the
+    insufficient-evidence message rather than an approve action.
+    """
+    reasons: list[str] = []
+    outcome = str(finding.get("outcome") or "")
+    if outcome not in SELECTION_PROOF_OUTCOMES | {SHORTLISTED, NEXT_ROUND, REJECTED}:
+        reasons.append("The outcome is not a company decision that maps to a status.")
+    if str(finding.get("evidence_strength") or STRENGTH_WEAK) != STRENGTH_STRONG:
+        reasons.append("Evidence is not strong enough to act on without verification.")
+    if str(finding.get("source_type") or "") != SOURCE_COMPANY:
+        reasons.append("The sender is not confirmed to be the hiring company.")
+    if str(finding.get("authenticity") or "") == AUTHENTICITY_SUSPICIOUS:
+        reasons.append("Sender authenticity is in question.")
+    if not str(finding.get("company_name") or finding.get("company_domain") or "").strip():
+        reasons.append("The outcome is not tied to an identified company.")
+    if not str(finding.get("job_title") or "").strip():
+        reasons.append("The outcome is not tied to an identified role.")
+    if later_conflict:
+        reasons.append("A later message in the same application conflicts with this outcome.")
+    if float(finding.get("confidence") or 0) < 80:
+        reasons.append("Confidence is below the threshold for an unattended change.")
+    return {
+        "eligible": not reasons,
+        "blockers": reasons,
+        "message": "" if not reasons else INSUFFICIENT_EVIDENCE_MESSAGE,
+    }
+
+
 def classify_message(
     message: dict[str, Any],
     attachments: Iterable[dict[str, Any]] | None = None,
@@ -729,7 +885,9 @@ def classify_message(
 
     hits: dict[str, list[str]] = {}
     for name, patterns in _SIGNALS:
-        found = _matches(patterns, full)
+        # Positive outcomes are read negation-aware; a rejection saying "not
+        # selected" must not also register as a selection.
+        found = _matches(patterns, full, negation_aware=name != REJECTED)
         if found:
             hits[name] = found
 
@@ -748,6 +906,64 @@ def classify_message(
     interest = _matches(_INTEREST_SIGNALS[0][1], primary)
     documents = _matches(_DOCUMENT_SIGNALS[0][1], full)
     questionnaire = _matches(_QUESTIONNAIRE_SIGNALS[0][1], primary)
+    bulk = _matches(_BULK_SIGNALS[0][1], primary)
+    details = _matches(_PROFILE_DETAILS_SIGNALS[0][1], primary)
+    generic_rejection = _matches(_GENERIC_REJECTION_SIGNALS[0][1], full)
+
+    sender_root = registrable_domain(domain_of(message.get("sender_email")))
+    from_portal = sender_root in _KNOWN_RELAY_DOMAINS
+
+    # A job portal or agency blast is a campaign, not a decision. It reaches
+    # thousands of candidates with wording that reads like personal progress
+    # ("your profile has been shortlisted for our top client"), and treating it
+    # as company evidence is how a mailbox of adverts became an offer.
+    if from_portal and (len(bulk) >= 2 or details or noise):
+        record("EMAIL_BODY", "BULK_CAMPAIGN", primary, (bulk or details or noise)[0])
+        return _result(
+            NOT_RELEVANT, 65, evidence,
+            f"Bulk campaign relayed by the job portal {sender_root}; not a company decision.",
+            manual_review=False,
+            signals=["BULK_CAMPAIGN", "JOB_PORTAL"] + sorted(hits),
+        )
+    if len(bulk) >= 3:
+        record("EMAIL_BODY", "BULK_CAMPAIGN", primary, bulk[0])
+        return _result(
+            NOT_RELEVANT, 60, evidence,
+            "Mass recruitment campaign or job advertisement; not addressed to this application.",
+            manual_review=False, signals=["BULK_CAMPAIGN"] + sorted(hits),
+        )
+
+    # A request to supply or confirm the candidate's own details reads like
+    # progress and states no company decision, whoever sent it.
+    if details and not (hits.keys() & (SELECTION_PROOF_OUTCOMES | {JOINING_CONFIRMED})):
+        record("EMAIL_BODY", "PROFILE_DETAILS_REQUEST", primary, details[0])
+        return _result(
+            NOT_RELEVANT, 55, evidence,
+            "Request to supply or confirm profile details; not an interview round "
+            "or a hiring decision.",
+            manual_review=False,
+            signals=["PROFILE_DETAILS_REQUEST"] + sorted(hits),
+        )
+
+    # Boilerplate that describes a policy for everyone is not this candidate's
+    # rejection. Without a specific application reference it proves nothing.
+    if REJECTED in hits and generic_rejection:
+        # A rejection phrase that sits inside the boilerplate sentence is the
+        # boilerplate; one that stands on its own is a real rejection.
+        specific = [
+            item for item in hits[REJECTED]
+            if not any(item.lower() in phrase.lower() for phrase in generic_rejection)
+        ]
+        if not specific:
+            record("EMAIL_BODY", "GENERIC_REJECTION_BOILERPLATE", full, generic_rejection[0])
+            hits.pop(REJECTED)
+            if not hits:
+                return _result(
+                    NOT_RELEVANT, 55, evidence,
+                    "Generic 'if you do not hear from us' boilerplate; it does not "
+                    "reference a specific application.",
+                    manual_review=False, signals=["GENERIC_REJECTION"],
+                )
 
     # A recruiter screening form asks the candidate to declare their own
     # status. It contains "offer letter", "CTC" and a joining date while
@@ -814,8 +1030,12 @@ def classify_message(
     # An offer letter states a date of joining as one of its terms.  That is
     # part of the offer, not a separate confirmation that the candidate joined,
     # so joining only wins when the mail itself says so.
-    joining_in_mail = bool(_matches(dict(_SIGNALS)[JOINING_CONFIRMED], primary))
-    if JOINING_CONFIRMED in hits and not joining_in_mail and VERIFIED_OFFER_LETTER in hits:
+    # An offer mail always states a joining date, in the body as well as in the
+    # attachment. Joining only wins when the mail is itself about joining
+    # rather than about the offer that sets the date.
+    joining_in_subject = bool(_matches(dict(_SIGNALS)[JOINING_CONFIRMED], subject))
+    offer_present = bool(hits.keys() & {VERIFIED_OFFER_LETTER, OFFER_INDICATION})
+    if JOINING_CONFIRMED in hits and offer_present and not joining_in_subject:
         hits.pop(JOINING_CONFIRMED)
 
     if JOINING_CONFIRMED in hits:

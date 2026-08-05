@@ -577,8 +577,10 @@ def install_recruitment_mail_routes(app):
           canonical_candidate_id=canonical_candidate_id)
         bookings=(await asyncio.to_thread(audit_store.candidate_bookings,canonical_candidate_id)
           if scoped==audit_engine.MODE_INTERVIEW else [])
+        applications=await asyncio.to_thread(audit_store.application_timeline,
+          canonical_candidate_id,scoped)
         return {'status':'ok','mode':scoped,'candidate':rows[0],'findings':findings,
-          'bookings':bookings,'gaps':gaps,'approvals':approvals}
+          'applications':applications,'bookings':bookings,'gaps':gaps,'approvals':approvals}
 
     @app.get('/api/mail-outcome-audit/excluded')
     async def outcome_audit_excluded(request:Request,response:Response,
@@ -626,9 +628,14 @@ def install_recruitment_mail_routes(app):
         try:
             result=await asyncio.to_thread(audit_store.approve_outcome,finding_id,
                 decision=decision,approved_by=profile.get('username') or 'admin',
-                notes=str(body.get('notes') or '')[:2000])
+                notes=str(body.get('notes') or '')[:2000],
+                force=bool(body.get('override_insufficient_evidence')))
         except LookupError:
             raise HTTPException(404,'Audit finding not found')
+        except PermissionError as exc:
+            # Evidence does not support a status change. An administrator may
+            # still record the review; overriding requires an explicit flag.
+            raise HTTPException(422,str(exc))
         except ValueError as exc:
             raise HTTPException(400,str(exc))
         except RuntimeError as exc:

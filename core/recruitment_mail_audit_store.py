@@ -105,7 +105,8 @@ def ensure_schema() -> None:
     migrations = Path(__file__).with_name("migrations")
     with get_connection() as conn, conn.cursor() as cur:
         for name in ("019_recruitment_mail_outcome_audit.sql",
-                     "020_recruitment_mail_audit_cleanup.sql"):
+                     "020_recruitment_mail_audit_cleanup.sql",
+                     "021_recruitment_mail_audit_provenance.sql"):
             cur.execute((migrations / name).read_text(encoding="utf-8"))
 
 
@@ -296,6 +297,20 @@ def audit_message(message: dict[str, Any], mailbox: dict[str, Any]) -> dict[str,
     else:
         agreement = "AUDIT_STRONGER"
 
+    job_title = event.get("job_title") or (structured.get("job") or {}).get("title")
+    source_type = engine.classify_source(message.get("sender_email"), company_domain)
+    bulk = "BULK_CAMPAIGN" in (verdict.get("signals") or [])
+    has_document = any(
+        str(item.get("attachment_type") or "").upper() in {
+            "OFFER_LETTER", "APPOINTMENT_LETTER", "JOINING_LETTER"}
+        and item.get("text")
+        for item in attachments
+    )
+    strength = engine.evidence_strength(
+        source=source_type, authenticity=authenticity["verdict"], bulk=bulk,
+        outcome=verdict["outcome"], has_attachment_proof=has_document,
+    )
+
     return {
         "mailbox_id": mailbox["id"],
         "candidate_id": message.get("candidate_id") or mailbox.get("candidate_id"),
@@ -313,7 +328,13 @@ def audit_message(message: dict[str, Any], mailbox: dict[str, Any]) -> dict[str,
         "received_at": message.get("sent_at") or message.get("created_at"),
         "company_name": company_name,
         "company_domain": company_domain,
-        "job_title": event.get("job_title") or (structured.get("job") or {}).get("title"),
+        "job_title": job_title,
+        "source_type": source_type,
+        "evidence_strength": strength,
+        "application_key": engine.application_key({
+            "company_domain": company_domain, "company_name": company_name,
+            "sender_domain": authenticity["sender_domain"], "job_title": job_title,
+        }),
         "outcome": verdict["outcome"],
         "outcome_rank": verdict["outcome_rank"],
         "confidence": verdict["confidence"],
@@ -532,7 +553,8 @@ def _persist_findings(run_id: str, findings: list[dict[str, Any]]) -> int:
                          rationale=%s,evidence=%s::jsonb,attachment_evidence=%s::jsonb,
                          authenticity=%s,authenticity_detail=%s::jsonb,manual_review_required=%s,
                          pipeline_outcome=%s,pipeline_event_id=%s,pipeline_agreement=%s,
-                         content_signature=%s,last_seen_at=now(),updated_at=now()
+                         content_signature=%s,source_type=%s,evidence_strength=%s,
+                         application_key=%s,last_seen_at=now(),updated_at=now()
                        WHERE id=%s""",
                     (run_id, finding["mailbox_message_id"], finding["provider_thread_id"],
                      finding["rfc_message_id"], finding["calendar_uid"],
@@ -544,7 +566,9 @@ def _persist_findings(run_id: str, findings: list[dict[str, Any]]) -> int:
                      _json(finding["attachment_evidence"]), finding["authenticity"],
                      _json(finding["authenticity_detail"]), finding["manual_review_required"],
                      finding["pipeline_outcome"], finding["pipeline_event_id"],
-                     finding["pipeline_agreement"], finding["content_signature"], finding_id),
+                     finding["pipeline_agreement"], finding["content_signature"],
+                     finding["source_type"], finding["evidence_strength"],
+                     finding["application_key"], finding_id),
                 )
                 if str(previous_outcome) != finding["outcome"]:
                     cur.execute(
@@ -567,9 +591,10 @@ def _persist_findings(run_id: str, findings: list[dict[str, Any]]) -> int:
                           sender_domain,received_at,company_name,company_domain,job_title,
                           outcome,outcome_rank,confidence,rationale,evidence,attachment_evidence,
                           authenticity,authenticity_detail,manual_review_required,pipeline_outcome,
-                          pipeline_event_id,pipeline_agreement,content_signature)
+                          pipeline_event_id,pipeline_agreement,content_signature,
+                          source_type,evidence_strength,application_key)
                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                               %s::jsonb,%s::jsonb,%s,%s::jsonb,%s,%s,%s,%s,%s)""",
+                               %s::jsonb,%s::jsonb,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     (finding_id, run_id, finding["mailbox_id"], finding["candidate_id"],
                      finding["canonical_candidate_id"], finding["mailbox_message_id"],
                      finding["provider_message_id"], finding["provider_thread_id"],
@@ -582,7 +607,9 @@ def _persist_findings(run_id: str, findings: list[dict[str, Any]]) -> int:
                      _json(finding["attachment_evidence"]), finding["authenticity"],
                      _json(finding["authenticity_detail"]), finding["manual_review_required"],
                      finding["pipeline_outcome"], finding["pipeline_event_id"],
-                     finding["pipeline_agreement"], finding["content_signature"]),
+                     finding["pipeline_agreement"], finding["content_signature"],
+                     finding["source_type"], finding["evidence_strength"],
+                     finding["application_key"]),
                 )
                 cur.execute(
                     """INSERT INTO mail_outcome_audit_finding_history
@@ -1595,7 +1622,7 @@ def list_gaps(*, gap_type: str | None = None, candidate_id: str | None = None,
 # ── Administrator approval ───────────────────────────────────────────────────
 
 def approve_outcome(finding_id: str, *, decision: str, approved_by: str,
-                    notes: str = "") -> dict[str, Any]:
+                    notes: str = "", force: bool = False) -> dict[str, Any]:
     """Apply an audited outcome to candidate status, on explicit approval only.
 
     This is the single place where the audit is allowed to change a candidate
@@ -1621,6 +1648,14 @@ def approve_outcome(finding_id: str, *, decision: str, approved_by: str,
     applied = False
     applied_status = None
     error = None
+
+    # The gate is enforced here, not only in the UI: a weak or portal-sourced
+    # finding must not become a candidate status through a direct API call.
+    eligibility = engine.approval_eligibility(finding)
+    if decision == "APPROVED" and not eligibility["eligible"] and not force:
+        raise PermissionError(
+            eligibility["message"] + " " + " ".join(eligibility["blockers"])
+        )
 
     if decision == "APPROVED":
         if not target_status:
@@ -1700,6 +1735,80 @@ def list_approvals(*, canonical_candidate_id: str | None = None, limit: int = 10
             params,
         )
         return _rows(cur)
+
+
+def application_timeline(canonical_candidate_id: str,
+                         mode: str = engine.MODE_SELECTION) -> list[dict[str, Any]]:
+    """One lifecycle per company and role, never merged across companies.
+
+    A later rejection from company B says nothing about an offer from company
+    A, so each application carries its own latest verified state and its own
+    recommendation.
+    """
+    mode = engine.normalize_mode(mode)
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT id,outcome,confidence,received_at,subject,sender_email,sender_domain,
+                      company_name,company_domain,job_title,authenticity,evidence_strength,
+                      source_type,application_key,manual_review_required,rationale,
+                      suppressed,suppression_reason,provider_thread_id
+               FROM mail_outcome_audit_findings
+               WHERE canonical_candidate_id=%s AND outcome = ANY(%s)
+                 AND COALESCE(suppressed,false)=false
+               ORDER BY received_at NULLS LAST""",
+            (canonical_candidate_id, sorted(engine.outcomes_for_mode(mode))),
+        )
+        rows = _rows(cur)
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        key = row.get("application_key") or engine.application_key(row)
+        grouped.setdefault(str(key), []).append(row)
+
+    applications: list[dict[str, Any]] = []
+    for key, entries in grouped.items():
+        entries.sort(key=lambda item: str(item.get("received_at") or ""))
+        latest = entries[-1]
+        best = engine.strongest(entries) or latest
+        # Only messages in this application can conflict with each other.
+        rank = engine.OUTCOME_RANK.get(str(best.get("outcome")), 0)
+        later_conflict = any(
+            str(item.get("received_at") or "") > str(best.get("received_at") or "")
+            and engine.OUTCOME_RANK.get(str(item.get("outcome")), 0) != rank
+            and (str(item.get("outcome")) == engine.REJECTED)
+            != (str(best.get("outcome")) == engine.REJECTED)
+            for item in entries
+        )
+        eligibility = engine.approval_eligibility(best, later_conflict=later_conflict)
+
+        applications.append({
+            "application_key": key,
+            "company": (best.get("company_name") or best.get("company_domain")
+                        or best.get("sender_domain") or "Unidentified company"),
+            "company_domain": best.get("company_domain"),
+            "role": best.get("job_title") or "Role not stated",
+            "messages": entries,
+            "first_seen": entries[0].get("received_at"),
+            "latest_message_at": latest.get("received_at"),
+            "latest_verified_state": best.get("outcome"),
+            "confidence": best.get("confidence"),
+            "authenticity": best.get("authenticity"),
+            "evidence_strength": best.get("evidence_strength") or engine.STRENGTH_WEAK,
+            "source_type": best.get("source_type"),
+            "strongest_finding_id": best.get("id"),
+            "later_conflict": later_conflict,
+            "approval": eligibility,
+            "recommended_action": (
+                f"Approve the status update for {best.get('company_name') or key}."
+                if eligibility["eligible"] else eligibility["message"]
+            ),
+        })
+
+    applications.sort(key=lambda item: (
+        -engine.OUTCOME_RANK.get(str(item["latest_verified_state"]), 0),
+        str(item["company"]),
+    ))
+    return applications
 
 
 def candidate_bookings(canonical_candidate_id: str) -> list[dict[str, Any]]:

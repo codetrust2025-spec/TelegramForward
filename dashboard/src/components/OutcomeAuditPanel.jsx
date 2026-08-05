@@ -94,14 +94,9 @@ const CLEANUP_REASONS = {
   WRONG_AUDIT_MODE: "Moved to Interview Slot Audit",
 };
 
-// Outcomes an administrator may approve as a candidate status change. Only the
-// selection audit makes claims about hiring status, so only its outcomes are
-// approvable. The server enforces this too.
-const APPROVABLE = new Set(
-  SELECTION_OUTCOMES.map(([value]) => value).filter(
-    (value) => value !== "NOT_RELEVANT" && value !== "MANUAL_REVIEW_REQUIRED",
-  ),
-);
+// Approval is offered per application, never per loose message: it requires a
+// named company and role, an authentic company sender, strong evidence and no
+// later conflicting message. The server enforces the same gate.
 
 const AUTHENTICITY = ["PASS", "PARTIAL", "UNVERIFIED", "SUSPICIOUS"];
 
@@ -747,6 +742,78 @@ export function OutcomeAuditPanel() {
                   </>
                 )}
 
+                {isSelection && (detail.applications || []).length > 0 && (
+                  <>
+                    <h3>By company and role</h3>
+                    <p className="outcome-audit__sub">
+                      Each application is its own lifecycle. A result from one company never
+                      affects another.
+                    </p>
+                    <ol className="outcome-audit__applications">
+                      {detail.applications.map((app) => (
+                        <li key={app.application_key}>
+                          <div className="outcome-audit__app-head">
+                            <strong>{app.company}</strong>
+                            <span className="outcome-audit__sub">{app.role}</span>
+                          </div>
+                          <div className="outcome-audit__app-state">
+                            <span className={`outcome-audit__outcome outcome-audit__outcome--${String(app.latest_verified_state).toLowerCase()}`}>
+                              {human(app.latest_verified_state)}
+                            </span>
+                            <span className={`outcome-audit__strength outcome-audit__strength--${String(app.evidence_strength).toLowerCase()}`}>
+                              {human(app.evidence_strength)} evidence
+                            </span>
+                            <span>{Math.round(app.confidence || 0)}%</span>
+                            <span>{human(app.authenticity)}</span>
+                            <span>{human(app.source_type)}</span>
+                            <span>{day(app.latest_message_at)}</span>
+                          </div>
+                          <ul className="outcome-audit__app-mails">
+                            {(app.messages || []).map((mail) => (
+                              <li key={mail.id}>
+                                {day(mail.received_at)} · {human(mail.outcome)} ·{" "}
+                                {mail.subject || "(no subject)"}
+                                <span className="outcome-audit__sub">{mail.sender_email}</span>
+                              </li>
+                            ))}
+                          </ul>
+                          {app.approval?.eligible ? (
+                            <div className="outcome-audit__approve">
+                              <button
+                                type="button"
+                                className="cand-btn cand-btn--primary cand-btn--sm"
+                                onClick={() =>
+                                  approve({ id: app.strongest_finding_id,
+                                            outcome: app.latest_verified_state }, "APPROVED")
+                                }
+                              >
+                                Approve status update
+                              </button>
+                              <button
+                                type="button"
+                                className="cand-btn cand-btn--ghost cand-btn--sm"
+                                onClick={() =>
+                                  approve({ id: app.strongest_finding_id,
+                                            outcome: app.latest_verified_state }, "REJECTED")
+                                }
+                              >
+                                Reviewed, do not apply
+                              </button>
+                            </div>
+                          ) : (
+                            <p className="outcome-audit__blocked">
+                              {app.approval?.message}
+                              <span className="outcome-audit__sub">
+                                {(app.approval?.blockers || []).join(" ")}
+                              </span>
+                            </p>
+                          )}
+                        </li>
+                      ))}
+                    </ol>
+                  </>
+                )}
+
                 <h3>{isSelection ? "Selection evidence" : "Interview mail"}, oldest first</h3>
                 {(detail.findings || []).filter((f) => f.outcome !== "NOT_RELEVANT").length === 0 ? (
                   <p className="outcome-audit__empty">
@@ -799,24 +866,10 @@ export function OutcomeAuditPanel() {
                             Pipeline: {finding.pipeline_outcome ? human(finding.pipeline_outcome) : "no event"} (
                             {human(finding.pipeline_agreement)})
                           </p>
-                          {APPROVABLE.has(finding.outcome) && (
-                            <div className="outcome-audit__approve">
-                              <button
-                                type="button"
-                                className="cand-btn cand-btn--primary cand-btn--sm"
-                                onClick={() => approve(finding, "APPROVED")}
-                              >
-                                Approve status update
-                              </button>
-                              <button
-                                type="button"
-                                className="cand-btn cand-btn--ghost cand-btn--sm"
-                                onClick={() => approve(finding, "REJECTED")}
-                              >
-                                Reviewed, do not apply
-                              </button>
-                            </div>
-                          )}
+                          <p className="outcome-audit__sub">
+                            Source: {human(finding.source_type)} ·{" "}
+                            {human(finding.evidence_strength)} evidence
+                          </p>
                         </li>
                       ))}
                   </ol>
