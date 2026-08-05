@@ -152,6 +152,11 @@ const OLLAMA_REVIEWS = {
     suggested_outcome: "JOINING_CONFIRMED",
     confidence: 95,
     agrees: false,
+    derived_agreement: "DISAGREES",
+    normalized_confidence: 95,
+    restricted_outcome: "JOINING_CONFIRMED",
+    restrictions: null,
+    approval_state: "Needs manual review — deterministic evidence and the AI disagree.",
     verified: true,
     verification_problems: null,
     quoted_evidence: "Thanks for accepting the offer letter.",
@@ -504,10 +509,22 @@ describe("Ollama second opinion is shown beside the other two", () => {
   });
 
   it("derives agreement from the outcomes, not the model's own claim", async () => {
-    // The fixture has agrees:false but a different outcome from the rules,
-    // so the UI must call it a disagreement on the outcomes alone.
+    // The fixture carries agrees:false; the UI must render the server-derived
+    // agreement instead, and never the model's self-assessment.
     await openDrawer();
     expect(screen.getByText("Disagrees")).toBeTruthy();
+  });
+
+  it("shows the normalised confidence, not the raw model value", async () => {
+    await openDrawer();
+    expect(screen.getByText("95%")).toBeTruthy();
+  });
+
+  it("blocks approval when the deterministic reading and the AI disagree", async () => {
+    await openDrawer();
+    expect(
+      screen.getByText(/Needs manual review . deterministic evidence and the AI disagree/i),
+    ).toBeTruthy();
   });
 
   it("shows the quoted evidence and the reasoning", async () => {

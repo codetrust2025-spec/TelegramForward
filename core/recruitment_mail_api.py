@@ -651,6 +651,23 @@ def install_recruitment_mail_routes(app):
           requested_by=profile.get('username') or 'admin')
         return {'status':'ok','queued':queued,'requested':len(ids)}
 
+    @app.post('/api/mail-audit-ai/run')
+    async def audit_ai_run(request:Request,body:dict|None=None):
+        """Manual 'Run AI Audit'. Works while automatic processing is paused."""
+        _guard();require_fleet_admin(request);audit_ai=_audit_ai_guard();body=body or {}
+        limit=max(1,min(10,int(body.get('limit') or 5)))
+        result=await asyncio.to_thread(audit_ai.process_pending,limit,manual=True)
+        return {'status':'ok','run':result,'queue':await asyncio.to_thread(audit_ai.queue_status)}
+
+    @app.post('/api/mail-audit-ai/findings/{finding_id}/rerun')
+    async def audit_ai_rerun(finding_id:str,request:Request):
+        """Manual 'Re-run AI Audit' for one finding."""
+        _guard();profile=require_fleet_admin(request);audit_ai=_audit_ai_guard()
+        await asyncio.to_thread(audit_ai.reset_for_rerun,finding_id,
+          requested_by=profile.get('username') or 'admin')
+        result=await asyncio.to_thread(audit_ai.process_pending,1,manual=True)
+        return {'status':'ok','run':result}
+
     @app.get('/api/mail-audit-ai/disagreements')
     async def audit_ai_disagreements(request:Request,response:Response,limit:int=100):
         _guard();require_fleet_admin(request);audit_ai=_audit_ai_guard()

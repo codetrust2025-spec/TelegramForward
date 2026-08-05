@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -40,9 +41,72 @@ QUEUE_FAILED = "FAILED"
 QUEUE_DEFERRED = "DEFERRED"
 
 
+AUTO_PROCESSING_FLAG = "AI_MAIL_AUDIT_AUTO_PROCESSING_ENABLED"
+
+
 def enabled() -> bool:
     """The audit's own switch. Never falls back to the booking flag."""
     return os.getenv(FEATURE_FLAG, "false").strip().lower() == "true"
+
+
+def auto_processing_enabled() -> bool:
+    """Whether the worker may drain the audit queue on its own.
+
+    Separate from FEATURE_FLAG so the audit can stay available for manual runs
+    while unattended processing is paused. Neither flag has anything to do with
+    interview auto-booking.
+    """
+    return os.getenv(AUTO_PROCESSING_FLAG, "false").strip().lower() == "true"
+
+
+# ── Confidence ───────────────────────────────────────────────────────────────
+
+def normalize_confidence(value: Any) -> float | None:
+    """Return a 0-100 confidence, or None when the model gave nothing usable.
+
+    The first production batch returned 1.0, 0.95, 95.0 and 100.0 for the same
+    field. A bare 1.0 is ambiguous — it is read as 100% because the schema asks
+    for 0-100 and no model has ever meant "1% confident" by it.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    if number < 0:
+        return None
+    if number <= 1.0:
+        return round(number * 100.0, 2)
+    if number <= 100.0:
+        return round(number, 2)
+    return None
+
+
+# ── Agreement ────────────────────────────────────────────────────────────────
+
+def derive_agreement(deterministic: Any, pipeline: Any, ollama: Any) -> str:
+    """Compare outcomes. The model's own `agrees` field is never consulted.
+
+    In the first batch one review reported agrees=false while giving the same
+    outcome, and another reported agrees=true while giving a different one.
+    """
+    rules = str(deterministic or "").strip().upper()
+    live = str(pipeline or "").strip().upper()
+    model = str(ollama or "").strip().upper()
+    if not model:
+        return "NO_AI_RESULT"
+    if model == rules:
+        return "AGREES_WITH_RULES"
+    if live and model == live:
+        return "AGREES_WITH_PIPELINE"
+    return "DISAGREES"
+
+
+def agreement_requires_review(agreement: str) -> bool:
+    """Any disagreement between the deterministic reading and the model is a
+    prompt for a human, never an automatic correction."""
+    return str(agreement or "").upper() not in {"AGREES_WITH_RULES"}
 
 
 def _id() -> str:
@@ -336,7 +400,7 @@ def _finding_for_job(finding_id: str) -> dict[str, Any] | None:
         thread = _rows(cur)
         cur.execute(
             """SELECT a.filename,a.mime_type,a.attachment_type,a.extraction_status,
-                      c.extracted_text
+                      a.checksum,c.extracted_text
                FROM mailbox_attachments a
                LEFT JOIN mailbox_attachment_cache c ON c.checksum=a.checksum
                WHERE a.mailbox_message_id=%s""",
@@ -365,10 +429,28 @@ def _finding_for_job(finding_id: str) -> dict[str, Any] | None:
             "filename": row.get("filename"), "mime_type": row.get("mime_type"),
             "attachment_type": row.get("attachment_type"),
             "extraction_status": row.get("extraction_status"),
+            "checksum": row.get("checksum"),
             "extracted_text": (row.get("extracted_text") or "")[:3000],
         }
         for row in attachments
     ]
+    # Addresses that cannot count as independent company confirmation: the
+    # candidate's own mailbox, and the operator account that runs the tool.
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT email_address FROM candidate_mailboxes WHERE id=%s",
+                    (finding.get("mailbox_id"),))
+        row = cur.fetchone()
+    finding["mailbox_email"] = row[0] if row else None
+    finding["owned_addresses"] = [
+        value for value in (
+            finding["mailbox_email"],
+            os.getenv("TELEAUTOMATION_OPERATOR_EMAIL"),
+            "codetrust2025@gmail.com",
+        ) if value
+    ]
+    body_all = " ".join(str(item.get("body") or "") for item in finding["thread"])
+    finding["forwarded"] = bool(engine._FORWARD_MARKER.search(body_all)) or bool(
+        engine._FORWARD_MARKER.search(str(finding.get("subject") or "")))
     return finding
 
 
@@ -440,52 +522,240 @@ def _normalise(value: str) -> str:
     return " ".join(str(value or "").split()).lower()
 
 
+# A Gmail message id is a hex string. "Ref:839093/1949677/ELTP 01-SEP-2021"
+# is a payroll reference number the model lifted out of a PDF and presented as
+# a message id; shape-checking rejects that class of fabrication outright.
+_GMAIL_ID = re.compile(r"^[0-9a-f]{8,24}$")
+
+
 def verify_review(finding: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     """Check the model's citations against the material it was actually given.
 
-    A second opinion is only useful if it can be checked. Every claim the
-    model makes must point at a real message, a real quotation and a real
+    A second opinion is only useful if it can be checked. Every claim must
+    point at a real message, a real quotation inside that message, and a real
     attachment; anything else is recorded as a fabrication and the review is
-    marked untrusted rather than silently believed.
+    marked UNVERIFIED rather than silently believed.
     """
     problems: list[str] = []
     thread = finding.get("thread") or []
     attachments = finding.get("attachments") or []
 
-    known_ids = {str(item.get("message_id") or "") for item in thread}
-    known_ids.add(str(finding.get("provider_message_id") or ""))
-    known_ids.discard("")
+    by_id = {str(item.get("message_id") or ""): item for item in thread}
+    by_id.pop("", None)
+    known_ids = set(by_id)
+    if finding.get("provider_message_id"):
+        known_ids.add(str(finding["provider_message_id"]))
+
     cited_id = str(payload.get("cited_message_id") or "").strip()
     if not cited_id:
         problems.append("No message id was cited.")
+    elif not _GMAIL_ID.match(cited_id.lower()):
+        problems.append(
+            f"Cited message id '{cited_id[:60]}' is not a Gmail message id; it looks "
+            "like a document reference lifted from the content."
+        )
     elif cited_id not in known_ids:
-        problems.append(f"Cited message id {cited_id} was not in the input.")
+        problems.append(f"Cited message id {cited_id} was not in the supplied timeline.")
 
-    corpus = _normalise(" ".join(
-        [str(item.get("body") or "") for item in thread]
-        + [str(item.get("extracted_text") or "") for item in attachments]
-        + [str(finding.get("subject") or "")]
-    ))
+    known_files = {_normalise(item.get("filename")): item for item in attachments}
+    known_files.pop("", None)
+    known_checksums = {str(item.get("checksum") or "") for item in attachments}
+    known_checksums.discard("")
+
+    cited_file = _normalise(payload.get("cited_attachment"))
+    cited_attachment = None
+    if cited_file:
+        if not attachments:
+            problems.append("An attachment was cited but the message has none.")
+        elif cited_file not in known_files:
+            problems.append(
+                f"Cited attachment '{payload.get('cited_attachment')}' does not exist.")
+        else:
+            cited_attachment = known_files[cited_file]
+
+    cited_hash = str(payload.get("cited_attachment_checksum") or "").strip()
+    if cited_hash and cited_hash not in known_checksums:
+        problems.append("Cited attachment checksum is not among the supplied evidence.")
+
+    # The quote must appear in the material the model actually pointed at, not
+    # merely somewhere in the bundle. Citing message A while quoting message B
+    # is a citation that cannot be followed.
     quote = _normalise(payload.get("quoted_evidence"))
     if not quote:
         problems.append("No evidence was quoted.")
-    elif quote not in corpus:
-        # Allow a shortened quote, but require a substantial contiguous run.
+    else:
+        # The union of what was explicitly cited: a model may reasonably cite
+        # an attachment for context while quoting the covering email. What it
+        # may not do is cite message A and quote message B, which is what the
+        # narrow scope is here to catch.
+        parts: list[str] = []
+        labels: list[str] = []
+        if cited_attachment is not None:
+            parts.append(_normalise(cited_attachment.get("extracted_text")))
+            labels.append("the cited attachment")
+        if cited_id in by_id:
+            source = by_id[cited_id]
+            parts.append(_normalise(f"{source.get('subject') or ''} {source.get('body') or ''}"))
+            labels.append("the cited message")
+        if not parts:
+            parts.append(_normalise(" ".join(
+                [str(item.get("body") or "") for item in thread]
+                + [str(item.get("extracted_text") or "") for item in attachments]
+                + [str(finding.get("subject") or "")]
+            )))
+            labels.append("the supplied evidence")
+        scope = " ".join(parts)
+        scope_label = " or ".join(labels)
         head = quote[:60]
-        if len(head) < 12 or head not in corpus:
-            problems.append("Quoted evidence does not appear in the source text.")
-
-    known_files = {_normalise(item.get("filename")) for item in attachments}
-    known_files.discard("")
-    cited_file = _normalise(payload.get("cited_attachment"))
-    if cited_file and cited_file not in known_files:
-        problems.append(f"Cited attachment '{payload.get('cited_attachment')}' does not exist.")
-    if cited_file and not attachments:
-        problems.append("An attachment was cited but the message has none.")
+        if quote not in scope and (len(head) < 12 or head not in scope):
+            problems.append(f"Quoted evidence does not appear in {scope_label}.")
 
     return {"trusted": not problems, "problems": problems,
             "checked_message_ids": sorted(known_ids),
-            "checked_attachments": sorted(f for f in known_files if f)}
+            "checked_attachments": sorted(known_files)}
+
+
+# ── Deterministic sender authenticity ────────────────────────────────────────
+
+def sender_is_hiring_company(finding: dict[str, Any],
+                             mailbox_email: str | None = None) -> dict[str, Any]:
+    """Decide provenance from the headers, never from the model's assertion.
+
+    The model claimed sender_is_hiring_company=true for a selection mail sent
+    from the operator's own Gmail address. Whether a sender is the hiring
+    company is a fact about domains, not a judgement.
+    """
+    sender = str(finding.get("sender_email") or "").strip().lower()
+    root = engine.registrable_domain(engine.domain_of(sender))
+    company_root = engine.registrable_domain(str(finding.get("company_domain") or ""))
+    reasons: list[str] = []
+
+    if not root:
+        return {"is_company": False, "source": engine.SOURCE_UNKNOWN,
+                "reasons": ["No sender domain."]}
+
+    owned = {str(mailbox_email or "").strip().lower()}
+    owned |= {str(value or "").strip().lower()
+              for value in (finding.get("owned_addresses") or [])}
+    owned.discard("")
+    if sender in owned:
+        reasons.append("Sent from the candidate's own or a TeleAutomation-owned mailbox.")
+        return {"is_company": False, "source": engine.SOURCE_PERSONAL, "reasons": reasons}
+
+    source = engine.classify_source(sender, finding.get("company_domain"))
+    if source == engine.SOURCE_PORTAL:
+        reasons.append(f"{root} is a job portal or applicant-tracking relay.")
+        return {"is_company": False, "source": source, "reasons": reasons}
+    if source == engine.SOURCE_PERSONAL:
+        reasons.append(f"{root} is a free-mail domain and proves no company.")
+        return {"is_company": False, "source": source, "reasons": reasons}
+
+    forwarded = bool(finding.get("forwarded"))
+    if forwarded:
+        reasons.append("Forwarded mail: the original sender is not independently verified.")
+        return {"is_company": False, "source": source, "reasons": reasons}
+
+    if company_root and company_root == root:
+        return {"is_company": True, "source": engine.SOURCE_COMPANY,
+                "reasons": [f"Sender domain matches the stated company {company_root}."]}
+
+    reasons.append(
+        f"Sender {root} is a corporate domain but is not confirmed to be the hiring company."
+        if not company_root else
+        f"Sender {root} does not match the stated company {company_root}."
+    )
+    return {"is_company": False, "source": source, "reasons": reasons}
+
+
+# ── Evidence-specific restrictions ───────────────────────────────────────────
+
+_PAYSLIP_MARKERS = ("pay period", "payslip", "pay slip", "salary slip",
+                    "employee code", "net pay", "provident fund", "earnings deductions")
+_COMMUNITY_MARKERS = ("community", "forum", "newsletter", "unsubscribe",
+                      "learning community", "certification", "training and certification",
+                      "discussion", "subscribe")
+
+# Outcomes that assert a company committed to hiring. These carry the most
+# consequence and so face the most restrictions.
+_HIGH_STAKES = frozenset({
+    engine.FINAL_SELECTION, engine.VERIFIED_OFFER_LETTER, engine.JOINING_CONFIRMED,
+})
+
+
+def apply_evidence_restrictions(finding: dict[str, Any], payload: dict[str, Any],
+                                *, provenance: dict[str, Any]) -> dict[str, Any]:
+    """Downgrade a model conclusion the supplied evidence cannot support.
+
+    Each rule below corresponds to a specific way the first batch went wrong.
+    A restriction never raises an outcome; it only sends it to a human.
+    """
+    suggested = str(payload.get("suggested_outcome") or "").strip().upper()
+    applied: list[str] = []
+    if not suggested:
+        return {"outcome": engine.MANUAL_REVIEW_REQUIRED, "restrictions": ["No outcome given."]}
+
+    attachments = finding.get("attachments") or []
+    corpus = _normalise(" ".join(
+        [str(item.get("body") or "") for item in (finding.get("thread") or [])]
+        + [str(item.get("extracted_text") or "") for item in attachments]
+        + [str(finding.get("subject") or "")]
+    ))
+    attachment_text = _normalise(" ".join(
+        str(item.get("extracted_text") or "") for item in attachments))
+
+    payslip_only = (
+        any(marker in attachment_text for marker in _PAYSLIP_MARKERS)
+        and not any(marker in attachment_text
+                    for marker in ("offer of employment", "appointment letter",
+                                   "we are pleased to offer", "pleased to appoint"))
+    )
+    if suggested in _HIGH_STAKES and payslip_only:
+        applied.append(
+            "A payslip records existing employment and cannot prove selection, "
+            "an offer or joining.")
+
+    if suggested in _HIGH_STAKES and not provenance.get("is_company"):
+        applied.append(
+            "The sender is not confirmed to be the hiring company: "
+            + " ".join(provenance.get("reasons") or []))
+
+    if suggested in _HIGH_STAKES and any(
+            marker in corpus for marker in _COMMUNITY_MARKERS):
+        applied.append(
+            "The message reads as a community, forum or newsletter mail rather "
+            "than a hiring decision.")
+
+    if payload.get("is_bulk_campaign") and suggested not in {
+            engine.NOT_RELEVANT, engine.MANUAL_REVIEW_REQUIRED}:
+        applied.append("A recruiter campaign cannot establish a round or an offer.")
+
+    if suggested in _HIGH_STAKES and not str(finding.get("job_title") or "").strip():
+        applied.append("No specific role is attached to this outcome.")
+    if suggested in _HIGH_STAKES and not str(
+            finding.get("company_name") or finding.get("company_domain") or "").strip():
+        applied.append("No specific company is attached to this outcome.")
+
+    if applied:
+        return {"outcome": engine.MANUAL_REVIEW_REQUIRED, "restrictions": applied}
+    return {"outcome": suggested, "restrictions": []}
+
+
+# ── Approval presentation ────────────────────────────────────────────────────
+
+AI_NOT_APPROVABLE = "AI suggestion — not eligible for approval."
+NEEDS_MANUAL_REVIEW = "Needs manual review — deterministic evidence and the AI disagree."
+SAFE_TO_REVIEW = "Safe to review for approval."
+
+
+def approval_state(*, verified: bool, agreement: str, restrictions: list[str]) -> str:
+    """What the UI may offer. Ollama alone never unlocks an approval."""
+    if not verified:
+        return AI_NOT_APPROVABLE
+    if restrictions:
+        return AI_NOT_APPROVABLE
+    if agreement_requires_review(agreement):
+        return NEEDS_MANUAL_REVIEW
+    return SAFE_TO_REVIEW
 
 
 def review_one(job: dict[str, Any]) -> dict[str, Any]:
@@ -524,26 +794,47 @@ def review_one(job: dict[str, Any]) -> dict[str, Any]:
         return {"status": "FAILED", "error": str(exc)[:400]}
 
     verification = verify_review(finding, payload)
-    record = _store_result(key, finding, payload,
-                           model=str(getattr(answer, "model", "") or ""),
-                           verification=verification)
+    provenance = sender_is_hiring_company(finding, finding.get("mailbox_email"))
+    restriction = apply_evidence_restrictions(finding, payload, provenance=provenance)
+    agreement = derive_agreement(
+        finding.get("outcome"), finding.get("pipeline_outcome"), restriction["outcome"],
+    )
+    # Confidence is only meaningful once the citations have been checked.
+    confidence = normalize_confidence(payload.get("confidence")) if verification["trusted"] else None
+    state = approval_state(verified=verification["trusted"], agreement=agreement,
+                           restrictions=restriction["restrictions"])
+
+    record = _store_result(
+        key, finding, payload, model=str(getattr(answer, "model", "") or ""),
+        verification=verification, provenance=provenance, restriction=restriction,
+        agreement=agreement, confidence=confidence, approval=state,
+    )
     _finish(str(job["id"]), QUEUE_DONE)
-    return {"status": "COMPLETED", "result": record, "verification": verification}
+    return {"status": "COMPLETED", "result": record, "verification": verification,
+            "agreement": agreement, "approval_state": state}
 
 
 def _store_result(key: str, finding: dict[str, Any], payload: dict[str, Any],
-                  *, model: str, verification: dict[str, Any] | None = None) -> dict[str, Any]:
+                  *, model: str, verification: dict[str, Any] | None = None,
+                  provenance: dict[str, Any] | None = None,
+                  restriction: dict[str, Any] | None = None,
+                  agreement: str = "", confidence: float | None = None,
+                  approval: str = AI_NOT_APPROVABLE) -> dict[str, Any]:
     """Persist the second opinion. Advisory only: no finding is overwritten."""
     record_id = _id()
     verification = verification or {"trusted": False, "problems": ["not verified"]}
+    provenance = provenance or {"is_company": False, "reasons": []}
+    restriction = restriction or {"outcome": engine.MANUAL_REVIEW_REQUIRED, "restrictions": []}
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """INSERT INTO mail_audit_ai_results
                  (id,cache_key,finding_id,prompt_name,model,agrees,suggested_outcome,
                   confidence,reasoning,is_bulk_campaign,sender_is_hiring_company,
                   quoted_evidence,cited_message_id,cited_attachment,cited_company,
-                  verified,verification_problems,raw_response)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                  verified,verification_problems,normalized_confidence,derived_agreement,
+                  restricted_outcome,restrictions,sender_verified_company,approval_state,
+                  raw_response)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
                ON CONFLICT (cache_key) DO UPDATE SET
                  agrees=EXCLUDED.agrees,suggested_outcome=EXCLUDED.suggested_outcome,
                  confidence=EXCLUDED.confidence,reasoning=EXCLUDED.reasoning,
@@ -555,6 +846,12 @@ def _store_result(key: str, finding: dict[str, Any], payload: dict[str, Any],
                  cited_company=EXCLUDED.cited_company,
                  verified=EXCLUDED.verified,
                  verification_problems=EXCLUDED.verification_problems,
+                 normalized_confidence=EXCLUDED.normalized_confidence,
+                 derived_agreement=EXCLUDED.derived_agreement,
+                 restricted_outcome=EXCLUDED.restricted_outcome,
+                 restrictions=EXCLUDED.restrictions,
+                 sender_verified_company=EXCLUDED.sender_verified_company,
+                 approval_state=EXCLUDED.approval_state,
                  raw_response=EXCLUDED.raw_response,updated_at=now()
                RETURNING *""",
             (record_id, key, finding["id"], AUDIT_PROMPT_NAME, model,
@@ -568,14 +865,29 @@ def _store_result(key: str, finding: dict[str, Any], payload: dict[str, Any],
              str(payload.get("company") or "")[:200] or None,
              bool(verification.get("trusted")),
              "; ".join(verification.get("problems") or [])[:600] or None,
+             confidence,
+             agreement or None,
+             restriction.get("outcome"),
+             "; ".join(restriction.get("restrictions") or [])[:900] or None,
+             bool(provenance.get("is_company")),
+             approval,
              json.dumps(payload, default=str)),
         )
         rows = _rows(cur)
     return rows[0] if rows else {}
 
 
-def process_pending(limit: int | None = None) -> dict[str, Any]:
-    """One audit pass. Yields to live processing and returns without work."""
+def process_pending(limit: int | None = None, *, manual: bool = False) -> dict[str, Any]:
+    """One audit pass. Yields to live processing and returns without work.
+
+    Unattended passes additionally require AI_MAIL_AUDIT_AUTO_PROCESSING_ENABLED.
+    A manual run from the API is unaffected by that flag, so an administrator
+    can still audit on demand while automatic draining is paused.
+    """
+    if not manual and not auto_processing_enabled():
+        return {"ran": 0, "deferred": True, "manual": False,
+                "reason": f"{AUTO_PROCESSING_FLAG} is not enabled; "
+                          "pending audit jobs are left untouched."}
     gate = may_run()
     if not gate["allowed"]:
         return {"ran": 0, "deferred": True, "reason": gate["reason"]}
@@ -600,6 +912,20 @@ def process_pending(limit: int | None = None) -> dict[str, Any]:
     return {"ran": done, "failed": failed, "deferred": False, "reason": ""}
 
 
+def reset_for_rerun(finding_id: str, *, requested_by: str = "admin") -> None:
+    """Queue one finding for another look. Audit tables only; nothing deleted."""
+    ensure_schema()
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO mail_audit_ai_queue (id,finding_id,status,requested_by)
+               VALUES (%s,%s,%s,%s)
+               ON CONFLICT (finding_id) DO UPDATE SET
+                 status='PENDING',retry_after=NULL,last_error=NULL,
+                 requested_by=EXCLUDED.requested_by,updated_at=now()""",
+            (_id(), finding_id, QUEUE_PENDING, requested_by),
+        )
+
+
 def queue_status() -> dict[str, Any]:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
@@ -608,7 +934,8 @@ def queue_status() -> dict[str, Any]:
         counts = {row["status"]: int(row["total"]) for row in _rows(cur)}
         cur.execute("SELECT count(*) FROM mail_audit_ai_results")
         results = int(cur.fetchone()[0] or 0)
-    return {"enabled": enabled(), "queue": counts, "results": results,
+    return {"enabled": enabled(), "auto_processing": auto_processing_enabled(),
+            "queue": counts, "results": results,
             "concurrency": max_concurrency(), "gate": may_run()}
 
 

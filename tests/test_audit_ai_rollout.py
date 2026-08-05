@@ -95,11 +95,11 @@ def test_the_schema_requires_citations():
 
 def finding():
     return {
-        "provider_message_id": "gmail-1",
+        "provider_message_id": "19f6aeccaff1b324",
         "subject": "Your offer letter",
         "thread": [
-            {"message_id": "gmail-0", "body": "We would like to schedule a call."},
-            {"message_id": "gmail-1", "body": "We are pleased to offer you the role."},
+            {"message_id": "19f6ad5e1eb33a58", "body": "We would like to schedule a call."},
+            {"message_id": "19f6aeccaff1b324", "body": "We are pleased to offer you the role."},
         ],
         "attachments": [
             {"filename": "Offer_Letter.pdf", "extracted_text": "Annual CTC is INR 24,00,000"},
@@ -109,7 +109,7 @@ def finding():
 
 def answer(**overrides):
     base = {
-        "cited_message_id": "gmail-1",
+        "cited_message_id": "19f6aeccaff1b324",
         "quoted_evidence": "We are pleased to offer you the role.",
         "cited_attachment": "Offer_Letter.pdf",
     }
@@ -124,9 +124,9 @@ def test_a_well_cited_answer_is_trusted():
 
 
 def test_an_invented_message_id_is_caught():
-    result = audit_ai.verify_review(finding(), answer(cited_message_id="gmail-999"))
+    result = audit_ai.verify_review(finding(), answer(cited_message_id="19f6aeccaff1b999"))
     assert result["trusted"] is False
-    assert any("gmail-999" in problem for problem in result["problems"])
+    assert any("19f6aeccaff1b999" in problem for problem in result["problems"])
 
 
 def test_an_invented_quotation_is_caught():
