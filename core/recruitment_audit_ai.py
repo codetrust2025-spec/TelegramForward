@@ -77,11 +77,22 @@ def live_pipeline_busy() -> dict[str, Any]:
                WHERE status IN ('QUEUED','RUNNING')"""
         )
         sync_jobs = int(cur.fetchone()[0] or 0)
+        # Only work the live worker can actually pick up right now counts as
+        # busy. A message parked in exponential backoff until this evening is
+        # not competing for the node, and treating it as live work would
+        # deadlock the audit for as long as any message is stuck retrying.
         cur.execute(
             """SELECT count(*) FROM mailbox_messages
-               WHERE processing_status IN ('AI_RETRY_PENDING','AI_PENDING')"""
+               WHERE processing_status IN ('AI_RETRY_PENDING','AI_PENDING')
+                 AND (ai_retry_after IS NULL OR ai_retry_after <= now())"""
         )
         ai_backlog = int(cur.fetchone()[0] or 0)
+        cur.execute(
+            """SELECT count(*) FROM mailbox_messages
+               WHERE processing_status IN ('AI_RETRY_PENDING','AI_PENDING')
+                 AND ai_retry_after > now()"""
+        )
+        ai_deferred = int(cur.fetchone()[0] or 0)
         cur.execute(
             """SELECT count(*) FROM gmail_message_ingestion_queue
                WHERE status IN ('QUEUED','RUNNING')"""
@@ -91,6 +102,8 @@ def live_pipeline_busy() -> dict[str, Any]:
     return {
         "busy": busy, "sync_jobs": sync_jobs,
         "ai_backlog": ai_backlog, "ingestion": ingestion,
+        # Reported for visibility, deliberately not part of `busy`.
+        "ai_in_backoff": ai_deferred,
     }
 
 
