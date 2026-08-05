@@ -559,20 +559,23 @@ def insert_message(mailbox: dict[str,Any], message: dict[str,Any], score: float)
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""INSERT INTO mailbox_messages(id,mailbox_id,candidate_id,provider_message_id,provider_thread_id,sender_name,sender_email,
           recipient_email,subject,sent_at,message_hash,body_hash,recruitment_relevance_score,processing_status,body_text,html_body_text,
-          authentication_results,received_spf,rfc_message_id,message_direction,gmail_label_ids,to_metadata,created_at,updated_at)
-          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'FILTERED',%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,now(),now())
+          authentication_results,received_spf,rfc_message_id,message_direction,gmail_label_ids,to_metadata,
+          reply_to_email,return_path_email,created_at,updated_at)
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'FILTERED',%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,now(),now())
           ON CONFLICT(mailbox_id,provider_message_id) DO UPDATE SET
             body_text=COALESCE(mailbox_messages.body_text,EXCLUDED.body_text),
             html_body_text=COALESCE(mailbox_messages.html_body_text,EXCLUDED.html_body_text),
             authentication_results=COALESCE(EXCLUDED.authentication_results,mailbox_messages.authentication_results),
             received_spf=COALESCE(EXCLUDED.received_spf,mailbox_messages.received_spf),
+            reply_to_email=COALESCE(EXCLUDED.reply_to_email,mailbox_messages.reply_to_email),
+            return_path_email=COALESCE(EXCLUDED.return_path_email,mailbox_messages.return_path_email),
             rfc_message_id=COALESCE(EXCLUDED.rfc_message_id,mailbox_messages.rfc_message_id),
             message_direction=COALESCE(EXCLUDED.message_direction,mailbox_messages.message_direction),
             gmail_label_ids=CASE WHEN EXCLUDED.gmail_label_ids<>'[]'::jsonb THEN EXCLUDED.gmail_label_ids ELSE mailbox_messages.gmail_label_ids END,
             to_metadata=CASE WHEN EXCLUDED.to_metadata<>'[]'::jsonb THEN EXCLUDED.to_metadata ELSE mailbox_messages.to_metadata END,
             recruitment_relevance_score=GREATEST(COALESCE(mailbox_messages.recruitment_relevance_score,0),EXCLUDED.recruitment_relevance_score),updated_at=now()
           RETURNING *, (xmax = 0) AS was_created""",
-          (mid,mailbox['id'],mailbox['candidate_id'],message['provider_message_id'],message.get('provider_thread_id'),message.get('sender_name'),message.get('sender_email'),message.get('recipient_email'),message.get('subject'),message.get('sent_at'),message['message_hash'],message['body_hash'],score,message.get('body'),message.get('html_body'),message.get('authentication_results'),message.get('received_spf'),message.get('rfc_message_id'),message.get('message_direction'),json.dumps(message.get('gmail_label_ids') or []),json.dumps(message.get('to_metadata') or [])))
+          (mid,mailbox['id'],mailbox['candidate_id'],message['provider_message_id'],message.get('provider_thread_id'),message.get('sender_name'),message.get('sender_email'),message.get('recipient_email'),message.get('subject'),message.get('sent_at'),message['message_hash'],message['body_hash'],score,message.get('body'),message.get('html_body'),message.get('authentication_results'),message.get('received_spf'),message.get('rfc_message_id'),message.get('message_direction'),json.dumps(message.get('gmail_label_ids') or []),json.dumps(message.get('to_metadata') or []),message.get('reply_to_email'),message.get('return_path_email')))
         rows=_rows(cur) if cur.description else []
     if not rows:return {},False
     row=rows[0];created=bool(row.pop('was_created',False));return row,created

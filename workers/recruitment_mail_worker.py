@@ -21,11 +21,12 @@ def _publish(event_type:str,**payload):
 class RecruitmentMailWorker:
     def __init__(self):
         self._task=None;self._stopping=False;self._jobs=set()
-        self._watch_task=None;self._ai_recovery_task=None
+        self._watch_task=None;self._ai_recovery_task=None;self._audit_task=None
         # Maintenance must be eligible on the first worker loop.  A zero
         # baseline accidentally delays it on freshly booted hosts where
         # time.monotonic() is still below the 60/900-second intervals.
         self._last_watch_renewal=float('-inf');self._last_ai_recovery=float('-inf')
+        self._last_outcome_audit=float('-inf')
     def start(self):
         if self._task is None or self._task.done():
             store.recover_interrupted_jobs()
@@ -36,10 +37,10 @@ class RecruitmentMailWorker:
         for job in self._jobs:job.cancel()
         if self._jobs:await asyncio.gather(*self._jobs,return_exceptions=True)
         self._jobs.clear()
-        maintenance=[task for task in (self._watch_task,self._ai_recovery_task) if task]
+        maintenance=[task for task in (self._watch_task,self._ai_recovery_task,self._audit_task) if task]
         for task in maintenance:task.cancel()
         if maintenance:await asyncio.gather(*maintenance,return_exceptions=True)
-        self._watch_task=None;self._ai_recovery_task=None
+        self._watch_task=None;self._ai_recovery_task=None;self._audit_task=None
     async def _run_maintenance(self,label,operation):
         try:await asyncio.to_thread(operation)
         except asyncio.CancelledError:raise
@@ -72,7 +73,12 @@ class RecruitmentMailWorker:
                     if self._ai_recovery_task is None and now-self._last_ai_recovery>=60:
                         self._last_ai_recovery=now
                         self._ai_recovery_task=asyncio.create_task(self._run_maintenance('ai-recovery',self.process_ai_recovery),name='mailbox-ai-recovery')
-                    active={*self._jobs,*(task for task in (self._watch_task,self._ai_recovery_task) if task)}
+                    if self._audit_task and self._audit_task.done():self._audit_task=None
+                    interval=max(300,int(os.getenv('AI_MAIL_AUDIT_INTERVAL_SECONDS','1800')))
+                    if self._audit_task is None and now-self._last_outcome_audit>=interval:
+                        self._last_outcome_audit=now
+                        self._audit_task=asyncio.create_task(self._run_maintenance('outcome-audit',self.run_incremental_outcome_audit),name='mailbox-outcome-audit')
+                    active={*self._jobs,*(task for task in (self._watch_task,self._ai_recovery_task,self._audit_task) if task)}
                     if active:
                         await asyncio.wait(active,timeout=1,return_when=asyncio.FIRST_COMPLETED);continue
             except asyncio.CancelledError:raise
@@ -147,6 +153,21 @@ class RecruitmentMailWorker:
             except Exception:
                 store.schedule_ai_retry(row['id'],succeeded=False)
                 logger.exception('AI retry failed message_id=%s',row['id'])
+    def run_incremental_outcome_audit(self):
+        """Audit only mail that arrived since the last completed audit run.
+
+        Report-only and idempotent: findings are keyed on the Gmail message id,
+        so re-running never creates a second outcome for the same mail and never
+        changes a candidate record.  A full historical pass is an explicit
+        administrator action, not something this loop repeats.
+        """
+        if os.getenv('AI_MAIL_AUDIT_INCREMENTAL_ENABLED','true').lower()=='false':return
+        from core import recruitment_mail_audit_store as audit_store
+        result=audit_store.run_audit(requested_by='worker',incremental=True)
+        if result.get('findings_written') or result.get('gaps_written'):
+            logger.info('Outcome audit pass run_id=%s findings=%s gaps=%s',
+              result.get('run_id'),result.get('findings_written'),result.get('gaps_written'))
+
     def process_job(self,job):
         mailbox=store.mailbox_by_id(job['mailbox_id']);counts={'fetched':0,'processed':0,'events':0}
         if not mailbox:store.finish_job(job['id'],status='FAILED',error='Mailbox not found');return

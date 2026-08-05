@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from core import recruitment_mail_store as store
+from core import recruitment_mail_audit_store as audit_store
 from core.dashboard_access import operator_profile, require_fleet_admin, assert_candidate_row_access
 from core.ai_gateway import AIGatewayError, chat_structured, configured_models, health as ollama_health
 from core.ollama_status import snapshot as ollama_status_snapshot
@@ -499,6 +500,94 @@ def install_recruitment_mail_routes(app):
         _guard();require_fleet_admin(request);response.headers['Cache-Control']='no-store, max-age=0'
         events=await asyncio.to_thread(store.list_realtime_events,after_id=after_event_id,limit=limit)
         return {'status':'ok','events':events}
+
+    # ── Candidate mail outcome audit ─────────────────────────────────────
+    # Read-only over mail. Running the audit never changes a candidate record;
+    # only the explicit approve endpoint can, and only per finding.
+
+    @app.post('/api/mail-outcome-audit/run')
+    async def outcome_audit_run(request:Request,body:dict|None=None):
+        _guard();profile=require_fleet_admin(request);body=body or {}
+        actor=profile.get('username') or 'admin'
+        candidate_id=str(body.get('candidate_id') or '').strip() or None
+        incremental=bool(body.get('incremental'))
+        result=await asyncio.to_thread(audit_store.run_audit,requested_by=actor,
+            candidate_id=candidate_id,incremental=incremental)
+        return {'status':'ok','run':result}
+
+    @app.get('/api/mail-outcome-audit/summary')
+    async def outcome_audit_summary(request:Request,response:Response,candidate:str|None=None,
+            company:str|None=None,outcome:str|None=None,authenticity:str|None=None,
+            manual_review:str|None=None,mismatch:str|None=None,sync_status:str|None=None,
+            min_confidence:str|None=None):
+        _guard();require_fleet_admin(request);response.headers['Cache-Control']='no-store, max-age=0'
+        filters={'candidate':candidate,'company':company,'outcome':outcome,'authenticity':authenticity,
+          'manual_review':manual_review,'mismatch':mismatch,'sync_status':sync_status,
+          'min_confidence':min_confidence}
+        return {'status':'ok','summary':await asyncio.to_thread(audit_store.system_summary,filters)}
+
+    @app.get('/api/mail-outcome-audit/candidates')
+    async def outcome_audit_candidates(request:Request,response:Response,candidate:str|None=None,
+            company:str|None=None,outcome:str|None=None,authenticity:str|None=None,
+            manual_review:str|None=None,mismatch:str|None=None,sync_status:str|None=None,
+            min_confidence:str|None=None):
+        _guard();require_fleet_admin(request);response.headers['Cache-Control']='no-store, max-age=0'
+        filters={'candidate':candidate,'company':company,'outcome':outcome,'authenticity':authenticity,
+          'manual_review':manual_review,'mismatch':mismatch,'sync_status':sync_status,
+          'min_confidence':min_confidence}
+        rows=await asyncio.to_thread(audit_store.candidate_report,filters)
+        return {'status':'ok','candidates':rows}
+
+    @app.get('/api/mail-outcome-audit/candidates/{canonical_candidate_id}')
+    async def outcome_audit_candidate(canonical_candidate_id:str,request:Request,
+            outcome:str|None=None,date_from:str|None=None,date_to:str|None=None,
+            relevant_only:str|None=None):
+        _guard();require_fleet_admin(request)
+        rows=await asyncio.to_thread(audit_store.candidate_report,{'candidate':canonical_candidate_id})
+        if not rows:raise HTTPException(404,'No audit result for this candidate')
+        findings=await asyncio.to_thread(audit_store.candidate_findings,canonical_candidate_id,
+          {'outcome':outcome,'date_from':date_from,'date_to':date_to,'relevant_only':relevant_only})
+        gaps=await asyncio.to_thread(audit_store.list_gaps,candidate_id=canonical_candidate_id)
+        approvals=await asyncio.to_thread(audit_store.list_approvals,
+          canonical_candidate_id=canonical_candidate_id)
+        return {'status':'ok','candidate':rows[0],'findings':findings,'gaps':gaps,'approvals':approvals}
+
+    @app.get('/api/mail-outcome-audit/gaps')
+    async def outcome_audit_gaps(request:Request,response:Response,gap_type:str|None=None,
+            candidate_id:str|None=None,limit:int=200):
+        _guard();require_fleet_admin(request);response.headers['Cache-Control']='no-store, max-age=0'
+        rows=await asyncio.to_thread(audit_store.list_gaps,gap_type=gap_type,
+          candidate_id=candidate_id,limit=limit)
+        return {'status':'ok','gaps':rows}
+
+    @app.get('/api/mail-outcome-audit/findings/{finding_id}/history')
+    async def outcome_audit_finding_history(finding_id:str,request:Request):
+        _guard();require_fleet_admin(request)
+        return {'status':'ok','history':await asyncio.to_thread(audit_store.finding_history,finding_id)}
+
+    @app.post('/api/mail-outcome-audit/findings/{finding_id}/approve')
+    async def outcome_audit_approve(finding_id:str,request:Request,body:dict|None=None):
+        """Explicit administrator action; the only path from audit to status."""
+        _guard();profile=require_fleet_admin(request);body=body or {}
+        decision=str(body.get('decision') or 'APPROVED').strip().upper()
+        try:
+            result=await asyncio.to_thread(audit_store.approve_outcome,finding_id,
+                decision=decision,approved_by=profile.get('username') or 'admin',
+                notes=str(body.get('notes') or '')[:2000])
+        except LookupError:
+            raise HTTPException(404,'Audit finding not found')
+        except ValueError as exc:
+            raise HTTPException(400,str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(409,str(exc))
+        return {'status':'ok','approval':result}
+
+    @app.get('/api/mail-outcome-audit/approvals')
+    async def outcome_audit_approvals(request:Request,candidate_id:str|None=None,limit:int=100):
+        _guard();require_fleet_admin(request)
+        rows=await asyncio.to_thread(audit_store.list_approvals,
+          canonical_candidate_id=candidate_id,limit=limit)
+        return {'status':'ok','approvals':rows}
 
     @app.get('/api/mail-monitoring/booking-audit')
     async def booking_audit(request:Request,candidate_id:str|None=None,booking_id:str|None=None,limit:int=100):

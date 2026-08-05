@@ -1,0 +1,907 @@
+"""Evidence engine for the candidate mail outcome audit.
+
+This module answers one question for a single email: *what did the company
+actually tell this candidate?*  It is deliberately independent of the live
+detection pipeline — it re-reads the stored subject, body, thread context and
+extracted attachment text and reaches its own conclusion, so that comparing the
+two surfaces what the pipeline missed or got wrong.
+
+Every function here is pure and side-effect free.  Nothing in this module
+touches Gmail, the database, or candidate records.
+
+Design rules that the classifier enforces, because each one is a way a naive
+keyword matcher reports a promotion that never happened:
+
+* interview scheduling is not final selection
+* a next-round email is not an offer
+* a document request alone is not final selection
+* background verification alone is not joining confirmation
+* recruiter interest is not proof of selection
+* an offer letter is only "verified" when real offer details are present
+* conflicting or incomplete evidence stays MANUAL_REVIEW_REQUIRED
+"""
+
+from __future__ import annotations
+
+import html
+import re
+from datetime import datetime
+from typing import Any, Iterable
+
+
+# ── Outcome taxonomy ─────────────────────────────────────────────────────────
+
+INTERVIEW_INVITE = "INTERVIEW_INVITE"
+INTERVIEW_RESCHEDULED = "INTERVIEW_RESCHEDULED"
+INTERVIEW_CANCELLED = "INTERVIEW_CANCELLED"
+NEXT_ROUND = "NEXT_ROUND"
+SHORTLISTED = "SHORTLISTED"
+FINAL_SELECTION = "FINAL_SELECTION"
+OFFER_INDICATION = "OFFER_INDICATION"
+VERIFIED_OFFER_LETTER = "VERIFIED_OFFER_LETTER"
+JOINING_CONFIRMED = "JOINING_CONFIRMED"
+BACKGROUND_VERIFICATION = "BACKGROUND_VERIFICATION"
+REJECTED = "REJECTED"
+MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED"
+NOT_RELEVANT = "NOT_RELEVANT"
+
+OUTCOMES = (
+    INTERVIEW_INVITE, INTERVIEW_RESCHEDULED, INTERVIEW_CANCELLED, NEXT_ROUND,
+    SHORTLISTED, FINAL_SELECTION, OFFER_INDICATION, VERIFIED_OFFER_LETTER,
+    JOINING_CONFIRMED, BACKGROUND_VERIFICATION, REJECTED,
+    MANUAL_REVIEW_REQUIRED, NOT_RELEVANT,
+)
+
+# How far through the hiring process an outcome places the candidate.  Used to
+# pick the strongest verified outcome per candidate.  REJECTED sits above the
+# interview stages because it is a real company decision, but below selection —
+# a candidate holding both is a conflict, reported explicitly rather than ranked
+# away.
+OUTCOME_RANK = {
+    NOT_RELEVANT: 0,
+    MANUAL_REVIEW_REQUIRED: 5,
+    INTERVIEW_CANCELLED: 10,
+    INTERVIEW_RESCHEDULED: 15,
+    INTERVIEW_INVITE: 20,
+    NEXT_ROUND: 30,
+    SHORTLISTED: 35,
+    REJECTED: 40,
+    BACKGROUND_VERIFICATION: 50,
+    FINAL_SELECTION: 60,
+    OFFER_INDICATION: 70,
+    VERIFIED_OFFER_LETTER: 80,
+    JOINING_CONFIRMED: 90,
+}
+
+# Outcomes that mean the company committed to hiring this candidate.  Paired
+# with REJECTED on the same candidate this is a conflict worth a human.
+POSITIVE_DECISION_OUTCOMES = frozenset({
+    FINAL_SELECTION, OFFER_INDICATION, VERIFIED_OFFER_LETTER,
+    JOINING_CONFIRMED, BACKGROUND_VERIFICATION,
+})
+
+MEANINGFUL_OUTCOMES = frozenset(set(OUTCOMES) - {NOT_RELEVANT, MANUAL_REVIEW_REQUIRED})
+
+AUTHENTICITY_PASS = "PASS"
+AUTHENTICITY_PARTIAL = "PARTIAL"
+AUTHENTICITY_UNVERIFIED = "UNVERIFIED"
+AUTHENTICITY_SUSPICIOUS = "SUSPICIOUS"
+
+
+# ── Text preparation ─────────────────────────────────────────────────────────
+
+_TAG = re.compile(r"<[^>]+>")
+_WS = re.compile(r"\s+")
+# Quoted replies and signature blocks repeat earlier outcomes verbatim.  Reading
+# them as fresh evidence is how one interview invite becomes five.
+_QUOTED = re.compile(
+    r"(?im)^\s*(?:on .{0,120}wrote:|-{2,}\s*original message\s*-{2,}"
+    r"|from:\s|sent from my |unsubscribe|confidentiality notice)"
+)
+_FORWARD_MARKER = re.compile(
+    r"(?i)(-{3,}\s*forwarded message\s*-{3,}|^\s*fwd:|^\s*fw:|begin forwarded message)"
+)
+
+
+def normalize(value: Any) -> str:
+    """Flatten HTML or plain text into lowercase single-spaced text."""
+    text = html.unescape(_TAG.sub(" ", str(value or "")))
+    return _WS.sub(" ", text).strip().lower()
+
+
+def visible_text(value: Any) -> str:
+    """Normalized text with quoted replies and signatures removed."""
+    text = html.unescape(_TAG.sub(" ", str(value or "")))
+    text = _QUOTED.split(text, maxsplit=1)[0]
+    return _WS.sub(" ", text).strip().lower()
+
+
+def _phrase(pattern: str) -> re.Pattern:
+    """Compile a phrase so it matches on word boundaries, spacing-insensitive."""
+    parts = [re.escape(word) for word in pattern.split()]
+    return re.compile(r"\b" + r"\W+".join(parts) + r"\b", re.IGNORECASE)
+
+
+def _compile(groups: Iterable[tuple[str, tuple[str, ...]]]) -> list[tuple[str, list[re.Pattern]]]:
+    return [(name, [_phrase(item) for item in phrases]) for name, phrases in groups]
+
+
+# ── Signal vocabulary ────────────────────────────────────────────────────────
+#
+# Phrases are the entry point, never the verdict.  Each candidate outcome is
+# confirmed or downgraded afterwards by structural checks over the full text.
+
+_JOINING_PHRASES = (
+    "your date of joining", "your joining date is", "date of joining is",
+    "joining is confirmed", "joining has been confirmed", "confirmed your joining",
+    "please report for joining", "report for joining on", "reporting date is",
+    "welcome aboard", "welcome to the team", "welcome to the organization",
+    "first day at", "your start date is", "date of commencement",
+)
+_OFFER_LETTER_PHRASES = (
+    "offer letter", "letter of appointment", "appointment letter",
+    "offer letter attached", "please find your offer letter", "attached offer",
+    "your offer letter is attached", "offer of employment",
+    "employment offer letter", "release your offer letter",
+)
+_OFFER_INDICATION_PHRASES = (
+    "pleased to offer you", "delighted to offer you", "happy to offer you",
+    "would like to offer you", "intent to offer", "letter of intent",
+    "planning to release your offer", "offer is being processed",
+    "offer is under preparation", "preparing your offer", "offer has been approved",
+    "we are extending an offer", "rolling out your offer", "offer roll out",
+)
+_SELECTION_PHRASES = (
+    "you have been selected", "you are selected", "selected for the position",
+    "selected for the role", "congratulations on your selection",
+    "final selection", "selection has been confirmed", "finally selected",
+    "we are pleased to inform you that you have been selected",
+    "your candidature has been selected", "cleared all the rounds",
+    "successfully cleared all rounds",
+)
+_SHORTLIST_PHRASES = (
+    "you have been shortlisted", "your profile has been shortlisted",
+    "shortlisted for the role", "shortlisted for the position",
+    "profile is shortlisted", "we have shortlisted your",
+)
+_NEXT_ROUND_PHRASES = (
+    "next round", "next stage", "subsequent round", "following round",
+    "moving you to the next", "moving forward to the next",
+    "progress to the next", "advanced to the next", "cleared the first round",
+    "cleared the technical round", "cleared the round", "you have cleared",
+    "qualified for the next", "shortlisted for the next interview",
+    "second round", "third round", "final round", "next level of interview",
+)
+_INTERVIEW_PHRASES = (
+    "interview invitation", "invitation for interview", "interview scheduled",
+    "interview has been scheduled", "schedule your interview",
+    "interview is confirmed", "interview confirmation", "your interview with",
+    "technical interview", "technical round", "managerial round", "hr round",
+    "hr interview", "screening call", "discussion has been scheduled",
+    "we would like to invite you", "invite you for an interview",
+    "please join the interview", "interview details",
+)
+_RESCHEDULE_PHRASES = (
+    "interview has been rescheduled", "rescheduled your interview",
+    "reschedule the interview", "rescheduling the interview",
+    "new interview time", "revised interview", "interview moved to",
+    "changed the interview", "interview timing has changed", "rescheduled to",
+)
+_CANCEL_PHRASES = (
+    "interview has been cancelled", "interview is cancelled",
+    "cancelling the interview", "cancel the interview",
+    "interview stands cancelled", "calling off the interview",
+    "interview has been called off", "we are cancelling",
+)
+_BGV_PHRASES = (
+    "background verification", "background check", "pre employment verification",
+    "pre-employment verification", "employment verification",
+    "bgv process", "bgv form", "verification partner", "antecedent verification",
+)
+_DOCUMENT_PHRASES = (
+    "document verification", "submit your documents", "submit the documents",
+    "share your documents", "upload your documents", "document submission",
+    "required documents", "documents for verification", "educational certificates",
+)
+_REJECTION_PHRASES = (
+    "regret to inform", "not been selected", "not selected for",
+    "not moving forward", "not shortlisted", "unable to move forward",
+    "application was unsuccessful", "application has been unsuccessful",
+    "decided not to proceed", "will not be proceeding", "position has been closed",
+    "position is closed", "role has been filled", "we have decided to move ahead with other",
+    "not a fit at this time", "your profile has not been shortlisted",
+    "candidature has been rejected", "we are not proceeding",
+)
+
+# Recruiter interest and pipeline noise.  Present in mail that looks positive
+# but carries no company decision.
+_INTEREST_PHRASES = (
+    "we came across your profile", "your profile matches", "are you interested",
+    "would you be interested", "let us know your interest", "share your updated resume",
+    "share your cv", "confirm your interest", "opportunity with us",
+    "we have an opening", "we are hiring", "job opportunity",
+)
+_NOISE_PHRASES = (
+    "job recommendation", "recommended jobs", "jobs matching your profile",
+    "new jobs for you", "jobs for you", "similar jobs", "job alert",
+    "hiring alert", "featured jobs", "new openings", "daily job alert",
+    "weekly job alert", "increase profile visibility", "upgrade your account",
+    "premium subscription", "career newsletter", "profile viewed",
+    "resume viewed", "searched your profile", "thank you for applying",
+    "application received", "application submitted", "we have received your application",
+    "your application is under review", "assessment invitation",
+    "complete the assessment", "coding test", "verify your email",
+    "password reset", "one time password", "otp",
+)
+
+_SIGNALS = _compile((
+    (JOINING_CONFIRMED, _JOINING_PHRASES),
+    (VERIFIED_OFFER_LETTER, _OFFER_LETTER_PHRASES),
+    (OFFER_INDICATION, _OFFER_INDICATION_PHRASES),
+    (FINAL_SELECTION, _SELECTION_PHRASES),
+    (BACKGROUND_VERIFICATION, _BGV_PHRASES),
+    (INTERVIEW_CANCELLED, _CANCEL_PHRASES),
+    (INTERVIEW_RESCHEDULED, _RESCHEDULE_PHRASES),
+    (NEXT_ROUND, _NEXT_ROUND_PHRASES),
+    (SHORTLISTED, _SHORTLIST_PHRASES),
+    (INTERVIEW_INVITE, _INTERVIEW_PHRASES),
+    (REJECTED, _REJECTION_PHRASES),
+))
+_DOCUMENT_SIGNALS = _compile(((("DOCUMENT_REQUEST"), _DOCUMENT_PHRASES),))
+_INTEREST_SIGNALS = _compile((("RECRUITER_INTEREST", _INTEREST_PHRASES),))
+_NOISE_SIGNALS = _compile((("NOISE", _NOISE_PHRASES),))
+
+# Structural detail extractors.  These are what separate "we are pleased to
+# offer you" boilerplate from a real offer.
+_CTC = re.compile(
+    r"(?i)(?:(?:annual|fixed|total|gross|monthly)\s+)?"
+    r"(?:ctc|compensation|salary|package|remuneration)\b[^.\n]{0,60}?"
+    r"(?:inr|rs\.?|₹|usd|\$)?\s*[\d][\d,\.]{3,}"
+    r"|(?:inr|rs\.?|₹)\s*[\d][\d,\.]{3,}\s*(?:lpa|per annum|p\.a\.|lakhs?|/-)?"
+    r"|[\d]+(?:\.\d+)?\s*(?:lpa|lakhs? per annum)"
+)
+_DATE = re.compile(
+    r"(?i)\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"
+    r"|\d{4}-\d{2}-\d{2}"
+    r"|\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*"
+    r"(?:\s+\d{2,4})?"
+    r"|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?"
+    r"(?:,?\s+\d{2,4})?)\b"
+)
+_TIME = re.compile(r"(?i)\b\d{1,2}[:.]\d{2}\s*(?:am|pm|hrs|ist|utc)?\b|\b\d{1,2}\s*(?:am|pm)\b")
+_JOB_TITLE = re.compile(
+    r"(?i)\b(?:position|designation|role|title|job title)\b\s*(?:of|:|-|is)?\s*[a-z][\w /&+.-]{2,60}"
+)
+_OFFER_DOC_FILENAME = re.compile(
+    r"(?i)(offer|appointment|joining|employment|loi|letter[_\- ]?of[_\- ]?intent|compensation|ctc)"
+)
+_OFFER_DOC_TYPES = frozenset({
+    "OFFER_LETTER", "APPOINTMENT_LETTER", "JOINING_LETTER",
+    "COMPENSATION_BREAKUP", "EMPLOYMENT_CONTRACT",
+})
+_FREE_MAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.in", "outlook.com",
+    "hotmail.com", "live.com", "rediffmail.com", "protonmail.com", "aol.com",
+    "icloud.com", "zoho.com", "mail.com", "yandex.com", "gmx.com",
+})
+# Portals legitimately relay recruiter mail.  Their domain not matching the
+# hiring company is normal, not a spoofing signal.
+_KNOWN_RELAY_DOMAINS = frozenset({
+    "naukri.com", "linkedin.com", "indeed.com", "monster.com", "monsterindia.com",
+    "shine.com", "timesjobs.com", "hirist.com", "instahyre.com", "cutshort.io",
+    "foundit.in", "glassdoor.com", "wellfound.com", "greenhouse.io",
+    "lever.co", "workday.com", "myworkday.com", "smartrecruiters.com",
+    "icims.com", "successfactors.com", "taleo.net", "zohorecruit.com",
+    "keka.com", "darwinbox.com", "freshteam.com", "ashbyhq.com",
+})
+
+
+def domain_of(address: Any) -> str:
+    value = str(address or "").strip().lower()
+    if "@" not in value:
+        return ""
+    domain = value.rsplit("@", 1)[1].strip("<> \t\r\n.")
+    return domain
+
+
+def registrable_domain(domain: str) -> str:
+    """Collapse mail subdomains so careers.acme.com matches acme.com."""
+    parts = [part for part in str(domain or "").lower().split(".") if part]
+    if len(parts) <= 2:
+        return ".".join(parts)
+    # Two-level public suffixes common in this dataset (co.in, co.uk, com.au).
+    if len(parts) >= 3 and parts[-2] in {"co", "com", "net", "org", "gov", "ac"} and len(parts[-1]) == 2:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def _matches(patterns: list[re.Pattern], text: str) -> list[str]:
+    found = []
+    for pattern in patterns:
+        match = pattern.search(text)
+        if match:
+            found.append(match.group(0).strip())
+    return found
+
+
+def _excerpt(text: str, phrase: str, width: int = 160) -> str:
+    index = text.find(phrase.lower())
+    if index < 0:
+        return phrase[:width]
+    start = max(0, index - width // 3)
+    return text[start:start + width].strip()
+
+
+def attachment_texts(attachments: Iterable[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Normalize stored or freshly fetched attachment records."""
+    result = []
+    for item in attachments or []:
+        result.append({
+            "filename": str(item.get("filename") or ""),
+            "mime_type": str(item.get("mime_type") or ""),
+            "attachment_type": str(item.get("attachment_type") or "").upper(),
+            "extraction_status": str(item.get("extraction_status") or "").upper(),
+            "checksum": str(item.get("checksum") or ""),
+            "size": item.get("size"),
+            "text": str(item.get("text") or item.get("extracted_text") or ""),
+        })
+    return result
+
+
+def _offer_document(attachments: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for item in attachments:
+        if item["attachment_type"] in _OFFER_DOC_TYPES:
+            return item
+        if _OFFER_DOC_FILENAME.search(item["filename"]):
+            return item
+    return None
+
+
+def _detail_signals(text: str) -> dict[str, bool]:
+    return {
+        "compensation": bool(_CTC.search(text)),
+        "date": bool(_DATE.search(text)),
+        "job_title": bool(_JOB_TITLE.search(text)),
+        "time": bool(_TIME.search(text)),
+    }
+
+
+def classify_message(
+    message: dict[str, Any],
+    attachments: Iterable[dict[str, Any]] | None = None,
+    *,
+    thread_context: Iterable[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Decide what a single email tells the candidate, from its full content.
+
+    Returns the outcome, a 0-100 confidence, the evidence that produced it, and
+    whether a human still needs to look.
+    """
+    subject_raw = str(message.get("subject") or "")
+    body_raw = str(message.get("body") or message.get("body_text") or "")
+    html_raw = str(message.get("html_body") or message.get("html_body_text") or "")
+    files = attachment_texts(attachments)
+
+    subject = visible_text(subject_raw)
+    body = visible_text(body_raw or html_raw)
+    attachment_blob = " ".join(item["text"] for item in files)
+    thread_blob = " ".join(
+        visible_text(f"{item.get('subject') or ''} {item.get('body') or ''}")
+        for item in (list(thread_context or [])[-5:])
+    )
+    # The classified surface is the mail itself.  Thread context informs
+    # corroboration but never creates an outcome on its own, otherwise every
+    # reply in a thread inherits the original decision.
+    primary = f"{subject} {body}".strip()
+    full = f"{primary} {normalize(attachment_blob)}".strip()
+
+    evidence: list[dict[str, Any]] = []
+
+    def record(source: str, meaning: str, text: str, phrase: str) -> None:
+        evidence.append({
+            "source": source, "meaning": meaning,
+            "text": _excerpt(text, phrase)[:500] or phrase[:500],
+        })
+
+    outbound = str(message.get("message_direction") or "").upper() == "OUTBOUND"
+    forwarded = bool(_FORWARD_MARKER.search(subject_raw)) or bool(_FORWARD_MARKER.search(body_raw))
+
+    # Structural facts about the mail.
+    has_ics = any(
+        "calendar" in item["mime_type"].lower() or item["filename"].lower().endswith(".ics")
+        for item in files
+    )
+    offer_doc = _offer_document(files)
+    offer_doc_text = (offer_doc or {}).get("text") or ""
+    offer_doc_failed = bool(offer_doc) and (offer_doc or {}).get("extraction_status") in {
+        "FAILED", "ERROR", "UNSUPPORTED",
+    }
+    details_full = _detail_signals(full)
+    details_offer_doc = _detail_signals(normalize(offer_doc_text))
+
+    hits: dict[str, list[str]] = {}
+    for name, patterns in _SIGNALS:
+        found = _matches(patterns, full)
+        if found:
+            hits[name] = found
+
+    # Mail the candidate sent is not a company decision.  Without this a
+    # candidate writing "I have been selected" would create a selection.
+    if outbound:
+        if hits:
+            record("EMAIL_BODY", "CANDIDATE_AUTHORED", primary, next(iter(hits.values()))[0])
+        return _result(
+            NOT_RELEVANT, 55, evidence,
+            "Message was sent by the candidate, not received from a company.",
+            manual_review=False, signals=["OUTBOUND"] + sorted(hits),
+        )
+
+    noise = _matches(_NOISE_SIGNALS[0][1], primary)
+    interest = _matches(_INTEREST_SIGNALS[0][1], primary)
+    documents = _matches(_DOCUMENT_SIGNALS[0][1], full)
+
+    # ── Nothing meaningful ───────────────────────────────────────────────
+    if not hits:
+        if documents:
+            # A document request on its own is a real recruiter action but not
+            # a hiring decision.  It is reported, never promoted.
+            record("EMAIL_BODY", "DOCUMENT_REQUEST", full, documents[0])
+            return _result(
+                NOT_RELEVANT, 40, evidence,
+                "Document request only; no hiring decision stated.",
+                manual_review=False, signals=["DOCUMENT_REQUEST"],
+            )
+        if interest:
+            record("EMAIL_BODY", "RECRUITER_INTEREST", primary, interest[0])
+            return _result(
+                NOT_RELEVANT, 45, evidence,
+                "Recruiter interest or sourcing outreach; not a company decision.",
+                manual_review=False, signals=["RECRUITER_INTEREST"],
+            )
+        return _result(
+            NOT_RELEVANT, 60 if noise else 35, evidence,
+            "No outcome language found in subject, body or attachments."
+            if not noise else "Job-portal or transactional mail.",
+            manual_review=False, signals=["NOISE"] if noise else [],
+        )
+
+    # ── Rejection versus positive decision in the same mail ──────────────
+    positive_hits = {name for name in hits if name in POSITIVE_DECISION_OUTCOMES}
+    if REJECTED in hits and positive_hits:
+        record("EMAIL_BODY", "CANDIDATE_REJECTED", full, hits[REJECTED][0])
+        for name in sorted(positive_hits):
+            record("EMAIL_BODY", name, full, hits[name][0])
+        return _result(
+            MANUAL_REVIEW_REQUIRED, 50, evidence,
+            "The same mail carries both rejection and positive-decision language.",
+            manual_review=True, signals=sorted(hits),
+        )
+
+    # ── Joining confirmed ────────────────────────────────────────────────
+    # An offer letter states a date of joining as one of its terms.  That is
+    # part of the offer, not a separate confirmation that the candidate joined,
+    # so joining only wins when the mail itself says so.
+    joining_in_mail = bool(_matches(dict(_SIGNALS)[JOINING_CONFIRMED], primary))
+    if JOINING_CONFIRMED in hits and not joining_in_mail and VERIFIED_OFFER_LETTER in hits:
+        hits.pop(JOINING_CONFIRMED)
+
+    if JOINING_CONFIRMED in hits:
+        record("EMAIL_BODY", "JOINING_CONFIRMED", full, hits[JOINING_CONFIRMED][0])
+        # "date of joining" appears in offer letters and in BGV forms asking the
+        # candidate to propose one.  A confirmation states a date.
+        if details_full["date"]:
+            return _result(
+                JOINING_CONFIRMED, 88, evidence,
+                "Joining confirmation with a stated date.",
+                manual_review=False, signals=sorted(hits),
+            )
+        return _result(
+            MANUAL_REVIEW_REQUIRED, 45, evidence,
+            "Joining language without a stated joining date.",
+            manual_review=True, signals=sorted(hits),
+        )
+
+    # ── Offer letter, verified only with real detail ──────────────────────
+    if VERIFIED_OFFER_LETTER in hits:
+        record("EMAIL_BODY", "OFFER_LETTER_REFERENCED", full, hits[VERIFIED_OFFER_LETTER][0])
+        if offer_doc and offer_doc_text:
+            confirmed = sum(1 for key in ("compensation", "date", "job_title") if details_offer_doc[key])
+            if confirmed >= 2:
+                evidence.append({
+                    "source": "ATTACHMENT", "meaning": "OFFER_LETTER_CONTENT",
+                    "text": (offer_doc["filename"] + ": " + offer_doc_text.strip()[:400]),
+                })
+                return _result(
+                    VERIFIED_OFFER_LETTER, 92, evidence,
+                    f"Offer document {offer_doc['filename']} contains genuine offer details.",
+                    manual_review=False, signals=sorted(hits),
+                )
+            return _result(
+                MANUAL_REVIEW_REQUIRED, 50, evidence,
+                f"Offer document {offer_doc['filename']} lacks verifiable offer details.",
+                manual_review=True, signals=sorted(hits),
+            )
+        if offer_doc_failed or (offer_doc and not offer_doc_text):
+            return _result(
+                MANUAL_REVIEW_REQUIRED, 40, evidence,
+                f"Offer document {offer_doc['filename']} could not be read; contents unverified.",
+                manual_review=True, signals=sorted(hits) + ["ATTACHMENT_UNREADABLE"],
+            )
+        # No attachment: the body itself must carry the offer.
+        confirmed = sum(1 for key in ("compensation", "date", "job_title") if details_full[key])
+        if confirmed >= 2:
+            return _result(
+                VERIFIED_OFFER_LETTER, 82, evidence,
+                "Offer details stated in the email body.",
+                manual_review=False, signals=sorted(hits),
+            )
+        return _result(
+            OFFER_INDICATION, 62, evidence,
+            "Offer letter mentioned without verifiable offer details.",
+            manual_review=False, signals=sorted(hits),
+        )
+
+    # ── Offer indication ─────────────────────────────────────────────────
+    if OFFER_INDICATION in hits:
+        record("EMAIL_BODY", "OFFER_INDICATION", full, hits[OFFER_INDICATION][0])
+        return _result(
+            OFFER_INDICATION, 78, evidence,
+            "Company states intent to offer without a released offer letter.",
+            manual_review=False, signals=sorted(hits),
+        )
+
+    # ── Final selection ──────────────────────────────────────────────────
+    if FINAL_SELECTION in hits:
+        record("EMAIL_BODY", "FINAL_SELECTION", full, hits[FINAL_SELECTION][0])
+        # Selection language inside an interview invitation ("selected for the
+        # technical round") is scheduling, not a hiring decision.
+        if INTERVIEW_INVITE in hits and not (details_full["compensation"] or OFFER_INDICATION in hits):
+            record("EMAIL_BODY", "INTERVIEW_CONTEXT", full, hits[INTERVIEW_INVITE][0])
+            return _result(
+                MANUAL_REVIEW_REQUIRED, 48, evidence,
+                "Selection wording appears alongside interview scheduling; not a clear final decision.",
+                manual_review=True, signals=sorted(hits),
+            )
+        return _result(
+            FINAL_SELECTION, 85, evidence,
+            "Company confirms the candidate was selected.",
+            manual_review=False, signals=sorted(hits),
+        )
+
+    # ── Background verification ──────────────────────────────────────────
+    if BACKGROUND_VERIFICATION in hits:
+        record("EMAIL_BODY", "BACKGROUND_VERIFICATION", full, hits[BACKGROUND_VERIFICATION][0])
+        return _result(
+            BACKGROUND_VERIFICATION, 80, evidence,
+            "Background or employment verification requested. "
+            "This alone is not selection or joining confirmation.",
+            manual_review=False, signals=sorted(hits),
+        )
+
+    # ── Rejection ────────────────────────────────────────────────────────
+    if REJECTED in hits:
+        record("EMAIL_BODY", "CANDIDATE_REJECTED", full, hits[REJECTED][0])
+        return _result(
+            REJECTED, 86, evidence,
+            "Company states the candidate is not proceeding.",
+            manual_review=False, signals=sorted(hits),
+        )
+
+    # ── Interview lifecycle ──────────────────────────────────────────────
+    if INTERVIEW_CANCELLED in hits:
+        record("EMAIL_BODY", "INTERVIEW_CANCELLED", full, hits[INTERVIEW_CANCELLED][0])
+        return _result(
+            INTERVIEW_CANCELLED, 84, evidence,
+            "Interview cancelled.", manual_review=False, signals=sorted(hits),
+        )
+    if INTERVIEW_RESCHEDULED in hits:
+        record("EMAIL_BODY", "INTERVIEW_RESCHEDULED", full, hits[INTERVIEW_RESCHEDULED][0])
+        return _result(
+            INTERVIEW_RESCHEDULED, 84 if (details_full["date"] or has_ics) else 60, evidence,
+            "Interview rescheduled." if (details_full["date"] or has_ics)
+            else "Reschedule stated without a new date.",
+            manual_review=not (details_full["date"] or has_ics), signals=sorted(hits),
+        )
+    if NEXT_ROUND in hits:
+        record("EMAIL_BODY", "NEXT_ROUND", full, hits[NEXT_ROUND][0])
+        return _result(
+            NEXT_ROUND, 80, evidence,
+            "Candidate progresses to a further interview round. "
+            "A next-round message is not an offer.",
+            manual_review=False, signals=sorted(hits),
+        )
+    if SHORTLISTED in hits:
+        record("EMAIL_BODY", "SHORTLISTED", full, hits[SHORTLISTED][0])
+        return _result(
+            SHORTLISTED, 80, evidence,
+            "Candidate shortlisted.", manual_review=False, signals=sorted(hits),
+        )
+    if INTERVIEW_INVITE in hits:
+        record("EMAIL_BODY", "INTERVIEW_INVITE", full, hits[INTERVIEW_INVITE][0])
+        if has_ics:
+            evidence.append({
+                "source": "ATTACHMENT", "meaning": "CALENDAR_INVITE",
+                "text": "Calendar invite attached.",
+            })
+        scheduled = has_ics or (details_full["date"] and details_full["time"])
+        return _result(
+            INTERVIEW_INVITE, 85 if scheduled else 62, evidence,
+            "Interview invitation with schedule details." if scheduled
+            else "Interview mentioned without a confirmed date and time.",
+            manual_review=not scheduled, signals=sorted(hits),
+        )
+
+    return _result(
+        NOT_RELEVANT, 30, evidence, "No decisive outcome evidence.",
+        manual_review=False, signals=sorted(hits),
+    )
+
+
+def _result(
+    outcome: str, confidence: float, evidence: list[dict[str, Any]],
+    rationale: str, *, manual_review: bool, signals: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "outcome": outcome,
+        "outcome_rank": OUTCOME_RANK.get(outcome, 0),
+        "confidence": round(float(confidence), 2),
+        "rationale": rationale,
+        "evidence": evidence,
+        "manual_review_required": bool(manual_review) or outcome == MANUAL_REVIEW_REQUIRED,
+        "signals": signals or [],
+    }
+
+
+# ── Authenticity ─────────────────────────────────────────────────────────────
+
+_AUTH_RESULT = re.compile(r"(?i)\b(spf|dkim|dmarc)\s*=\s*([a-z]+)")
+
+
+def parse_authentication(header: Any) -> dict[str, str]:
+    """Extract spf/dkim/dmarc verdicts from an Authentication-Results header."""
+    results: dict[str, str] = {}
+    for mechanism, verdict in _AUTH_RESULT.findall(str(header or "")):
+        key = mechanism.lower()
+        # Keep the first verdict; Gmail lists the authoritative one first.
+        results.setdefault(key, verdict.lower())
+    return results
+
+
+def assess_authenticity(
+    message: dict[str, Any],
+    *,
+    company_domain: str | None = None,
+    mailbox_email: str | None = None,
+    attachments: Iterable[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Judge how much the sender of an outcome mail can be trusted.
+
+    Reports what was checked and what could not be checked.  Missing headers
+    produce UNVERIFIED, never PASS, and never an accusation.
+    """
+    sender = str(message.get("sender_email") or "").strip().lower()
+    sender_domain = domain_of(sender)
+    root = registrable_domain(sender_domain)
+    auth = parse_authentication(message.get("authentication_results"))
+    spf_header = str(message.get("received_spf") or "")
+    if "spf" not in auth and spf_header:
+        match = re.match(r"\s*([a-z]+)", spf_header.strip(), re.IGNORECASE)
+        if match:
+            auth["spf"] = match.group(1).lower()
+
+    checks: list[dict[str, Any]] = []
+    concerns: list[str] = []
+    notes: list[str] = []
+
+    def check(name: str, state: str, detail: str) -> None:
+        checks.append({"check": name, "state": state, "detail": detail})
+
+    for mechanism in ("spf", "dkim", "dmarc"):
+        verdict = auth.get(mechanism)
+        if not verdict:
+            check(mechanism.upper(), "UNAVAILABLE", "No result recorded for this message.")
+        elif verdict in {"pass"}:
+            check(mechanism.upper(), "PASS", f"{mechanism}={verdict}")
+        elif verdict in {"neutral", "none", "policy", "unknown", "temperror", "permerror"}:
+            check(mechanism.upper(), "INCONCLUSIVE", f"{mechanism}={verdict}")
+        else:
+            check(mechanism.upper(), "FAIL", f"{mechanism}={verdict}")
+            concerns.append(f"{mechanism.upper()} did not pass ({verdict}).")
+
+    # Reply-To / Return-Path. Absent on historical mail; reported as such.
+    reply_to = str(message.get("reply_to_email") or "").strip().lower()
+    return_path = str(message.get("return_path_email") or "").strip().lower()
+    for label, value in (("REPLY_TO", reply_to), ("RETURN_PATH", return_path)):
+        if not value:
+            check(label, "UNAVAILABLE", "Header not captured for this message.")
+            continue
+        value_root = registrable_domain(domain_of(value))
+        if value_root and root and value_root != root:
+            check(label, "MISMATCH", f"{value} does not share the sender domain {root}.")
+            concerns.append(f"{label.replace('_', '-').title()} domain {value_root} differs from sender {root}.")
+        else:
+            check(label, "PASS", value)
+
+    # Sender versus the company the mail claims to represent.
+    claimed = registrable_domain(str(company_domain or ""))
+    if claimed and root:
+        if claimed == root:
+            check("COMPANY_DOMAIN", "PASS", f"Sender domain matches {claimed}.")
+        elif root in _KNOWN_RELAY_DOMAINS:
+            check("COMPANY_DOMAIN", "RELAY", f"Sent through recruiting platform {root}.")
+            notes.append(f"Delivered via {root}, a known recruiting platform.")
+        elif root in _FREE_MAIL_DOMAINS:
+            check("COMPANY_DOMAIN", "MISMATCH", f"Free mail sender {root} for company {claimed}.")
+            concerns.append(
+                f"Mail about {claimed} was sent from the free-mail domain {root}."
+            )
+        else:
+            check("COMPANY_DOMAIN", "MISMATCH", f"Sender {root} differs from company domain {claimed}.")
+            concerns.append(f"Sender domain {root} does not match the stated company domain {claimed}.")
+    elif root in _FREE_MAIL_DOMAINS:
+        check("COMPANY_DOMAIN", "WEAK", f"Sender uses the free-mail domain {root}.")
+        notes.append(f"Sender {root} is a personal mail domain, so the company cannot be confirmed from the domain alone.")
+    else:
+        check("COMPANY_DOMAIN", "UNAVAILABLE", "No company domain to compare against.")
+
+    # Forwarded mail: the original sender's authentication does not survive.
+    subject_raw = str(message.get("subject") or "")
+    body_raw = str(message.get("body") or message.get("body_text") or "")
+    forwarded = bool(_FORWARD_MARKER.search(subject_raw) or _FORWARD_MARKER.search(body_raw))
+    self_sent = bool(mailbox_email) and sender == str(mailbox_email or "").strip().lower()
+    if forwarded or self_sent:
+        check("FORWARDING", "DETECTED",
+              "Message appears forwarded; headers describe the forwarder, not the original sender.")
+        notes.append(
+            "Forwarded mail: authentication results apply to the forwarding account, "
+            "so the original sender is not independently verified."
+        )
+    else:
+        check("FORWARDING", "NOT_DETECTED", "No forwarding markers found.")
+
+    # Attachment shape.
+    files = attachment_texts(attachments)
+    for item in files:
+        mime = item["mime_type"].lower()
+        name = item["filename"].lower()
+        if not name:
+            continue
+        executable = name.endswith((".exe", ".scr", ".js", ".vbs", ".jar", ".bat", ".cmd"))
+        if executable:
+            check("ATTACHMENT_TYPE", "SUSPICIOUS", f"{item['filename']} is an executable attachment.")
+            concerns.append(f"Attachment {item['filename']} is an executable file type.")
+        elif _OFFER_DOC_FILENAME.search(name) and mime and not any(
+            token in mime for token in ("pdf", "word", "officedocument", "msword", "octet-stream", "text")
+        ):
+            check("ATTACHMENT_TYPE", "MISMATCH",
+                  f"{item['filename']} declares an unexpected type {item['mime_type']}.")
+            concerns.append(f"Offer document {item['filename']} has an unexpected MIME type {item['mime_type']}.")
+
+    passes = sum(1 for item in checks if item["state"] == "PASS")
+    unavailable = sum(1 for item in checks if item["state"] == "UNAVAILABLE")
+
+    if concerns:
+        verdict = AUTHENTICITY_SUSPICIOUS
+    elif auth.get("spf") == "pass" and auth.get("dkim") == "pass" and not forwarded and not self_sent:
+        verdict = AUTHENTICITY_PASS if passes >= 3 else AUTHENTICITY_PARTIAL
+    elif passes and unavailable < len(checks):
+        verdict = AUTHENTICITY_PARTIAL
+    else:
+        verdict = AUTHENTICITY_UNVERIFIED
+
+    return {
+        "verdict": verdict,
+        "sender_email": sender,
+        "sender_domain": sender_domain,
+        "sender_root_domain": root,
+        "company_domain": claimed or None,
+        "authentication": auth,
+        "checks": checks,
+        "concerns": concerns,
+        "notes": notes,
+        "forwarded": forwarded or self_sent,
+    }
+
+
+# ── Aggregation ──────────────────────────────────────────────────────────────
+
+def strongest(findings: Iterable[dict[str, Any]]) -> dict[str, Any] | None:
+    """Pick the furthest-progressed outcome, preferring higher confidence."""
+    best = None
+    for finding in findings:
+        outcome = str(finding.get("outcome") or NOT_RELEVANT)
+        if outcome not in MEANINGFUL_OUTCOMES:
+            continue
+        key = (
+            OUTCOME_RANK.get(outcome, 0),
+            float(finding.get("confidence") or 0),
+            str(finding.get("received_at") or ""),
+        )
+        if best is None or key > best[0]:
+            best = (key, finding)
+    return best[1] if best else None
+
+
+def detect_conflicts(findings: Iterable[dict[str, Any]]) -> list[str]:
+    """Report contradictions a human must resolve, per company."""
+    by_company: dict[str, set[str]] = {}
+    for finding in findings:
+        outcome = str(finding.get("outcome") or "")
+        if outcome not in MEANINGFUL_OUTCOMES:
+            continue
+        company = registrable_domain(str(finding.get("company_domain") or "")) or \
+            str(finding.get("company_name") or "").strip().lower() or "unknown"
+        by_company.setdefault(company, set()).add(outcome)
+
+    conflicts = []
+    for company, outcomes in sorted(by_company.items()):
+        positive = outcomes & POSITIVE_DECISION_OUTCOMES
+        if REJECTED in outcomes and positive:
+            conflicts.append(
+                f"{company}: rejection recorded alongside {', '.join(sorted(positive))}."
+            )
+    return conflicts
+
+
+def outcome_counts(findings: Iterable[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for finding in findings:
+        outcome = str(finding.get("outcome") or NOT_RELEVANT)
+        counts[outcome] = counts.get(outcome, 0) + 1
+    return counts
+
+
+def content_signature(message: dict[str, Any], attachments: Iterable[dict[str, Any]] | None = None) -> str:
+    """Stable signature for duplicate detection across message ids.
+
+    Subject plus normalized body plus attachment checksums.  Two Gmail messages
+    with different ids but identical content collapse onto one signature, which
+    is how a forwarded copy of an offer stops counting twice.
+    """
+    import hashlib
+
+    subject = visible_text(message.get("subject"))
+    body = visible_text(message.get("body") or message.get("body_text") or "")
+    checksums = sorted(
+        str(item.get("checksum") or "") for item in (attachments or []) if item.get("checksum")
+    )
+    payload = "|".join([subject, body[:4000], *checksums])
+    return hashlib.sha256(payload.encode("utf-8", "replace")).hexdigest()
+
+
+def calendar_uid(attachments: Iterable[dict[str, Any]] | None) -> str | None:
+    """Return the UID of an attached calendar invite, for idempotency."""
+    try:
+        from services.calendar_invite_parser import parse_calendar
+    except Exception:
+        return None
+    for item in attachment_texts(attachments):
+        is_ics = "calendar" in item["mime_type"].lower() or item["filename"].lower().endswith(".ics")
+        if not is_ics or not item["text"]:
+            continue
+        try:
+            parsed = parse_calendar(item["text"])
+        except Exception:
+            continue
+        if parsed and parsed.get("uid"):
+            return str(parsed["uid"])
+    return None
+
+
+def attachment_fingerprint(attachments: Iterable[dict[str, Any]] | None) -> str | None:
+    checksums = sorted(
+        str(item.get("checksum") or "") for item in (attachments or []) if item.get("checksum")
+    )
+    return ",".join(checksums)[:500] or None
+
+
+def parse_timestamp(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
