@@ -353,7 +353,19 @@ def _resolve_existing_slot(
     """Resolve one slot using stable interview identity; never pick an arbitrary recent row."""
     if not slots:
         raise BookingValidationError("BOOKING_NOT_FOUND", "No active interview booking was found.")
+    calendar_uid = _calendar_uid(result)
     if len(slots) == 1:
+        # A lone slot used to be accepted unconditionally, which let an
+        # organiser's CANCEL for one event land on an unrelated booking whenever
+        # the real target had already left the confirmed list. Two calendar UIDs
+        # that disagree are different meetings by definition, so refuse rather
+        # than mutate the only row that happens to be standing.
+        only_uid = str(slots[0].get("interview_calendar_uid") or "").strip()
+        if calendar_uid and only_uid and not _same_text(only_uid, calendar_uid):
+            raise BookingValidationError(
+                "BOOKING_NOT_FOUND",
+                "The only active interview booking belongs to a different calendar event.",
+            )
         return slots[0]
     interview = result.get("interview") or {}
     company = (result.get("company") or {}).get("name")
@@ -367,7 +379,6 @@ def _resolve_existing_slot(
         (result.get("job") or {}).get("title"),
         *((result.get("interview") or {}).get("stable_ids") or []),
     )
-    calendar_uid = _calendar_uid(result)
     ranked: list[tuple[int, dict[str, Any]]] = []
     for row in slots:
         score = 0
