@@ -150,6 +150,46 @@
   flex: 0 1 auto;
 }
 
+/* Audit mode selector. Selection and interview-slot results are separate
+   reports, so the switch between them is a primary control, not a filter. */
+.outcome-audit__modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px;
+  border-radius: 10px;
+  background: #0b1020;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.outcome-audit__modes button {
+  flex: 0 1 auto;
+  padding: 9px 18px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.outcome-audit__modes button:hover {
+  color: #e5e7eb;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.outcome-audit__modes button.is-active {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.55);
+  color: #93c5fd;
+}
+.outcome-audit__modes button:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
 .outcome-audit__tabs {
   display: flex;
   gap: 6px;

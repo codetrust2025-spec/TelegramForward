@@ -8,162 +8,126 @@ vi.mock("../context/ConfirmContext.jsx", () => ({
 
 import { OutcomeAuditPanel } from "./OutcomeAuditPanel.jsx";
 
-const SUMMARY = {
+const SELECTION_SUMMARY = {
+  mode: "SELECTION",
   total_connected_mailboxes: 2,
   mailboxes_scanned: 2,
   mailboxes_failed: 0,
-  candidates_with_interview_invites: 1,
   candidates_verified_offer_letters: 1,
-  candidates_manual_review: 1,
+  candidates_offer_indication: 2,
+  candidates_shortlisted: 3,
+  candidates_rejected: 4,
+  candidates_background_verification: 5,
+  candidates_no_outcome: 0,
   candidates_status_mismatch: 1,
-  emails_missed_or_misclassified: 3,
-  sync_or_queue_failures: 1,
+  pipeline_gaps_total: 12,
   latest_run: {
     started_at: "2026-08-05T09:00:00Z",
     status: "COMPLETED",
     mode: "REPORT_ONLY",
-    messages_examined: 412,
-    incremental: false,
+    messages_examined: 7399,
   },
 };
 
-const OFFER_CANDIDATE = {
-  canonical_candidate_id: "9000031215",
-  candidate_name: "Abilash Perla",
-  email_address: "abiperla.536@gmail.com",
+const INTERVIEW_SUMMARY = {
+  mode: "INTERVIEW",
+  total_connected_mailboxes: 2,
+  mailboxes_scanned: 2,
+  mailboxes_failed: 0,
+  candidates_with_interview_invites: 9,
+  candidates_auto_booked: 6,
+  candidates_interview_rescheduled: 2,
+  candidates_interview_cancelled: 1,
+  candidates_booking_blocked: 3,
+  candidates_duplicate_booking_ignored: 1,
+  candidates_slot_conflict: 1,
+  candidates_missing_date_or_time: 2,
+  candidates_missed_invites: 4,
+  candidates_historical_not_booked: 7,
+  pipeline_gaps_total: 20,
+  latest_run: SELECTION_SUMMARY.latest_run,
+};
+
+const SELECTION_CANDIDATE = {
+  canonical_candidate_id: "8b52fe4c3d",
+  candidate_name: "Lekkala swathi",
+  email_address: "swathilekkala515@gmail.com",
   monitoring_status: "MONITORING_ACTIVE",
   scan_status: "SCANNED",
   strongest_outcome: "VERIFIED_OFFER_LETTER",
   strongest_confidence: 92,
-  strongest_authenticity: "PASS",
-  system_status: "Interview Confirmed",
+  strongest_authenticity: "PARTIAL",
+  system_status: "Profile Active",
   status_mismatch: true,
-  mismatch_detail: "Mail evidence supports 'Offer Received'; TeleAutomation shows 'Interview Confirmed'.",
-  companies: ["Acme Corp"],
-  conflicting_evidence: false,
-  suspicious_evidence: false,
-  last_successful_sync_at: "2026-08-05T08:55:00Z",
+  mismatch_detail: "Mail evidence supports 'Offer Received'.",
+  companies: ["Kaivale Technologies"],
+  outcome_counts: { VERIFIED_OFFER_LETTER: 1, SHORTLISTED: 2 },
   recommended_action: "Review and, if correct, approve the status update to 'Offer Received'.",
 };
 
-const REVIEW_CANDIDATE = {
-  canonical_candidate_id: "6301596228",
-  candidate_name: "Shailaja",
-  email_address: "sailajachennu761@gmail.com",
+const INTERVIEW_CANDIDATE = {
+  canonical_candidate_id: "43ea8aacba",
+  candidate_name: "Abilash Perla",
+  email_address: "abiperla.536@gmail.com",
   monitoring_status: "MONITORING_ACTIVE",
   scan_status: "SCANNED",
-  strongest_outcome: "MANUAL_REVIEW_REQUIRED",
-  strongest_confidence: 50,
-  strongest_authenticity: "SUSPICIOUS",
-  system_status: null,
+  strongest_outcome: "INTERVIEW_AUTO_BOOKED",
+  strongest_confidence: 100,
   status_mismatch: false,
   companies: [],
-  conflicting_evidence: true,
-  suspicious_evidence: true,
-  last_successful_sync_at: "2026-08-05T08:50:00Z",
-  recommended_action: "Human review: conflicting outcomes for the same company.",
+  outcome_counts: { INTERVIEW_AUTO_BOOKED: 2, BOOKING_BLOCKED: 1 },
+  recommended_action: "No action; the interview slot was booked automatically.",
 };
-
-const FINDINGS = [
-  {
-    id: "finding-1",
-    outcome: "VERIFIED_OFFER_LETTER",
-    confidence: 92,
-    received_at: "2026-07-20T06:00:00Z",
-    subject: "Your offer letter",
-    sender_email: "hr@acme-corp.example",
-    sender_name: "Acme HR",
-    company_name: "Acme Corp",
-    rationale: "Offer document Offer_Letter_Acme.pdf contains genuine offer details.",
-    evidence: [{ source: "ATTACHMENT", meaning: "OFFER_LETTER_CONTENT", text: "annual CTC is INR 24,00,000" }],
-    attachment_evidence: [
-      { filename: "Offer_Letter_Acme.pdf", extraction_status: "COMPLETED", has_text: true },
-    ],
-    authenticity: "PASS",
-    authenticity_detail: { concerns: [], notes: [] },
-    pipeline_outcome: "INTERVIEW_INVITE",
-    pipeline_agreement: "AUDIT_STRONGER",
-  },
-  {
-    id: "finding-2",
-    outcome: "NOT_RELEVANT",
-    confidence: 60,
-    received_at: "2026-07-01T06:00:00Z",
-    subject: "Job alert",
-    sender_email: "alerts@naukri.com",
-    rationale: "Job-portal or transactional mail.",
-    evidence: [],
-    attachment_evidence: [],
-    authenticity: "PARTIAL",
-    authenticity_detail: { concerns: [], notes: [] },
-    pipeline_outcome: null,
-    pipeline_agreement: "NO_PIPELINE_RESULT",
-  },
-];
-
-const GAPS = [
-  {
-    id: "gap-1",
-    gap_type: "MISSING_EVENT",
-    severity: "HIGH",
-    canonical_candidate_id: "9000031215",
-    candidate_name: "Abilash Perla",
-    email_address: "abiperla.536@gmail.com",
-    detail: "The audit reads this mail as VERIFIED_OFFER_LETTER but no recruitment event exists.",
-    audit_outcome: "VERIFIED_OFFER_LETTER",
-    pipeline_outcome: null,
-  },
-];
 
 let calls;
 
-function jsonResponse(body) {
-  return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
-}
+const jsonResponse = (body) => Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
 
-function mockFetch(overrides = {}) {
+function mockFetch() {
   calls = [];
   vi.stubGlobal(
     "fetch",
     vi.fn((url, options) => {
       const path = String(url);
       calls.push({ path, options });
-      if (path.includes("/mail-outcome-audit/summary"))
-        return jsonResponse({ status: "ok", summary: overrides.summary ?? SUMMARY });
-      if (path.includes("/mail-outcome-audit/candidates/"))
+      const interview = path.includes("mode=INTERVIEW");
+      if (path.includes("/summary"))
         return jsonResponse({
           status: "ok",
-          candidate: OFFER_CANDIDATE,
-          findings: FINDINGS,
-          gaps: GAPS,
+          summary: interview ? INTERVIEW_SUMMARY : SELECTION_SUMMARY,
+        });
+      if (path.includes("/candidates/"))
+        return jsonResponse({
+          status: "ok",
+          mode: interview ? "INTERVIEW" : "SELECTION",
+          candidate: interview ? INTERVIEW_CANDIDATE : SELECTION_CANDIDATE,
+          findings: [],
+          bookings: interview
+            ? [
+                {
+                  id: "b1",
+                  booking_outcome: "INTERVIEW_AUTO_BOOKED",
+                  booking_status: "Auto Booked",
+                  created_at: "2026-08-04T12:36:00Z",
+                },
+              ]
+            : [],
+          gaps: [],
           approvals: [],
         });
-      if (path.includes("/mail-outcome-audit/candidates"))
+      if (path.includes("/candidates"))
         return jsonResponse({
           status: "ok",
-          candidates: overrides.candidates ?? [OFFER_CANDIDATE, REVIEW_CANDIDATE],
+          candidates: [interview ? INTERVIEW_CANDIDATE : SELECTION_CANDIDATE],
         });
-      if (path.includes("/mail-outcome-audit/gaps"))
-        return jsonResponse({ status: "ok", gaps: GAPS });
-      if (path.includes("/mail-outcome-audit/run"))
-        return jsonResponse({
-          status: "ok",
-          run: {
-            mailboxes_total: 2, mailboxes_scanned: 2, mailboxes_failed: 0,
-            messages_examined: 412, gaps_written: 1,
-          },
-        });
-      if (path.includes("/approve"))
-        return jsonResponse({
-          status: "ok",
-          approval: { status: "Offer Received", candidate_id: "9000031215", applied: true },
-        });
+      if (path.includes("/gaps")) return jsonResponse({ status: "ok", gaps: [] });
       return jsonResponse({ status: "ok" });
     }),
   );
+  vi.stubGlobal("open", vi.fn());
 }
 
-beforeEach(() => mockFetch());
+beforeEach(mockFetch);
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -171,130 +135,188 @@ afterEach(() => {
 
 async function renderPanel() {
   const view = render(<OutcomeAuditPanel />);
-  await screen.findByText("Abilash Perla");
+  await screen.findByText("Lekkala swathi");
   return view;
 }
 
-describe("Outcome audit report", () => {
-  it("states plainly that the audit is read-only", async () => {
+const switchTo = async (label) => {
+  fireEvent.click(screen.getByText(label));
+  await waitFor(() =>
+    expect(calls.some((c) => c.path.includes("mode=INTERVIEW"))).toBe(true),
+  );
+};
+
+describe("Audit mode selector", () => {
+  it("offers both audits and pipeline gaps", async () => {
     await renderPanel();
+    expect(screen.getByText("Selection Audit")).toBeTruthy();
+    expect(screen.getByText("Interview Slot Audit")).toBeTruthy();
+    expect(screen.getByText(/Pipeline Gaps/)).toBeTruthy();
+  });
+
+  it("defaults to the selection audit", async () => {
+    await renderPanel();
+    expect(screen.getByText("Selection Audit").getAttribute("aria-current")).toBe("page");
+    expect(calls[0].path).toContain("mode=SELECTION");
+  });
+
+  it("requests the interview mode when switched", async () => {
+    await renderPanel();
+    await switchTo("Interview Slot Audit");
     expect(
-      screen.getByText(/no email is sent, deleted, labelled or modified/i),
-    ).toBeTruthy();
+      calls.some((c) => c.path.includes("/summary") && c.path.includes("mode=INTERVIEW")),
+    ).toBe(true);
+  });
+});
+
+describe("Selection audit shows no interview results", () => {
+  it("shows only selection categories in the tiles", async () => {
+    const { container } = await renderPanel();
+    const tiles = within(container.querySelector(".outcome-audit__tiles"));
+    expect(tiles.getByText("Verified offer letters")).toBeTruthy();
+    expect(tiles.getByText("Shortlisted")).toBeTruthy();
+    expect(tiles.getByText("Rejected")).toBeTruthy();
+    expect(tiles.getByText("No selection evidence")).toBeTruthy();
+    // Interview categories must be absent entirely.
+    expect(tiles.queryByText("Interview invitations")).toBeNull();
+    expect(tiles.queryByText("Automatically booked")).toBeNull();
+    expect(tiles.queryByText("Slot conflicts")).toBeNull();
+    expect(tiles.queryByText("Duplicate ignored")).toBeNull();
   });
 
-  it("shows the system-wide summary tiles", async () => {
+  it("offers only selection outcomes in the outcome filter", async () => {
     await renderPanel();
-    expect(screen.getByText("Connected mailboxes")).toBeTruthy();
-    expect(screen.getByText("Verified offer letters")).toBeTruthy();
-    expect(screen.getByText("Mail missed / misclassified")).toBeTruthy();
-    expect(screen.getByText(/report only/i)).toBeTruthy();
+    const options = [...screen.getByLabelText("Filter by outcome").options].map((o) => o.textContent);
+    expect(options).toContain("Verified offer letter");
+    expect(options).toContain("Manual review required");
+    expect(options).not.toContain("Interview invitation");
+    expect(options).not.toContain("Booking blocked");
   });
 
-  it("lists each audited candidate with their strongest outcome", async () => {
+  it("keeps the status-mismatch column and filter", async () => {
     await renderPanel();
-    const row = screen.getByText("Abilash Perla").closest("tr");
-    expect(within(row).getByText("Verified offer letter")).toBeTruthy();
-    expect(within(row).getByText("92%")).toBeTruthy();
-    expect(within(row).getByText("Mismatch")).toBeTruthy();
+    expect(screen.getByText("System status")).toBeTruthy();
+    expect(screen.getByLabelText(/status mismatches only/i, { selector: "input" })).toBeTruthy();
+  });
+});
+
+describe("Interview slot audit shows no selection results", () => {
+  it("shows only interview categories in the tiles", async () => {
+    const { container } = await renderPanel();
+    await switchTo("Interview Slot Audit");
+    await screen.findByText("Interview invitations");
+    const tiles = within(container.querySelector(".outcome-audit__tiles"));
+    expect(tiles.getByText("Automatically booked")).toBeTruthy();
+    expect(tiles.getByText("Booking blocked")).toBeTruthy();
+    expect(tiles.getByText("Slot conflicts")).toBeTruthy();
+    expect(tiles.getByText("Missing date or time")).toBeTruthy();
+    expect(tiles.getByText("Missed or unprocessed invites")).toBeTruthy();
+    // Selection categories must be absent entirely.
+    expect(tiles.queryByText("Verified offer letters")).toBeNull();
+    expect(tiles.queryByText("Final selections")).toBeNull();
+    expect(tiles.queryByText("Joining confirmed")).toBeNull();
+    expect(tiles.queryByText("Rejected")).toBeNull();
   });
 
-  it("marks conflicting and suspicious evidence", async () => {
+  it("offers only interview outcomes in the outcome filter", async () => {
     await renderPanel();
-    const row = screen.getByText("Shailaja").closest("tr");
-    expect(within(row).getByText("Conflicting evidence")).toBeTruthy();
-    expect(within(row).getByText("Authenticity concern")).toBeTruthy();
+    await switchTo("Interview Slot Audit");
+    await screen.findByText("Interview invitations");
+    const options = [...screen.getByLabelText("Filter by outcome").options].map((o) => o.textContent);
+    expect(options).toContain("Interview automatically booked");
+    expect(options).toContain("Slot conflict");
+    expect(options).not.toContain("Verified offer letter");
+    expect(options).not.toContain("Rejected");
   });
 
-  it("sends every filter to the API", async () => {
+  it("drops the hiring-status column and mismatch filter", async () => {
+    await renderPanel();
+    await switchTo("Interview Slot Audit");
+    await screen.findByText("Interview activity");
+    expect(screen.queryByText("System status")).toBeNull();
+    expect(screen.queryByLabelText(/status mismatches only/i, { selector: "input" })).toBeNull();
+  });
+
+  it("resets an outcome filter that belongs to the other mode", async () => {
     await renderPanel();
     fireEvent.change(screen.getByLabelText("Filter by outcome"), {
       target: { value: "VERIFIED_OFFER_LETTER" },
     });
     await waitFor(() =>
+      expect(calls.some((c) => c.path.includes("outcome=VERIFIED_OFFER_LETTER"))).toBe(true),
+    );
+    await switchTo("Interview Slot Audit");
+    const latest = calls[calls.length - 1];
+    expect(latest.path).not.toContain("outcome=VERIFIED_OFFER_LETTER");
+  });
+});
+
+describe("Evidence drawer follows the mode", () => {
+  it("requests evidence scoped to the active audit", async () => {
+    await renderPanel();
+    fireEvent.click(
+      within(screen.getByText("Lekkala swathi").closest("tr")).getByText("Evidence"),
+    );
+    await waitFor(() =>
       expect(
-        calls.some((c) => c.path.includes("outcome=VERIFIED_OFFER_LETTER")),
+        calls.some((c) => c.path.includes("/candidates/8b52fe4c3d") && c.path.includes("mode=SELECTION")),
       ).toBe(true),
     );
-
-    fireEvent.click(screen.getByLabelText(/manual review only/i, { selector: "input" }));
-    await waitFor(() =>
-      expect(calls.some((c) => c.path.includes("manual_review=1"))).toBe(true),
-    );
+    expect(await screen.findByText(/Selection audit/)).toBeTruthy();
   });
 
-  it("opens the evidence drawer with the audit's reasoning", async () => {
+  it("shows booking outcomes in interview mode", async () => {
     await renderPanel();
-    const row = screen.getByText("Abilash Perla").closest("tr");
-    fireEvent.click(within(row).getByText("Evidence"));
-
-    await screen.findByText("Your offer letter");
-    expect(
-      screen.getByText(/contains genuine offer details/i),
-    ).toBeTruthy();
-    expect(screen.getByText(/annual CTC is INR 24,00,000/)).toBeTruthy();
-    // The filename appears in both the rationale and the attachment line.
-    expect(screen.getAllByText(/Offer_Letter_Acme\.pdf/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/text read/)).toBeTruthy();
-  });
-
-  it("hides irrelevant mail from the evidence list", async () => {
-    await renderPanel();
+    await switchTo("Interview Slot Audit");
+    await screen.findByText("Abilash Perla");
     fireEvent.click(
       within(screen.getByText("Abilash Perla").closest("tr")).getByText("Evidence"),
     );
-    await screen.findByText("Your offer letter");
-    expect(screen.queryByText("Job alert")).toBeNull();
+    const heading = await screen.findByText("Booking outcomes");
+    const list = within(heading.nextElementSibling);
+    expect(list.getByText("Interview automatically booked")).toBeTruthy();
+    expect(list.getByText(/Auto Booked/)).toBeTruthy();
   });
+});
 
-  it("requires an explicit approval to change a candidate status", async () => {
+describe("Pipeline gaps stay available for both modes", () => {
+  it("is reachable and scoped to the active mode", async () => {
     await renderPanel();
-    fireEvent.click(
-      within(screen.getByText("Abilash Perla").closest("tr")).getByText("Evidence"),
-    );
-    const approve = await screen.findByText("Approve status update");
-
-    // Nothing has been applied merely by viewing the report.
-    expect(calls.some((c) => c.path.includes("/approve"))).toBe(false);
-
-    fireEvent.click(approve);
-    await waitFor(() =>
-      expect(
-        calls.some(
-          (c) => c.path.includes("/findings/finding-1/approve") && c.options?.method === "POST",
-        ),
-      ).toBe(true),
-    );
-    const call = calls.find((c) => c.path.includes("/approve"));
-    expect(JSON.parse(call.options.body)).toEqual({ decision: "APPROVED" });
-  });
-
-  it("runs the audit in report-only mode", async () => {
-    await renderPanel();
-    fireEvent.click(screen.getByText("Run full audit"));
-    await waitFor(() =>
-      expect(calls.some((c) => c.path.includes("/mail-outcome-audit/run"))).toBe(true),
-    );
-    const call = calls.find((c) => c.path.includes("/run"));
-    expect(JSON.parse(call.options.body)).toEqual({ incremental: false });
-    // The run summary notice, distinct from the "last run" line above it.
+    fireEvent.click(screen.getByText(/Pipeline Gaps/));
     expect(
-      await screen.findByText(/Audit complete — 2\/2 mailboxes scanned, 412 messages examined/),
+      await screen.findByText(/Pipeline gaps affecting the selection audit/i),
     ).toBeTruthy();
+    expect(calls.some((c) => c.path.includes("/gaps") && c.path.includes("mode=SELECTION"))).toBe(true);
   });
+});
 
-  it("shows pipeline gaps the audit found", async () => {
+describe("Export follows the mode", () => {
+  it("exports the selection report by default", async () => {
     await renderPanel();
-    fireEvent.click(screen.getByText(/Pipeline gaps/));
-    expect(await screen.findByText("Missing event")).toBeTruthy();
-    expect(screen.getByText(/no recruitment event exists/)).toBeTruthy();
+    fireEvent.click(screen.getByText("Export CSV"));
+    expect(window.open).toHaveBeenCalled();
+    expect(window.open.mock.calls[0][0]).toContain("mode=SELECTION");
+    expect(window.open.mock.calls[0][0]).toContain("/mail-outcome-audit/export");
   });
 
-  it("explains an empty report instead of showing a blank table", async () => {
-    mockFetch({ candidates: [] });
-    render(<OutcomeAuditPanel />);
-    expect(
-      await screen.findByText(/No audited mailboxes match these filters/i),
-    ).toBeTruthy();
+  it("exports the interview report after switching", async () => {
+    await renderPanel();
+    await switchTo("Interview Slot Audit");
+    fireEvent.click(screen.getByText("Export CSV"));
+    const url = window.open.mock.calls[window.open.mock.calls.length - 1][0];
+    expect(url).toContain("mode=INTERVIEW");
+  });
+});
+
+describe("Read-only behaviour is preserved", () => {
+  it("states plainly that the audit is read-only", async () => {
+    await renderPanel();
+    expect(screen.getByText(/no email is sent, deleted, labelled or modified/i)).toBeTruthy();
+  });
+
+  it("changes nothing merely by switching modes", async () => {
+    await renderPanel();
+    await switchTo("Interview Slot Audit");
+    expect(calls.every((c) => !c.options?.method || c.options.method === "GET")).toBe(true);
   });
 });

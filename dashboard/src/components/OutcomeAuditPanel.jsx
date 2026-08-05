@@ -18,32 +18,90 @@ const request = async (path, options = {}) => {
   return body;
 };
 
-const OUTCOMES = [
-  "INTERVIEW_INVITE",
-  "INTERVIEW_RESCHEDULED",
-  "INTERVIEW_CANCELLED",
-  "NEXT_ROUND",
-  "SHORTLISTED",
-  "FINAL_SELECTION",
-  "OFFER_INDICATION",
-  "VERIFIED_OFFER_LETTER",
-  "JOINING_CONFIRMED",
-  "BACKGROUND_VERIFICATION",
-  "REJECTED",
-  "MANUAL_REVIEW_REQUIRED",
-  "NOT_RELEVANT",
+export const SELECTION = "SELECTION";
+export const INTERVIEW = "INTERVIEW";
+
+/**
+ * Selection results and interview-slot results answer different questions and
+ * are never totalled together. Each mode owns its own categories; the two
+ * lists below share no entry, which is what stops a mailbox full of interview
+ * invitations from reading as hiring progress.
+ */
+const SELECTION_OUTCOMES = [
+  ["VERIFIED_OFFER_LETTER", "Verified offer letter"],
+  ["FINAL_SELECTION", "Final selection"],
+  ["OFFER_INDICATION", "Offer indication"],
+  ["JOINING_CONFIRMED", "Joining confirmation"],
+  ["BACKGROUND_VERIFICATION", "Background verification"],
+  ["SHORTLISTED", "Shortlisted"],
+  ["NEXT_ROUND", "Next round"],
+  ["REJECTED", "Rejected"],
+  ["MANUAL_REVIEW_REQUIRED", "Manual review required"],
+  ["NOT_RELEVANT", "No selection evidence"],
 ];
 
-// Outcomes an administrator may approve as a candidate status change. The
-// server enforces this too; the UI only avoids offering an action that would
-// be refused.
-const APPROVABLE = new Set(OUTCOMES.filter(
-  (value) => value !== "NOT_RELEVANT" && value !== "MANUAL_REVIEW_REQUIRED",
-));
+const INTERVIEW_OUTCOMES = [
+  ["INTERVIEW_INVITE", "Interview invitation"],
+  ["INTERVIEW_AUTO_BOOKED", "Interview automatically booked"],
+  ["INTERVIEW_RESCHEDULED", "Interview rescheduled"],
+  ["INTERVIEW_CANCELLED", "Interview cancelled"],
+  ["BOOKING_BLOCKED", "Booking blocked"],
+  ["DUPLICATE_BOOKING_IGNORED", "Duplicate booking ignored"],
+  ["SLOT_CONFLICT", "Slot conflict"],
+  ["MISSING_DATE_OR_TIME", "Missing date or time"],
+  ["MISSED_OR_UNPROCESSED_INVITE", "Missed or unprocessed invite"],
+  ["HISTORICAL_NOT_BOOKED", "Historical, not booked"],
+  ["NOT_RELEVANT", "No interview activity"],
+];
+
+const SELECTION_TILES = [
+  ["candidates_verified_offer_letters", "Verified offer letters"],
+  ["candidates_final_selection", "Final selections"],
+  ["candidates_offer_indication", "Offer indications"],
+  ["candidates_joining_confirmed", "Joining confirmed"],
+  ["candidates_background_verification", "Background verification"],
+  ["candidates_shortlisted", "Shortlisted"],
+  ["candidates_next_round", "Next round"],
+  ["candidates_rejected", "Rejected"],
+  ["candidates_manual_review_outcome", "Manual review required"],
+  ["candidates_no_outcome", "No selection evidence"],
+];
+
+const INTERVIEW_TILES = [
+  ["candidates_with_interview_invites", "Interview invitations"],
+  ["candidates_auto_booked", "Automatically booked"],
+  ["candidates_interview_rescheduled", "Rescheduled"],
+  ["candidates_interview_cancelled", "Cancelled"],
+  ["candidates_booking_blocked", "Booking blocked"],
+  ["candidates_duplicate_booking_ignored", "Duplicate ignored"],
+  ["candidates_slot_conflict", "Slot conflicts"],
+  ["candidates_missing_date_or_time", "Missing date or time"],
+  ["candidates_missed_invites", "Missed or unprocessed invites"],
+  ["candidates_historical_not_booked", "Historical, not booked"],
+];
+
+const SHARED_TILES = [
+  ["total_connected_mailboxes", "Connected mailboxes"],
+  ["mailboxes_scanned", "Scanned"],
+  ["mailboxes_failed", "Failed to scan"],
+  ["pipeline_gaps_total", "Pipeline gaps"],
+];
+
+// Outcomes an administrator may approve as a candidate status change. Only the
+// selection audit makes claims about hiring status, so only its outcomes are
+// approvable. The server enforces this too.
+const APPROVABLE = new Set(
+  SELECTION_OUTCOMES.map(([value]) => value).filter(
+    (value) => value !== "NOT_RELEVANT" && value !== "MANUAL_REVIEW_REQUIRED",
+  ),
+);
 
 const AUTHENTICITY = ["PASS", "PARTIAL", "UNVERIFIED", "SUSPICIOUS"];
 
+const LABELS = new Map([...SELECTION_OUTCOMES, ...INTERVIEW_OUTCOMES]);
+
 const human = (value) =>
+  LABELS.get(value) ||
   String(value || "")
     .replace(/_/g, " ")
     .toLowerCase()
@@ -65,30 +123,10 @@ const day = (value) => {
     : date.toLocaleDateString("en-IN", { dateStyle: "medium" });
 };
 
-const SUMMARY_TILES = [
-  ["total_connected_mailboxes", "Connected mailboxes"],
-  ["mailboxes_scanned", "Scanned"],
-  ["mailboxes_failed", "Failed to scan"],
-  ["candidates_with_interview_invites", "Interview invites"],
-  ["candidates_shortlisted", "Shortlisted"],
-  ["candidates_next_round", "Next round"],
-  ["candidates_final_selection", "Final selections"],
-  ["candidates_offer_indication", "Offer indications"],
-  ["candidates_verified_offer_letters", "Verified offer letters"],
-  ["candidates_joining_confirmed", "Joining confirmed"],
-  ["candidates_background_verification", "Background verification"],
-  ["candidates_rejected", "Rejected"],
-  ["candidates_no_outcome", "No outcome found"],
-  ["candidates_manual_review", "Need manual review"],
-  ["candidates_status_mismatch", "Status mismatches"],
-  ["candidates_conflicting_evidence", "Conflicting evidence"],
-  ["candidates_suspicious_evidence", "Suspicious evidence"],
-  ["emails_missed_or_misclassified", "Mail missed / misclassified"],
-  ["sync_or_queue_failures", "Sync or queue failures"],
-];
-
 export function OutcomeAuditPanel() {
   const { confirm } = useConfirm();
+  const [mode, setMode] = useState(SELECTION);
+  const [view, setView] = useState("report");
   const [summary, setSummary] = useState(null);
   const [candidates, setCandidates] = useState([]);
   const [gaps, setGaps] = useState([]);
@@ -97,7 +135,6 @@ export function OutcomeAuditPanel() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [tab, setTab] = useState("candidates");
 
   const [filters, setFilters] = useState({
     candidate: "",
@@ -112,8 +149,13 @@ export function OutcomeAuditPanel() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
+  const isSelection = mode === SELECTION;
+  const outcomeOptions = isSelection ? SELECTION_OUTCOMES : INTERVIEW_OUTCOMES;
+  const modeTiles = isSelection ? SELECTION_TILES : INTERVIEW_TILES;
+
   const query = useMemo(() => {
     const params = new URLSearchParams();
+    params.set("mode", mode);
     if (filters.candidate.trim()) params.set("candidate", filters.candidate.trim());
     if (filters.company.trim()) params.set("company", filters.company.trim());
     if (filters.outcome !== "ALL") params.set("outcome", filters.outcome);
@@ -121,19 +163,18 @@ export function OutcomeAuditPanel() {
     if (filters.sync_status !== "ALL") params.set("sync_status", filters.sync_status);
     if (filters.min_confidence) params.set("min_confidence", filters.min_confidence);
     if (filters.manual_review) params.set("manual_review", "1");
-    if (filters.mismatch) params.set("mismatch", "1");
+    if (isSelection && filters.mismatch) params.set("mismatch", "1");
     return params.toString();
-  }, [filters]);
+  }, [filters, mode, isSelection]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const suffix = query ? `?${query}` : "";
       const [summaryBody, candidateBody, gapBody] = await Promise.all([
-        request(`/api/mail-outcome-audit/summary${suffix}`),
-        request(`/api/mail-outcome-audit/candidates${suffix}`),
-        request(`/api/mail-outcome-audit/gaps?limit=300`),
+        request(`/api/mail-outcome-audit/summary?${query}`),
+        request(`/api/mail-outcome-audit/candidates?${query}`),
+        request(`/api/mail-outcome-audit/gaps?mode=${mode}&limit=300`),
       ]);
       setSummary(summaryBody.summary || null);
       setCandidates(candidateBody.candidates || []);
@@ -143,17 +184,25 @@ export function OutcomeAuditPanel() {
     } finally {
       setLoading(false);
     }
-  }, [query]);
+  }, [query, mode]);
 
   useEffect(() => {
     load();
   }, [load]);
 
+  // An outcome filter from one mode means nothing in the other.
+  const switchMode = useCallback((next) => {
+    setMode(next);
+    setView("report");
+    setDetail(null);
+    setFilters((prev) => ({ ...prev, outcome: "ALL", mismatch: false }));
+  }, []);
+
   const runAudit = useCallback(async () => {
     const ok = await confirm({
       title: "Run the mail outcome audit",
       message:
-        "This reads every authorized candidate mailbox and rebuilds the report. " +
+        "This reads every authorized candidate mailbox and rebuilds both audits. " +
         "It is report-only: no email is modified and no candidate status changes.",
       confirmLabel: "Run audit",
     });
@@ -180,23 +229,28 @@ export function OutcomeAuditPanel() {
     }
   }, [confirm, load]);
 
+  const exportReport = useCallback(() => {
+    // The export carries exactly the rows on screen, mode included.
+    window.open(`${API}/api/mail-outcome-audit/export?${query}`, "_blank", "noopener");
+  }, [query]);
+
   const openCandidate = useCallback(
     async (row) => {
       setDetail({ loading: true, candidate: row });
       try {
         const params = new URLSearchParams();
+        params.set("mode", mode);
         if (dateFrom) params.set("date_from", dateFrom);
         if (dateTo) params.set("date_to", dateTo);
-        const suffix = params.toString() ? `?${params.toString()}` : "";
         const body = await request(
-          `/api/mail-outcome-audit/candidates/${encodeURIComponent(row.canonical_candidate_id)}${suffix}`,
+          `/api/mail-outcome-audit/candidates/${encodeURIComponent(row.canonical_candidate_id)}?${params}`,
         );
         setDetail({ loading: false, ...body });
       } catch (exc) {
         setDetail({ loading: false, candidate: row, error: exc.message });
       }
     },
-    [dateFrom, dateTo],
+    [dateFrom, dateTo, mode],
   );
 
   const approve = useCallback(
@@ -236,6 +290,8 @@ export function OutcomeAuditPanel() {
   const closeDetail = useCallback(() => setDetail(null), []);
   const dialogRef = useDialogA11y(Boolean(detail), closeDetail);
 
+  const tiles = [...modeTiles, ...SHARED_TILES];
+
   return (
     <div className="outcome-audit">
       <header className="outcome-audit__header">
@@ -254,6 +310,9 @@ export function OutcomeAuditPanel() {
               Run full audit
             </ButtonContent>
           </button>
+          <button type="button" className="cand-btn cand-btn--ghost" onClick={exportReport}>
+            Export CSV
+          </button>
           <button type="button" className="cand-btn cand-btn--ghost" onClick={load} disabled={loading}>
             Refresh
           </button>
@@ -262,144 +321,169 @@ export function OutcomeAuditPanel() {
 
       <MailMonitoringTabs active="outcome-audit" />
 
-      {summary?.latest_run && (
-        <p className="outcome-audit__runline">
-          Last run {when(summary.latest_run.started_at)} · {summary.latest_run.status} ·{" "}
-          {summary.latest_run.mode === "REPORT_ONLY" ? "report only" : summary.latest_run.mode} ·{" "}
-          {summary.latest_run.messages_examined} messages examined
-          {summary.latest_run.incremental ? " (incremental)" : ""}
-        </p>
-      )}
+      <nav className="outcome-audit__modes" aria-label="Audit mode">
+        <button
+          type="button"
+          className={mode === SELECTION && view === "report" ? "is-active" : ""}
+          aria-current={mode === SELECTION && view === "report" ? "page" : undefined}
+          onClick={() => switchMode(SELECTION)}
+        >
+          Selection Audit
+        </button>
+        <button
+          type="button"
+          className={mode === INTERVIEW && view === "report" ? "is-active" : ""}
+          aria-current={mode === INTERVIEW && view === "report" ? "page" : undefined}
+          onClick={() => switchMode(INTERVIEW)}
+        >
+          Interview Slot Audit
+        </button>
+        <button
+          type="button"
+          className={view === "gaps" ? "is-active" : ""}
+          aria-current={view === "gaps" ? "page" : undefined}
+          onClick={() => {
+            setView("gaps");
+            setDetail(null);
+          }}
+        >
+          Pipeline Gaps ({gaps.length})
+        </button>
+      </nav>
+
+      <p className="outcome-audit__runline">
+        {view === "gaps"
+          ? `Pipeline gaps affecting the ${isSelection ? "selection" : "interview slot"} audit. ` +
+            "Mailbox-level sync failures appear in both."
+          : isSelection
+            ? "Offer, selection, joining, background verification, shortlist and rejection evidence only."
+            : "Interview invitations, bookings, reschedules, cancellations and slot problems only."}
+        {summary?.latest_run && (
+          <>
+            {" · "}Last run {when(summary.latest_run.started_at)} · {summary.latest_run.status} ·{" "}
+            {summary.latest_run.mode === "REPORT_ONLY" ? "report only" : summary.latest_run.mode}
+          </>
+        )}
+      </p>
 
       {error && <div className="outcome-audit__error">{error}</div>}
       {notice && <div className="outcome-audit__notice">{notice}</div>}
 
-      <section className="outcome-audit__tiles" aria-label="System-wide summary">
-        {summary
-          ? SUMMARY_TILES.map(([key, label]) => (
-              <div className="outcome-audit__tile" key={key}>
-                <span className="outcome-audit__tile-value">{summary[key] ?? 0}</span>
-                <span className="outcome-audit__tile-label">{label}</span>
-              </div>
-            ))
-          : loading && <InlineLoader label="Loading summary…" />}
-      </section>
+      {view === "report" && (
+        <section className="outcome-audit__tiles" aria-label="Audit summary">
+          {summary
+            ? tiles.map(([key, label]) => (
+                <div className="outcome-audit__tile" key={key}>
+                  <span className="outcome-audit__tile-value">{summary[key] ?? 0}</span>
+                  <span className="outcome-audit__tile-label">{label}</span>
+                </div>
+              ))
+            : loading && <InlineLoader label="Loading summary…" />}
+        </section>
+      )}
 
-      <section className="outcome-audit__filters" aria-label="Audit filters">
-        <input
-          className="cand-input"
-          placeholder="Candidate name, id or Gmail"
-          value={filters.candidate}
-          onChange={(e) => setFilter("candidate", e.target.value)}
-          aria-label="Filter by candidate"
-        />
-        <input
-          className="cand-input"
-          placeholder="Company"
-          value={filters.company}
-          onChange={(e) => setFilter("company", e.target.value)}
-          aria-label="Filter by company"
-        />
-        <select
-          className="cand-input"
-          value={filters.outcome}
-          onChange={(e) => setFilter("outcome", e.target.value)}
-          aria-label="Filter by outcome"
-        >
-          <option value="ALL">All outcomes</option>
-          {OUTCOMES.map((value) => (
-            <option key={value} value={value}>
-              {human(value)}
-            </option>
-          ))}
-        </select>
-        <select
-          className="cand-input"
-          value={filters.authenticity}
-          onChange={(e) => setFilter("authenticity", e.target.value)}
-          aria-label="Filter by authenticity"
-        >
-          <option value="ALL">All authenticity</option>
-          {AUTHENTICITY.map((value) => (
-            <option key={value} value={value}>
-              {human(value)}
-            </option>
-          ))}
-        </select>
-        <select
-          className="cand-input"
-          value={filters.sync_status}
-          onChange={(e) => setFilter("sync_status", e.target.value)}
-          aria-label="Filter by mailbox sync status"
-        >
-          <option value="ALL">All mailboxes</option>
-          <option value="MONITORING_ACTIVE">Monitoring active</option>
-          <option value="CONNECTED">Connected</option>
-          <option value="FAILED">Sync failed</option>
-        </select>
-        <select
-          className="cand-input"
-          value={filters.min_confidence}
-          onChange={(e) => setFilter("min_confidence", e.target.value)}
-          aria-label="Filter by minimum confidence"
-        >
-          <option value="">Any confidence</option>
-          <option value="60">60% and above</option>
-          <option value="75">75% and above</option>
-          <option value="85">85% and above</option>
-        </select>
-        <input
-          type="date"
-          className="cand-input"
-          value={dateFrom}
-          onChange={(e) => setDateFrom(e.target.value)}
-          aria-label="Evidence from date"
-        />
-        <input
-          type="date"
-          className="cand-input"
-          value={dateTo}
-          onChange={(e) => setDateTo(e.target.value)}
-          aria-label="Evidence to date"
-        />
-        <label className="cand-toggle">
+      {view === "report" && (
+        <section className="outcome-audit__filters" aria-label="Audit filters">
           <input
-            type="checkbox"
-            checked={filters.manual_review}
-            onChange={(e) => setFilter("manual_review", e.target.checked)}
+            className="cand-input"
+            placeholder="Candidate name, id or Gmail"
+            value={filters.candidate}
+            onChange={(e) => setFilter("candidate", e.target.value)}
+            aria-label="Filter by candidate"
           />
-          <span>Manual review only</span>
-        </label>
-        <label className="cand-toggle">
           <input
-            type="checkbox"
-            checked={filters.mismatch}
-            onChange={(e) => setFilter("mismatch", e.target.checked)}
+            className="cand-input"
+            placeholder="Company"
+            value={filters.company}
+            onChange={(e) => setFilter("company", e.target.value)}
+            aria-label="Filter by company"
           />
-          <span>Status mismatches only</span>
-        </label>
-      </section>
-
-      <nav className="outcome-audit__tabs" aria-label="Audit sections">
-        <button
-          type="button"
-          className={tab === "candidates" ? "is-active" : ""}
-          onClick={() => setTab("candidates")}
-        >
-          Candidates ({candidates.length})
-        </button>
-        <button
-          type="button"
-          className={tab === "gaps" ? "is-active" : ""}
-          onClick={() => setTab("gaps")}
-        >
-          Pipeline gaps ({gaps.length})
-        </button>
-      </nav>
+          <select
+            className="cand-input"
+            value={filters.outcome}
+            onChange={(e) => setFilter("outcome", e.target.value)}
+            aria-label="Filter by outcome"
+          >
+            <option value="ALL">All outcomes</option>
+            {outcomeOptions.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <select
+            className="cand-input"
+            value={filters.authenticity}
+            onChange={(e) => setFilter("authenticity", e.target.value)}
+            aria-label="Filter by authenticity"
+          >
+            <option value="ALL">All authenticity</option>
+            {AUTHENTICITY.map((value) => (
+              <option key={value} value={value}>
+                {human(value)}
+              </option>
+            ))}
+          </select>
+          <select
+            className="cand-input"
+            value={filters.sync_status}
+            onChange={(e) => setFilter("sync_status", e.target.value)}
+            aria-label="Filter by mailbox sync status"
+          >
+            <option value="ALL">All mailboxes</option>
+            <option value="MONITORING_ACTIVE">Monitoring active</option>
+            <option value="CONNECTED">Connected</option>
+            <option value="FAILED">Sync failed</option>
+          </select>
+          <select
+            className="cand-input"
+            value={filters.min_confidence}
+            onChange={(e) => setFilter("min_confidence", e.target.value)}
+            aria-label="Filter by minimum confidence"
+          >
+            <option value="">Any confidence</option>
+            <option value="60">60% and above</option>
+            <option value="75">75% and above</option>
+            <option value="85">85% and above</option>
+          </select>
+          <input
+            type="date"
+            className="cand-input"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            aria-label="Evidence from date"
+          />
+          <input
+            type="date"
+            className="cand-input"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            aria-label="Evidence to date"
+          />
+          <label className="cand-toggle">
+            <input
+              type="checkbox"
+              checked={filters.manual_review}
+              onChange={(e) => setFilter("manual_review", e.target.checked)}
+            />
+            <span>Manual review only</span>
+          </label>
+          {isSelection && (
+            <label className="cand-toggle">
+              <input
+                type="checkbox"
+                checked={filters.mismatch}
+                onChange={(e) => setFilter("mismatch", e.target.checked)}
+              />
+              <span>Status mismatches only</span>
+            </label>
+          )}
+        </section>
+      )}
 
       {loading ? (
         <InlineLoader label="Loading audit results…" />
-      ) : tab === "candidates" ? (
+      ) : view === "report" ? (
         <div className="outcome-audit__table-wrap">
           <table className="outcome-audit__table">
             <thead>
@@ -409,8 +493,8 @@ export function OutcomeAuditPanel() {
                 <th>Mailbox</th>
                 <th>Strongest outcome</th>
                 <th>Confidence</th>
-                <th>Authenticity</th>
-                <th>System status</th>
+                {isSelection && <th>Authenticity</th>}
+                {isSelection ? <th>System status</th> : <th>Interview activity</th>}
                 <th>Companies</th>
                 <th>Last sync</th>
                 <th aria-label="Actions" />
@@ -420,7 +504,7 @@ export function OutcomeAuditPanel() {
               {candidates.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="outcome-audit__empty">
-                    No audited mailboxes match these filters. Run the audit if it has not been run yet.
+                    No audited mailboxes match these filters.
                   </td>
                 </tr>
               ) : (
@@ -454,15 +538,25 @@ export function OutcomeAuditPanel() {
                       )}
                     </td>
                     <td>{row.strongest_confidence ? `${Math.round(row.strongest_confidence)}%` : "—"}</td>
-                    <td>{human(row.strongest_authenticity) || "—"}</td>
-                    <td>
-                      {row.system_status || "—"}
-                      {row.status_mismatch && (
-                        <span className="outcome-audit__warn" title={row.mismatch_detail}>
-                          Mismatch
-                        </span>
-                      )}
-                    </td>
+                    {isSelection && <td>{human(row.strongest_authenticity) || "—"}</td>}
+                    {isSelection ? (
+                      <td>
+                        {row.system_status || "—"}
+                        {row.status_mismatch && (
+                          <span className="outcome-audit__warn" title={row.mismatch_detail}>
+                            Mismatch
+                          </span>
+                        )}
+                      </td>
+                    ) : (
+                      <td>
+                        {Object.entries(row.outcome_counts || {}).length === 0
+                          ? "—"
+                          : Object.entries(row.outcome_counts || {})
+                              .map(([key, count]) => `${human(key)} × ${count}`)
+                              .join(", ")}
+                      </td>
+                    )}
                     <td>{(row.companies || []).join(", ") || "—"}</td>
                     <td>{when(row.last_successful_sync_at)}</td>
                     <td>
@@ -497,7 +591,7 @@ export function OutcomeAuditPanel() {
               {gaps.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="outcome-audit__empty">
-                    No pipeline gaps recorded.
+                    No pipeline gaps recorded for this audit.
                   </td>
                 </tr>
               ) : (
@@ -543,6 +637,8 @@ export function OutcomeAuditPanel() {
                 <h2>{detail.candidate?.candidate_name || "Candidate"}</h2>
                 <p>
                   ID {detail.candidate?.canonical_candidate_id} · {detail.candidate?.email_address}
+                  {" · "}
+                  {isSelection ? "Selection audit" : "Interview slot audit"}
                 </p>
               </div>
               <button type="button" className="cand-btn cand-btn--ghost cand-btn--sm" onClick={closeDetail}>
@@ -563,10 +659,27 @@ export function OutcomeAuditPanel() {
                   <p className="outcome-audit__warnbox">{detail.candidate.mismatch_detail}</p>
                 )}
 
-                <h3>Relevant mail, oldest first</h3>
+                {!isSelection && (detail.bookings || []).length > 0 && (
+                  <>
+                    <h3>Booking outcomes</h3>
+                    <ul className="outcome-audit__gaplist">
+                      {detail.bookings.map((booking) => (
+                        <li key={booking.id}>
+                          <strong>{human(booking.booking_outcome)}</strong> — {booking.booking_status}
+                          {booking.failure_message ? ` · ${booking.failure_message}` : ""}
+                          {booking.created_at ? ` · ${day(booking.created_at)}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+
+                <h3>{isSelection ? "Selection evidence" : "Interview mail"}, oldest first</h3>
                 {(detail.findings || []).filter((f) => f.outcome !== "NOT_RELEVANT").length === 0 ? (
                   <p className="outcome-audit__empty">
-                    No mail in this mailbox carries a company outcome.
+                    {isSelection
+                      ? "No mail in this mailbox carries a selection outcome."
+                      : "No interview mail found in this mailbox."}
                   </p>
                 ) : (
                   <ol className="outcome-audit__evidence">
@@ -608,8 +721,6 @@ export function OutcomeAuditPanel() {
                             Authenticity: <strong>{human(finding.authenticity)}</strong>
                             {(finding.authenticity_detail?.concerns || []).length > 0 &&
                               ` — ${finding.authenticity_detail.concerns.join(" ")}`}
-                            {(finding.authenticity_detail?.notes || []).length > 0 &&
-                              ` ${finding.authenticity_detail.notes.join(" ")}`}
                           </p>
                           <p className="outcome-audit__sub">
                             Pipeline: {finding.pipeline_outcome ? human(finding.pipeline_outcome) : "no event"} (
@@ -660,7 +771,6 @@ export function OutcomeAuditPanel() {
                           {when(item.created_at)} — {item.decision} {human(item.requested_outcome)} by{" "}
                           {item.approved_by}
                           {item.applied ? ` → status "${item.applied_system_status}"` : " (not applied)"}
-                          {item.error_message ? ` — ${item.error_message}` : ""}
                         </li>
                       ))}
                     </ul>
