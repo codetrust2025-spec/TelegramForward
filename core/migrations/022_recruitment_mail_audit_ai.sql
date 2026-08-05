@@ -54,6 +54,20 @@ CREATE TABLE IF NOT EXISTS mail_audit_ai_log (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Citations, and whether they survived checking against the source material.
+-- An unverified review is kept and shown, but marked, so a fabricated quote is
+-- visible rather than believed.
+ALTER TABLE mail_audit_ai_results
+  ADD COLUMN IF NOT EXISTS cited_message_id text;
+ALTER TABLE mail_audit_ai_results
+  ADD COLUMN IF NOT EXISTS cited_attachment text;
+ALTER TABLE mail_audit_ai_results
+  ADD COLUMN IF NOT EXISTS cited_company text;
+ALTER TABLE mail_audit_ai_results
+  ADD COLUMN IF NOT EXISTS verified boolean NOT NULL DEFAULT false;
+ALTER TABLE mail_audit_ai_results
+  ADD COLUMN IF NOT EXISTS verification_problems text;
+
 CREATE INDEX IF NOT EXISTS idx_mail_audit_ai_queue_status
   ON mail_audit_ai_queue(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_mail_audit_ai_results_finding

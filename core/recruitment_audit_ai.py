@@ -156,12 +156,24 @@ Judge only what the email itself states:
 - an offer letter is only verified when real offer terms are present
 - interview scheduling is not selection
 If the text does not clearly support any outcome, say so.
+
+You receive the whole thread, oldest first, and the text extracted from any
+attachments. Read all of it before answering, and keep companies separate: a
+result from one company says nothing about another.
+
+Every answer must be checkable:
+- cited_message_id must be one of the message_id values given to you
+- quoted_evidence must be text copied verbatim from a body or an attachment
+- cited_attachment must be a filename given to you, or null
+Do not invent a message, a quotation, an attachment or a company. If nothing
+in the input supports a conclusion, set agrees to reflect that and say why.
 """
 
 AUDIT_SCHEMA = {
     "type": "object",
     "required": ["agrees", "suggested_outcome", "confidence", "reasoning",
-                 "is_bulk_campaign", "sender_is_hiring_company"],
+                 "is_bulk_campaign", "sender_is_hiring_company",
+                 "cited_message_id", "quoted_evidence", "company", "cited_attachment"],
     "properties": {
         "agrees": {"type": "boolean"},
         "suggested_outcome": {"type": "string", "enum": sorted(engine.OUTCOMES)},
@@ -169,7 +181,13 @@ AUDIT_SCHEMA = {
         "reasoning": {"type": "string", "maxLength": 800},
         "is_bulk_campaign": {"type": "boolean"},
         "sender_is_hiring_company": {"type": "boolean"},
+        # Citations exist so the answer can be checked against the source.
+        # A message id or quote that is not in the input is a fabrication and
+        # is caught by verify_review before the result is trusted.
+        "cited_message_id": {"type": "string", "maxLength": 64},
         "quoted_evidence": {"type": "string", "maxLength": 400},
+        "cited_attachment": {"type": ["string", "null"], "maxLength": 200},
+        "company": {"type": ["string", "null"], "maxLength": 200},
     },
     "additionalProperties": False,
 }
@@ -190,16 +208,21 @@ def _prompt_payload(finding: dict[str, Any], body: str) -> list[dict[str, Any]]:
     return [
         {"role": "system", "content": AUDIT_SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps({
+            "message_under_review": finding.get("provider_message_id"),
             "rule_engine_outcome": finding.get("outcome"),
             "rule_engine_rationale": finding.get("rationale"),
+            "live_pipeline_outcome": finding.get("pipeline_outcome"),
             "subject": finding.get("subject"),
             "sender_email": finding.get("sender_email"),
             "sender_domain": finding.get("sender_domain"),
             "stated_company": finding.get("company_name"),
             "company_domain": finding.get("company_domain"),
             "role": finding.get("job_title"),
+            "application_key": finding.get("application_key"),
             "received_at": str(finding.get("received_at") or ""),
-            "body": (body or "")[:6000],
+            # The full conversation and the real extracted attachment text.
+            "thread": finding.get("thread") or [],
+            "attachments": finding.get("attachments") or [],
         }, default=str)},
     ]
 
@@ -262,11 +285,20 @@ def _finish(job_id: str, status: str, *, error: str | None = None,
 
 
 def _finding_for_job(finding_id: str) -> dict[str, Any] | None:
+    """Load one finding with everything the reviewer must actually read.
+
+    The complete thread and the extracted attachment text travel with the
+    prompt, because a second opinion formed from the subject line alone is
+    worth no more than the rule it is checking.
+    """
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT f.id,f.provider_message_id,f.outcome,f.rationale,f.subject,
-                      f.sender_email,f.sender_domain,f.company_name,f.company_domain,
-                      f.job_title,f.received_at,f.content_signature,
+            """SELECT f.id,f.provider_message_id,f.provider_thread_id,f.outcome,
+                      f.rationale,f.subject,f.sender_email,f.sender_domain,
+                      f.company_name,f.company_domain,f.job_title,f.received_at,
+                      f.content_signature,f.application_key,f.source_type,
+                      f.evidence_strength,f.authenticity,f.pipeline_outcome,
+                      f.mailbox_id,f.mailbox_message_id,f.canonical_candidate_id,
                       m.body_text
                FROM mail_outcome_audit_findings f
                LEFT JOIN mailbox_messages m ON m.id=f.mailbox_message_id
@@ -274,7 +306,112 @@ def _finding_for_job(finding_id: str) -> dict[str, Any] | None:
             (finding_id,),
         )
         rows = _rows(cur)
-    return rows[0] if rows else None
+    if not rows:
+        return None
+    finding = rows[0]
+
+    with get_connection() as conn, conn.cursor() as cur:
+        # The whole conversation, oldest first, so chronology is visible.
+        cur.execute(
+            """SELECT provider_message_id,subject,sender_email,sent_at,body_text,
+                      message_direction
+               FROM mailbox_messages
+               WHERE mailbox_id=%s AND provider_thread_id=%s
+               ORDER BY COALESCE(sent_at,created_at)""",
+            (finding.get("mailbox_id"), finding.get("provider_thread_id") or ""),
+        )
+        thread = _rows(cur)
+        cur.execute(
+            """SELECT a.filename,a.mime_type,a.attachment_type,a.extraction_status,
+                      c.extracted_text
+               FROM mailbox_attachments a
+               LEFT JOIN mailbox_attachment_cache c ON c.checksum=a.checksum
+               WHERE a.mailbox_message_id=%s""",
+            (finding.get("mailbox_message_id"),),
+        )
+        attachments = _rows(cur)
+
+    finding["thread"] = [
+        {
+            "message_id": row.get("provider_message_id"),
+            "subject": row.get("subject"),
+            "from": row.get("sender_email"),
+            "sent_at": str(row.get("sent_at") or ""),
+            "direction": row.get("message_direction"),
+            "body": (row.get("body_text") or "")[:2500],
+        }
+        for row in thread
+    ] or [{
+        "message_id": finding.get("provider_message_id"),
+        "subject": finding.get("subject"), "from": finding.get("sender_email"),
+        "sent_at": str(finding.get("received_at") or ""), "direction": None,
+        "body": (finding.get("body_text") or "")[:2500],
+    }]
+    finding["attachments"] = [
+        {
+            "filename": row.get("filename"), "mime_type": row.get("mime_type"),
+            "attachment_type": row.get("attachment_type"),
+            "extraction_status": row.get("extraction_status"),
+            "extracted_text": (row.get("extracted_text") or "")[:3000],
+        }
+        for row in attachments
+    ]
+    return finding
+
+
+# ── First-rollout eligibility ────────────────────────────────────────────────
+#
+# The audit does not review everything. It reviews the cases where a second
+# opinion changes what an administrator would do: the ones the rules already
+# doubt, the ones where the rules and the live pipeline disagree, and the ones
+# whose consequences are largest.
+
+ELIGIBILITY_SQL = """
+    (
+      f.outcome = 'MANUAL_REVIEW_REQUIRED'
+      OR f.manual_review_required = true
+      OR f.pipeline_agreement IN ('AUDIT_STRONGER','PIPELINE_STRONGER')
+      OR f.outcome IN ('VERIFIED_OFFER_LETTER','OFFER_INDICATION')
+      OR f.authenticity = 'SUSPICIOUS'
+      OR c.status_mismatch = true
+    )
+"""
+
+
+def eligible_findings(limit: int = 5) -> list[dict[str, Any]]:
+    """Selection-audit findings worth a second opinion, highest value first.
+
+    Deliberately excludes suppressed findings and anything already reviewed:
+    this is a targeted first pass, not a backfill of every stored email.
+    """
+    from core import recruitment_mail_audit as audit_engine
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""SELECT f.id,f.canonical_candidate_id,f.subject,f.outcome,
+                       f.authenticity,f.pipeline_agreement,f.manual_review_required,
+                       c.candidate_name,c.status_mismatch
+                FROM mail_outcome_audit_findings f
+                LEFT JOIN mail_outcome_audit_candidates c
+                  ON c.canonical_candidate_id = f.canonical_candidate_id
+                WHERE COALESCE(f.suppressed,false) = false
+                  AND f.outcome = ANY(%s)
+                  AND {ELIGIBILITY_SQL}
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mail_audit_ai_queue q WHERE q.finding_id = f.id)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM mail_audit_ai_results r WHERE r.finding_id = f.id)
+                ORDER BY
+                  CASE f.outcome
+                    WHEN 'VERIFIED_OFFER_LETTER' THEN 0
+                    WHEN 'OFFER_INDICATION' THEN 1
+                    WHEN 'MANUAL_REVIEW_REQUIRED' THEN 2
+                    ELSE 3 END,
+                  (f.authenticity = 'SUSPICIOUS') DESC,
+                  f.received_at DESC NULLS LAST
+                LIMIT %s""",
+            (sorted(audit_engine.SELECTION_OUTCOMES), max(1, min(50, int(limit)))),
+        )
+        return _rows(cur)
 
 
 def cached_result(key: str) -> dict[str, Any] | None:
@@ -284,6 +421,58 @@ def cached_result(key: str) -> dict[str, Any] | None:
         )
         rows = _rows(cur)
     return rows[0] if rows else None
+
+
+def _normalise(value: str) -> str:
+    return " ".join(str(value or "").split()).lower()
+
+
+def verify_review(finding: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Check the model's citations against the material it was actually given.
+
+    A second opinion is only useful if it can be checked. Every claim the
+    model makes must point at a real message, a real quotation and a real
+    attachment; anything else is recorded as a fabrication and the review is
+    marked untrusted rather than silently believed.
+    """
+    problems: list[str] = []
+    thread = finding.get("thread") or []
+    attachments = finding.get("attachments") or []
+
+    known_ids = {str(item.get("message_id") or "") for item in thread}
+    known_ids.add(str(finding.get("provider_message_id") or ""))
+    known_ids.discard("")
+    cited_id = str(payload.get("cited_message_id") or "").strip()
+    if not cited_id:
+        problems.append("No message id was cited.")
+    elif cited_id not in known_ids:
+        problems.append(f"Cited message id {cited_id} was not in the input.")
+
+    corpus = _normalise(" ".join(
+        [str(item.get("body") or "") for item in thread]
+        + [str(item.get("extracted_text") or "") for item in attachments]
+        + [str(finding.get("subject") or "")]
+    ))
+    quote = _normalise(payload.get("quoted_evidence"))
+    if not quote:
+        problems.append("No evidence was quoted.")
+    elif quote not in corpus:
+        # Allow a shortened quote, but require a substantial contiguous run.
+        head = quote[:60]
+        if len(head) < 12 or head not in corpus:
+            problems.append("Quoted evidence does not appear in the source text.")
+
+    known_files = {_normalise(item.get("filename")) for item in attachments}
+    known_files.discard("")
+    cited_file = _normalise(payload.get("cited_attachment"))
+    if cited_file and cited_file not in known_files:
+        problems.append(f"Cited attachment '{payload.get('cited_attachment')}' does not exist.")
+    if cited_file and not attachments:
+        problems.append("An attachment was cited but the message has none.")
+
+    return {"trusted": not problems, "problems": problems,
+            "checked_message_ids": sorted(known_ids),
+            "checked_attachments": sorted(f for f in known_files if f)}
 
 
 def review_one(job: dict[str, Any]) -> dict[str, Any]:
@@ -318,28 +507,38 @@ def review_one(job: dict[str, Any]) -> dict[str, Any]:
         _finish(str(job["id"]), QUEUE_FAILED, error=str(exc))
         return {"status": "FAILED", "error": str(exc)[:400]}
 
-    record = _store_result(key, finding, payload, model=str(getattr(answer, "model", "") or ""))
+    verification = verify_review(finding, payload)
+    record = _store_result(key, finding, payload,
+                           model=str(getattr(answer, "model", "") or ""),
+                           verification=verification)
     _finish(str(job["id"]), QUEUE_DONE)
-    return {"status": "COMPLETED", "result": record}
+    return {"status": "COMPLETED", "result": record, "verification": verification}
 
 
 def _store_result(key: str, finding: dict[str, Any], payload: dict[str, Any],
-                  *, model: str) -> dict[str, Any]:
+                  *, model: str, verification: dict[str, Any] | None = None) -> dict[str, Any]:
     """Persist the second opinion. Advisory only: no finding is overwritten."""
     record_id = _id()
+    verification = verification or {"trusted": False, "problems": ["not verified"]}
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """INSERT INTO mail_audit_ai_results
                  (id,cache_key,finding_id,prompt_name,model,agrees,suggested_outcome,
                   confidence,reasoning,is_bulk_campaign,sender_is_hiring_company,
-                  quoted_evidence,raw_response)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                  quoted_evidence,cited_message_id,cited_attachment,cited_company,
+                  verified,verification_problems,raw_response)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
                ON CONFLICT (cache_key) DO UPDATE SET
                  agrees=EXCLUDED.agrees,suggested_outcome=EXCLUDED.suggested_outcome,
                  confidence=EXCLUDED.confidence,reasoning=EXCLUDED.reasoning,
                  is_bulk_campaign=EXCLUDED.is_bulk_campaign,
                  sender_is_hiring_company=EXCLUDED.sender_is_hiring_company,
                  quoted_evidence=EXCLUDED.quoted_evidence,
+                 cited_message_id=EXCLUDED.cited_message_id,
+                 cited_attachment=EXCLUDED.cited_attachment,
+                 cited_company=EXCLUDED.cited_company,
+                 verified=EXCLUDED.verified,
+                 verification_problems=EXCLUDED.verification_problems,
                  raw_response=EXCLUDED.raw_response,updated_at=now()
                RETURNING *""",
             (record_id, key, finding["id"], AUDIT_PROMPT_NAME, model,
@@ -348,6 +547,11 @@ def _store_result(key: str, finding: dict[str, Any], payload: dict[str, Any],
              bool(payload.get("is_bulk_campaign")),
              bool(payload.get("sender_is_hiring_company")),
              str(payload.get("quoted_evidence") or "")[:400],
+             str(payload.get("cited_message_id") or "")[:64],
+             str(payload.get("cited_attachment") or "")[:200] or None,
+             str(payload.get("company") or "")[:200] or None,
+             bool(verification.get("trusted")),
+             "; ".join(verification.get("problems") or [])[:600] or None,
              json.dumps(payload, default=str)),
         )
         rows = _rows(cur)
