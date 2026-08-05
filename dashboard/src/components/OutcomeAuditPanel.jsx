@@ -1,7 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API } from "../config.js";
 import { useConfirm } from "../context/ConfirmContext.jsx";
-import { MailMonitoringTabs } from "./MailMonitoringTabs.jsx";
 import { useDialogA11y } from "../hooks/useDialogA11y.js";
 import { ButtonContent, InlineLoader } from "../Loader.jsx";
 
@@ -22,10 +21,10 @@ export const SELECTION = "SELECTION";
 export const INTERVIEW = "INTERVIEW";
 
 /**
- * Selection results and interview-slot results answer different questions and
- * are never totalled together. Each mode owns its own categories; the two
- * lists below share no entry, which is what stops a mailbox full of interview
- * invitations from reading as hiring progress.
+ * Selection and interview-slot results answer different questions and share no
+ * category, which is what stops a mailbox of interview invitations reading as
+ * hiring progress. The lists below are display labels only; the partition
+ * itself lives in the audit engine.
  */
 const SELECTION_OUTCOMES = [
   ["VERIFIED_OFFER_LETTER", "Verified offer letter"],
@@ -54,52 +53,53 @@ const INTERVIEW_OUTCOMES = [
   ["NOT_RELEVANT", "No interview activity"],
 ];
 
-const SELECTION_TILES = [
-  ["candidates_verified_offer_letters", "Verified offer letters"],
-  ["candidates_final_selection", "Final selections"],
+// The decision first. Everything else is one click away, never removed.
+const SELECTION_HEADLINE = [
+  ["candidates_verified_offer_letters", "Verified offers"],
   ["candidates_offer_indication", "Offer indications"],
+  ["candidates_rejected", "Rejected"],
+  ["candidates_manual_review", "Needs review"],
+  ["pipeline_gaps_total", "Pipeline issues"],
+];
+const SELECTION_MORE = [
+  ["candidates_final_selection", "Final selections"],
   ["candidates_joining_confirmed", "Joining confirmed"],
   ["candidates_background_verification", "Background verification"],
   ["candidates_shortlisted", "Shortlisted"],
   ["candidates_next_round", "Next round"],
-  ["candidates_rejected", "Rejected"],
-  ["candidates_manual_review_outcome", "Manual review required"],
   ["candidates_no_outcome", "No selection evidence"],
-];
-
-const INTERVIEW_TILES = [
-  ["candidates_with_interview_invites", "Interview invitations"],
-  ["candidates_auto_booked", "Automatically booked"],
-  ["candidates_interview_rescheduled", "Rescheduled"],
-  ["candidates_interview_cancelled", "Cancelled"],
-  ["candidates_booking_blocked", "Booking blocked"],
-  ["candidates_duplicate_booking_ignored", "Duplicate ignored"],
-  ["candidates_slot_conflict", "Slot conflicts"],
-  ["candidates_missing_date_or_time", "Missing date or time"],
-  ["candidates_missed_invites", "Missed or unprocessed invites"],
-  ["candidates_historical_not_booked", "Historical, not booked"],
-];
-
-const SHARED_TILES = [
   ["total_connected_mailboxes", "Connected mailboxes"],
   ["mailboxes_scanned", "Scanned"],
   ["mailboxes_failed", "Failed to scan"],
-  ["pipeline_gaps_total", "Pipeline gaps"],
+];
+
+const INTERVIEW_HEADLINE = [
+  ["candidates_with_interview_invites", "Invitations"],
+  ["candidates_auto_booked", "Automatically booked"],
+  ["candidates_booking_blocked", "Booking blocked"],
+  ["candidates_slot_conflict", "Slot conflicts"],
+  ["pipeline_gaps_total", "Pipeline issues"],
+];
+const INTERVIEW_MORE = [
+  ["candidates_interview_rescheduled", "Rescheduled"],
+  ["candidates_interview_cancelled", "Cancelled"],
+  ["candidates_duplicate_booking_ignored", "Duplicate ignored"],
+  ["candidates_missing_date_or_time", "Missing date or time"],
+  ["candidates_missed_invites", "Missed or unprocessed"],
+  ["candidates_historical_not_booked", "Historical, not booked"],
+  ["total_connected_mailboxes", "Connected mailboxes"],
+  ["mailboxes_scanned", "Scanned"],
+  ["mailboxes_failed", "Failed to scan"],
 ];
 
 const CLEANUP_REASONS = {
   IRRELEVANT: "Irrelevant",
   DUPLICATE: "Duplicate",
   SUPERSEDED: "Superseded",
-  WRONG_AUDIT_MODE: "Moved to Interview Slot Audit",
+  WRONG_AUDIT_MODE: "Moved to Interview Slots",
 };
 
-// Approval is offered per application, never per loose message: it requires a
-// named company and role, an authentic company sender, strong evidence and no
-// later conflicting message. The server enforces the same gate.
-
 const AUTHENTICITY = ["PASS", "PARTIAL", "UNVERIFIED", "SUSPICIOUS"];
-
 const LABELS = new Map([...SELECTION_OUTCOMES, ...INTERVIEW_OUTCOMES]);
 
 const human = (value) =>
@@ -125,6 +125,38 @@ const day = (value) => {
     : date.toLocaleDateString("en-IN", { dateStyle: "medium" });
 };
 
+// Only three states get colour. Everything else is neutral, so the eye lands
+// on the outcome rather than on a wall of badges.
+const TONE = {
+  VERIFIED_OFFER_LETTER: "good",
+  JOINING_CONFIRMED: "good",
+  INTERVIEW_AUTO_BOOKED: "good",
+  FINAL_SELECTION: "good",
+  REJECTED: "bad",
+  INTERVIEW_CANCELLED: "bad",
+  SLOT_CONFLICT: "bad",
+  BOOKING_BLOCKED: "warn",
+  MANUAL_REVIEW_REQUIRED: "warn",
+};
+
+function Collapsible({ label, count, children, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="audit-collapse">
+      <button
+        type="button"
+        className="audit-collapse__toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span aria-hidden>{open ? "▾" : "▸"}</span> {label}
+        {count != null && <span className="audit-collapse__count">{count}</span>}
+      </button>
+      {open && <div className="audit-collapse__body">{children}</div>}
+    </div>
+  );
+}
+
 export function OutcomeAuditPanel() {
   const { confirm } = useConfirm();
   const [mode, setMode] = useState(SELECTION);
@@ -138,6 +170,13 @@ export function OutcomeAuditPanel() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showMetrics, setShowMetrics] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [showTechnical, setShowTechnical] = useState(false);
+  const [expandedRow, setExpandedRow] = useState(null);
+  const menuRef = useRef(null);
 
   const [filters, setFilters] = useState({
     candidate: "",
@@ -154,7 +193,22 @@ export function OutcomeAuditPanel() {
 
   const isSelection = mode === SELECTION;
   const outcomeOptions = isSelection ? SELECTION_OUTCOMES : INTERVIEW_OUTCOMES;
-  const modeTiles = isSelection ? SELECTION_TILES : INTERVIEW_TILES;
+  const headline = isSelection ? SELECTION_HEADLINE : INTERVIEW_HEADLINE;
+  const moreMetrics = isSelection ? SELECTION_MORE : INTERVIEW_MORE;
+
+  const activeFilters = useMemo(() => {
+    const active = [];
+    if (filters.candidate.trim()) active.push("search");
+    if (filters.company.trim()) active.push("company");
+    if (filters.outcome !== "ALL") active.push("outcome");
+    if (filters.authenticity !== "ALL") active.push("authenticity");
+    if (filters.sync_status !== "ALL") active.push("mailbox");
+    if (filters.min_confidence) active.push("confidence");
+    if (filters.manual_review) active.push("needs review");
+    if (filters.mismatch) active.push("mismatch");
+    if (dateFrom || dateTo) active.push("dates");
+    return active;
+  }, [filters, dateFrom, dateTo]);
 
   const query = useMemo(() => {
     const params = new URLSearchParams();
@@ -195,19 +249,38 @@ export function OutcomeAuditPanel() {
     load();
   }, [load]);
 
-  // An outcome filter from one mode means nothing in the other.
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onDoc = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [menuOpen]);
+
+  // An outcome filter from one audit means nothing in the other.
   const switchMode = useCallback((next) => {
     setMode(next);
     setView("report");
     setDetail(null);
+    setExpandedRow(null);
     setFilters((prev) => ({ ...prev, outcome: "ALL", mismatch: false }));
+  }, []);
+
+  const clearFilters = useCallback(() => {
+    setFilters({
+      candidate: "", company: "", outcome: "ALL", authenticity: "ALL",
+      sync_status: "ALL", min_confidence: "", manual_review: false, mismatch: false,
+    });
+    setDateFrom("");
+    setDateTo("");
   }, []);
 
   const runAudit = useCallback(async () => {
     const ok = await confirm({
-      title: "Run the mail outcome audit",
+      title: "Run the mail audit",
       message:
-        "This reads every authorized candidate mailbox and rebuilds both audits. " +
+        "This reads every authorized candidate mailbox and rebuilds the report. " +
         "It is report-only: no email is modified and no candidate status changes.",
       confirmLabel: "Run audit",
     });
@@ -223,8 +296,7 @@ export function OutcomeAuditPanel() {
       const run = body.run || {};
       setNotice(
         `Audit complete — ${run.mailboxes_scanned}/${run.mailboxes_total} mailboxes scanned, ` +
-          `${run.messages_examined} messages examined, ${run.gaps_written} pipeline gaps recorded.` +
-          (run.mailboxes_failed ? ` ${run.mailboxes_failed} mailbox(es) could not be scanned.` : ""),
+          `${run.messages_examined} messages examined.`,
       );
       await load();
     } catch (exc) {
@@ -235,8 +307,8 @@ export function OutcomeAuditPanel() {
   }, [confirm, load]);
 
   const exportReport = useCallback(() => {
-    // The export carries exactly the rows on screen, mode included.
     window.open(`${API}/api/mail-outcome-audit/export?${query}`, "_blank", "noopener");
+    setMenuOpen(false);
   }, [query]);
 
   const openCandidate = useCallback(
@@ -261,13 +333,13 @@ export function OutcomeAuditPanel() {
   const approve = useCallback(
     async (finding, decision) => {
       const ok = await confirm({
-        title: decision === "APPROVED" ? "Apply this outcome" : "Dismiss this outcome",
+        title: decision === "APPROVED" ? "Apply this outcome" : "Mark as reviewed",
         message:
           decision === "APPROVED"
             ? `Set this candidate's status from the audited outcome "${human(finding.outcome)}"? ` +
               "This is the only action that changes a candidate record."
             : "Record that this audited outcome was reviewed and not applied?",
-        confirmLabel: decision === "APPROVED" ? "Apply status" : "Dismiss",
+        confirmLabel: decision === "APPROVED" ? "Apply status" : "Mark reviewed",
       });
       if (!ok) return;
       try {
@@ -279,7 +351,7 @@ export function OutcomeAuditPanel() {
         setNotice(
           decision === "APPROVED"
             ? `Status set to "${approval.status}" for candidate ${approval.candidate_id}.`
-            : "Outcome recorded as reviewed; nothing was changed.",
+            : "Recorded as reviewed; nothing was changed.",
         );
         await load();
         if (detail?.candidate) await openCandidate(detail.candidate);
@@ -291,49 +363,100 @@ export function OutcomeAuditPanel() {
   );
 
   const setFilter = (key, value) => setFilters((prev) => ({ ...prev, [key]: value }));
-
   const closeDetail = useCallback(() => setDetail(null), []);
   const dialogRef = useDialogA11y(Boolean(detail), closeDetail);
 
-  const tiles = [...modeTiles, ...SHARED_TILES];
+  // The one application an administrator could act on, if any. Eligibility is
+  // decided by the server; this only picks which one to surface first.
+  const primaryApplication = useMemo(
+    () => (detail?.applications || []).find((app) => app.approval?.eligible) || null,
+    [detail],
+  );
+
+  const modeLabel = isSelection ? "Selection" : "Interview slots";
 
   return (
-    <div className="outcome-audit">
-      <header className="outcome-audit__header">
-        <div>
-          <p className="outcome-audit__eyebrow">AI MAIL MONITORING</p>
-          <h1>Candidate mail outcome audit</h1>
-          <p className="outcome-audit__lede">
-            Evidence-based reconstruction of what every connected mailbox actually received.
-            Read-only: no email is sent, deleted, labelled or modified, and candidate status
-            changes only through an explicit approval below.
+    <div className="audit">
+      <header className="audit__header">
+        <div className="audit__title">
+          <p className="audit__eyebrow">AI mail monitoring</p>
+          <h1>Candidate Mail Audit</h1>
+          <p className="audit__lastrun">
+            {summary?.latest_run
+              ? `Last audit ${when(summary.latest_run.started_at)} · report only`
+              : "No audit has been run yet"}
           </p>
         </div>
-        <div className="outcome-audit__actions">
-          <button type="button" className="cand-btn cand-btn--primary" onClick={runAudit} disabled={running}>
-            <ButtonContent loading={running} loadingLabel="Auditing…">
-              Run full audit
-            </ButtonContent>
+        <div className="audit__actions" ref={menuRef}>
+          <button
+            type="button"
+            className="audit-btn audit-btn--primary"
+            onClick={runAudit}
+            disabled={running}
+          >
+            <ButtonContent loading={running} loadingLabel="Auditing…">Run audit</ButtonContent>
           </button>
-          <button type="button" className="cand-btn cand-btn--ghost" onClick={exportReport}>
-            Export CSV
+          <button
+            type="button"
+            className="audit-btn audit-btn--icon"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label="More actions"
+            onClick={() => setMenuOpen((value) => !value)}
+          >
+            ⋯
           </button>
-          <button type="button" className="cand-btn cand-btn--ghost" onClick={load} disabled={loading}>
-            Refresh
-          </button>
+          {menuOpen && (
+            <div className="audit-menu" role="menu">
+              <button type="button" role="menuitem" onClick={exportReport}>
+                Export CSV
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  load();
+                }}
+              >
+                Refresh
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setShowTechnical((value) => !value);
+                  setMenuOpen(false);
+                }}
+              >
+                Audit technical details
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
-      <MailMonitoringTabs active="outcome-audit" />
+      {showTechnical && summary?.latest_run && (
+        <section className="audit-technical" aria-label="Audit technical details">
+          <dl>
+            <div><dt>Run</dt><dd>{summary.latest_run.id || "—"}</dd></div>
+            <div><dt>Status</dt><dd>{summary.latest_run.status}</dd></div>
+            <div><dt>Mode</dt><dd>{summary.latest_run.mode}</dd></div>
+            <div><dt>Messages examined</dt><dd>{summary.latest_run.messages_examined}</dd></div>
+            <div><dt>Mailboxes</dt><dd>{summary.mailboxes_scanned}/{summary.total_connected_mailboxes}</dd></div>
+            <div><dt>Excluded findings</dt><dd>{summary.excluded_findings ?? excluded.length}</dd></div>
+          </dl>
+        </section>
+      )}
 
-      <nav className="outcome-audit__modes" aria-label="Audit mode">
+      <nav className="audit-nav" aria-label="Audit sections">
         <button
           type="button"
           className={mode === SELECTION && view === "report" ? "is-active" : ""}
           aria-current={mode === SELECTION && view === "report" ? "page" : undefined}
           onClick={() => switchMode(SELECTION)}
         >
-          Selection Audit
+          Selection
         </button>
         <button
           type="button"
@@ -341,7 +464,7 @@ export function OutcomeAuditPanel() {
           aria-current={mode === INTERVIEW && view === "report" ? "page" : undefined}
           onClick={() => switchMode(INTERVIEW)}
         >
-          Interview Slot Audit
+          Interviews
         </button>
         <button
           type="button"
@@ -352,364 +475,390 @@ export function OutcomeAuditPanel() {
             setDetail(null);
           }}
         >
-          Pipeline Gaps ({gaps.length})
+          Pipeline
         </button>
-        {isSelection && (
-          <button
-            type="button"
-            className={view === "excluded" ? "is-active" : ""}
-            aria-current={view === "excluded" ? "page" : undefined}
-            onClick={() => {
-              setView("excluded");
-              setDetail(null);
-            }}
-            title="Findings cleaned out of the Selection Audit. Nothing is deleted."
-          >
-            Excluded ({excluded.length})
-          </button>
-        )}
       </nav>
 
-      <p className="outcome-audit__runline">
-        {view === "excluded"
-          ? "Findings cleaned out of the Selection Audit. The email, its attachments and its " +
-            "evidence are unchanged; only the counting excludes them."
-          : view === "gaps"
-          ? `Pipeline gaps affecting the ${isSelection ? "selection" : "interview slot"} audit. ` +
-            "Mailbox-level sync failures appear in both."
-          : isSelection
-            ? "Offer, selection, joining, background verification, shortlist and rejection evidence only."
-            : "Interview invitations, bookings, reschedules, cancellations and slot problems only."}
-        {summary?.latest_run && (
-          <>
-            {" · "}Last run {when(summary.latest_run.started_at)} · {summary.latest_run.status} ·{" "}
-            {summary.latest_run.mode === "REPORT_ONLY" ? "report only" : summary.latest_run.mode}
-          </>
-        )}
-      </p>
-
-      {error && <div className="outcome-audit__error">{error}</div>}
-      {notice && <div className="outcome-audit__notice">{notice}</div>}
-
-      {view === "report" && (
-        <section className="outcome-audit__tiles" aria-label="Audit summary">
-          {summary
-            ? tiles.map(([key, label]) => (
-                <div className="outcome-audit__tile" key={key}>
-                  <span className="outcome-audit__tile-value">{summary[key] ?? 0}</span>
-                  <span className="outcome-audit__tile-label">{label}</span>
-                </div>
-              ))
-            : loading && <InlineLoader label="Loading summary…" />}
-        </section>
-      )}
-
-      {view === "report" && (
-        <section className="outcome-audit__filters" aria-label="Audit filters">
-          <input
-            className="cand-input"
-            placeholder="Candidate name, id or Gmail"
-            value={filters.candidate}
-            onChange={(e) => setFilter("candidate", e.target.value)}
-            aria-label="Filter by candidate"
-          />
-          <input
-            className="cand-input"
-            placeholder="Company"
-            value={filters.company}
-            onChange={(e) => setFilter("company", e.target.value)}
-            aria-label="Filter by company"
-          />
-          <select
-            className="cand-input"
-            value={filters.outcome}
-            onChange={(e) => setFilter("outcome", e.target.value)}
-            aria-label="Filter by outcome"
-          >
-            <option value="ALL">All outcomes</option>
-            {outcomeOptions.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-          <select
-            className="cand-input"
-            value={filters.authenticity}
-            onChange={(e) => setFilter("authenticity", e.target.value)}
-            aria-label="Filter by authenticity"
-          >
-            <option value="ALL">All authenticity</option>
-            {AUTHENTICITY.map((value) => (
-              <option key={value} value={value}>
-                {human(value)}
-              </option>
-            ))}
-          </select>
-          <select
-            className="cand-input"
-            value={filters.sync_status}
-            onChange={(e) => setFilter("sync_status", e.target.value)}
-            aria-label="Filter by mailbox sync status"
-          >
-            <option value="ALL">All mailboxes</option>
-            <option value="MONITORING_ACTIVE">Monitoring active</option>
-            <option value="CONNECTED">Connected</option>
-            <option value="FAILED">Sync failed</option>
-          </select>
-          <select
-            className="cand-input"
-            value={filters.min_confidence}
-            onChange={(e) => setFilter("min_confidence", e.target.value)}
-            aria-label="Filter by minimum confidence"
-          >
-            <option value="">Any confidence</option>
-            <option value="60">60% and above</option>
-            <option value="75">75% and above</option>
-            <option value="85">85% and above</option>
-          </select>
-          <input
-            type="date"
-            className="cand-input"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            aria-label="Evidence from date"
-          />
-          <input
-            type="date"
-            className="cand-input"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            aria-label="Evidence to date"
-          />
-          <label className="cand-toggle">
-            <input
-              type="checkbox"
-              checked={filters.manual_review}
-              onChange={(e) => setFilter("manual_review", e.target.checked)}
-            />
-            <span>Manual review only</span>
-          </label>
-          {isSelection && (
-            <label className="cand-toggle">
-              <input
-                type="checkbox"
-                checked={filters.mismatch}
-                onChange={(e) => setFilter("mismatch", e.target.checked)}
-              />
-              <span>Status mismatches only</span>
-            </label>
-          )}
-        </section>
-      )}
+      {error && <div className="audit-alert audit-alert--error">{error}</div>}
+      {notice && <div className="audit-alert audit-alert--ok">{notice}</div>}
 
       {loading ? (
-        <InlineLoader label="Loading audit results…" />
+        <InlineLoader label="Loading audit…" />
       ) : view === "report" ? (
-        <div className="outcome-audit__table-wrap">
-          <table className="outcome-audit__table">
-            <thead>
-              <tr>
-                <th>Candidate</th>
-                <th>Gmail</th>
-                <th>Mailbox</th>
-                <th>Strongest outcome</th>
-                <th>Confidence</th>
-                {isSelection && <th>Authenticity</th>}
-                {isSelection ? <th>System status</th> : <th>Interview activity</th>}
-                <th>Companies</th>
-                <th>Last sync</th>
-                <th aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {candidates.length === 0 ? (
+        <>
+          <section className="audit-metrics" aria-label={`${modeLabel} summary`}>
+            <div className="audit-metrics__row">
+              {headline.map(([key, label]) => (
+                <div className="audit-metric" key={key}>
+                  <span className="audit-metric__value">{summary?.[key] ?? 0}</span>
+                  <span className="audit-metric__label">{label}</span>
+                </div>
+              ))}
+            </div>
+            <Collapsible label="View all metrics">
+              <div className="audit-metrics__row audit-metrics__row--secondary">
+                {moreMetrics.map(([key, label]) => (
+                  <div className="audit-metric audit-metric--small" key={key}>
+                    <span className="audit-metric__value">{summary?.[key] ?? 0}</span>
+                    <span className="audit-metric__label">{label}</span>
+                  </div>
+                ))}
+              </div>
+            </Collapsible>
+          </section>
+
+          <section className="audit-filters" aria-label="Filters">
+            <div className="audit-filters__row">
+              <input
+                className="audit-input audit-input--search"
+                placeholder="Search candidate"
+                value={filters.candidate}
+                onChange={(e) => setFilter("candidate", e.target.value)}
+                aria-label="Search candidate"
+              />
+              <select
+                className="audit-input"
+                value={filters.outcome}
+                onChange={(e) => setFilter("outcome", e.target.value)}
+                aria-label="Filter by outcome"
+              >
+                <option value="ALL">All outcomes</option>
+                {outcomeOptions.map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+              <label className="audit-toggle">
+                <input
+                  type="checkbox"
+                  checked={filters.manual_review}
+                  onChange={(e) => setFilter("manual_review", e.target.checked)}
+                />
+                <span>Needs review</span>
+              </label>
+              <button
+                type="button"
+                className="audit-btn audit-btn--ghost"
+                aria-expanded={showFilters}
+                onClick={() => setShowFilters((value) => !value)}
+              >
+                More filters
+              </button>
+              {activeFilters.length > 0 && (
+                <button type="button" className="audit-link" onClick={clearFilters}>
+                  Clear filters ({activeFilters.length})
+                </button>
+              )}
+            </div>
+            {showFilters && (
+              <div className="audit-filters__panel">
+                <input
+                  className="audit-input"
+                  placeholder="Company"
+                  value={filters.company}
+                  onChange={(e) => setFilter("company", e.target.value)}
+                  aria-label="Filter by company"
+                />
+                <select
+                  className="audit-input"
+                  value={filters.authenticity}
+                  onChange={(e) => setFilter("authenticity", e.target.value)}
+                  aria-label="Filter by authenticity"
+                >
+                  <option value="ALL">All authenticity</option>
+                  {AUTHENTICITY.map((value) => (
+                    <option key={value} value={value}>{human(value)}</option>
+                  ))}
+                </select>
+                <select
+                  className="audit-input"
+                  value={filters.sync_status}
+                  onChange={(e) => setFilter("sync_status", e.target.value)}
+                  aria-label="Filter by mailbox sync status"
+                >
+                  <option value="ALL">All mailboxes</option>
+                  <option value="MONITORING_ACTIVE">Monitoring active</option>
+                  <option value="CONNECTED">Connected</option>
+                  <option value="FAILED">Sync failed</option>
+                </select>
+                <select
+                  className="audit-input"
+                  value={filters.min_confidence}
+                  onChange={(e) => setFilter("min_confidence", e.target.value)}
+                  aria-label="Filter by minimum confidence"
+                >
+                  <option value="">Any confidence</option>
+                  <option value="60">60% and above</option>
+                  <option value="75">75% and above</option>
+                  <option value="85">85% and above</option>
+                </select>
+                <input
+                  type="date"
+                  className="audit-input"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  aria-label="Evidence from date"
+                />
+                <input
+                  type="date"
+                  className="audit-input"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  aria-label="Evidence to date"
+                />
+                {isSelection && (
+                  <label className="audit-toggle">
+                    <input
+                      type="checkbox"
+                      checked={filters.mismatch}
+                      onChange={(e) => setFilter("mismatch", e.target.checked)}
+                    />
+                    <span>Status mismatch</span>
+                  </label>
+                )}
+              </div>
+            )}
+          </section>
+
+          <section className="audit-table-wrap" aria-label={`${modeLabel} results`}>
+            <table className="audit-table">
+              <thead>
                 <tr>
-                  <td colSpan={10} className="outcome-audit__empty">
-                    No audited mailboxes match these filters.
-                  </td>
+                  <th scope="col">Candidate</th>
+                  <th scope="col">Strongest outcome</th>
+                  <th scope="col">Company</th>
+                  <th scope="col">System status</th>
+                  <th scope="col">Last updated</th>
+                  <th scope="col"><span className="audit-sr">Evidence</span></th>
                 </tr>
-              ) : (
-                candidates.map((row) => (
-                  <tr
-                    key={row.canonical_candidate_id}
-                    className={row.status_mismatch ? "is-mismatch" : ""}
-                  >
-                    <td>
-                      <strong>{row.candidate_name || "Unnamed"}</strong>
-                      <span className="outcome-audit__sub">ID: {row.canonical_candidate_id}</span>
-                    </td>
-                    <td>{row.email_address}</td>
-                    <td>
-                      <span className={`outcome-audit__pill outcome-audit__pill--${String(row.scan_status).toLowerCase()}`}>
-                        {human(row.monitoring_status)}
-                      </span>
-                      {row.scan_status === "FAILED" && (
-                        <span className="outcome-audit__sub">{row.scan_error}</span>
-                      )}
-                    </td>
-                    <td>
-                      <span className={`outcome-audit__outcome outcome-audit__outcome--${String(row.strongest_outcome).toLowerCase()}`}>
-                        {human(row.strongest_outcome)}
-                      </span>
-                      {row.conflicting_evidence && (
-                        <span className="outcome-audit__warn">Conflicting evidence</span>
-                      )}
-                      {row.suspicious_evidence && (
-                        <span className="outcome-audit__warn">Authenticity concern</span>
-                      )}
-                    </td>
-                    <td>{row.strongest_confidence ? `${Math.round(row.strongest_confidence)}%` : "—"}</td>
-                    {isSelection && <td>{human(row.strongest_authenticity) || "—"}</td>}
-                    {isSelection ? (
-                      <td>
-                        {row.system_status || "—"}
-                        {row.status_mismatch && (
-                          <span className="outcome-audit__warn" title={row.mismatch_detail}>
-                            Mismatch
-                          </span>
-                        )}
-                      </td>
-                    ) : (
-                      <td>
-                        {Object.entries(row.outcome_counts || {}).length === 0
-                          ? "—"
-                          : Object.entries(row.outcome_counts || {})
-                              .map(([key, count]) => `${human(key)} × ${count}`)
-                              .join(", ")}
-                      </td>
-                    )}
-                    <td>{(row.companies || []).join(", ") || "—"}</td>
-                    <td>{when(row.last_successful_sync_at)}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="cand-btn cand-btn--ghost cand-btn--sm"
-                        onClick={() => openCandidate(row)}
-                      >
-                        Evidence
-                      </button>
+              </thead>
+              <tbody>
+                {candidates.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="audit-empty">
+                      No audited mailboxes match these filters.
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                ) : (
+                  candidates.map((row) => {
+                    const id = row.canonical_candidate_id;
+                    const open = expandedRow === id;
+                    const needsAttention =
+                      row.manual_review_required ||
+                      row.conflicting_evidence ||
+                      row.suspicious_evidence;
+                    const companies = row.companies || [];
+                    return (
+                      <React.Fragment key={id}>
+                        <tr className={open ? "is-open" : ""}>
+                          <td>
+                            <button
+                              type="button"
+                              className="audit-rowtoggle"
+                              aria-expanded={open}
+                              onClick={() => setExpandedRow(open ? null : id)}
+                            >
+                              <span aria-hidden>{open ? "▾" : "▸"}</span>
+                              <span className="audit-rowtoggle__name">
+                                {row.candidate_name || "Unnamed"}
+                              </span>
+                            </button>
+                            <span className="audit-sub">{row.email_address}</span>
+                          </td>
+                          <td>
+                            <span
+                              className={`audit-badge audit-badge--${TONE[row.strongest_outcome] || "muted"}`}
+                            >
+                              {human(row.strongest_outcome)}
+                            </span>
+                            {needsAttention && (
+                              <span
+                                className="audit-warn"
+                                title="Needs review — open Evidence for detail"
+                                aria-label="Needs review"
+                              >
+                                !
+                              </span>
+                            )}
+                            <span className="audit-sub">
+                              {row.strongest_confidence
+                                ? `${Math.round(row.strongest_confidence)}% confidence`
+                                : "confidence not set"}
+                              {row.strongest_authenticity
+                                ? ` · ${human(row.strongest_authenticity)}`
+                                : ""}
+                            </span>
+                          </td>
+                          <td>
+                            {companies.length === 0 ? "—" : companies[0]}
+                            {companies.length > 1 && (
+                              <span className="audit-sub">+{companies.length - 1} more</span>
+                            )}
+                          </td>
+                          <td>
+                            {row.system_status || "—"}
+                            {row.status_mismatch && (
+                              <span className="audit-mismatch" title={row.mismatch_detail}>
+                                Mismatch
+                              </span>
+                            )}
+                          </td>
+                          <td>{when(row.last_successful_sync_at)}</td>
+                          <td className="audit-table__action">
+                            <button
+                              type="button"
+                              className="audit-btn audit-btn--ghost audit-btn--sm"
+                              onClick={() => openCandidate(row)}
+                            >
+                              Evidence
+                            </button>
+                          </td>
+                        </tr>
+                        {open && (
+                          <tr className="audit-rowdetail">
+                            <td colSpan={6}>
+                              <dl>
+                                <div><dt>Gmail</dt><dd>{row.email_address}</dd></div>
+                                <div><dt>Candidate ID</dt><dd>{id}</dd></div>
+                                <div><dt>Mailbox</dt><dd>{human(row.monitoring_status)}</dd></div>
+                                <div><dt>Authenticity</dt><dd>{human(row.strongest_authenticity) || "—"}</dd></div>
+                                <div><dt>Messages examined</dt><dd>{row.messages_examined ?? "—"}</dd></div>
+                                <div><dt>Relevant</dt><dd>{row.relevant_messages ?? "—"}</dd></div>
+                                <div className="audit-rowdetail__wide">
+                                  <dt>Companies</dt>
+                                  <dd>{companies.join(", ") || "—"}</dd>
+                                </div>
+                                <div className="audit-rowdetail__wide">
+                                  <dt>Recommended</dt>
+                                  <dd>{row.recommended_action}</dd>
+                                </div>
+                              </dl>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </section>
+
+          {isSelection && excluded.length > 0 && (
+            <p className="audit-footnote">
+              <button
+                type="button"
+                className="audit-link"
+                onClick={() => setView("excluded")}
+              >
+                {excluded.length} findings excluded from this audit
+              </button>{" "}
+              — irrelevant, duplicate or superseded mail. Nothing was deleted.
+            </p>
+          )}
+        </>
       ) : view === "excluded" ? (
-        <div className="outcome-audit__table-wrap">
-          <table className="outcome-audit__table">
-            <thead>
-              <tr>
-                <th>Reason</th>
-                <th>Candidate</th>
-                <th>Classified as</th>
-                <th>Subject</th>
-                <th>Sender</th>
-                <th>Received</th>
-                <th>Why it was excluded</th>
-                <th>Excluded at</th>
-              </tr>
-            </thead>
-            <tbody>
-              {excluded.length === 0 ? (
+        <>
+          <p className="audit-footnote">
+            <button type="button" className="audit-link" onClick={() => setView("report")}>
+              ← Back to {modeLabel}
+            </button>
+          </p>
+          <section className="audit-table-wrap" aria-label="Excluded findings">
+            <table className="audit-table">
+              <thead>
                 <tr>
-                  <td colSpan={8} className="outcome-audit__empty">
-                    Nothing has been excluded from the Selection Audit.
-                  </td>
+                  <th scope="col">Reason</th>
+                  <th scope="col">Candidate</th>
+                  <th scope="col">Subject</th>
+                  <th scope="col">Why</th>
+                  <th scope="col">Excluded</th>
                 </tr>
-              ) : (
-                excluded.map((row) => (
+              </thead>
+              <tbody>
+                {excluded.map((row) => (
                   <tr key={row.id}>
                     <td>
-                      <span className={`outcome-audit__sev outcome-audit__sev--${String(row.suppression_reason).toLowerCase()}`}>
+                      <span className="audit-badge audit-badge--muted">
                         {CLEANUP_REASONS[row.suppression_reason] || row.suppression_reason}
                       </span>
                     </td>
                     <td>
                       {row.candidate_name || row.canonical_candidate_id}
-                      <span className="outcome-audit__sub">{row.email_address}</span>
+                      <span className="audit-sub">{row.email_address}</span>
                     </td>
-                    <td>{human(row.outcome)}</td>
-                    <td className="outcome-audit__detailcell">{row.subject || "(no subject)"}</td>
-                    <td>{row.sender_email}</td>
-                    <td>{day(row.received_at)}</td>
-                    <td className="outcome-audit__detailcell">{row.suppression_detail}</td>
-                    <td>{when(row.suppressed_at)}</td>
+                    <td className="audit-cell--wide">{row.subject || "(no subject)"}</td>
+                    <td className="audit-cell--wide">{row.suppression_detail}</td>
+                    <td>{day(row.suppressed_at)}</td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        </>
       ) : (
-        <div className="outcome-audit__table-wrap">
-          <table className="outcome-audit__table">
+        <section className="audit-table-wrap" aria-label="Pipeline issues">
+          <table className="audit-table">
             <thead>
               <tr>
-                <th>Severity</th>
-                <th>Gap</th>
-                <th>Candidate</th>
-                <th>Detail</th>
-                <th>Audit reads</th>
-                <th>Pipeline recorded</th>
+                <th scope="col">Severity</th>
+                <th scope="col">Issue</th>
+                <th scope="col">Candidate</th>
+                <th scope="col">Detail</th>
               </tr>
             </thead>
             <tbody>
               {gaps.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="outcome-audit__empty">
-                    No pipeline gaps recorded for this audit.
-                  </td>
+                  <td colSpan={4} className="audit-empty">No pipeline issues recorded.</td>
                 </tr>
               ) : (
                 gaps.map((row) => (
                   <tr key={row.id}>
                     <td>
-                      <span className={`outcome-audit__sev outcome-audit__sev--${String(row.severity).toLowerCase()}`}>
+                      <span
+                        className={`audit-badge audit-badge--${
+                          row.severity === "HIGH" ? "bad" : row.severity === "MEDIUM" ? "warn" : "muted"
+                        }`}
+                      >
                         {row.severity}
                       </span>
                     </td>
                     <td>{human(row.gap_type)}</td>
                     <td>
                       {row.candidate_name || row.canonical_candidate_id}
-                      <span className="outcome-audit__sub">{row.email_address}</span>
+                      <span className="audit-sub">{row.email_address}</span>
                     </td>
-                    <td className="outcome-audit__detailcell">{row.detail}</td>
-                    <td>{row.audit_outcome ? human(row.audit_outcome) : "—"}</td>
-                    <td>{row.pipeline_outcome ? human(row.pipeline_outcome) : "—"}</td>
+                    <td className="audit-cell--wide">{row.detail}</td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
-        </div>
+        </section>
       )}
 
       {detail && (
-        <div
-          className="outcome-audit__drawer-backdrop"
-          role="presentation"
-          onClick={closeDetail}
-        >
+        <div className="audit-drawer-backdrop" role="presentation" onClick={closeDetail}>
           <aside
             ref={dialogRef}
-            className="outcome-audit__drawer"
+            className="audit-drawer"
             role="dialog"
             aria-modal="true"
             aria-label="Candidate mail evidence"
             onClick={(e) => e.stopPropagation()}
           >
-            <header>
+            <header className="audit-drawer__head">
               <div>
                 <h2>{detail.candidate?.candidate_name || "Candidate"}</h2>
-                <p>
-                  ID {detail.candidate?.canonical_candidate_id} · {detail.candidate?.email_address}
-                  {" · "}
-                  {isSelection ? "Selection audit" : "Interview slot audit"}
+                <p className="audit-sub">
+                  {detail.candidate?.email_address} · {modeLabel} audit
                 </p>
               </div>
-              <button type="button" className="cand-btn cand-btn--ghost cand-btn--sm" onClick={closeDetail}>
+              <button
+                type="button"
+                className="audit-btn audit-btn--ghost audit-btn--sm"
+                onClick={closeDetail}
+              >
                 Close
               </button>
             </header>
@@ -717,278 +866,227 @@ export function OutcomeAuditPanel() {
             {detail.loading ? (
               <InlineLoader label="Loading evidence…" />
             ) : detail.error ? (
-              <div className="outcome-audit__error">{detail.error}</div>
+              <div className="audit-alert audit-alert--error">{detail.error}</div>
             ) : (
               <>
-                <p className="outcome-audit__recommend">
-                  <strong>Recommended action:</strong> {detail.candidate?.recommended_action}
-                </p>
-                {detail.candidate?.mismatch_detail && (
-                  <p className="outcome-audit__warnbox">{detail.candidate.mismatch_detail}</p>
-                )}
-
-                {!isSelection && (detail.bookings || []).length > 0 && (
-                  <>
-                    <h3>Booking outcomes</h3>
-                    <ul className="outcome-audit__gaplist">
-                      {detail.bookings.map((booking) => (
-                        <li key={booking.id}>
-                          <strong>{human(booking.booking_outcome)}</strong> — {booking.booking_status}
-                          {booking.failure_message ? ` · ${booking.failure_message}` : ""}
-                          {booking.created_at ? ` · ${day(booking.created_at)}` : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                )}
+                <section className="audit-drawer__action">
+                  <h3>Recommended action</h3>
+                  <p>{detail.candidate?.recommended_action}</p>
+                  {detail.candidate?.mismatch_detail && (
+                    <p className="audit-alert audit-alert--warn">
+                      {detail.candidate.mismatch_detail}
+                    </p>
+                  )}
+                  <div className="audit-drawer__buttons">
+                    {primaryApplication ? (
+                      <button
+                        type="button"
+                        className="audit-btn audit-btn--primary"
+                        onClick={() =>
+                          approve(
+                            {
+                              id: primaryApplication.strongest_finding_id,
+                              outcome: primaryApplication.latest_verified_state,
+                            },
+                            "APPROVED",
+                          )
+                        }
+                      >
+                        Review status update
+                      </button>
+                    ) : (
+                      <p className="audit-blocked">
+                        No application meets the bar for a status change.
+                      </p>
+                    )}
+                    {(detail.applications || []).length > 0 && (
+                      <button
+                        type="button"
+                        className="audit-btn audit-btn--ghost"
+                        onClick={() =>
+                          approve(
+                            {
+                              id:
+                                (primaryApplication || detail.applications[0])
+                                  .strongest_finding_id,
+                              outcome:
+                                (primaryApplication || detail.applications[0])
+                                  .latest_verified_state,
+                            },
+                            "REJECTED",
+                          )
+                        }
+                      >
+                        Mark reviewed
+                      </button>
+                    )}
+                  </div>
+                </section>
 
                 {isSelection && (detail.applications || []).length > 0 && (
-                  <>
-                    <h3>By company and role</h3>
-                    <p className="outcome-audit__sub">
+                  <section className="audit-drawer__section">
+                    <h3>Companies and applications</h3>
+                    <p className="audit-sub">
                       Each application is its own lifecycle. A result from one company never
                       affects another.
                     </p>
-                    <ol className="outcome-audit__applications">
+                    <ul className="audit-apps">
                       {detail.applications.map((app) => (
                         <li key={app.application_key}>
-                          <div className="outcome-audit__app-head">
+                          <div className="audit-apps__head">
                             <strong>{app.company}</strong>
-                            <span className="outcome-audit__sub">{app.role}</span>
-                          </div>
-                          <div className="outcome-audit__app-state">
-                            <span className={`outcome-audit__outcome outcome-audit__outcome--${String(app.latest_verified_state).toLowerCase()}`}>
+                            <span
+                              className={`audit-badge audit-badge--${TONE[app.latest_verified_state] || "muted"}`}
+                            >
                               {human(app.latest_verified_state)}
                             </span>
-                            <span className={`outcome-audit__strength outcome-audit__strength--${String(app.evidence_strength).toLowerCase()}`}>
-                              {human(app.evidence_strength)} evidence
-                            </span>
-                            <span>{Math.round(app.confidence || 0)}%</span>
-                            <span>{human(app.authenticity)}</span>
-                            <span>{human(app.source_type)}</span>
-                            <span>{day(app.latest_message_at)}</span>
                           </div>
-                          <ul className="outcome-audit__app-mails">
-                            {(app.messages || []).map((mail) => (
-                              <li key={mail.id}>
-                                {day(mail.received_at)} · {human(mail.outcome)} ·{" "}
-                                {mail.subject || "(no subject)"}
-                                <span className="outcome-audit__sub">{mail.sender_email}</span>
-                              </li>
-                            ))}
-                          </ul>
-                          {app.approval?.eligible ? (
-                            <div className="outcome-audit__approve">
-                              <button
-                                type="button"
-                                className="cand-btn cand-btn--primary cand-btn--sm"
-                                onClick={() =>
-                                  approve({ id: app.strongest_finding_id,
-                                            outcome: app.latest_verified_state }, "APPROVED")
-                                }
-                              >
-                                Approve status update
-                              </button>
-                              <button
-                                type="button"
-                                className="cand-btn cand-btn--ghost cand-btn--sm"
-                                onClick={() =>
-                                  approve({ id: app.strongest_finding_id,
-                                            outcome: app.latest_verified_state }, "REJECTED")
-                                }
-                              >
-                                Reviewed, do not apply
-                              </button>
-                            </div>
-                          ) : (
-                            <p className="outcome-audit__blocked">
-                              {app.approval?.message}
-                              <span className="outcome-audit__sub">
-                                {(app.approval?.blockers || []).join(" ")}
-                              </span>
-                            </p>
+                          <p className="audit-sub">
+                            {app.role} · {day(app.latest_message_at)} ·{" "}
+                            {human(app.evidence_strength)} evidence
+                          </p>
+                          {!app.approval?.eligible && (
+                            <p className="audit-blocked">{app.approval?.message}</p>
                           )}
                         </li>
                       ))}
-                    </ol>
-                  </>
+                    </ul>
+                  </section>
                 )}
 
-                <h3>{isSelection ? "Selection evidence" : "Interview mail"}, oldest first</h3>
-                {(detail.findings || []).filter((f) => f.outcome !== "NOT_RELEVANT").length === 0 ? (
-                  <p className="outcome-audit__empty">
-                    {isSelection
-                      ? "No mail in this mailbox carries a selection outcome."
-                      : "No interview mail found in this mailbox."}
-                  </p>
-                ) : (
-                  <ol className="outcome-audit__evidence">
-                    {(detail.findings || [])
-                      .filter((f) => f.outcome !== "NOT_RELEVANT")
-                      .map((finding) => (
-                        <li key={finding.id}>
-                          <div className="outcome-audit__evidence-head">
-                            <span className={`outcome-audit__outcome outcome-audit__outcome--${String(finding.outcome).toLowerCase()}`}>
-                              {human(finding.outcome)}
-                            </span>
-                            <span>{Math.round(finding.confidence)}%</span>
-                            <span>{day(finding.received_at)}</span>
-                          </div>
-                          <p className="outcome-audit__subject">{finding.subject || "(no subject)"}</p>
-                          <p className="outcome-audit__sub">
-                            {finding.sender_name ? `${finding.sender_name} · ` : ""}
-                            {finding.sender_email}
-                            {finding.company_name ? ` · ${finding.company_name}` : ""}
-                          </p>
-                          <p className="outcome-audit__rationale">{finding.rationale}</p>
-                          {(finding.evidence || []).map((item, index) => (
-                            <blockquote key={index}>
-                              <em>{human(item.meaning)}</em> — “{item.text}”
-                            </blockquote>
-                          ))}
-                          {(finding.attachment_evidence || []).length > 0 && (
-                            <p className="outcome-audit__sub">
-                              Attachments:{" "}
-                              {(finding.attachment_evidence || [])
-                                .map(
-                                  (a) =>
-                                    `${a.filename} (${a.extraction_status}${a.has_text ? ", text read" : ", no text"})`,
-                                )
-                                .join("; ")}
-                            </p>
-                          )}
-                          <p className="outcome-audit__sub">
-                            Authenticity: <strong>{human(finding.authenticity)}</strong>
-                            {(finding.authenticity_detail?.concerns || []).length > 0 &&
-                              ` — ${finding.authenticity_detail.concerns.join(" ")}`}
-                          </p>
-                          <p className="outcome-audit__sub">
-                            Pipeline: {finding.pipeline_outcome ? human(finding.pipeline_outcome) : "no event"} (
-                            {human(finding.pipeline_agreement)})
-                          </p>
-                          <p className="outcome-audit__sub">
-                            Source: {human(finding.source_type)} ·{" "}
-                            {human(finding.evidence_strength)} evidence
-                          </p>
-                          {(() => {
-                            const review = (detail.ollama_reviews || {})[finding.id];
-                            if (!review) return null;
-                            // Everything shown here is what the server derived
-                            // deterministically. The model's own `agrees` and
-                            // raw confidence are not displayed: in the first
-                            // batch it reported agrees=false with an identical
-                            // outcome and mixed 0-1 with 0-100 confidences.
-                            const same = review.derived_agreement === "AGREES_WITH_RULES";
-                            const shown = review.restricted_outcome || review.suggested_outcome;
-                            return (
-                              <div
-                                className={`outcome-audit__review outcome-audit__review--${
-                                  same ? "agree" : "differ"
-                                }`}
-                              >
-                                <div className="outcome-audit__review-head">
-                                  <strong>Ollama second opinion</strong>
-                                  <span>{review.model}</span>
-                                  <span
-                                    className={`outcome-audit__strength outcome-audit__strength--${
-                                      review.verified ? "strong" : "weak"
-                                    }`}
-                                  >
-                                    {review.verified ? "Citations verified" : "Unverified"}
-                                  </span>
-                                </div>
-                                <p className="outcome-audit__review-row">
-                                  <span>Deterministic: <strong>{human(finding.outcome)}</strong></span>
-                                  <span>
-                                    Pipeline:{" "}
+                {!isSelection && (detail.bookings || []).length > 0 && (
+                  <section className="audit-drawer__section">
+                    <h3>Booking outcomes</h3>
+                    <ul className="audit-list">
+                      {detail.bookings.map((booking) => (
+                        <li key={booking.id}>
+                          <strong>{human(booking.booking_outcome)}</strong> —{" "}
+                          {booking.booking_status}
+                          {booking.failure_message ? ` · ${booking.failure_message}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
+
+                <section className="audit-drawer__section">
+                  <h3>Strongest evidence</h3>
+                  {(detail.findings || []).filter((f) => f.outcome !== "NOT_RELEVANT").length === 0 ? (
+                    <p className="audit-empty">No mail here carries an outcome.</p>
+                  ) : (
+                    <ol className="audit-evidence">
+                      {(detail.findings || [])
+                        .filter((f) => f.outcome !== "NOT_RELEVANT")
+                        .map((finding) => {
+                          const review = (detail.ollama_reviews || {})[finding.id];
+                          return (
+                            <li key={finding.id}>
+                              <div className="audit-evidence__head">
+                                <span
+                                  className={`audit-badge audit-badge--${TONE[finding.outcome] || "muted"}`}
+                                >
+                                  {human(finding.outcome)}
+                                </span>
+                                <span className="audit-sub">{day(finding.received_at)}</span>
+                              </div>
+                              <p className="audit-evidence__subject">
+                                {finding.subject || "(no subject)"}
+                              </p>
+                              <p className="audit-sub">{finding.sender_email}</p>
+                              <p className="audit-evidence__why">{finding.rationale}</p>
+                              {(finding.evidence || []).slice(0, 1).map((item, index) => (
+                                <blockquote key={index}>“{item.text}”</blockquote>
+                              ))}
+
+                              {review && (
+                                <Collapsible label="AI audit comparison">
+                                  <p className="audit-sub">
+                                    Deterministic <strong>{human(finding.outcome)}</strong> ·
+                                    Pipeline{" "}
                                     <strong>
                                       {finding.pipeline_outcome
                                         ? human(finding.pipeline_outcome)
                                         : "no event"}
+                                    </strong>{" "}
+                                    · Ollama{" "}
+                                    <strong>
+                                      {human(review.restricted_outcome || review.suggested_outcome)}
                                     </strong>
-                                  </span>
-                                  <span>
-                                    Ollama: <strong>{human(shown)}</strong>
-                                    {review.restricted_outcome &&
-                                      review.restricted_outcome !== review.suggested_outcome && (
-                                        <em> (restricted from {human(review.suggested_outcome)})</em>
-                                      )}
-                                  </span>
-                                  <span>{human(review.derived_agreement) || "—"}</span>
-                                  <span>
+                                  </p>
+                                  <p className="audit-sub">
+                                    {human(review.derived_agreement)} ·{" "}
                                     {review.normalized_confidence == null
                                       ? "confidence withheld"
                                       : `${Math.round(review.normalized_confidence)}%`}
-                                  </span>
-                                </p>
-                                <p
-                                  className={`outcome-audit__approvalstate outcome-audit__approvalstate--${
-                                    review.approval_state === "Safe to review for approval."
-                                      ? "safe"
-                                      : "blocked"
-                                  }`}
-                                >
-                                  {review.approval_state}
-                                </p>
-                                {review.restrictions && (
-                                  <p className="outcome-audit__sub">{review.restrictions}</p>
-                                )}
-                                {review.quoted_evidence && (
-                                  <blockquote>“{review.quoted_evidence}”</blockquote>
-                                )}
-                                <p className="outcome-audit__rationale">{review.reasoning}</p>
-                                <p className="outcome-audit__sub">
-                                  Cited message {review.cited_message_id || "—"}
-                                  {review.cited_attachment
-                                    ? ` · attachment ${review.cited_attachment}`
-                                    : ""}
-                                  {review.cited_company ? ` · ${review.cited_company}` : ""}
-                                  {review.is_bulk_campaign ? " · reads as a bulk campaign" : ""}
-                                </p>
-                                {!review.verified && (
-                                  <p className="outcome-audit__warnbox">
-                                    Not acted on — {review.verification_problems}
+                                  </p>
+                                  {review.quoted_evidence && (
+                                    <blockquote>“{review.quoted_evidence}”</blockquote>
+                                  )}
+                                  <p className="audit-evidence__why">{review.reasoning}</p>
+                                  <p className="audit-blocked">{review.approval_state}</p>
+                                </Collapsible>
+                              )}
+
+                              <Collapsible label="Technical details">
+                                <dl className="audit-tech">
+                                  <div><dt>Source</dt><dd>{human(finding.source_type)}</dd></div>
+                                  <div><dt>Evidence strength</dt><dd>{human(finding.evidence_strength)}</dd></div>
+                                  <div><dt>Authenticity</dt><dd>{human(finding.authenticity)}</dd></div>
+                                  <div><dt>Confidence</dt><dd>{Math.round(finding.confidence || 0)}%</dd></div>
+                                  <div><dt>Pipeline</dt><dd>{human(finding.pipeline_agreement)}</dd></div>
+                                  <div><dt>Message</dt><dd>{finding.provider_message_id || "—"}</dd></div>
+                                  {review && (
+                                    <>
+                                      <div><dt>Model</dt><dd>{review.model}</dd></div>
+                                      <div><dt>Cited message</dt><dd>{review.cited_message_id || "—"}</dd></div>
+                                      <div><dt>Citations</dt><dd>{review.verified ? "verified" : "unverified"}</dd></div>
+                                    </>
+                                  )}
+                                </dl>
+                                {(finding.attachment_evidence || []).length > 0 && (
+                                  <p className="audit-sub">
+                                    Attachments:{" "}
+                                    {(finding.attachment_evidence || [])
+                                      .map((a) => `${a.filename} (${a.extraction_status})`)
+                                      .join("; ")}
                                   </p>
                                 )}
-                                <p className="outcome-audit__sub">
-                                  {same
-                                    ? "Advisory only. Both readings agree; approval still requires the application-level checks above."
-                                    : "Advisory only. A disagreement is a prompt to read the mail, not a status change."}
-                                </p>
-                              </div>
-                            );
-                          })()}
-                        </li>
-                      ))}
-                  </ol>
-                )}
+                              </Collapsible>
+                            </li>
+                          );
+                        })}
+                    </ol>
+                  )}
+                </section>
 
                 {(detail.gaps || []).length > 0 && (
-                  <>
-                    <h3>Pipeline gaps for this candidate</h3>
-                    <ul className="outcome-audit__gaplist">
-                      {detail.gaps.map((gap) => (
-                        <li key={gap.id}>
-                          <strong>{human(gap.gap_type)}</strong> ({gap.severity}) — {gap.detail}
-                        </li>
-                      ))}
-                    </ul>
-                  </>
+                  <section className="audit-drawer__section">
+                    <Collapsible label="Conflicting evidence and pipeline issues" count={detail.gaps.length}>
+                      <ul className="audit-list">
+                        {detail.gaps.map((gap) => (
+                          <li key={gap.id}>
+                            <strong>{human(gap.gap_type)}</strong> — {gap.detail}
+                          </li>
+                        ))}
+                      </ul>
+                    </Collapsible>
+                  </section>
                 )}
 
                 {(detail.approvals || []).length > 0 && (
-                  <>
-                    <h3>Approval history</h3>
-                    <ul className="outcome-audit__gaplist">
-                      {detail.approvals.map((item) => (
-                        <li key={item.id}>
-                          {when(item.created_at)} — {item.decision} {human(item.requested_outcome)} by{" "}
-                          {item.approved_by}
-                          {item.applied ? ` → status "${item.applied_system_status}"` : " (not applied)"}
-                        </li>
-                      ))}
-                    </ul>
-                  </>
+                  <section className="audit-drawer__section">
+                    <Collapsible label="Approval history" count={detail.approvals.length}>
+                      <ul className="audit-list">
+                        {detail.approvals.map((item) => (
+                          <li key={item.id}>
+                            {when(item.created_at)} — {item.decision}{" "}
+                            {human(item.requested_outcome)} by {item.approved_by}
+                            {item.applied ? ` → "${item.applied_system_status}"` : " (not applied)"}
+                          </li>
+                        ))}
+                      </ul>
+                    </Collapsible>
+                  </section>
                 )}
               </>
             )}

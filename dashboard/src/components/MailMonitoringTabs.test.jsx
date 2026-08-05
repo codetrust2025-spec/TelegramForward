@@ -116,13 +116,17 @@ describe("Mail Audit is reachable from every shell", () => {
     expect(mobile).toContain('case "outcome-audit":');
   });
 
-  it("is linked from the notifications page and back", () => {
+  it("is linked from the notifications page", () => {
     expect(read("components/MailMonitoringNotifications.jsx")).toContain(
       'MailMonitoringTabs active="mail-notifications"',
     );
-    expect(read("components/OutcomeAuditPanel.jsx")).toContain(
-      'MailMonitoringTabs active="outcome-audit"',
-    );
+  });
+
+  it("does not repeat that link on the audit page itself", () => {
+    // The audit page reached the point of carrying two navigation bars. The
+    // sidebar lists both sections, and Notifications still links across, so
+    // the duplicate inside the audit page is redundant chrome.
+    expect(read("components/OutcomeAuditPanel.jsx")).not.toContain("MailMonitoringTabs");
   });
 
   it("keeps the main nav from clipping a section out of view", () => {
