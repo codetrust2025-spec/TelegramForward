@@ -87,6 +87,13 @@ const SHARED_TILES = [
   ["pipeline_gaps_total", "Pipeline gaps"],
 ];
 
+const CLEANUP_REASONS = {
+  IRRELEVANT: "Irrelevant",
+  DUPLICATE: "Duplicate",
+  SUPERSEDED: "Superseded",
+  WRONG_AUDIT_MODE: "Moved to Interview Slot Audit",
+};
+
 // Outcomes an administrator may approve as a candidate status change. Only the
 // selection audit makes claims about hiring status, so only its outcomes are
 // approvable. The server enforces this too.
@@ -130,6 +137,7 @@ export function OutcomeAuditPanel() {
   const [summary, setSummary] = useState(null);
   const [candidates, setCandidates] = useState([]);
   const [gaps, setGaps] = useState([]);
+  const [excluded, setExcluded] = useState([]);
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
@@ -171,14 +179,16 @@ export function OutcomeAuditPanel() {
     setLoading(true);
     setError("");
     try {
-      const [summaryBody, candidateBody, gapBody] = await Promise.all([
+      const [summaryBody, candidateBody, gapBody, excludedBody] = await Promise.all([
         request(`/api/mail-outcome-audit/summary?${query}`),
         request(`/api/mail-outcome-audit/candidates?${query}`),
         request(`/api/mail-outcome-audit/gaps?mode=${mode}&limit=300`),
+        request(`/api/mail-outcome-audit/excluded?limit=500`),
       ]);
       setSummary(summaryBody.summary || null);
       setCandidates(candidateBody.candidates || []);
       setGaps(gapBody.gaps || []);
+      setExcluded(excludedBody.excluded || []);
     } catch (exc) {
       setError(exc.message || "Could not load the audit report");
     } finally {
@@ -349,10 +359,27 @@ export function OutcomeAuditPanel() {
         >
           Pipeline Gaps ({gaps.length})
         </button>
+        {isSelection && (
+          <button
+            type="button"
+            className={view === "excluded" ? "is-active" : ""}
+            aria-current={view === "excluded" ? "page" : undefined}
+            onClick={() => {
+              setView("excluded");
+              setDetail(null);
+            }}
+            title="Findings cleaned out of the Selection Audit. Nothing is deleted."
+          >
+            Excluded ({excluded.length})
+          </button>
+        )}
       </nav>
 
       <p className="outcome-audit__runline">
-        {view === "gaps"
+        {view === "excluded"
+          ? "Findings cleaned out of the Selection Audit. The email, its attachments and its " +
+            "evidence are unchanged; only the counting excludes them."
+          : view === "gaps"
           ? `Pipeline gaps affecting the ${isSelection ? "selection" : "interview slot"} audit. ` +
             "Mailbox-level sync failures appear in both."
           : isSelection
@@ -568,6 +595,52 @@ export function OutcomeAuditPanel() {
                         Evidence
                       </button>
                     </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : view === "excluded" ? (
+        <div className="outcome-audit__table-wrap">
+          <table className="outcome-audit__table">
+            <thead>
+              <tr>
+                <th>Reason</th>
+                <th>Candidate</th>
+                <th>Classified as</th>
+                <th>Subject</th>
+                <th>Sender</th>
+                <th>Received</th>
+                <th>Why it was excluded</th>
+                <th>Excluded at</th>
+              </tr>
+            </thead>
+            <tbody>
+              {excluded.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="outcome-audit__empty">
+                    Nothing has been excluded from the Selection Audit.
+                  </td>
+                </tr>
+              ) : (
+                excluded.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <span className={`outcome-audit__sev outcome-audit__sev--${String(row.suppression_reason).toLowerCase()}`}>
+                        {CLEANUP_REASONS[row.suppression_reason] || row.suppression_reason}
+                      </span>
+                    </td>
+                    <td>
+                      {row.candidate_name || row.canonical_candidate_id}
+                      <span className="outcome-audit__sub">{row.email_address}</span>
+                    </td>
+                    <td>{human(row.outcome)}</td>
+                    <td className="outcome-audit__detailcell">{row.subject || "(no subject)"}</td>
+                    <td>{row.sender_email}</td>
+                    <td>{day(row.received_at)}</td>
+                    <td className="outcome-audit__detailcell">{row.suppression_detail}</td>
+                    <td>{when(row.suppressed_at)}</td>
                   </tr>
                 ))
               )}

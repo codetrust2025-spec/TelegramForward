@@ -306,6 +306,19 @@
   background: rgba(245, 158, 11, 0.18);
   color: #fbbf24;
 }
+/* Cleanup reasons. Muted on purpose: an excluded finding is bookkeeping, not
+   an alarm, and the row must not compete with a real gap. */
+.outcome-audit__sev--duplicate,
+.outcome-audit__sev--superseded,
+.outcome-audit__sev--irrelevant,
+.outcome-audit__sev--wrong_audit_mode {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+}
+.outcome-audit__sev--wrong_audit_mode {
+  background: rgba(59, 130, 246, 0.16);
+  color: #93c5fd;
+}
 
 /* Evidence drawer */
 .outcome-audit__drawer-backdrop {

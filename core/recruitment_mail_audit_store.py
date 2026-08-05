@@ -102,9 +102,11 @@ def now() -> datetime:
 def ensure_schema() -> None:
     if not use_postgres():
         return
+    migrations = Path(__file__).with_name("migrations")
     with get_connection() as conn, conn.cursor() as cur:
-        migration = Path(__file__).with_name("migrations") / "019_recruitment_mail_outcome_audit.sql"
-        cur.execute(migration.read_text(encoding="utf-8"))
+        for name in ("019_recruitment_mail_outcome_audit.sql",
+                     "020_recruitment_mail_audit_cleanup.sql"):
+            cur.execute((migrations / name).read_text(encoding="utf-8"))
 
 
 def _rows(cur) -> list[dict[str, Any]]:
@@ -851,6 +853,14 @@ def run_audit(*, requested_by: str, candidate_id: str | None = None,
             except Exception:
                 logger.exception("Could not record failed mailbox mailbox_id=%s", mailbox.get("id"))
 
+    # Cleanup runs over the whole finding set once the scan is complete, so a
+    # duplicate whose twin arrived in a different mailbox pass is still caught.
+    cleanup = {}
+    try:
+        cleanup = recompute_cleanup(run_id=run_id, decided_by=requested_by)
+    except Exception:
+        logger.exception("Selection-audit cleanup failed run_id=%s", run_id)
+
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE mail_outcome_audit_runs SET status=%s,mailboxes_total=%s,mailboxes_scanned=%s,
@@ -871,6 +881,7 @@ def run_audit(*, requested_by: str, candidate_id: str | None = None,
         "mailboxes_failed": failed, "messages_examined": examined,
         "findings_written": findings_written, "gaps_written": gaps_written,
         "errors": errors, "mode": REPORT_ONLY, "incremental": incremental,
+        "cleanup": cleanup,
     }
 
 
@@ -910,22 +921,173 @@ def _filter_clauses(filters: dict[str, Any], *, alias: str) -> tuple[list[str], 
 # findings at read time: the audit does not need re-running to change how its
 # results are grouped, and the two totals can never drift apart.
 
-def _findings_for_mode(mode: str) -> dict[str, list[dict[str, Any]]]:
+def _findings_for_mode(mode: str, *, include_suppressed: bool = False) -> dict[str, list[dict[str, Any]]]:
     outcomes = sorted(engine.outcomes_for_mode(mode))
+    clauses = ["outcome = ANY(%s)"]
+    params: list[Any] = [outcomes]
+    # Cleanup applies to the selection audit. An interview result excluded
+    # there is still a first-class result in the Interview Slot Audit.
+    if not include_suppressed and engine.normalize_mode(mode) == engine.MODE_SELECTION:
+        clauses.append("COALESCE(suppressed,false)=false")
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT id,canonical_candidate_id,outcome,confidence,received_at,company_name,
-                      company_domain,sender_domain,authenticity,manual_review_required,
-                      pipeline_outcome,pipeline_agreement,subject
-               FROM mail_outcome_audit_findings
-               WHERE outcome = ANY(%s)""",
-            (outcomes,),
+            f"""SELECT id,canonical_candidate_id,outcome,confidence,received_at,company_name,
+                       company_domain,sender_domain,authenticity,manual_review_required,
+                       pipeline_outcome,pipeline_agreement,subject,suppressed,
+                       suppression_reason,suppression_detail,suppressed_at
+                FROM mail_outcome_audit_findings
+                WHERE {' AND '.join(clauses)}""",
+            params,
         )
         rows = _rows(cur)
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(str(row["canonical_candidate_id"]), []).append(row)
     return grouped
+
+
+# ── Cleanup ──────────────────────────────────────────────────────────────────
+
+def _cleanup_candidates() -> dict[str, list[dict[str, Any]]]:
+    """Every finding, with the fields the suppression rules need."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT id,canonical_candidate_id,provider_message_id,provider_thread_id,
+                      outcome,confidence,received_at,company_name,company_domain,sender_domain,
+                      evidence,content_signature,attachment_fingerprint,rationale,
+                      suppressed,suppression_reason
+               FROM mail_outcome_audit_findings"""
+        )
+        rows = _rows(cur)
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["canonical_candidate_id"]), []).append(row)
+    return grouped
+
+
+def recompute_cleanup(*, run_id: str | None = None, decided_by: str = "system") -> dict[str, Any]:
+    """Re-evaluate which findings the selection audit should skip.
+
+    Nothing is deleted. Each decision is written to the finding and appended to
+    the cleanup log with its reason and timestamp, and a finding whose outcome
+    later changes is restored automatically.
+    """
+    ensure_schema()
+    grouped = _cleanup_candidates()
+    suppressed = restored = changed = 0
+    by_reason: dict[str, int] = {}
+
+    with get_connection() as conn, conn.cursor() as cur:
+        for canonical, findings in grouped.items():
+            decisions = engine.selection_suppressions(findings)
+            for finding in findings:
+                key = str(finding["id"])
+                decision = decisions.get(key)
+                was = bool(finding.get("suppressed"))
+                previous = finding.get("suppression_reason")
+
+                if decision:
+                    by_reason[decision["reason"]] = by_reason.get(decision["reason"], 0) + 1
+                    if was and previous == decision["reason"]:
+                        continue
+                    cur.execute(
+                        """UPDATE mail_outcome_audit_findings
+                           SET suppressed=true,suppression_reason=%s,suppression_detail=%s,
+                               suppression_mode=%s,suppressed_at=now(),updated_at=now()
+                           WHERE id=%s""",
+                        (decision["reason"], decision["detail"][:1000],
+                         engine.MODE_SELECTION, key),
+                    )
+                    action = "REASON_CHANGED" if was else "SUPPRESSED"
+                    cur.execute(
+                        """INSERT INTO mail_outcome_audit_cleanup_log
+                             (id,finding_id,canonical_candidate_id,run_id,mode,action,
+                              reason,detail,previous_reason,decided_by)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (_id(), key, canonical, run_id, engine.MODE_SELECTION, action,
+                         decision["reason"], decision["detail"][:1000], previous, decided_by),
+                    )
+                    suppressed += 1 if action == "SUPPRESSED" else 0
+                    changed += 1 if action == "REASON_CHANGED" else 0
+                elif was:
+                    cur.execute(
+                        """UPDATE mail_outcome_audit_findings
+                           SET suppressed=false,suppression_reason=NULL,suppression_detail=NULL,
+                               suppression_mode=NULL,suppressed_at=NULL,updated_at=now()
+                           WHERE id=%s""",
+                        (key,),
+                    )
+                    cur.execute(
+                        """INSERT INTO mail_outcome_audit_cleanup_log
+                             (id,finding_id,canonical_candidate_id,run_id,mode,action,
+                              reason,detail,previous_reason,decided_by)
+                           VALUES (%s,%s,%s,%s,%s,'RESTORED',NULL,%s,%s,%s)""",
+                        (_id(), key, canonical, run_id, engine.MODE_SELECTION,
+                         "Re-audit no longer matches a cleanup rule.", previous, decided_by),
+                    )
+                    restored += 1
+
+    return {"suppressed": suppressed, "restored": restored, "reason_changed": changed,
+            "by_reason": by_reason}
+
+
+def excluded_findings(canonical_candidate_id: str | None = None,
+                      *, limit: int = 500) -> list[dict[str, Any]]:
+    """Suppressed findings, still carrying their mail and evidence."""
+    clauses = ["COALESCE(f.suppressed,false)=true"]
+    params: list[Any] = []
+    if canonical_candidate_id:
+        clauses.append("f.canonical_candidate_id=%s")
+        params.append(canonical_candidate_id)
+    params.append(max(1, min(2000, int(limit))))
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""SELECT f.id,f.canonical_candidate_id,f.subject,f.sender_email,f.company_name,
+                       f.received_at,f.outcome,f.confidence,f.suppression_reason,
+                       f.suppression_detail,f.suppressed_at,c.candidate_name,c.email_address
+                FROM mail_outcome_audit_findings f
+                LEFT JOIN mail_outcome_audit_candidates c
+                  ON c.canonical_candidate_id=f.canonical_candidate_id
+                WHERE {' AND '.join(clauses)}
+                ORDER BY f.suppressed_at DESC NULLS LAST, f.received_at DESC
+                LIMIT %s""",
+            params,
+        )
+        return _rows(cur)
+
+
+def cleanup_summary() -> dict[str, Any]:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT suppression_reason AS reason,count(*) AS total
+               FROM mail_outcome_audit_findings
+               WHERE COALESCE(suppressed,false)=true GROUP BY 1 ORDER BY 2 DESC"""
+        )
+        by_reason = _rows(cur)
+        cur.execute(
+            "SELECT count(*) FROM mail_outcome_audit_findings WHERE COALESCE(suppressed,false)=true"
+        )
+        total = int(cur.fetchone()[0] or 0)
+        cur.execute("SELECT max(created_at) FROM mail_outcome_audit_cleanup_log")
+        last = cur.fetchone()[0]
+    return {"excluded_total": total, "by_reason": by_reason, "last_cleanup_at": last}
+
+
+def cleanup_log(canonical_candidate_id: str | None = None, *, limit: int = 200) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if canonical_candidate_id:
+        clauses.append("canonical_candidate_id=%s")
+        params.append(canonical_candidate_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(max(1, min(1000, int(limit))))
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""SELECT * FROM mail_outcome_audit_cleanup_log {where}
+                ORDER BY created_at DESC LIMIT %s""",
+            params,
+        )
+        return _rows(cur)
 
 
 def _booking_rows_by_candidate() -> dict[str, list[dict[str, Any]]]:
@@ -1248,6 +1410,11 @@ def candidate_findings(canonical_candidate_id: str, filters: dict[str, Any] | No
     if mode and str(mode).upper() != "ALL":
         clauses.append("f.outcome = ANY(%s)")
         params.append(sorted(engine.outcomes_for_mode(mode)))
+        # Cleaned-up findings are listed separately, not mixed into the
+        # evidence the counted outcome rests on.
+        if (engine.normalize_mode(mode) == engine.MODE_SELECTION
+                and str(filters.get("include_excluded") or "").lower() not in {"1", "true", "yes"}):
+            clauses.append("COALESCE(f.suppressed,false)=false")
 
     if str(filters.get("relevant_only") or "").lower() in {"1", "true", "yes"}:
         clauses.append("f.outcome <> 'NOT_RELEVANT'")
@@ -1356,6 +1523,10 @@ def system_summary(filters: dict[str, Any] | None = None) -> dict[str, Any]:
             1 for row in rows if row.get("status_mismatch"))
         summary["candidates_conflicting_evidence"] = sum(
             1 for row in rows if row.get("conflicting_evidence"))
+        cleanup = cleanup_summary()
+        summary["excluded_findings"] = cleanup["excluded_total"]
+        summary["excluded_by_reason"] = cleanup["by_reason"]
+        summary["last_cleanup_at"] = cleanup["last_cleanup_at"]
     return summary
 
 
