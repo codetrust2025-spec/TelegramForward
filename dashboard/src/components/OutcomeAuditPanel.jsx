@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { API } from "../config.js";
 import { useConfirm } from "../context/ConfirmContext.jsx";
+import { MailMonitoringTabs } from "./MailMonitoringTabs.jsx";
 import { useDialogA11y } from "../hooks/useDialogA11y.js";
 import { ButtonContent, InlineLoader } from "../Loader.jsx";
 
@@ -239,7 +240,7 @@ export function OutcomeAuditPanel() {
     <div className="outcome-audit">
       <header className="outcome-audit__header">
         <div>
-          <p className="outcome-audit__eyebrow">Gmail operations</p>
+          <p className="outcome-audit__eyebrow">AI MAIL MONITORING</p>
           <h1>Candidate mail outcome audit</h1>
           <p className="outcome-audit__lede">
             Evidence-based reconstruction of what every connected mailbox actually received.
@@ -258,6 +259,8 @@ export function OutcomeAuditPanel() {
           </button>
         </div>
       </header>
+
+      <MailMonitoringTabs active="outcome-audit" />
 
       {summary?.latest_run && (
         <p className="outcome-audit__runline">

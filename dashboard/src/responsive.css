@@ -955,3 +955,17 @@ body:has(> #root .mobile-drawer--open) {
     overflow: visible;
   }
 }
+
+/* Main view nav must never hide a section.
+   ------------------------------------------------------------------
+   The desktop rule is `display:inline-flex; flex-shrink:0` with no wrap and
+   no overflow, inside an `.app-shell` that sets `overflow:hidden`. Once the
+   nav held nine sections the trailing ones were clipped at the header edge
+   with no scrollbar and no other affordance, so a deployed view looked to an
+   administrator like it had never shipped. Wrapping costs a second header
+   row only at widths where the alternative is an invisible tab. */
+.app-header .app-view-nav,
+.app-header .app-view-nav.app-view-nav-buttons {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
