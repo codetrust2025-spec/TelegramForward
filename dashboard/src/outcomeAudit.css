@@ -522,6 +522,25 @@
   color: #cbd5e1;
 }
 
+/* What the AI result is allowed to unlock. "Blocked" is the normal case and
+   is styled quietly; only a fully verified, agreeing, unrestricted review
+   earns the affirmative colour. */
+.outcome-audit__approvalstate {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.outcome-audit__approvalstate--blocked {
+  background: rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+}
+.outcome-audit__approvalstate--safe {
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
+}
+
 .outcome-audit__gaplist {
   margin: 0;
   padding-left: 18px;

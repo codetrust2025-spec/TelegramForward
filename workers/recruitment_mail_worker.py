@@ -188,7 +188,10 @@ class RecruitmentMailWorker:
         never fail, delay or retry a booking.
         """
         from core import recruitment_audit_ai as audit_ai
+        # Two switches: the feature may be on for manual runs while unattended
+        # draining of the queue is paused.  Neither affects auto-booking.
         if not audit_ai.enabled():return
+        if not audit_ai.auto_processing_enabled():return
         try:
             result=audit_ai.process_pending()
         except Exception:

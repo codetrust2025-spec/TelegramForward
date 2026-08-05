@@ -873,10 +873,13 @@ export function OutcomeAuditPanel() {
                           {(() => {
                             const review = (detail.ollama_reviews || {})[finding.id];
                             if (!review) return null;
-                            // Agreement is derived by comparing outcomes, not
-                            // taken from the model's own `agrees` field, which
-                            // it does not use consistently.
-                            const same = review.suggested_outcome === finding.outcome;
+                            // Everything shown here is what the server derived
+                            // deterministically. The model's own `agrees` and
+                            // raw confidence are not displayed: in the first
+                            // batch it reported agrees=false with an identical
+                            // outcome and mixed 0-1 with 0-100 confidences.
+                            const same = review.derived_agreement === "AGREES_WITH_RULES";
+                            const shown = review.restricted_outcome || review.suggested_outcome;
                             return (
                               <div
                                 className={`outcome-audit__review outcome-audit__review--${
@@ -905,11 +908,31 @@ export function OutcomeAuditPanel() {
                                     </strong>
                                   </span>
                                   <span>
-                                    Ollama:{" "}
-                                    <strong>{human(review.suggested_outcome)}</strong>
+                                    Ollama: <strong>{human(shown)}</strong>
+                                    {review.restricted_outcome &&
+                                      review.restricted_outcome !== review.suggested_outcome && (
+                                        <em> (restricted from {human(review.suggested_outcome)})</em>
+                                      )}
                                   </span>
-                                  <span>{same ? "Agrees" : "Disagrees"}</span>
+                                  <span>{human(review.derived_agreement) || "—"}</span>
+                                  <span>
+                                    {review.normalized_confidence == null
+                                      ? "confidence withheld"
+                                      : `${Math.round(review.normalized_confidence)}%`}
+                                  </span>
                                 </p>
+                                <p
+                                  className={`outcome-audit__approvalstate outcome-audit__approvalstate--${
+                                    review.approval_state === "Safe to review for approval."
+                                      ? "safe"
+                                      : "blocked"
+                                  }`}
+                                >
+                                  {review.approval_state}
+                                </p>
+                                {review.restrictions && (
+                                  <p className="outcome-audit__sub">{review.restrictions}</p>
+                                )}
                                 {review.quoted_evidence && (
                                   <blockquote>“{review.quoted_evidence}”</blockquote>
                                 )}

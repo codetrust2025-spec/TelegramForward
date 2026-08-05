@@ -68,6 +68,22 @@ ALTER TABLE mail_audit_ai_results
 ALTER TABLE mail_audit_ai_results
   ADD COLUMN IF NOT EXISTS verification_problems text;
 
+-- Hardening after the first production batch. The model's raw answer is kept
+-- verbatim in raw_response; these columns hold what the system derived from it
+-- deterministically, which is what the UI shows and what any approval rests on.
+ALTER TABLE mail_audit_ai_results
+  ADD COLUMN IF NOT EXISTS normalized_confidence double precision;
+ALTER TABLE mail_audit_ai_results
+  ADD COLUMN IF NOT EXISTS derived_agreement text;
+ALTER TABLE mail_audit_ai_results
+  ADD COLUMN IF NOT EXISTS restricted_outcome text;
+ALTER TABLE mail_audit_ai_results
+  ADD COLUMN IF NOT EXISTS restrictions text;
+ALTER TABLE mail_audit_ai_results
+  ADD COLUMN IF NOT EXISTS sender_verified_company boolean NOT NULL DEFAULT false;
+ALTER TABLE mail_audit_ai_results
+  ADD COLUMN IF NOT EXISTS approval_state text;
+
 CREATE INDEX IF NOT EXISTS idx_mail_audit_ai_queue_status
   ON mail_audit_ai_queue(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_mail_audit_ai_results_finding
