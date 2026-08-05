@@ -402,13 +402,17 @@ def _offer_document(attachments: list[dict[str, Any]]) -> dict[str, Any] | None:
         or _OFFER_DOC_FILENAME.search(item["filename"])
     ]
     # Prefer one whose extracted text actually reads like an offer letter.
+    # Offer language decides; non-offer vocabulary only breaks a weak tie. A
+    # real appointment letter routinely mentions relieving letters in its terms
+    # and conditions, so treating that vocabulary as a veto rejected genuine
+    # offers, while a payslip carries none of the offer language at all.
     for item in candidates:
         text = normalize(item["text"])
         if not text:
             continue
-        if _matches(_NON_OFFER_DOC[0][1], text):
-            continue
-        if _matches(_OFFER_DOC_CONTENT[0][1], text):
+        offer_markers = _matches(_OFFER_DOC_CONTENT[0][1], text)
+        non_offer_markers = _matches(_NON_OFFER_DOC[0][1], text)
+        if len(offer_markers) >= 2 or (offer_markers and not non_offer_markers):
             return item
     # Otherwise fall back to a named-but-unreadable candidate, so an offer
     # attachment that failed extraction still routes to a human.
