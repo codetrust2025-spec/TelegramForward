@@ -243,6 +243,45 @@ def test_a_real_appointment_letter_attachment_is_still_verified():
     assert result["confidence"] >= 90
 
 
+def test_appointment_letter_mentioning_relieving_letters_is_still_verified():
+    """Employment terms routinely reference relieving and experience letters.
+
+    Treating that vocabulary as disqualifying rejected the one genuine offer
+    letter in the production mailboxes.
+    """
+    appointment = (
+        "APPOINTMENT LETTER Date: 16/07/2026 Dear Lekkala Swathi, This has reference to "
+        "your application and subsequent interviews you have had with Kaivale Technologies "
+        "Private Limited and their associates. We are pleased to appoint you as an "
+        "Sr. Software Engineer, Based in Bangalore. Your employment will be governed by the "
+        "following terms and conditions. 1. Monthly Gross Salary Your Annual Salary will be "
+        "INR 6,00,000. Your date of joining is 01 Aug 2026. You shall produce the relieving "
+        "letter from your previous employer at the time of joining."
+    )
+    result = engine.classify_message(
+        message(subject="Welcome to Kaivale Technologies",
+                body="Please sign the attached offer letter.",
+                sender_email="vanshika@kaivale.example"),
+        [attachment(filename="Kaivale Technologies offer Letter_Signed.pdf",
+                    attachment_type="OFFER_LETTER", text=appointment)],
+    )
+    assert result["outcome"] == engine.VERIFIED_OFFER_LETTER
+
+
+def test_payslip_has_no_offer_language_so_stays_rejected():
+    """The counterpart to the test above: a payslip must still not qualify."""
+    payslip = (
+        "Employee Code : 782541 Pay Period : 01/05/2026 To 31/05/2026 "
+        "Employee Name : Gumma Gopichand Hire Date : 07/09/2021 Net Pay 84,500 "
+        "Provident Fund 1,800 Earnings Deductions"
+    )
+    result = engine.classify_message(
+        message(subject="Documents", body="Your offer letter is referenced below."),
+        [attachment(filename="29-MAY-2026.pdf", attachment_type="OFFER_LETTER", text=payslip)],
+    )
+    assert result["outcome"] != engine.VERIFIED_OFFER_LETTER
+
+
 def test_offer_letter_mentioned_but_not_attached_is_not_verified():
     result = engine.classify_message(
         message(subject="Update", body="Your offer letter will follow shortly."),
