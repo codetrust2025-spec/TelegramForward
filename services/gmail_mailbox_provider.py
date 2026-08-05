@@ -158,5 +158,11 @@ def decode_gmail_message(raw:dict[str,Any],recipient:str)->dict[str,Any]:
     labels=[str(value).upper() for value in raw.get('labelIds') or []]
     mailbox=str(recipient or '').strip().lower()
     direction=('OUTBOUND' if ('SENT' in labels and 'INBOX' not in labels) or (sender_email.lower()==mailbox and mailbox not in to_addresses) else 'INBOUND')
+    # Reply-To and Return-Path are the two headers that expose a reply path
+    # pointing away from the apparent sender, so the outcome audit needs them
+    # alongside the SPF/DKIM/DMARC verdicts.
+    _reply_name,reply_to=parseaddr(headers.get('reply-to',''))
+    _return_name,return_path=parseaddr(headers.get('return-path',''))
     return {"provider_message_id":raw['id'],"provider_thread_id":raw.get('threadId'),"sender_name":sender_name,"sender_email":sender_email,"recipient_email":recipient,"to_metadata":to_addresses,"cc_metadata":cc,"gmail_label_ids":labels,"message_direction":direction,"subject":subject,"sent_at":sent,"body":plain or html_body,"html_body":html_body,
-            "rfc_message_id":headers.get('message-id'),"authentication_results":headers.get('authentication-results'),"received_spf":headers.get('received-spf')}
+            "rfc_message_id":headers.get('message-id'),"authentication_results":headers.get('authentication-results'),"received_spf":headers.get('received-spf'),
+            "reply_to_email":(reply_to or '').lower() or None,"return_path_email":(return_path or '').lower() or None}

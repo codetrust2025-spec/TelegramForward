@@ -71,6 +71,7 @@ import { DataRoomPanel } from './components/DataRoomPanel.jsx'
 import { AdminPanel } from './components/AdminPanel.jsx'
 import { KnowledgeAssistantPanel } from './components/KnowledgeAssistantPanel.jsx'
 import { RecruitmentMailPanel } from './components/RecruitmentMailPanel.jsx'
+import { OutcomeAuditPanel } from './components/OutcomeAuditPanel.jsx'
 import { MailMonitoringNotifications } from './components/MailMonitoringNotifications.jsx'
 import {
   playNewMessageSound,
@@ -90,6 +91,7 @@ import { MobileApp } from './mobile/MobileApp.jsx'
 import { DesktopApp } from './desktop/DesktopApp.jsx'
 import { PendingWorksProvider } from './dailyOps/PendingWorksProvider.jsx'
 import './recruitmentMail.css'
+import './outcomeAudit.css'
 
 
 function mergeInboxConversationList(convs, conversation, { clearUnread = false } = {}) {
@@ -2206,6 +2208,8 @@ export default function App() {
         <KnowledgeAssistantPanel />
       ) : mainView === 'ai-recruitment' ? (
         <RecruitmentMailPanel />
+      ) : mainView === 'outcome-audit' ? (
+        <OutcomeAuditPanel />
       ) : mainView === 'mail-notifications' ? (
         <MailMonitoringNotifications />
       ) : mainView === 'data-room' ? (

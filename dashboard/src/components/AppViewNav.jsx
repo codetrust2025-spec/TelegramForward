@@ -8,6 +8,7 @@ const MAIN_VIEWS = [
   { value: "candidates", label: "Candidates", shortLabel: "Candidates" },
   { value: "knowledge", label: "Ask AI", shortLabel: "Ask AI" },
   { value: "ai-recruitment", label: "AI Mail Review", shortLabel: "AI Mail" },
+  { value: "outcome-audit", label: "Mail Audit", shortLabel: "Audit" },
   { value: "data-room", label: "Data room", shortLabel: "Data" },
   { value: "admin", label: "Admin", shortLabel: "Admin" },
   { value: "logs", label: "Logs", shortLabel: "Logs" },
@@ -92,7 +93,9 @@ export function AppViewNav({
                       ? "Live activity logs"
                       : v.value === "candidates"
                         ? "Candidates tracker"
-                        : undefined
+                        : v.value === "outcome-audit"
+                          ? "Candidate mail outcome audit — evidence-based, read-only"
+                          : undefined
               }
             >
               {v.label}
