@@ -579,8 +579,19 @@ def install_recruitment_mail_routes(app):
           if scoped==audit_engine.MODE_INTERVIEW else [])
         applications=await asyncio.to_thread(audit_store.application_timeline,
           canonical_candidate_id,scoped)
+        # Ollama second opinions, keyed by finding. Advisory: the deterministic
+        # outcome stands until an administrator decides otherwise.
+        reviews={}
+        try:
+            from core import recruitment_audit_ai as audit_ai
+            if audit_ai.enabled():
+                reviews=await asyncio.to_thread(audit_ai.results_for_findings,
+                  [str(row['id']) for row in findings])
+        except Exception:
+            logger.debug('Audit second opinions unavailable',exc_info=True)
         return {'status':'ok','mode':scoped,'candidate':rows[0],'findings':findings,
-          'applications':applications,'bookings':bookings,'gaps':gaps,'approvals':approvals}
+          'applications':applications,'bookings':bookings,'gaps':gaps,
+          'approvals':approvals,'ollama_reviews':reviews}
 
     @app.get('/api/mail-outcome-audit/excluded')
     async def outcome_audit_excluded(request:Request,response:Response,

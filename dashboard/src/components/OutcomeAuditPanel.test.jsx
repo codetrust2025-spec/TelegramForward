@@ -125,6 +125,44 @@ const APPLICATIONS = [
   },
 ];
 
+const FINDINGS_WITH_REVIEW = [
+  {
+    id: "f-kaivale",
+    outcome: "MANUAL_REVIEW_REQUIRED",
+    confidence: 50,
+    received_at: "2026-07-16T12:10:00Z",
+    subject: "Re: Welcome to Kaivale Technologies",
+    sender_email: "vanshika@kaivale.com",
+    company_name: "Kaivale Technologies",
+    rationale: "Offer letter referenced but not attached.",
+    evidence: [],
+    attachment_evidence: [],
+    authenticity: "PARTIAL",
+    authenticity_detail: { concerns: [] },
+    source_type: "COMPANY",
+    evidence_strength: "MODERATE",
+    pipeline_outcome: "JOINING_CONFIRMED",
+    pipeline_agreement: "PIPELINE_STRONGER",
+  },
+];
+
+const OLLAMA_REVIEWS = {
+  "f-kaivale": {
+    model: "qwen2.5:7b",
+    suggested_outcome: "JOINING_CONFIRMED",
+    confidence: 95,
+    agrees: false,
+    verified: true,
+    verification_problems: null,
+    quoted_evidence: "Thanks for accepting the offer letter.",
+    reasoning: "The thread shows the offer was accepted and onboarding began.",
+    cited_message_id: "19f6b02d5051d006",
+    cited_attachment: null,
+    cited_company: "Kaivale Technologies",
+    is_bulk_campaign: false,
+  },
+};
+
 let calls;
 
 const jsonResponse = (body) => Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
@@ -161,6 +199,8 @@ function mockFetch() {
             : [],
           gaps: [],
           approvals: [],
+          findings: interview ? [] : FINDINGS_WITH_REVIEW,
+          ollama_reviews: interview ? {} : OLLAMA_REVIEWS,
         });
       if (path.includes("/candidates"))
         return jsonResponse({
@@ -441,6 +481,57 @@ describe("Evidence is read company by company", () => {
     await waitFor(() =>
       expect(calls.some((c) => c.path.includes("/findings/f-kaivale/approve"))).toBe(true),
     );
+  });
+});
+
+describe("Ollama second opinion is shown beside the other two", () => {
+  const openDrawer = async () => {
+    await renderPanel();
+    fireEvent.click(
+      within(screen.getByText("Lekkala swathi").closest("tr")).getByText("Evidence"),
+    );
+    return screen.findByText("Ollama second opinion");
+  };
+
+  it("shows all three verdicts together", async () => {
+    const heading = await openDrawer();
+    // Scoped to the review block: "Pipeline:" also appears on the finding.
+    const block = within(heading.closest(".outcome-audit__review"));
+    expect(block.getByText(/Deterministic:/)).toBeTruthy();
+    expect(block.getByText(/Pipeline:/)).toBeTruthy();
+    expect(block.getByText(/Ollama:/)).toBeTruthy();
+    expect(block.getByText("qwen2.5:7b")).toBeTruthy();
+  });
+
+  it("derives agreement from the outcomes, not the model's own claim", async () => {
+    // The fixture has agrees:false but a different outcome from the rules,
+    // so the UI must call it a disagreement on the outcomes alone.
+    await openDrawer();
+    expect(screen.getByText("Disagrees")).toBeTruthy();
+  });
+
+  it("shows the quoted evidence and the reasoning", async () => {
+    await openDrawer();
+    expect(screen.getByText(/Thanks for accepting the offer letter/)).toBeTruthy();
+    expect(screen.getByText(/onboarding began/)).toBeTruthy();
+  });
+
+  it("marks whether the citations were verified", async () => {
+    await openDrawer();
+    expect(screen.getByText("Citations verified")).toBeTruthy();
+    expect(screen.getByText(/19f6b02d5051d006/)).toBeTruthy();
+  });
+
+  it("states plainly that the second opinion is advisory", async () => {
+    await openDrawer();
+    expect(screen.getByText(/A disagreement is a prompt to read the mail, not a status change/i))
+      .toBeTruthy();
+  });
+
+  it("offers no approve action from the Ollama block", async () => {
+    const heading = await openDrawer();
+    const block = heading.closest(".outcome-audit__review");
+    expect(within(block).queryByText("Approve status update")).toBeNull();
   });
 });
 

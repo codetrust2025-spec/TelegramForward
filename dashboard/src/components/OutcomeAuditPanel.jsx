@@ -870,6 +870,71 @@ export function OutcomeAuditPanel() {
                             Source: {human(finding.source_type)} ·{" "}
                             {human(finding.evidence_strength)} evidence
                           </p>
+                          {(() => {
+                            const review = (detail.ollama_reviews || {})[finding.id];
+                            if (!review) return null;
+                            // Agreement is derived by comparing outcomes, not
+                            // taken from the model's own `agrees` field, which
+                            // it does not use consistently.
+                            const same = review.suggested_outcome === finding.outcome;
+                            return (
+                              <div
+                                className={`outcome-audit__review outcome-audit__review--${
+                                  same ? "agree" : "differ"
+                                }`}
+                              >
+                                <div className="outcome-audit__review-head">
+                                  <strong>Ollama second opinion</strong>
+                                  <span>{review.model}</span>
+                                  <span
+                                    className={`outcome-audit__strength outcome-audit__strength--${
+                                      review.verified ? "strong" : "weak"
+                                    }`}
+                                  >
+                                    {review.verified ? "Citations verified" : "Unverified"}
+                                  </span>
+                                </div>
+                                <p className="outcome-audit__review-row">
+                                  <span>Deterministic: <strong>{human(finding.outcome)}</strong></span>
+                                  <span>
+                                    Pipeline:{" "}
+                                    <strong>
+                                      {finding.pipeline_outcome
+                                        ? human(finding.pipeline_outcome)
+                                        : "no event"}
+                                    </strong>
+                                  </span>
+                                  <span>
+                                    Ollama:{" "}
+                                    <strong>{human(review.suggested_outcome)}</strong>
+                                  </span>
+                                  <span>{same ? "Agrees" : "Disagrees"}</span>
+                                </p>
+                                {review.quoted_evidence && (
+                                  <blockquote>“{review.quoted_evidence}”</blockquote>
+                                )}
+                                <p className="outcome-audit__rationale">{review.reasoning}</p>
+                                <p className="outcome-audit__sub">
+                                  Cited message {review.cited_message_id || "—"}
+                                  {review.cited_attachment
+                                    ? ` · attachment ${review.cited_attachment}`
+                                    : ""}
+                                  {review.cited_company ? ` · ${review.cited_company}` : ""}
+                                  {review.is_bulk_campaign ? " · reads as a bulk campaign" : ""}
+                                </p>
+                                {!review.verified && (
+                                  <p className="outcome-audit__warnbox">
+                                    Not acted on — {review.verification_problems}
+                                  </p>
+                                )}
+                                <p className="outcome-audit__sub">
+                                  {same
+                                    ? "Advisory only. Both readings agree; approval still requires the application-level checks above."
+                                    : "Advisory only. A disagreement is a prompt to read the mail, not a status change."}
+                                </p>
+                              </div>
+                            );
+                          })()}
                         </li>
                       ))}
                   </ol>
