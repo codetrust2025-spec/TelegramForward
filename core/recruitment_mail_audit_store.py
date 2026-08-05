@@ -903,7 +903,280 @@ def _filter_clauses(filters: dict[str, Any], *, alias: str) -> tuple[list[str], 
     return clauses, params
 
 
+# ── Mode-scoped reporting ────────────────────────────────────────────────────
+#
+# Selection and interview-slot results are reported separately. Rather than
+# store two rollups per candidate, each mode's view is derived from the same
+# findings at read time: the audit does not need re-running to change how its
+# results are grouped, and the two totals can never drift apart.
+
+def _findings_for_mode(mode: str) -> dict[str, list[dict[str, Any]]]:
+    outcomes = sorted(engine.outcomes_for_mode(mode))
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT id,canonical_candidate_id,outcome,confidence,received_at,company_name,
+                      company_domain,sender_domain,authenticity,manual_review_required,
+                      pipeline_outcome,pipeline_agreement,subject
+               FROM mail_outcome_audit_findings
+               WHERE outcome = ANY(%s)""",
+            (outcomes,),
+        )
+        rows = _rows(cur)
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["canonical_candidate_id"]), []).append(row)
+    return grouped
+
+
+def _booking_rows_by_candidate() -> dict[str, list[dict[str, Any]]]:
+    """Auto-booking outcomes, keyed by the candidate identity the audit uses."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT b.id,b.candidate_id,
+                      COALESCE(l.canonical_candidate_id,b.candidate_id) AS canonical_candidate_id,
+                      b.classification,b.auto_booked,b.booking_status,b.validation_status,
+                      b.duplicate_check_status,b.conflict_check_status,b.failure_code,
+                      b.failure_message,b.gmail_message_id,b.created_at
+               FROM interview_auto_booking_audit b
+               LEFT JOIN candidate_identity_links l ON l.alias_candidate_id=b.candidate_id"""
+        )
+        rows = _rows(cur)
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        row["booking_outcome"] = engine.booking_outcome(row)
+        grouped.setdefault(str(row["canonical_candidate_id"]), []).append(row)
+    return grouped
+
+
+def _gap_counts_by_candidate(mode: str) -> dict[str, int]:
+    """Gaps attributable to one mode, plus mailbox-level gaps that affect both."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT canonical_candidate_id,audit_outcome,count(*) AS total
+               FROM mail_outcome_audit_gaps GROUP BY 1,2"""
+        )
+        rows = _rows(cur)
+    counts: dict[str, int] = {}
+    for row in rows:
+        outcome = row.get("audit_outcome")
+        owner = engine.mode_for_outcome(str(outcome)) if outcome else None
+        # A sync or backlog gap has no outcome and degrades both reports.
+        if owner is not None and owner != engine.normalize_mode(mode):
+            continue
+        key = str(row["canonical_candidate_id"])
+        counts[key] = counts.get(key, 0) + int(row["total"])
+    return counts
+
+
+def _base_candidate_rows() -> list[dict[str, Any]]:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM mail_outcome_audit_candidates")
+        return _rows(cur)
+
+
+def mode_candidate_rows(mode: str) -> list[dict[str, Any]]:
+    """One row per candidate, scoped to a single audit mode."""
+    mode = engine.normalize_mode(mode)
+    base = _base_candidate_rows()
+    findings = _findings_for_mode(mode)
+    bookings = _booking_rows_by_candidate() if mode == engine.MODE_INTERVIEW else {}
+    gaps = _gap_counts_by_candidate(mode)
+
+    result: list[dict[str, Any]] = []
+    for row in base:
+        key = str(row["canonical_candidate_id"])
+        mine = findings.get(key, [])
+        counts = engine.outcome_counts(mine)
+
+        if mode == engine.MODE_INTERVIEW:
+            for booking in bookings.get(key, []):
+                outcome = booking["booking_outcome"]
+                counts[outcome] = counts.get(outcome, 0) + 1
+
+        best = engine.strongest(mine)
+        # In interview mode a completed booking is the strongest statement the
+        # system can make about a slot, ahead of the invitation that caused it.
+        booked = [b for b in bookings.get(key, [])
+                  if b["booking_outcome"] == engine.BOOKING_AUTO_BOOKED]
+        if mode == engine.MODE_INTERVIEW and booked:
+            strongest_outcome = engine.BOOKING_AUTO_BOOKED
+            strongest_confidence = 100.0
+            strongest_finding_id = None
+        elif best:
+            strongest_outcome = best["outcome"]
+            strongest_confidence = float(best.get("confidence") or 0)
+            strongest_finding_id = best.get("id")
+        elif counts:
+            # No ranked outcome, but the mode still has something to report:
+            # booking-side evidence in interview mode, or a finding that needs
+            # review in selection mode.
+            order = (engine.INTERVIEW_MODE_CATEGORIES if mode == engine.MODE_INTERVIEW
+                     else engine.SELECTION_MODE_CATEGORIES)
+            ranked = [category for category in order if counts.get(category)]
+            strongest_outcome = ranked[0] if ranked else engine.NOT_RELEVANT
+            strongest_confidence = 100.0 if mode == engine.MODE_INTERVIEW else 0.0
+            strongest_finding_id = None
+        else:
+            strongest_outcome = engine.NOT_RELEVANT
+            strongest_confidence = 0.0
+            strongest_finding_id = None
+
+        relevant = [f for f in mine if f["outcome"] in engine.MEANINGFUL_OUTCOMES]
+        conflicts = engine.detect_conflicts(mine) if mode == engine.MODE_SELECTION else []
+        latest = max(mine, key=lambda f: str(f.get("received_at") or ""), default=None)
+        relevant_count = len(relevant)
+        if mode == engine.MODE_INTERVIEW:
+            relevant_count += len(bookings.get(key, []))
+
+        entry = dict(row)
+        entry.update({
+            "mode": mode,
+            "outcome_counts": counts,
+            "relevant_messages": relevant_count,
+            "messages_examined": row.get("messages_examined"),
+            "strongest_outcome": strongest_outcome,
+            "strongest_outcome_rank": engine.OUTCOME_RANK.get(strongest_outcome, 0),
+            "strongest_confidence": strongest_confidence,
+            "strongest_finding_id": strongest_finding_id,
+            "strongest_authenticity": (best or {}).get("authenticity"),
+            "latest_outcome": (latest or {}).get("outcome"),
+            "latest_outcome_at": (latest or {}).get("received_at"),
+            "companies": sorted({
+                str(f.get("company_name") or f.get("sender_domain") or "").strip()
+                for f in relevant if (f.get("company_name") or f.get("sender_domain"))
+            }),
+            "manual_review_required": any(f["manual_review_required"] for f in mine) or bool(conflicts),
+            "conflicting_evidence": bool(conflicts),
+            "suspicious_evidence": any(
+                f["authenticity"] == engine.AUTHENTICITY_SUSPICIOUS for f in relevant
+            ),
+            "pipeline_gaps": gaps.get(key, 0),
+        })
+
+        # A status mismatch is a statement about hiring status, which only the
+        # selection audit is entitled to make. Interview-slot results say
+        # nothing about whether a candidate was selected.
+        if mode == engine.MODE_SELECTION:
+            expected = _AUDIT_TO_CANDIDATE_STATUS.get(strongest_outcome)
+            system_status = row.get("system_status")
+            mismatch, detail = _status_mismatch(expected, system_status, strongest_outcome)
+            entry["status_mismatch"] = mismatch
+            entry["mismatch_detail"] = detail
+            entry["recommended_action"] = _recommendation(
+                conflicts, entry["suspicious_evidence"], mismatch, expected,
+                entry["manual_review_required"], relevant,
+            )
+        else:
+            entry["status_mismatch"] = False
+            entry["mismatch_detail"] = None
+            entry["recommended_action"] = _interview_recommendation(counts)
+        result.append(entry)
+    return result
+
+
+def _status_mismatch(expected: str | None, system_status: str | None,
+                     strongest_outcome: str) -> tuple[bool, str | None]:
+    if expected and system_status and expected != system_status:
+        return True, (f"Mail evidence supports '{expected}' ({strongest_outcome}); "
+                      f"TeleAutomation shows '{system_status}'.")
+    if expected and not system_status:
+        return True, (f"Mail evidence supports '{expected}' ({strongest_outcome}); "
+                      "TeleAutomation has no detected job status for this candidate.")
+    if not expected and system_status and system_status not in {"Profile Active", "Needs Review"}:
+        return True, (f"TeleAutomation shows '{system_status}' but the audit found no "
+                      "supporting selection evidence.")
+    return False, None
+
+
+def _recommendation(conflicts, suspicious, mismatch, expected, manual, relevant) -> str:
+    if conflicts:
+        return "Human review: conflicting outcomes for the same company."
+    if suspicious:
+        return "Human review: sender authenticity concerns on a material outcome."
+    if mismatch:
+        return (f"Review and, if correct, approve the status update to '{expected}'."
+                if expected else "Review why the system status has no mail evidence.")
+    if manual:
+        return "Human review: incomplete evidence on one or more messages."
+    if relevant:
+        return "No action; system status matches the mail evidence."
+    return "No selection evidence found in this mailbox."
+
+
+def _interview_recommendation(counts: dict[str, int]) -> str:
+    if counts.get(engine.BOOKING_SLOT_CONFLICT):
+        return "Resolve the slot conflict before the interview date."
+    if counts.get(engine.BOOKING_MISSING_SCHEDULE):
+        return "Interview mail carries no usable date or time; confirm with the recruiter."
+    if counts.get(engine.BOOKING_BLOCKED):
+        return "Automatic booking was blocked; review and book manually if still valid."
+    if counts.get(engine.INVITE_UNPROCESSED):
+        return "An invitation was never processed into a booking; check the pipeline gap."
+    if counts.get(engine.BOOKING_DUPLICATE_IGNORED):
+        return "Duplicate invitation ignored; no action unless the slot changed."
+    if counts.get(engine.BOOKING_AUTO_BOOKED):
+        return "No action; the interview slot was booked automatically."
+    if counts:
+        return "Interview mail present; no booking action outstanding."
+    return "No interview activity found in this mailbox."
+
+
 def candidate_report(filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Mode-scoped candidate rows with the report filters applied."""
+    filters = filters or {}
+    mode = engine.normalize_mode(filters.get("mode"))
+    rows = mode_candidate_rows(mode)
+
+    candidate = str(filters.get("candidate") or "").strip().lower()
+    if candidate:
+        rows = [
+            row for row in rows
+            if candidate in str(row.get("canonical_candidate_id") or "").lower()
+            or candidate in str(row.get("candidate_id") or "").lower()
+            or candidate in str(row.get("email_address") or "").lower()
+            or candidate in str(row.get("candidate_name") or "").lower()
+        ]
+
+    outcome = str(filters.get("outcome") or "").strip().upper()
+    if outcome and outcome != "ALL":
+        rows = [row for row in rows if row.get("strongest_outcome") == outcome]
+
+    company = str(filters.get("company") or "").strip().lower()
+    if company:
+        rows = [row for row in rows
+                if any(company in str(item).lower() for item in row.get("companies") or [])]
+
+    if str(filters.get("manual_review") or "").lower() in {"1", "true", "yes"}:
+        rows = [row for row in rows if row.get("manual_review_required")]
+    if str(filters.get("mismatch") or "").lower() in {"1", "true", "yes"}:
+        rows = [row for row in rows if row.get("status_mismatch")]
+
+    authenticity = str(filters.get("authenticity") or "").strip().upper()
+    if authenticity and authenticity != "ALL":
+        rows = [row for row in rows if row.get("strongest_authenticity") == authenticity]
+
+    sync_status = str(filters.get("sync_status") or "").strip().upper()
+    if sync_status and sync_status != "ALL":
+        if sync_status == "MONITORING_ACTIVE":
+            rows = [row for row in rows if row.get("monitoring_status") == "MONITORING_ACTIVE"]
+        elif sync_status == "FAILED":
+            rows = [row for row in rows
+                    if row.get("scan_status") == "FAILED" or row.get("connection_status") == "ERROR"]
+        else:
+            rows = [row for row in rows if row.get("connection_status") == sync_status]
+
+    minimum = filters.get("min_confidence")
+    if minimum not in (None, "", "all"):
+        rows = [row for row in rows if float(row.get("strongest_confidence") or 0) >= float(minimum)]
+
+    rows.sort(key=lambda row: (
+        -int(row.get("strongest_outcome_rank") or 0),
+        str(row.get("candidate_name") or ""),
+    ))
+    return rows
+
+
+def _legacy_candidate_report(filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     filters = filters or {}
     clauses: list[str] = []
     params: list[Any] = []
@@ -969,6 +1242,13 @@ def candidate_findings(canonical_candidate_id: str, filters: dict[str, Any] | No
     clauses = ["f.canonical_candidate_id=%s"]
     params: list[Any] = [canonical_candidate_id]
 
+    # The drawer belongs to whichever audit opened it, so selection evidence
+    # never appears inside an interview-slot review and vice versa.
+    mode = filters.get("mode")
+    if mode and str(mode).upper() != "ALL":
+        clauses.append("f.outcome = ANY(%s)")
+        params.append(sorted(engine.outcomes_for_mode(mode)))
+
     if str(filters.get("relevant_only") or "").lower() in {"1", "true", "yes"}:
         clauses.append("f.outcome <> 'NOT_RELEVANT'")
     date_from = filters.get("date_from")
@@ -994,26 +1274,56 @@ def candidate_findings(canonical_candidate_id: str, filters: dict[str, Any] | No
         return _rows(cur)
 
 
-def system_summary(filters: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The administrator report."""
-    rows = candidate_report(filters)
+# Tiles per mode. Each label is a category the operator asked to see, and the
+# two lists share no category, so a number can never appear in both reports.
+SELECTION_TILES = (
+    ("candidates_verified_offer_letters", engine.VERIFIED_OFFER_LETTER),
+    ("candidates_final_selection", engine.FINAL_SELECTION),
+    ("candidates_offer_indication", engine.OFFER_INDICATION),
+    ("candidates_joining_confirmed", engine.JOINING_CONFIRMED),
+    ("candidates_background_verification", engine.BACKGROUND_VERIFICATION),
+    ("candidates_shortlisted", engine.SHORTLISTED),
+    ("candidates_next_round", engine.NEXT_ROUND),
+    ("candidates_rejected", engine.REJECTED),
+    ("candidates_manual_review_outcome", engine.MANUAL_REVIEW_REQUIRED),
+)
+INTERVIEW_TILES = (
+    ("candidates_with_interview_invites", engine.INTERVIEW_INVITE),
+    ("candidates_auto_booked", engine.BOOKING_AUTO_BOOKED),
+    ("candidates_interview_rescheduled", engine.INTERVIEW_RESCHEDULED),
+    ("candidates_interview_cancelled", engine.INTERVIEW_CANCELLED),
+    ("candidates_booking_blocked", engine.BOOKING_BLOCKED),
+    ("candidates_duplicate_booking_ignored", engine.BOOKING_DUPLICATE_IGNORED),
+    ("candidates_slot_conflict", engine.BOOKING_SLOT_CONFLICT),
+    ("candidates_missing_date_or_time", engine.BOOKING_MISSING_SCHEDULE),
+    ("candidates_missed_invites", engine.INVITE_UNPROCESSED),
+    ("candidates_historical_not_booked", engine.BOOKING_HISTORICAL_SKIPPED),
+)
 
-    def with_outcome(outcome: str) -> int:
-        return sum(1 for row in rows if row.get("strongest_outcome") == outcome)
+
+def system_summary(filters: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The administrator report for one audit mode."""
+    filters = filters or {}
+    mode = engine.normalize_mode(filters.get("mode"))
+    rows = candidate_report(filters)
+    gaps = gap_totals(mode)
+
+    # Counted over every candidate that has the category at all, not only where
+    # it is the strongest outcome: an operator asking "who has a blocked
+    # booking" wants all of them, not just those with nothing stronger.
+    def with_category(category: str) -> int:
+        return sum(1 for row in rows if (row.get("outcome_counts") or {}).get(category))
+
+    tiles = SELECTION_TILES if mode == engine.MODE_SELECTION else INTERVIEW_TILES
+    summary = {key: with_category(category) for key, category in tiles}
 
     with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            """SELECT gap_type,severity,count(*) AS total FROM mail_outcome_audit_gaps
-               GROUP BY gap_type,severity ORDER BY count(*) DESC"""
-        )
-        gaps = _rows(cur)
-        cur.execute(
-            """SELECT * FROM mail_outcome_audit_runs ORDER BY started_at DESC LIMIT 1"""
-        )
+        cur.execute("SELECT * FROM mail_outcome_audit_runs ORDER BY started_at DESC LIMIT 1")
         run = _rows(cur)
         cur.execute(
             """SELECT count(*) FROM mail_outcome_audit_findings
-               WHERE authenticity='SUSPICIOUS'"""
+               WHERE authenticity='SUSPICIOUS' AND outcome = ANY(%s)""",
+            (sorted(engine.outcomes_for_mode(mode)),),
         )
         suspicious_findings = int(cur.fetchone()[0] or 0)
 
@@ -1023,38 +1333,69 @@ def system_summary(filters: dict[str, Any] | None = None) -> dict[str, Any]:
                          if item["gap_type"] in {GAP_AI_QUEUE_FAILURE, GAP_SYNC_FAILURE,
                                                  GAP_SYNC_INCOMPLETE})
 
-    return {
+    summary.update({
+        "mode": mode,
         "generated_at": now(),
         "latest_run": run[0] if run else None,
         "total_connected_mailboxes": len(rows),
         "mailboxes_scanned": sum(1 for row in rows if row.get("scan_status") == "SCANNED"),
         "mailboxes_failed": sum(1 for row in rows if row.get("scan_status") == "FAILED"),
         "mailboxes_inaccessible": sum(1 for row in rows if row.get("connection_status") == "ERROR"),
-        "candidates_with_interview_invites": with_outcome(engine.INTERVIEW_INVITE),
-        "candidates_shortlisted": with_outcome(engine.SHORTLISTED),
-        "candidates_next_round": with_outcome(engine.NEXT_ROUND),
-        "candidates_final_selection": with_outcome(engine.FINAL_SELECTION),
-        "candidates_offer_indication": with_outcome(engine.OFFER_INDICATION),
-        "candidates_verified_offer_letters": with_outcome(engine.VERIFIED_OFFER_LETTER),
-        "candidates_joining_confirmed": with_outcome(engine.JOINING_CONFIRMED),
-        "candidates_background_verification": with_outcome(engine.BACKGROUND_VERIFICATION),
-        "candidates_rejected": with_outcome(engine.REJECTED),
-        "candidates_no_outcome": with_outcome(engine.NOT_RELEVANT),
+        "candidates_no_outcome": sum(
+            1 for row in rows if row.get("strongest_outcome") == engine.NOT_RELEVANT),
         "candidates_manual_review": sum(1 for row in rows if row.get("manual_review_required")),
-        "candidates_status_mismatch": sum(1 for row in rows if row.get("status_mismatch")),
-        "candidates_conflicting_evidence": sum(1 for row in rows if row.get("conflicting_evidence")),
         "candidates_suspicious_evidence": sum(1 for row in rows if row.get("suspicious_evidence")),
         "suspicious_findings": suspicious_findings,
         "emails_missed_or_misclassified": missed,
         "sync_or_queue_failures": queue_failures,
+        "pipeline_gaps_total": sum(int(item["total"]) for item in gaps),
         "gaps_by_type": gaps,
-    }
+    })
+    if mode == engine.MODE_SELECTION:
+        summary["candidates_status_mismatch"] = sum(
+            1 for row in rows if row.get("status_mismatch"))
+        summary["candidates_conflicting_evidence"] = sum(
+            1 for row in rows if row.get("conflicting_evidence"))
+    return summary
+
+
+def gap_totals(mode: str) -> list[dict[str, Any]]:
+    """Gap counts scoped to one mode, mailbox-level gaps counted in both."""
+    mode = engine.normalize_mode(mode)
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT gap_type,severity,audit_outcome,count(*) AS total
+               FROM mail_outcome_audit_gaps GROUP BY 1,2,3"""
+        )
+        rows = _rows(cur)
+    totals: dict[tuple[str, str], int] = {}
+    for row in rows:
+        outcome = row.get("audit_outcome")
+        owner = engine.mode_for_outcome(str(outcome)) if outcome else None
+        if owner is not None and owner != mode:
+            continue
+        key = (str(row["gap_type"]), str(row["severity"]))
+        totals[key] = totals.get(key, 0) + int(row["total"])
+    return [
+        {"gap_type": gap_type, "severity": severity, "total": total}
+        for (gap_type, severity), total in sorted(totals.items(), key=lambda item: -item[1])
+    ]
 
 
 def list_gaps(*, gap_type: str | None = None, candidate_id: str | None = None,
-              limit: int = 200) -> list[dict[str, Any]]:
+              mode: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
     clauses: list[str] = []
     params: list[Any] = []
+    if mode and str(mode).upper() != "ALL":
+        scoped = engine.normalize_mode(mode)
+        owned = sorted(
+            outcome for outcome in
+            (set(engine.OUTCOMES) | set(engine.BOOKING_OUTCOMES))
+            if engine.mode_for_outcome(outcome) == scoped
+        )
+        # Mailbox-level gaps carry no outcome and degrade both reports.
+        clauses.append("(g.audit_outcome IS NULL OR g.audit_outcome = ANY(%s))")
+        params.append(owned)
     if gap_type and gap_type != "ALL":
         clauses.append("g.gap_type=%s")
         params.append(gap_type)
@@ -1185,6 +1526,67 @@ def list_approvals(*, canonical_candidate_id: str | None = None, limit: int = 10
             params,
         )
         return _rows(cur)
+
+
+def candidate_bookings(canonical_candidate_id: str) -> list[dict[str, Any]]:
+    """Auto-booking outcomes for one candidate, for the interview-mode drawer."""
+    return _booking_rows_by_candidate().get(str(canonical_candidate_id), [])
+
+
+def export_csv(filters: dict[str, Any] | None = None) -> str:
+    """Comma-separated export of the current mode's candidate report.
+
+    The export carries the same rows the screen shows, so a selection export
+    can never contain interview-slot totals.
+    """
+    import csv
+    import io
+
+    filters = filters or {}
+    mode = engine.normalize_mode(filters.get("mode"))
+    rows = candidate_report(filters)
+    categories = (engine.SELECTION_MODE_CATEGORIES if mode == engine.MODE_SELECTION
+                  else engine.INTERVIEW_MODE_CATEGORIES)
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    header = [
+        "audit_mode", "candidate_name", "candidate_id", "gmail",
+        "monitoring_status", "connection_status", "last_successful_sync_at",
+        "messages_examined", "relevant_messages", "companies",
+        "strongest_outcome", "confidence", "authenticity",
+        "manual_review_required", "suspicious_evidence", "pipeline_gaps",
+    ]
+    if mode == engine.MODE_SELECTION:
+        header += ["system_status", "status_mismatch", "mismatch_detail", "conflicting_evidence"]
+    header += ["recommended_action"] + [category.lower() for category in categories]
+    writer.writerow(header)
+
+    for row in rows:
+        counts = row.get("outcome_counts") or {}
+        line = [
+            mode, row.get("candidate_name") or "", row.get("canonical_candidate_id") or "",
+            row.get("email_address") or "", row.get("monitoring_status") or "",
+            row.get("connection_status") or "", row.get("last_successful_sync_at") or "",
+            row.get("messages_examined") or 0, row.get("relevant_messages") or 0,
+            "; ".join(row.get("companies") or []),
+            row.get("strongest_outcome") or "", round(float(row.get("strongest_confidence") or 0)),
+            row.get("strongest_authenticity") or "",
+            "yes" if row.get("manual_review_required") else "no",
+            "yes" if row.get("suspicious_evidence") else "no",
+            row.get("pipeline_gaps") or 0,
+        ]
+        if mode == engine.MODE_SELECTION:
+            line += [
+                row.get("system_status") or "",
+                "yes" if row.get("status_mismatch") else "no",
+                row.get("mismatch_detail") or "",
+                "yes" if row.get("conflicting_evidence") else "no",
+            ]
+        line += [row.get("recommended_action") or ""]
+        line += [counts.get(category, 0) for category in categories]
+        writer.writerow(line)
+    return buffer.getvalue()
 
 
 def finding_history(finding_id: str) -> list[dict[str, Any]]:

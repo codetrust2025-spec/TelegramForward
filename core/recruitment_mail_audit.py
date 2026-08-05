@@ -82,6 +82,106 @@ POSITIVE_DECISION_OUTCOMES = frozenset({
 
 MEANINGFUL_OUTCOMES = frozenset(set(OUTCOMES) - {NOT_RELEVANT, MANUAL_REVIEW_REQUIRED})
 
+
+# ── Audit modes ──────────────────────────────────────────────────────────────
+#
+# Selection and interview-slot results answer different questions and were
+# being totalled together, so a mailbox full of interview invitations read as
+# hiring progress. The two are partitioned here and never mixed.
+
+MODE_SELECTION = "SELECTION"
+MODE_INTERVIEW = "INTERVIEW"
+MODES = (MODE_SELECTION, MODE_INTERVIEW)
+
+# NEXT_ROUND sits on the selection side beside SHORTLISTED: both say the
+# company advanced this candidate. The interview mode is about slot mechanics —
+# what was booked, blocked or missed — not about progression.
+SELECTION_OUTCOMES = frozenset({
+    VERIFIED_OFFER_LETTER, FINAL_SELECTION, OFFER_INDICATION, JOINING_CONFIRMED,
+    BACKGROUND_VERIFICATION, SHORTLISTED, NEXT_ROUND, REJECTED,
+    MANUAL_REVIEW_REQUIRED,
+})
+INTERVIEW_OUTCOMES = frozenset({
+    INTERVIEW_INVITE, INTERVIEW_RESCHEDULED, INTERVIEW_CANCELLED,
+})
+
+# Booking outcomes come from the auto-booking pipeline, not from mail text.
+BOOKING_AUTO_BOOKED = "INTERVIEW_AUTO_BOOKED"
+BOOKING_BLOCKED = "BOOKING_BLOCKED"
+BOOKING_DUPLICATE_IGNORED = "DUPLICATE_BOOKING_IGNORED"
+BOOKING_SLOT_CONFLICT = "SLOT_CONFLICT"
+BOOKING_MISSING_SCHEDULE = "MISSING_DATE_OR_TIME"
+BOOKING_HISTORICAL_SKIPPED = "HISTORICAL_NOT_BOOKED"
+INVITE_UNPROCESSED = "MISSED_OR_UNPROCESSED_INVITE"
+
+BOOKING_OUTCOMES = (
+    BOOKING_AUTO_BOOKED, BOOKING_BLOCKED, BOOKING_DUPLICATE_IGNORED,
+    BOOKING_SLOT_CONFLICT, BOOKING_MISSING_SCHEDULE,
+    BOOKING_HISTORICAL_SKIPPED, INVITE_UNPROCESSED,
+)
+
+INTERVIEW_MODE_CATEGORIES = (
+    INTERVIEW_INVITE, BOOKING_AUTO_BOOKED, INTERVIEW_RESCHEDULED,
+    INTERVIEW_CANCELLED, BOOKING_BLOCKED, BOOKING_DUPLICATE_IGNORED,
+    BOOKING_SLOT_CONFLICT, BOOKING_MISSING_SCHEDULE, INVITE_UNPROCESSED,
+    BOOKING_HISTORICAL_SKIPPED,
+)
+SELECTION_MODE_CATEGORIES = (
+    VERIFIED_OFFER_LETTER, FINAL_SELECTION, OFFER_INDICATION, JOINING_CONFIRMED,
+    BACKGROUND_VERIFICATION, SHORTLISTED, NEXT_ROUND, REJECTED,
+    MANUAL_REVIEW_REQUIRED,
+)
+
+
+def normalize_mode(value: Any) -> str:
+    mode = str(value or "").strip().upper()
+    return mode if mode in MODES else MODE_SELECTION
+
+
+def outcomes_for_mode(mode: str) -> frozenset:
+    """Mail outcomes belonging to one audit mode. The two never overlap."""
+    return SELECTION_OUTCOMES if normalize_mode(mode) == MODE_SELECTION else INTERVIEW_OUTCOMES
+
+
+def mode_for_outcome(outcome: str) -> str | None:
+    if outcome in SELECTION_OUTCOMES:
+        return MODE_SELECTION
+    if outcome in INTERVIEW_OUTCOMES or outcome in BOOKING_OUTCOMES:
+        return MODE_INTERVIEW
+    return None
+
+
+def booking_outcome(row: dict[str, Any]) -> str:
+    """Classify one interview_auto_booking_audit row.
+
+    Ordered by what an operator most needs to know: a booking that happened,
+    then the specific reason one did not. Derived from the failure code and the
+    duplicate/conflict checks rather than the display status, because the
+    status string merges causes that mean different things.
+    """
+    status = str(row.get("booking_status") or "").strip().upper()
+    failure = str(row.get("failure_code") or "").strip().upper()
+    duplicate = str(row.get("duplicate_check_status") or "").strip().upper()
+    conflict = str(row.get("conflict_check_status") or "").strip().upper()
+
+    if row.get("auto_booked") or status in {"AUTO BOOKED", "APPROVED & BOOKED", "BOOKED"}:
+        return BOOKING_AUTO_BOOKED
+    if duplicate == "DUPLICATE" or failure == "DUPLICATE_BOOKING" or status == "DUPLICATE IGNORED":
+        return BOOKING_DUPLICATE_IGNORED
+    if conflict == "CONFLICT" or failure == "SLOT_CONFLICT":
+        return BOOKING_SLOT_CONFLICT
+    if failure in {"INCOMPLETE_SCHEDULE", "HISTORICAL_SCHEDULE_INCOMPLETE"}:
+        return BOOKING_MISSING_SCHEDULE
+    # A past interview was seen and deliberately not booked. Calling that
+    # "blocked" would report a failure where the pipeline behaved correctly.
+    if failure == "PAST_INTERVIEW" or status == "HISTORICAL SKIPPED":
+        return BOOKING_HISTORICAL_SKIPPED
+    if status in {"BLOCKED", "REVIEW REQUIRED"} or failure:
+        return BOOKING_BLOCKED
+    if status == "CANCELLED":
+        return INTERVIEW_CANCELLED
+    return BOOKING_BLOCKED
+
 AUTHENTICITY_PASS = "PASS"
 AUTHENTICITY_PARTIAL = "PARTIAL"
 AUTHENTICITY_UNVERIFIED = "UNVERIFIED"
