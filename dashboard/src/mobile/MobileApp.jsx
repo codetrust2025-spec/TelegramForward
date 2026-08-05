@@ -8,6 +8,7 @@ import { KnowledgeAssistantPanel } from "../components/KnowledgeAssistantPanel.j
 import { DailyBriefingCard } from "../components/DailyBriefingCard.jsx";
 import { RecruitmentMailPanel } from "../components/RecruitmentMailPanel.jsx";
 import { MailMonitoringNotifications, MailNotificationBell } from "../components/MailMonitoringNotifications.jsx";
+import { OutcomeAuditPanel } from "../components/OutcomeAuditPanel.jsx";
 import {
   LogPanel,
   LogsToolbarTabs,
@@ -43,6 +44,7 @@ const MORE_NAV_ITEMS = [
   { id: "daily-briefing", label: "Daily briefing", icon: "☀" },
   { id: "ai-recruitment", label: "AI Mail Review", icon: "AI" },
   { id: "mail-notifications", label: "Mail alerts", icon: "🔔" },
+  { id: "outcome-audit", label: "Mail Audit", icon: "🔍" },
   { id: "dashboard", label: "Dashboard", icon: "▣" },
   { id: "accounts", label: "Accounts", icon: "👤" },
   { id: "forwarding", label: "Forwarding", icon: "↻" },
@@ -74,6 +76,7 @@ function mainViewToNav(mainView, mobilePage) {
     mainView === "daily-briefing" ||
     mainView === "ai-recruitment" ||
     mainView === "mail-notifications" ||
+    mainView === "outcome-audit" ||
     mainView === "daily-ops" ||
     mainView === "data-room"
   ) {
@@ -208,6 +211,9 @@ export function MobileApp({
         case "mail-notifications":
           setMainView("mail-notifications");
           break;
+        case "outcome-audit":
+          setMainView("outcome-audit");
+          break;
         case "daily-ops":
           setMainView("daily-ops");
           break;
@@ -294,6 +300,8 @@ export function MobileApp({
     mainContent = <RecruitmentMailPanel />;
   } else if (mainView === "mail-notifications") {
     mainContent = <MailMonitoringNotifications />;
+  } else if (mainView === "outcome-audit") {
+    mainContent = <OutcomeAuditPanel />;
   } else if (mainView === "data-room") {
     mainContent = <DataRoomPanel />;
   } else if (mainView === "daily-ops") {

@@ -1,6 +1,49 @@
 /* Candidate mail outcome audit report.
    Shares the candidates page tokens so the two read as one system. */
 
+/* Sub-navigation shared by the two AI Mail Monitoring pages. The top-level
+   nav scrolls horizontally with a hidden scrollbar, so a section that lands
+   past the fold is invisible; these tabs make the pair reachable from either
+   side regardless of how wide the header is. */
+.mail-area-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 4px;
+}
+.mail-area-tabs__btn {
+  padding: 7px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #0b1020;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.mail-area-tabs__btn:hover {
+  color: #e5e7eb;
+  border-color: rgba(255, 255, 255, 0.24);
+}
+.mail-area-tabs__btn--active {
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(59, 130, 246, 0.5);
+  color: #93c5fd;
+}
+.mail-area-tabs__btn:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+/* The notifications page renders its own <section> padding; keep the tabs
+   aligned with its header rather than the page edge. */
+.mail-monitoring-page .mail-area-tabs {
+  margin-top: 4px;
+}
+
 .outcome-audit {
   display: flex;
   flex-direction: column;
