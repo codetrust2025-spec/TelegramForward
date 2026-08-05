@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "description": "Pinned production assets \u2014 live site must match these hashes.",
+  "git_commit": "bb6c7e41afcaf247ccce730b76196b16cfa13061",
+  "git_commit_short": "bb6c7e4",
+  "deployed_at": "2026-08-05T10:07:00Z",
+  "js": "assets/app-JOxFLQ9S.js",
+  "css": "assets/index-CACmtDwH.css",
+  "js_sha256": "8acbbf0b93050621f42a42a8a2aa17437930435604feb6654edc3e55b83e1aee",
+  "css_sha256": "70a53a6be461b26bdb3a445a740797b0dcc3bb34515c19241f461419deedc762",
+  "js_bytes": 1396386,
+  "css_bytes": 694897,
+  "server_py_sha256": "80d6e70d06ba1ff1fbc7be1f75fce27f004654a99aa11d6acac027b0fb3a5f6a"
+}
