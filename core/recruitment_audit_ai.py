@@ -509,7 +509,10 @@ def review_one(job: dict[str, Any]) -> dict[str, Any]:
             timeout=float(os.getenv("AI_MAIL_AUDIT_TIMEOUT_SECONDS", "90")),
             workload="mail_audit_review",
         )
-        payload = answer.data if hasattr(answer, "data") else answer
+        # chat_structured returns an AIResult whose .content is the validated
+        # JSON *string*; the gateway has already checked it against the schema.
+        raw = getattr(answer, "content", answer)
+        payload = json.loads(raw) if isinstance(raw, str) else raw
         if not isinstance(payload, dict):
             raise AIGatewayError("Audit model returned a non-object response")
     except Exception as exc:

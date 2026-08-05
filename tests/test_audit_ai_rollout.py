@@ -186,6 +186,18 @@ def test_an_unverified_review_defaults_to_untrusted():
     assert '"trusted": False' in body
 
 
+def test_the_gateway_result_is_read_from_content_not_data():
+    """AIResult exposes .content as a JSON string; there is no .data. Reading
+    the wrong attribute failed every review in the first production batch."""
+    from core.ai_gateway import AIResult
+    assert not hasattr(AIResult, "data")
+    assert "content" in AIResult.__dataclass_fields__
+    source = (REPO / "core" / "recruitment_audit_ai.py").read_text(encoding="utf-8")
+    body = source.split("def review_one(", 1)[1].split("\ndef ", 1)[0]
+    assert 'getattr(answer, "content"' in body
+    assert "json.loads(raw)" in body
+
+
 def test_the_rollout_still_changes_no_candidate_record():
     source = (REPO / "core" / "recruitment_audit_ai.py").read_text(encoding="utf-8")
     for token in ("candidate_job_status", "candidate_status_history",
