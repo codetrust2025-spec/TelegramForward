@@ -607,6 +607,45 @@ def install_recruitment_mail_routes(app):
           source_id='selection-audit',new=result)
         return {'status':'ok','cleanup':result}
 
+    # ── Ollama second opinion (separate feature, separate flag) ──────────
+    # Read-only and advisory. These endpoints cannot book, reschedule, cancel
+    # or approve anything, and are gated by AI_MAIL_AUDIT_ENABLED alone.
+
+    def _audit_ai_guard():
+        from core import recruitment_audit_ai as audit_ai
+        if not audit_ai.enabled():
+            raise HTTPException(404,'Ollama mail audit is disabled')
+        return audit_ai
+
+    @app.get('/api/mail-audit-ai/status')
+    async def audit_ai_status(request:Request,response:Response):
+        """Queue and deference state. Readable even when the feature is off."""
+        _guard();require_fleet_admin(request);response.headers['Cache-Control']='no-store, max-age=0'
+        from core import recruitment_audit_ai as audit_ai
+        if not audit_ai.enabled():
+            return {'status':'ok','enabled':False,'flag':audit_ai.FEATURE_FLAG}
+        return {'status':'ok','enabled':True,'flag':audit_ai.FEATURE_FLAG,
+          'detail':await asyncio.to_thread(audit_ai.queue_status)}
+
+    @app.post('/api/mail-audit-ai/enqueue')
+    async def audit_ai_enqueue(request:Request,body:dict|None=None):
+        _guard();profile=require_fleet_admin(request);audit_ai=_audit_ai_guard();body=body or {}
+        ids=[str(value) for value in (body.get('finding_ids') or []) if value]
+        if not ids:
+            candidate=str(body.get('candidate_id') or '').strip()
+            findings=await asyncio.to_thread(audit_store.candidate_findings,candidate,
+              {'mode':audit_engine.MODE_SELECTION,'relevant_only':'1'}) if candidate else []
+            ids=[str(row['id']) for row in findings]
+        queued=await asyncio.to_thread(audit_ai.enqueue,ids,
+          requested_by=profile.get('username') or 'admin')
+        return {'status':'ok','queued':queued,'requested':len(ids)}
+
+    @app.get('/api/mail-audit-ai/disagreements')
+    async def audit_ai_disagreements(request:Request,response:Response,limit:int=100):
+        _guard();require_fleet_admin(request);audit_ai=_audit_ai_guard()
+        response.headers['Cache-Control']='no-store, max-age=0'
+        return {'status':'ok','disagreements':await asyncio.to_thread(audit_ai.disagreements,limit)}
+
     @app.get('/api/mail-outcome-audit/gaps')
     async def outcome_audit_gaps(request:Request,response:Response,gap_type:str|None=None,
             candidate_id:str|None=None,mode:str|None=None,limit:int=200):
