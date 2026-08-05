@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "description": "Pinned production assets \u2014 live site must match these hashes.",
+  "git_commit": "6eb8f871d1f2d0edbfee8a24b4837fbb486ec520",
+  "git_commit_short": "6eb8f87",
+  "deployed_at": "2026-08-05T09:19:21Z",
+  "js": "assets/app-Dbyd8S9B.js",
+  "css": "assets/index-CVR7NRCu.css",
+  "js_sha256": "07ac5dd00d0f89c985c4c8fd8dde336381d5a0b7fb1aa6aa60e61f6bb3b96636",
+  "css_sha256": "59babb528eef22b2f21b9ac7d2b1f0ae4cf4d1cc79b6cdaaebc08257eb19f3d7",
+  "js_bytes": 1395493,
+  "css_bytes": 694202,
+  "server_py_sha256": "80d6e70d06ba1ff1fbc7be1f75fce27f004654a99aa11d6acac027b0fb3a5f6a"
+}
