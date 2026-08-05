@@ -37,6 +37,15 @@ module.exports = {
         OLLAMA_REMOTE_ENABLED: "true",
         OLLAMA_EXPECT_REVERSE_SSH_TUNNEL: "true",
         OLLAMA_INFERENCE_HOST_ID: "jagadeesh-ollama",
+        // Ollama-assisted mail audit. Read-only second opinion on audit
+        // findings; it cannot book, reschedule, cancel, approve, or change a
+        // candidate status. Deliberately a separate switch from
+        // AI_INTERVIEW_AUTO_BOOKING_ENABLED: turning this off must never
+        // affect interview auto-booking, and vice versa.
+        AI_MAIL_AUDIT_ENABLED: "true",
+        // One review at a time. Audit inference always yields to live Gmail
+        // sync and interview booking; this caps what it can take when idle.
+        AI_MAIL_AUDIT_CONCURRENCY: "1",
       },
     },
   ],
