@@ -1027,8 +1027,11 @@ def recompute_cleanup(*, run_id: str | None = None, decided_by: str = "system") 
                     )
                     restored += 1
 
+    # The first three are deltas for this pass; a re-run over an already clean
+    # set legitimately reports zero, so the current total is reported too.
     return {"suppressed": suppressed, "restored": restored, "reason_changed": changed,
-            "by_reason": by_reason}
+            "by_reason": by_reason,
+            "total_suppressed": sum(by_reason.values())}
 
 
 def excluded_findings(canonical_candidate_id: str | None = None,
