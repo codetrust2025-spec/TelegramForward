@@ -158,6 +158,98 @@ def test_offer_intent_without_a_letter_is_only_an_indication():
     assert result["outcome"] == engine.OFFER_INDICATION
 
 
+# ── False positives found in the first production audit ──────────────────────
+#
+# Each of these was reported as a VERIFIED_OFFER_LETTER against a real
+# candidate. They are the reason an offer letter must be a document that reads
+# like an offer letter, and why "offer letter" as a bare phrase is worthless.
+
+def test_recruiter_screening_form_is_not_an_offer():
+    """"Holding any offer letter = no" is the candidate answering a form."""
+    result = engine.classify_message(
+        message(
+            subject="Re: AWS",
+            body="Please share: current ctc= 5 LPA, expected ctc= 12 LPA, "
+                 "holding any offer letter= no, notice period= 60 days (negotiable), "
+                 "highest qualification = B.Tech",
+            sender_email="ranjith@realtekconsulting.example",
+        ),
+    )
+    assert result["outcome"] == engine.NOT_RELEVANT
+    assert "QUESTIONNAIRE" in result["signals"]
+
+
+def test_job_advert_listing_document_requirements_is_not_an_offer():
+    result = engine.classify_message(
+        message(
+            subject="Job | Urgent Requirements FOR DevSecOps Engineer FOR TCS - Hyderabad",
+            body="Apply now. Candidates should have all the documents (offer letters and "
+                 "relieving letters for all the previous organizations and offer letter "
+                 "for the current organization). New jobs for you matching your profile.",
+            sender_email="ngstaffing@naukri.com",
+        ),
+    )
+    assert result["outcome"] == engine.NOT_RELEVANT
+
+
+def test_screening_mail_asking_whether_an_offer_was_received_is_not_an_offer():
+    result = engine.classify_message(
+        message(
+            subject="Video Interview - Share details ASAP",
+            body="Date of birth: ; have you received TCS offer letter (TCS offer released) "
+                 "before? current ctc: ; expected ctc: ; current location?",
+            sender_email="nandhini@naukri.com",
+        ),
+    )
+    assert result["outcome"] != engine.VERIFIED_OFFER_LETTER
+
+
+def test_a_payslip_is_not_an_offer_letter():
+    """A payslip carries a salary figure, a date and a job title. It is a
+    record of existing employment, not an offer."""
+    payslip = (
+        "Employee Code : 782541 Pay Period : 01/05/2026 To 31/05/2026 "
+        "Employee Name : Gumma Gopichand Hire Date : 07/09/2021 Employee Band : U2 "
+        "Pay Entity : Tech Mahindra Limited Function : Technical Net Pay 84,500"
+    )
+    result = engine.classify_message(
+        message(
+            subject="Documents",
+            body="During the initial training period as mentioned in offer letter, your "
+                 "performance would be closely monitored.",
+            sender_email="gummagopichand@gmail.com",
+        ),
+        [attachment(filename="29-MAY-2026.pdf", attachment_type="OFFER_LETTER", text=payslip)],
+    )
+    assert result["outcome"] != engine.VERIFIED_OFFER_LETTER
+
+
+def test_a_real_appointment_letter_attachment_is_still_verified():
+    """The true positive from the same audit must keep working."""
+    appointment = (
+        "APPOINTMENT LETTER Date: 16/07/2026 Dear Lekkala Swathi, This has reference to "
+        "your application and subsequent interviews you have had with Kaivale Technologies "
+        "Private Limited. We are pleased to offer you the position of Software Engineer. "
+        "Your annual CTC is INR 6,00,000. Your date of joining is 01 Aug 2026."
+    )
+    result = engine.classify_message(
+        message(subject="Welcome to Kaivale Technologies",
+                body="Please sign the attached offer letter.",
+                sender_email="vanshika@kaivale.example"),
+        [attachment(filename="Kaivale Technologies offer Letter_Signed.pdf",
+                    attachment_type="OFFER_LETTER", text=appointment)],
+    )
+    assert result["outcome"] == engine.VERIFIED_OFFER_LETTER
+    assert result["confidence"] >= 90
+
+
+def test_offer_letter_mentioned_but_not_attached_is_not_verified():
+    result = engine.classify_message(
+        message(subject="Update", body="Your offer letter will follow shortly."),
+    )
+    assert result["outcome"] != engine.VERIFIED_OFFER_LETTER
+
+
 # ── 5. Fake or mismatched sender domain ──────────────────────────────────────
 
 def test_mismatched_sender_domain_is_flagged_without_accusation():
