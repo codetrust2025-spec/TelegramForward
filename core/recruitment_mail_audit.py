@@ -138,11 +138,48 @@ _JOINING_PHRASES = (
     "welcome aboard", "welcome to the team", "welcome to the organization",
     "first day at", "your start date is", "date of commencement",
 )
+# Deliberately possessive or delivery-shaped. A bare "offer letter" is one of
+# the most common phrases in recruiter screening mail ("offer letter received
+# - y/n", "must have valid employment documents: offer letter, relieving
+# letter"), and matching it turned questionnaires and job ads into offers.
 _OFFER_LETTER_PHRASES = (
-    "offer letter", "letter of appointment", "appointment letter",
-    "offer letter attached", "please find your offer letter", "attached offer",
-    "your offer letter is attached", "offer of employment",
-    "employment offer letter", "release your offer letter",
+    "your offer letter", "offer letter attached", "attached offer letter",
+    "please find your offer letter", "find the attached offer letter",
+    "your offer letter is attached", "sign the attached offer letter",
+    "releasing your offer letter", "release your offer letter",
+    "offer letter has been released", "offer letter is released",
+    "letter of appointment", "appointment letter attached",
+    "your appointment letter", "offer of employment",
+    "we are pleased to attach", "enclosed is your offer",
+)
+
+# Text an actual offer or appointment letter contains. A document is only
+# treated as an offer document when it reads like one: a payslip carries a
+# salary figure and a date too, which is not the same thing.
+_OFFER_DOC_CONTENT_PHRASES = (
+    "offer of employment", "appointment letter", "letter of appointment",
+    "we are pleased to offer", "pleased to appoint", "offer you the position",
+    "offer you employment", "terms and conditions of employment",
+    "your date of joining", "date of joining", "annual ctc",
+    "compensation structure", "this offer is subject to",
+    "we are delighted to offer", "employment offer",
+)
+# Documents that look financial but are records of existing employment.
+_NON_OFFER_DOC_PHRASES = (
+    "pay period", "payslip", "pay slip", "salary slip", "employee code",
+    "net pay", "earnings deductions", "provident fund", "form 16",
+    "relieving letter", "experience letter", "service certificate",
+)
+
+# Recruiter screening forms. These ask the candidate to state their own status
+# and legitimately contain every offer word without conveying any decision.
+_QUESTIONNAIRE_PHRASES = (
+    "current ctc", "expected ctc", "notice period", "offer in hand",
+    "offer letter received", "holding any offer", "any offer in hand",
+    "total experience", "relevant experience", "date of birth",
+    "pan number", "share your details", "fill the below details",
+    "kindly share the below", "please share the following",
+    "must have valid employment documents", "share your updated profile",
 )
 _OFFER_INDICATION_PHRASES = (
     "pleased to offer you", "delighted to offer you", "happy to offer you",
@@ -250,6 +287,9 @@ _SIGNALS = _compile((
 _DOCUMENT_SIGNALS = _compile(((("DOCUMENT_REQUEST"), _DOCUMENT_PHRASES),))
 _INTEREST_SIGNALS = _compile((("RECRUITER_INTEREST", _INTEREST_PHRASES),))
 _NOISE_SIGNALS = _compile((("NOISE", _NOISE_PHRASES),))
+_QUESTIONNAIRE_SIGNALS = _compile((("QUESTIONNAIRE", _QUESTIONNAIRE_PHRASES),))
+_OFFER_DOC_CONTENT = _compile((("OFFER_DOC", _OFFER_DOC_CONTENT_PHRASES),))
+_NON_OFFER_DOC = _compile((("NON_OFFER_DOC", _NON_OFFER_DOC_PHRASES),))
 
 # Structural detail extractors.  These are what separate "we are pleased to
 # offer you" boilerplate from a real offer.
@@ -349,10 +389,31 @@ def attachment_texts(attachments: Iterable[dict[str, Any]] | None) -> list[dict[
 
 
 def _offer_document(attachments: list[dict[str, Any]]) -> dict[str, Any] | None:
-    for item in attachments:
-        if item["attachment_type"] in _OFFER_DOC_TYPES:
+    """The attachment that is plausibly an offer or appointment letter.
+
+    Content decides. A payslip named 29-MAY-2026.pdf can be tagged
+    OFFER_LETTER upstream and carries a salary figure, a date and a job title,
+    so a candidate whose employer mailed them a payslip was being reported as
+    holding a verified offer.
+    """
+    candidates = [
+        item for item in attachments
+        if item["attachment_type"] in _OFFER_DOC_TYPES
+        or _OFFER_DOC_FILENAME.search(item["filename"])
+    ]
+    # Prefer one whose extracted text actually reads like an offer letter.
+    for item in candidates:
+        text = normalize(item["text"])
+        if not text:
+            continue
+        if _matches(_NON_OFFER_DOC[0][1], text):
+            continue
+        if _matches(_OFFER_DOC_CONTENT[0][1], text):
             return item
-        if _OFFER_DOC_FILENAME.search(item["filename"]):
+    # Otherwise fall back to a named-but-unreadable candidate, so an offer
+    # attachment that failed extraction still routes to a human.
+    for item in candidates:
+        if not normalize(item["text"]):
             return item
     return None
 
@@ -439,6 +500,31 @@ def classify_message(
     noise = _matches(_NOISE_SIGNALS[0][1], primary)
     interest = _matches(_INTEREST_SIGNALS[0][1], primary)
     documents = _matches(_DOCUMENT_SIGNALS[0][1], full)
+    questionnaire = _matches(_QUESTIONNAIRE_SIGNALS[0][1], primary)
+
+    # A recruiter screening form asks the candidate to declare their own
+    # status. It contains "offer letter", "CTC" and a joining date while
+    # conveying no company decision at all, so it is settled before any
+    # outcome signal is read.
+    if len(questionnaire) >= 2 and JOINING_CONFIRMED not in hits:
+        record("EMAIL_BODY", "RECRUITER_QUESTIONNAIRE", primary, questionnaire[0])
+        return _result(
+            NOT_RELEVANT, 55, evidence,
+            "Recruiter screening form asking the candidate to state their own "
+            "CTC, notice period or offer status; not a company decision.",
+            manual_review=False, signals=["QUESTIONNAIRE"] + sorted(hits),
+        )
+
+    # Job adverts and portal blasts list document requirements and salary
+    # ranges. Treating their wording as an outcome credits a candidate with an
+    # offer from a mass mail they were one of thousands to receive.
+    if len(noise) >= 2 or (noise and not interest and len(hits) <= 1):
+        record("EMAIL_SUBJECT", "JOB_ADVERT_OR_PORTAL", primary, noise[0])
+        return _result(
+            NOT_RELEVANT, 60, evidence,
+            "Job advertisement or portal notification, not addressed decision mail.",
+            manual_review=False, signals=["NOISE"] + sorted(hits),
+        )
 
     # ── Nothing meaningful ───────────────────────────────────────────────
     if not hits:
@@ -527,18 +613,20 @@ def classify_message(
                 f"Offer document {offer_doc['filename']} could not be read; contents unverified.",
                 manual_review=True, signals=sorted(hits) + ["ATTACHMENT_UNREADABLE"],
             )
-        # No attachment: the body itself must carry the offer.
-        confirmed = sum(1 for key in ("compensation", "date", "job_title") if details_full[key])
-        if confirmed >= 2:
+        # No offer document. An offer letter is a document, so without one the
+        # mail can at most be an indication that an offer exists — never a
+        # verified offer letter. Deriving "verified" from body text alone
+        # turned recruiter mail that merely mentions offer letters into offers.
+        if OFFER_INDICATION in hits:
             return _result(
-                VERIFIED_OFFER_LETTER, 82, evidence,
-                "Offer details stated in the email body.",
+                OFFER_INDICATION, 72, evidence,
+                "Offer stated in the mail body; no offer document attached to verify.",
                 manual_review=False, signals=sorted(hits),
             )
         return _result(
-            OFFER_INDICATION, 62, evidence,
-            "Offer letter mentioned without verifiable offer details.",
-            manual_review=False, signals=sorted(hits),
+            MANUAL_REVIEW_REQUIRED, 45, evidence,
+            "An offer letter is referenced but not attached, and the body states no offer terms.",
+            manual_review=True, signals=sorted(hits),
         )
 
     # ── Offer indication ─────────────────────────────────────────────────
