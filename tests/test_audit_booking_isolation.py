@@ -170,10 +170,26 @@ def test_the_audit_yields_while_a_sync_job_is_queued(monkeypatch):
     assert "yields" in gate["reason"]
 
 
-def test_the_audit_yields_while_the_live_ai_queue_has_a_backlog(monkeypatch):
+def test_the_audit_yields_while_the_live_ai_queue_has_due_work(monkeypatch):
     monkeypatch.setenv("AI_MAIL_AUDIT_ENABLED", "true")
     with fake_live(monkeypatch, ai_backlog=3):
         assert audit_ai.may_run()["allowed"] is False
+
+
+def test_only_due_retries_count_as_live_work():
+    """Messages parked in exponential backoff are not competing for the node.
+
+    Production held 56 messages in AI_RETRY_PENDING with retry counts up to 77,
+    every one of them parked hours ahead. Counting those as live work blocked
+    the audit permanently while taking no capacity from anything.
+    """
+    source = (REPO / "core" / "recruitment_audit_ai.py").read_text(encoding="utf-8")
+    body = source.split("def live_pipeline_busy(", 1)[1].split("\ndef ", 1)[0]
+    assert "ai_retry_after IS NULL OR ai_retry_after <= now()" in body
+    # The parked count is reported but must not make the pipeline "busy".
+    assert "ai_in_backoff" in body
+    busy_line = [line for line in body.splitlines() if line.strip().startswith("busy = ")]
+    assert busy_line and "ai_deferred" not in busy_line[0]
 
 
 def test_the_audit_yields_while_gmail_ingestion_is_pending(monkeypatch):
