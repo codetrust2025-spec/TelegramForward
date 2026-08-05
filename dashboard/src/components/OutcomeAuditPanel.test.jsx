@@ -79,6 +79,52 @@ const INTERVIEW_CANDIDATE = {
   recommended_action: "No action; the interview slot was booked automatically.",
 };
 
+// One candidate, three companies. The Kaivale offer is verified company mail;
+// the Crescendo "rejection" and the Stravya "offer" both came through job
+// portals and must not be approvable.
+const APPLICATIONS = [
+  {
+    application_key: "kaivale.com:sr-software-engineer",
+    company: "Kaivale Technologies",
+    role: "Sr. Software Engineer",
+    latest_verified_state: "VERIFIED_OFFER_LETTER",
+    confidence: 92,
+    authenticity: "PASS",
+    evidence_strength: "STRONG",
+    source_type: "COMPANY",
+    strongest_finding_id: "f-kaivale",
+    latest_message_at: "2026-07-16T12:10:00Z",
+    messages: [
+      { id: "m1", received_at: "2026-07-16T12:10:00Z", outcome: "VERIFIED_OFFER_LETTER",
+        subject: "Your offer letter", sender_email: "vanshika@kaivale.com" },
+    ],
+    approval: { eligible: true, blockers: [], message: "" },
+  },
+  {
+    application_key: "shine.com:",
+    company: "Stravya Hiring Solutions Limited",
+    role: "Role not stated",
+    latest_verified_state: "OFFER_INDICATION",
+    confidence: 78,
+    authenticity: "PARTIAL",
+    evidence_strength: "WEAK",
+    source_type: "JOB_PORTAL",
+    strongest_finding_id: "f-stravya",
+    latest_message_at: "2026-06-25T04:19:00Z",
+    messages: [
+      { id: "m2", received_at: "2026-06-25T04:19:00Z", outcome: "OFFER_INDICATION",
+        subject: "You are a Top Applicant! Details Required",
+        sender_email: "alerts@jobs.shine.com" },
+    ],
+    approval: {
+      eligible: false,
+      blockers: ["The sender is not confirmed to be the hiring company.",
+                 "Evidence is not strong enough to act on without verification."],
+      message: "Needs manual review — evidence is insufficient for a status change.",
+    },
+  },
+];
+
 let calls;
 
 const jsonResponse = (body) => Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
@@ -102,6 +148,7 @@ function mockFetch() {
           mode: interview ? "INTERVIEW" : "SELECTION",
           candidate: interview ? INTERVIEW_CANDIDATE : SELECTION_CANDIDATE,
           findings: [],
+          applications: interview ? [] : APPLICATIONS,
           bookings: interview
             ? [
                 {
@@ -337,6 +384,63 @@ describe("Export follows the mode", () => {
     fireEvent.click(screen.getByText("Export CSV"));
     const url = window.open.mock.calls[window.open.mock.calls.length - 1][0];
     expect(url).toContain("mode=INTERVIEW");
+  });
+});
+
+describe("Evidence is read company by company", () => {
+  const openDrawer = async () => {
+    await renderPanel();
+    fireEvent.click(
+      within(screen.getByText("Lekkala swathi").closest("tr")).getByText("Evidence"),
+    );
+    return screen.findByText("By company and role");
+  };
+
+  it("shows one lifecycle per company and role", async () => {
+    const heading = await openDrawer();
+    // Scoped to the timeline: the company also appears in the table behind it.
+    const timeline = within(heading.parentElement.querySelector(".outcome-audit__applications"));
+    expect(timeline.getByText("Kaivale Technologies")).toBeTruthy();
+    expect(timeline.getByText("Sr. Software Engineer")).toBeTruthy();
+    expect(timeline.getByText("Stravya Hiring Solutions Limited")).toBeTruthy();
+    expect(timeline.getAllByRole("listitem").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("says outright that companies are never merged", async () => {
+    await openDrawer();
+    expect(
+      screen.getByText(/A result from one company never affects another/i),
+    ).toBeTruthy();
+  });
+
+  it("shows evidence strength and source for each application", async () => {
+    await openDrawer();
+    expect(screen.getByText("Strong evidence")).toBeTruthy();
+    expect(screen.getByText("Weak evidence")).toBeTruthy();
+    expect(screen.getByText("Job portal")).toBeTruthy();
+  });
+
+  it("offers approval only for the verified company application", async () => {
+    await openDrawer();
+    expect(screen.getAllByText("Approve status update")).toHaveLength(1);
+  });
+
+  it("shows the insufficient-evidence message for the portal application", async () => {
+    await openDrawer();
+    expect(
+      screen.getByText("Needs manual review — evidence is insufficient for a status change."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/not confirmed to be the hiring company/),
+    ).toBeTruthy();
+  });
+
+  it("approves against the application's strongest finding", async () => {
+    await openDrawer();
+    fireEvent.click(screen.getByText("Approve status update"));
+    await waitFor(() =>
+      expect(calls.some((c) => c.path.includes("/findings/f-kaivale/approve"))).toBe(true),
+    );
   });
 });
 
