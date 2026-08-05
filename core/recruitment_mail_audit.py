@@ -133,6 +133,145 @@ SELECTION_MODE_CATEGORIES = (
 )
 
 
+# ── Selection-audit cleanup ──────────────────────────────────────────────────
+#
+# A finding is never deleted. Suppression marks it as not counting toward the
+# selection totals or a candidate's strongest outcome, records why, and leaves
+# the mail, the evidence and the audit history exactly as they were.
+
+SUPPRESS_IRRELEVANT = "IRRELEVANT"
+SUPPRESS_DUPLICATE = "DUPLICATE"
+SUPPRESS_SUPERSEDED = "SUPERSEDED"
+SUPPRESS_WRONG_MODE = "WRONG_AUDIT_MODE"
+SUPPRESSION_REASONS = (
+    SUPPRESS_IRRELEVANT, SUPPRESS_DUPLICATE, SUPPRESS_SUPERSEDED, SUPPRESS_WRONG_MODE,
+)
+
+# Outcomes that on their own prove a company decided to hire this candidate.
+# Background verification and document checks accompany such a decision; they
+# do not establish one, so they only survive cleanup alongside real evidence.
+SELECTION_PROOF_OUTCOMES = frozenset({
+    OFFER_INDICATION, VERIFIED_OFFER_LETTER, FINAL_SELECTION, JOINING_CONFIRMED,
+})
+SUPPORTING_ONLY_OUTCOMES = frozenset({BACKGROUND_VERIFICATION})
+
+
+def _company_key(finding: dict[str, Any]) -> str:
+    return (
+        registrable_domain(str(finding.get("company_domain") or ""))
+        or str(finding.get("company_name") or "").strip().lower()
+        or registrable_domain(str(finding.get("sender_domain") or ""))
+        or "unknown"
+    )
+
+
+def _received_key(finding: dict[str, Any]) -> str:
+    return str(finding.get("received_at") or "")
+
+
+def selection_suppressions(findings: Iterable[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """Decide which of one candidate's findings the selection audit should skip.
+
+    Returns {finding_id: {"reason": ..., "detail": ...}} for suppressed rows
+    only. Pure: it reads findings and returns a decision, nothing else.
+    """
+    items = sorted(findings, key=_received_key)
+    decisions: dict[str, dict[str, str]] = {}
+
+    def suppress(finding: dict[str, Any], reason: str, detail: str) -> None:
+        key = str(finding.get("id") or "")
+        if key and key not in decisions:
+            decisions[key] = {"reason": reason, "detail": detail}
+
+    # Pass 1 — findings that never belonged in this audit at all.
+    for finding in items:
+        outcome = str(finding.get("outcome") or "")
+        if outcome in INTERVIEW_OUTCOMES:
+            suppress(finding, SUPPRESS_WRONG_MODE,
+                     "Interview-slot result; counted in the Interview Slot Audit instead.")
+            continue
+        if outcome == NOT_RELEVANT:
+            signals = finding.get("signals") or []
+            label = ", ".join(str(item) for item in signals) if signals else "no outcome language"
+            suppress(finding, SUPPRESS_IRRELEVANT,
+                     f"Carries no selection outcome ({label}).")
+            continue
+        evidence = finding.get("evidence")
+        if isinstance(evidence, (list, tuple)) and not evidence:
+            suppress(finding, SUPPRESS_IRRELEVANT,
+                     "No evidence was recorded to support this outcome.")
+
+    live = [f for f in items if str(f.get("id") or "") not in decisions]
+
+    # Pass 2 — the same mail counted twice. A forwarded copy, a thread reply
+    # carrying the original attachment, or two near-identical files all produce
+    # a second finding for one real event.
+    seen: dict[tuple, str] = {}
+    for finding in live:
+        signature = str(finding.get("content_signature") or "")
+        fingerprint = str(finding.get("attachment_fingerprint") or "")
+        thread = str(finding.get("provider_thread_id") or "")
+        outcome = str(finding.get("outcome") or "")
+        keys = []
+        if signature:
+            keys.append(("content", signature))
+        if fingerprint:
+            keys.append(("attachment", fingerprint, outcome))
+        if thread:
+            keys.append(("thread", thread, outcome, _company_key(finding)))
+        matched = next((seen[key] for key in keys if key in seen), None)
+        if matched:
+            suppress(finding, SUPPRESS_DUPLICATE,
+                     f"Same {outcome.lower().replace('_', ' ')} already counted from message {matched}.")
+            continue
+        for key in keys:
+            seen.setdefault(key, str(finding.get("provider_message_id") or finding.get("id") or ""))
+
+    live = [f for f in items if str(f.get("id") or "") not in decisions]
+
+    # Pass 3 — support-only evidence with nothing it can support.
+    by_company_proof: dict[str, bool] = {}
+    for finding in live:
+        if str(finding.get("outcome") or "") in SELECTION_PROOF_OUTCOMES:
+            by_company_proof[_company_key(finding)] = True
+    for finding in live:
+        outcome = str(finding.get("outcome") or "")
+        if outcome in SUPPORTING_ONLY_OUTCOMES and not by_company_proof.get(_company_key(finding)):
+            suppress(finding, SUPPRESS_IRRELEVANT,
+                     "Background or document verification with no offer or selection evidence "
+                     "from the same company.")
+
+    live = [f for f in items if str(f.get("id") or "") not in decisions]
+
+    # Pass 4 — earlier, weaker statements the company has since overtaken.
+    # An offer indication followed by that company's verified offer letter is
+    # history, not a second outcome.
+    for finding in live:
+        outcome = str(finding.get("outcome") or "")
+        rank = OUTCOME_RANK.get(outcome, 0)
+        company = _company_key(finding)
+        received = _received_key(finding)
+        stronger = next(
+            (
+                other for other in live
+                if other is not finding
+                and _company_key(other) == company
+                and OUTCOME_RANK.get(str(other.get("outcome") or ""), 0) > rank
+                and _received_key(other) >= received
+                and str(other.get("outcome") or "") in SELECTION_PROOF_OUTCOMES
+            ),
+            None,
+        )
+        if stronger is not None:
+            suppress(
+                finding, SUPPRESS_SUPERSEDED,
+                f"Superseded by a later {str(stronger.get('outcome') or '').lower().replace('_', ' ')} "
+                f"from {company}.",
+            )
+
+    return decisions
+
+
 def normalize_mode(value: Any) -> str:
     mode = str(value or "").strip().upper()
     return mode if mode in MODES else MODE_SELECTION

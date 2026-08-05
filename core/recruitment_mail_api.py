@@ -580,6 +580,31 @@ def install_recruitment_mail_routes(app):
         return {'status':'ok','mode':scoped,'candidate':rows[0],'findings':findings,
           'bookings':bookings,'gaps':gaps,'approvals':approvals}
 
+    @app.get('/api/mail-outcome-audit/excluded')
+    async def outcome_audit_excluded(request:Request,response:Response,
+            candidate_id:str|None=None,limit:int=500):
+        """Findings cleaned out of the Selection Audit, with their mail intact."""
+        _guard();require_fleet_admin(request);response.headers['Cache-Control']='no-store, max-age=0'
+        rows=await asyncio.to_thread(audit_store.excluded_findings,candidate_id,limit=limit)
+        summary=await asyncio.to_thread(audit_store.cleanup_summary)
+        return {'status':'ok','excluded':rows,'summary':summary}
+
+    @app.get('/api/mail-outcome-audit/cleanup-log')
+    async def outcome_audit_cleanup_log(request:Request,candidate_id:str|None=None,limit:int=200):
+        _guard();require_fleet_admin(request)
+        rows=await asyncio.to_thread(audit_store.cleanup_log,candidate_id,limit=limit)
+        return {'status':'ok','log':rows}
+
+    @app.post('/api/mail-outcome-audit/cleanup')
+    async def outcome_audit_cleanup(request:Request):
+        """Re-evaluate the cleanup rules. Marks findings; deletes nothing."""
+        _guard();profile=require_fleet_admin(request)
+        actor=profile.get('username') or 'admin'
+        result=await asyncio.to_thread(audit_store.recompute_cleanup,decided_by=actor)
+        store.audit(actor=actor,role='admin',action='mail_outcome_audit_cleanup',
+          source_id='selection-audit',new=result)
+        return {'status':'ok','cleanup':result}
+
     @app.get('/api/mail-outcome-audit/gaps')
     async def outcome_audit_gaps(request:Request,response:Response,gap_type:str|None=None,
             candidate_id:str|None=None,mode:str|None=None,limit:int=200):

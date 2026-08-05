@@ -121,6 +121,38 @@ function mockFetch() {
           candidates: [interview ? INTERVIEW_CANDIDATE : SELECTION_CANDIDATE],
         });
       if (path.includes("/gaps")) return jsonResponse({ status: "ok", gaps: [] });
+      if (path.includes("/excluded"))
+        return jsonResponse({
+          status: "ok",
+          excluded: [
+            {
+              id: "x1",
+              canonical_candidate_id: "8b52fe4c3d",
+              candidate_name: "Lekkala swathi",
+              email_address: "swathilekkala515@gmail.com",
+              outcome: "VERIFIED_OFFER_LETTER",
+              subject: "Re: Welcome to Kaivale Technologies",
+              sender_email: "vanshika@kaivale.com",
+              received_at: "2026-07-16T12:10:00Z",
+              suppression_reason: "DUPLICATE",
+              suppression_detail: "Same verified offer letter already counted from message gmail-a.",
+              suppressed_at: "2026-08-05T10:00:00Z",
+            },
+            {
+              id: "x2",
+              canonical_candidate_id: "24cc7b8ffd",
+              candidate_name: "Gopichand",
+              outcome: "INTERVIEW_INVITE",
+              subject: "Interview invitation",
+              sender_email: "hr@acme.example",
+              received_at: "2026-07-01T09:00:00Z",
+              suppression_reason: "WRONG_AUDIT_MODE",
+              suppression_detail: "Interview-slot result; counted in the Interview Slot Audit instead.",
+              suppressed_at: "2026-08-05T10:00:00Z",
+            },
+          ],
+          summary: { excluded_total: 2 },
+        });
       return jsonResponse({ status: "ok" });
     }),
   );
@@ -305,6 +337,37 @@ describe("Export follows the mode", () => {
     fireEvent.click(screen.getByText("Export CSV"));
     const url = window.open.mock.calls[window.open.mock.calls.length - 1][0];
     expect(url).toContain("mode=INTERVIEW");
+  });
+});
+
+describe("Cleanup keeps excluded findings visible", () => {
+  it("offers an Excluded view in the selection audit", async () => {
+    await renderPanel();
+    expect(screen.getByText(/Excluded \(2\)/)).toBeTruthy();
+  });
+
+  it("lists what was excluded, with the reason and when", async () => {
+    await renderPanel();
+    fireEvent.click(screen.getByText(/Excluded \(2\)/));
+    expect(await screen.findByText("Duplicate")).toBeTruthy();
+    expect(screen.getByText("Moved to Interview Slot Audit")).toBeTruthy();
+    expect(screen.getByText(/already counted from message gmail-a/)).toBeTruthy();
+    expect(screen.getByText("Re: Welcome to Kaivale Technologies")).toBeTruthy();
+  });
+
+  it("says plainly that nothing was deleted", async () => {
+    await renderPanel();
+    fireEvent.click(screen.getByText(/Excluded \(2\)/));
+    expect(
+      await screen.findByText(/attachments and its evidence are unchanged/i),
+    ).toBeTruthy();
+  });
+
+  it("does not offer the Excluded view in the interview audit", async () => {
+    await renderPanel();
+    await switchTo("Interview Slot Audit");
+    await screen.findByText("Interview invitations");
+    expect(screen.queryByText(/^Excluded \(/)).toBeNull();
   });
 });
 
