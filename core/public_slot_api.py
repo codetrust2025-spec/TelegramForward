@@ -288,6 +288,30 @@ def install_public_slot_routes(app) -> None:
         """
         raw = await file.read()
         mime = file.content_type or "image/jpeg"
+        # Persist the bytes before anything else looks at them. This path used
+        # to record ledger evidence — checksum, extraction, UTR — while the
+        # image lived only in memory for the request, so payments ended up with
+        # complete metadata and no screenshot left to re-read.
+        stored_evidence: dict = {}
+        try:
+            from features import payment_evidence_store
+            stored_evidence = await asyncio.to_thread(
+                payment_evidence_store.store,
+                raw,
+                mime_type=mime,
+                original_filename=file.filename or "",
+                candidate_id=str(
+                    (
+                        cs._best_row_for_slot_name(candidate_name.strip())
+                        if candidate_name.strip()
+                        else {}
+                    ).get("id")
+                    or ""
+                ),
+                upload_source="public_slot_payment_proof",
+            )
+        except Exception:
+            logger.exception("Could not durably store public payment evidence")
         try:
             from features.payment_verification_engine import verify_payment_screenshot
 
