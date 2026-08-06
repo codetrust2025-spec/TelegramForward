@@ -633,6 +633,50 @@ def _allocation_fields(
     }
 
 
+def _flag_amount_anomalies(result: dict[str, Any]) -> None:
+    """Raise a review flag when the amount evidence contradicts itself.
+
+    Every visible figure on a receipt should agree. When they do not — or when
+    one is exactly a factor of ten from another — the amount is decided by a
+    human, never by whichever number happened to be parsed first.
+    """
+    amount = int(result.get("amount") or 0)
+    if amount <= 0:
+        return
+    seen: list[int] = []
+    for raw in result.get("visible_amounts") or []:
+        from features.ollama_payment_extract import _normalize_amount_number
+        parsed = _normalize_amount_number(raw)
+        if parsed > 0:
+            seen.append(parsed)
+    if not seen:
+        return
+    result["amount_candidates"] = sorted(set(seen))
+    agreeing = sum(1 for value in seen if value == amount)
+    if agreeing >= 2:
+        # The same figure printed in two places is the strongest evidence a
+        # receipt can offer.
+        result["amount_corroborated"] = True
+    if any(value == amount * 10 for value in seen):
+        result["amount_extraction_review_required"] = True
+        result["amount_review_reason"] = (
+            f"A visible amount of ₹{amount * 10:,} is exactly ten times the "
+            f"parsed ₹{amount:,}. A digit was probably dropped."
+        )
+        return
+    if any(value not in (amount,) for value in seen) and not result.get(
+        "amount_corroborated"
+    ):
+        others = sorted({value for value in seen if value != amount})
+        if others:
+            result["amount_extraction_review_required"] = True
+            result["amount_review_reason"] = (
+                f"Visible amounts disagree: parsed ₹{amount:,}, also saw "
+                + ", ".join(f"₹{value:,}" for value in others)
+                + "."
+            )
+
+
 def _normalize_directional_extraction(
     extraction: dict[str, Any],
 ) -> dict[str, Any]:
@@ -656,12 +700,42 @@ def _normalize_directional_extraction(
         direction = "UNKNOWN"
     result["direction"] = direction
 
-    if not result.get("amount") and result.get("amount_minor") is not None:
+    # Amount resolution, most trustworthy source first.
+    #
+    # A vision model must never be asked to do arithmetic. Asking one for
+    # `amount_minor` (paise) made it convert rupees itself, and it lost a zero
+    # on every five-figure amount: ₹30,000 came back as 300000 instead of
+    # 3000000, so the receipt read ₹3,000 — with confidence 1.0. The literal
+    # text it copies off the image is reliable; its multiplication is not.
+    from features.ollama_payment_extract import _normalize_amount_number
+
+    literal = _normalize_amount_number(result.get("amount_text"))
+    if literal:
+        result["amount"] = literal
+        result["amount_source"] = "literal_text"
+    elif _normalize_amount_number(result.get("amount")):
+        result["amount"] = _normalize_amount_number(result.get("amount"))
+        result["amount_source"] = "model_rupees"
+    elif result.get("amount_minor") is not None:
+        # Legacy, untrusted. Keep the value so nothing is lost, but flag it so
+        # it cannot reach a verified state on model arithmetic alone.
         try:
             result["amount"] = _rupees(int(result["amount_minor"]))
         except (TypeError, ValueError):
             result["amount"] = 0
+        result["amount_source"] = "model_minor_units_untrusted"
+        if result["amount"] > 0:
+            result["amount_extraction_review_required"] = True
+            result["amount_review_reason"] = (
+                "Amount came only from the model's paise conversion, which is "
+                "unreliable for five-figure values. Confirm against the "
+                "printed amount before verifying."
+            )
+    else:
+        result["amount"] = 0
+        result["amount_source"] = "missing"
     result["amount_minor"] = _minor_units(result.get("amount"))
+    _flag_amount_anomalies(result)
     result.setdefault("currency", "INR")
     result["status"] = str(
         result.get("payment_status") or result.get("status") or "unknown"
@@ -1262,6 +1336,15 @@ def verify_payment_screenshot(
     amount_mismatch_reason = str(result.get("amount_mismatch_reason") or "").strip()
     if amount_mismatch_reason:
         reason_codes = list(dict.fromkeys([*reason_codes, "AMOUNT_SOURCE_MISMATCH"]))
+        verification_state = "PENDING_MANUAL_REVIEW"
+        result["verified"] = False
+    # An amount the model arrived at by arithmetic, or one contradicted by
+    # another figure on the same receipt, cannot verify itself. Confidence is
+    # no help here: every known factor-of-ten error reported 1.0.
+    if result.get("amount_extraction_review_required"):
+        reason_codes = list(
+            dict.fromkeys([*reason_codes, "AMOUNT_EXTRACTION_REVIEW_REQUIRED"])
+        )
         verification_state = "PENDING_MANUAL_REVIEW"
         result["verified"] = False
     deterministic_verified = verification_state in {
