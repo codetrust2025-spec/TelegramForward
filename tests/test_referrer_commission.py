@@ -33,7 +33,14 @@ def test_partial_payment_earns_half_of_cash_received():
     assert referrer_commission_amount(row) == 2_500
 
 
-def test_commission_remains_capped_at_agreed_client_charge():
+def test_payment_above_the_agreed_charge_is_commissionable():
+    """Superseded the old cap-at-agreed-charge rule on 2026-08-06.
+
+    The basis used to be `min(received, agreed)`, so a candidate paying ₹8,000
+    against a ₹5,000 minimum earned their referrer ₹2,500. Expected is a floor,
+    not a ceiling: everything received is revenue the referrer brought in, so
+    commission is 50% of the whole amount.
+    """
     row = {
         "service_type": "round_wise",
         "interview_scope": "external",
@@ -41,8 +48,8 @@ def test_commission_remains_capped_at_agreed_client_charge():
         "payment": 8_000,
     }
 
-    assert referrer_commission_basis(row) == 5_000
-    assert referrer_commission_amount(row) == 2_500
+    assert referrer_commission_basis(row) == 8_000
+    assert referrer_commission_amount(row) == 4_000
 
 
 def test_bgv_pass_through_remains_non_commissionable():

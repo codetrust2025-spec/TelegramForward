@@ -291,6 +291,8 @@ def test_api_summary_matches_the_documented_response_shape():
         "payment": 6000, "expected_minimum": 5000, "verified_proof_total": 6000,
         "balance_due": 0, "above_minimum": 1000, "verified_proof_count": 1,
         "payment_status": "paid", "payment_is_proof_derived": True,
+        "reference": "Pavan Kalyan", "referral_commission": 3000,
+        "referral_percentage": 50, "referral_basis": 6000,
     }
     assert receipts.api_summary(row) == {
         "verified_proof_total": 6000,
@@ -303,6 +305,11 @@ def test_api_summary_matches_the_documented_response_shape():
         "proof_derived": True,
         "needs_reconciliation": False,
         "reconciliation_gap": 0,
+        "referrer": "Pavan Kalyan",
+        "referral_percentage": 50,
+        "referral_commission": 3000,
+        "referral_basis": 6000,
+        "referrer_complimentary_amount": 0,
     }
 
 

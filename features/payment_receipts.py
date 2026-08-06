@@ -261,6 +261,16 @@ def api_summary(row: dict[str, Any]) -> dict[str, Any]:
         "proof_derived": bool(row.get("payment_is_proof_derived")),
         "needs_reconciliation": bool(row.get("payment_needs_reconciliation")),
         "reconciliation_gap": max(0, int(row.get("payment_reconciliation_gap") or 0)),
+        # Referral share of this payment, so the editor never recomputes it.
+        # Deliberately excludes closure complimentary amounts, which are earned
+        # separately and must not be folded into the payment commission.
+        "referrer": str(row.get("reference") or ""),
+        "referral_percentage": max(0, int(row.get("referral_percentage") or 0)),
+        "referral_commission": max(0, int(row.get("referral_commission") or 0)),
+        "referral_basis": max(0, int(row.get("referral_basis") or 0)),
+        "referrer_complimentary_amount": max(
+            0, int(row.get("referrer_complimentary_amount") or 0)
+        ),
     }
 
 

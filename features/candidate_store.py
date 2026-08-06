@@ -304,9 +304,13 @@ def referrer_commission_basis(row: dict) -> int:
     if received <= 0:
         return 0
     bgv_charge = BGV_CERTIFICATES_PAYMENT if _coerce_bool(row.get("bgv_certificates")) else 0
-    agreed = max(0, effective_expected_payment(row) - bgv_charge)
-    charged = min(received, agreed) if agreed > 0 else 0
-    return charged
+    # Commission follows the money actually received, not the invoice. The basis
+    # used to be capped at the agreed amount, so a candidate who paid ₹6,000
+    # against a ₹5,000 minimum earned their referrer commission on ₹5,000.
+    # Expected is a floor, and everything above it is still revenue the referrer
+    # brought in. Only the BGV pass-through stays excluded — a third party bills
+    # that ₹30k and it never becomes company revenue.
+    return max(0, received - bgv_charge)
 
 
 def referrer_commission_amount(row: dict) -> int:
@@ -1567,6 +1571,11 @@ def _with_computed(row: dict) -> dict:
     referrer_bonus = referrer_complimentary_amount(row)
     admin_bonus = admin_complimentary_amount(row)
     enriched["base_handler_commission"] = base_commission
+    # The payment-referral share, kept apart from any closure complimentary so
+    # the editor can label one without absorbing the other.
+    enriched["referral_commission"] = base_commission
+    enriched["referral_percentage"] = HANDLER_COMMISSION_PCT
+    enriched["referral_basis"] = referrer_commission_basis(row)
     enriched["referrer_complimentary_amount"] = referrer_bonus
     enriched["admin_complimentary_amount"] = admin_bonus
     # Candidate rows are shown under their own referrer. The admin bonus is

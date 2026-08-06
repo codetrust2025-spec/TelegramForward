@@ -1844,6 +1844,22 @@ function K8(e) {
     notes: e.notes || "",
     slot_confirmed: !!e.slot_confirmed,
     slots_group_posted: !!e.slots_group_posted,
+    // Server-computed payment and referral figures. Carried into the draft so
+    // the form shows the authoritative numbers the moment it opens, and keeps
+    // showing them after a proof mutation refreshes the summary.
+    payment_is_proof_derived: !!e.payment_is_proof_derived,
+    expected_minimum: e.expected_minimum,
+    verified_received: e.verified_received,
+    verified_proof_total: e.verified_proof_total,
+    verified_proof_count: e.verified_proof_count,
+    above_minimum: e.above_minimum,
+    balance_due: e.balance_due,
+    payment_needs_reconciliation: !!e.payment_needs_reconciliation,
+    payment_reconciliation_gap: e.payment_reconciliation_gap,
+    referral_commission: e.referral_commission,
+    referral_percentage: e.referral_percentage,
+    referral_basis: e.referral_basis,
+    referrer_complimentary_amount: e.referrer_complimentary_amount,
   };
 }
 function ReferencePicker({
@@ -1964,6 +1980,13 @@ export function CandidateEditModal({
           !!paymentSummary.needs_reconciliation;
         next.payment_reconciliation_gap =
           Number(paymentSummary.reconciliation_gap) || 0;
+        next.referral_commission =
+          Number(paymentSummary.referral_commission) || 0;
+        next.referral_percentage =
+          Number(paymentSummary.referral_percentage) || 0;
+        next.referral_basis = Number(paymentSummary.referral_basis) || 0;
+        next.referrer_complimentary_amount =
+          Number(paymentSummary.referrer_complimentary_amount) || 0;
       } else if (candidate) {
         next.payment = Number(candidate.payment) || 0;
         next.expected_minimum = Number(candidate.expected_minimum) || 0;
@@ -1977,6 +2000,11 @@ export function CandidateEditModal({
           !!candidate.payment_needs_reconciliation;
         next.payment_reconciliation_gap =
           Number(candidate.payment_reconciliation_gap) || 0;
+        next.referral_commission = Number(candidate.referral_commission) || 0;
+        next.referral_percentage = Number(candidate.referral_percentage) || 0;
+        next.referral_basis = Number(candidate.referral_basis) || 0;
+        next.referrer_complimentary_amount =
+          Number(candidate.referrer_complimentary_amount) || 0;
       }
       return next;
     });
@@ -2146,6 +2174,13 @@ export function CandidateEditModal({
     os(l.service_type, l.consultancy, l.interview_scope);
   const P = os(l.service_type, l.consultancy, l.interview_scope);
   const F = Y8(k, T, P, !!l.bgv_certificates);
+  // Referral share comes from the server: it is 50% of what was actually
+  // received, less any BGV pass-through, and it excludes closure complimentary
+  // amounts. `wl` is kept only for the read-only list view.
+  const referralCommission =
+    l.referral_commission != null
+      ? Number(l.referral_commission) || 0
+      : wl(k, T, P, !!l.bgv_certificates);
   const S = Math.max(0, T - k);
   const E = w.useMemo(
     () => (k <= 0 ? "unpaid" : k >= T ? "paid" : "partial"),
@@ -2627,7 +2662,12 @@ export function CandidateEditModal({
               </span>
               {k > 0 && (l.reference || "").trim() && (
                 <span className="cand-pay-handler-share">
-                  ↻ {l.reference.trim()} earns {$n(wl(k, T, P))}
+                  {/* The server owns this figure. The browser used to recompute
+                      it and disagreed in both directions — capping the basis at
+                      the expected amount, then zeroing it out entirely for an
+                      under-paid candidate. */}
+                  ↻ {l.reference.trim()} earns{" "}
+                  {$n(referralCommission)}
                 </span>
               )}
             </div>
