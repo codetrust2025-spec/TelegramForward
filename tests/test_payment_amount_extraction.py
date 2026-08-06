@@ -92,6 +92,6 @@ def test_missing_amount_is_not_invented():
 def test_review_flag_blocks_a_verified_state():
     """Confidence cannot rescue it — every known factor-of-ten error reported
     confidence 1.0."""
-    assert "AMOUNT_EXTRACTION_REVIEW_REQUIRED" not in pve.VERIFICATION_STATES
+    assert "AMOUNT_EXTRACTION_REVIEW_REQUIRED" in pve.VERIFICATION_STATES
     result = normalize(amount_minor=300000)
     assert result["amount_extraction_review_required"] is True

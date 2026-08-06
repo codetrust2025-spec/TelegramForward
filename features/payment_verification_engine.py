@@ -35,6 +35,35 @@ VERIFICATION_STATES = {
     "FAILED_PAYMENT",
     "REJECTED",
     "REVERSED",
+    # A recorded amount that cannot be trusted until a human confirms it against
+    # the image — used when extraction is known to have misread the figure.
+    "AMOUNT_EXTRACTION_REVIEW_REQUIRED",
+}
+
+# Whether the original evidence file is still there to be re-read. Kept apart
+# from the verification verdict: a payment can be genuinely verified while its
+# screenshot has since been lost, and that combination has to be visible rather
+# than collapsing into either state alone.
+FILE_AVAILABLE = "AVAILABLE"
+FILE_MISSING = "MISSING_FILE"
+FILE_CHECKSUM_MISMATCH = "CHECKSUM_MISMATCH"
+FILE_UNREADABLE = "UNREADABLE"
+FILE_ARCHIVED = "ARCHIVED"
+
+FILE_AVAILABILITY_STATES = {
+    FILE_AVAILABLE,
+    FILE_MISSING,
+    FILE_CHECKSUM_MISMATCH,
+    FILE_UNREADABLE,
+    FILE_ARCHIVED,
+}
+
+# Anything but AVAILABLE or ARCHIVED means the evidence cannot be re-read, so
+# nothing may verify automatically from it.
+FILE_STATES_BLOCKING_VERIFICATION = {
+    FILE_MISSING,
+    FILE_CHECKSUM_MISMATCH,
+    FILE_UNREADABLE,
 }
 SETTLEMENT_STATES = {
     "NOT_APPLICABLE",
@@ -1542,6 +1571,170 @@ def correct_extraction_amount(
             "new_amount": corrected_amount,
             "corrections": len(history),
         }
+
+
+def quarantine_payment(
+    *,
+    transaction_reference: str,
+    file_state: str,
+    reason: str,
+    reviewer: str,
+    verification_state: str = "AMOUNT_EXTRACTION_REVIEW_REQUIRED",
+) -> dict[str, Any]:
+    """Withdraw a payment's trusted status without touching its amount.
+
+    Used when an amount is known to be unreliable but the evidence needed to
+    correct it is gone. The recorded figure stays exactly as it is — guessing a
+    replacement would be inventing money — and the previous verification state
+    is preserved so the history shows what was believed and when that stopped.
+
+    Quarantine deliberately does not recalculate anything. A candidate's
+    recorded total was set from business reality, and removing trust from one
+    proof is not evidence that the money never arrived.
+    """
+    reference = _norm_text(transaction_reference).replace(" ", "")
+    if not reference:
+        raise ValueError("A transaction reference is required")
+    if file_state not in FILE_AVAILABILITY_STATES:
+        raise ValueError(f"Unknown file availability state: {file_state}")
+    if verification_state not in VERIFICATION_STATES:
+        raise ValueError(f"Unknown verification state: {verification_state}")
+
+    with _lock:
+        data = _load_ledger()
+        matches = [
+            row
+            for row in data.get("payments") or []
+            if _norm_text(row.get("transaction_reference")).replace(" ", "") == reference
+        ]
+        if not matches:
+            raise ValueError(f"No payment found for reference {transaction_reference}")
+        if len(matches) > 1:
+            raise ValueError(
+                f"{len(matches)} payments share reference {transaction_reference}"
+            )
+        payment = matches[0]
+        previous_state = payment.get("verification_state")
+        previous_file = payment.get("file_availability", FILE_AVAILABLE)
+        if previous_state == verification_state and previous_file == file_state:
+            return {"payment": dict(payment), "changed": False}
+
+        payment.setdefault("quarantine_history", []).append({
+            "quarantined_at": _now(),
+            "previous_verification_state": previous_state,
+            "new_verification_state": verification_state,
+            "previous_file_availability": previous_file,
+            "new_file_availability": file_state,
+            "reviewer": reviewer,
+            "reason": reason,
+        })
+        payment["verification_state"] = verification_state
+        payment["file_availability"] = file_state
+        payment["blocks_automatic_reconciliation"] = True
+        payment["updated_at"] = _now()
+
+        # A posted credit stops counting while the evidence behind it is in
+        # doubt, but the entry itself is kept so the history stays readable.
+        for entry in data.get("entries") or []:
+            if entry.get("payment_id") == payment.get("payment_id"):
+                entry["status"] = "quarantined"
+                entry["updated_at"] = _now()
+        _save_ledger(data)
+        return {
+            "payment": dict(payment),
+            "changed": True,
+            "previous_verification_state": previous_state,
+            "verification_state": verification_state,
+            "file_availability": file_state,
+        }
+
+
+def mark_file_availability(
+    *, transaction_reference: str, file_state: str, reason: str, reviewer: str
+) -> dict[str, Any]:
+    """Record that a payment's original file is missing, damaged or archived,
+    leaving the verification verdict alone."""
+    if file_state not in FILE_AVAILABILITY_STATES:
+        raise ValueError(f"Unknown file availability state: {file_state}")
+    reference = _norm_text(transaction_reference).replace(" ", "")
+    with _lock:
+        data = _load_ledger()
+        matches = [
+            row
+            for row in data.get("payments") or []
+            if _norm_text(row.get("transaction_reference")).replace(" ", "") == reference
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"Expected exactly one payment for {transaction_reference}, "
+                f"found {len(matches)}"
+            )
+        payment = matches[0]
+        previous = payment.get("file_availability", FILE_AVAILABLE)
+        if previous == file_state:
+            return {"payment": dict(payment), "changed": False}
+        payment.setdefault("file_availability_history", []).append({
+            "recorded_at": _now(),
+            "previous": previous,
+            "new": file_state,
+            "reviewer": reviewer,
+            "reason": reason,
+        })
+        payment["file_availability"] = file_state
+        if file_state in FILE_STATES_BLOCKING_VERIFICATION:
+            payment["blocks_automatic_reconciliation"] = True
+        payment["updated_at"] = _now()
+        _save_ledger(data)
+        return {"payment": dict(payment), "changed": True, "previous": previous}
+
+
+def add_corroborating_evidence(
+    *,
+    transaction_reference: str,
+    description: str,
+    supplied_by: str,
+    stated_amount: int = 0,
+    source: str = "ADMINISTRATOR_CORROBORATING_EVIDENCE",
+) -> dict[str, Any]:
+    """Attach out-of-band evidence to a payment whose original file is gone.
+
+    This is testimony, not a system capture, so it is stored in its own list and
+    never becomes the payment's amount or verification state. Someone reading
+    the record later must be able to see the difference between what the system
+    captured and what a person later said about it.
+    """
+    reference = _norm_text(transaction_reference).replace(" ", "")
+    with _lock:
+        data = _load_ledger()
+        matches = [
+            row
+            for row in data.get("payments") or []
+            if _norm_text(row.get("transaction_reference")).replace(" ", "") == reference
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"Expected exactly one payment for {transaction_reference}, "
+                f"found {len(matches)}"
+            )
+        payment = matches[0]
+        record = {
+            "recorded_at": _now(),
+            "source": source,
+            "description": description,
+            "supplied_by": supplied_by,
+            "stated_amount": max(0, int(stated_amount or 0)),
+            "is_original_system_capture": False,
+        }
+        existing = payment.setdefault("corroborating_evidence", [])
+        if any(
+            item.get("description") == description and item.get("source") == source
+            for item in existing
+        ):
+            return {"payment": dict(payment), "changed": False}
+        existing.append(record)
+        payment["updated_at"] = _now()
+        _save_ledger(data)
+        return {"payment": dict(payment), "changed": True, "evidence": record}
 
 
 def ledger_entries(*, month: str | None = None, action: str | None = None) -> list[dict[str, Any]]:
