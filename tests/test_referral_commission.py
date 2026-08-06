@@ -102,3 +102,21 @@ def test_duplicate_proofs_do_not_inflate_commission():
     total = payment_receipts.verified_proof_total(duplicate_pair)
     assert total == 6000
     assert cs.referrer_commission_amount(row(payment=total)) == 3000
+
+
+def test_bgv_is_excluded_on_every_row_of_a_bgv_profile():
+    """BGV is a profile attribute, but it is stored per row. The candidate list
+    collapses clone rows and can pick one whose flag was never set, which is how
+    a BGV pass-through leaked into commission for sakthivek: the collapsed row
+    read bgv_certificates False and made the whole Rs 50,000 commissionable."""
+    bgv_row = row(service_type="profile_service", interview_scope="",
+                  expected_payment=50000, payment=50000, bgv_certificates=True)
+    clone = dict(bgv_row, id="c2", bgv_certificates=False)
+
+    assert cs.referrer_commission_amount(bgv_row) == 10000
+    assert cs.referrer_commission_amount(clone) == 25000, (
+        "a clone missing the flag over-pays by half the pass-through"
+    )
+    # Once the flag is carried across the profile, every row agrees.
+    repaired = dict(clone, bgv_certificates=True)
+    assert cs.referrer_commission_amount(repaired) == 10000
