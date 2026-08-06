@@ -2506,7 +2506,14 @@ function X8({
               />
             </label>
             <label className="cand-field">
-              <span className="cand-field-label">Received ₹</span>
+              <span className="cand-field-label">
+                Received ₹
+                {l.payment_is_proof_derived && (
+                  <span className="cand-field-required-tag">
+                    from verified proofs
+                  </span>
+                )}
+              </span>
               <input
                 className="cand-input"
                 type="number"
@@ -2515,8 +2522,44 @@ function X8({
                 value={l.payment}
                 onChange={(C) => g("payment", C.target.value)}
                 placeholder="0"
+                readOnly={!!l.payment_is_proof_derived}
+                disabled={!!l.payment_is_proof_derived}
+                title={
+                  l.payment_is_proof_derived
+                    ? "Calculated from verified payment proofs. Upload, reject or remove a proof to change it."
+                    : undefined
+                }
               />
             </label>
+            {l.payment_is_proof_derived && (
+              <div className="cand-field cand-receipt-breakdown">
+                <span className="cand-receipt-line">
+                  Minimum expected <strong>{$n(l.expected_minimum ?? T)}</strong>
+                </span>
+                <span className="cand-receipt-line">
+                  Verified received <strong>{$n(l.verified_received ?? k)}</strong>
+                </span>
+                {(l.above_minimum ?? 0) > 0 && (
+                  <span className="cand-receipt-line cand-receipt-line--over">
+                    Above minimum <strong>{$n(l.above_minimum)}</strong>
+                  </span>
+                )}
+                <span className="cand-receipt-line">
+                  Outstanding <strong>{$n(l.balance_due ?? 0)}</strong>
+                </span>
+                <span className="cand-receipt-line">
+                  Verified proofs <strong>{l.verified_proof_count ?? 0}</strong>
+                </span>
+              </div>
+            )}
+            {l.payment_needs_reconciliation && (
+              <div className="cand-field cand-receipt-warning">
+                Verified proofs account for {$n(l.verified_proof_total ?? 0)} of the{" "}
+                {$n(l.payment)} recorded — {$n(l.payment_reconciliation_gap ?? 0)}{" "}
+                unevidenced. Upload the missing receipt, or confirm the recorded
+                amount before reducing it.
+              </div>
+            )}
             <div className="cand-field">
               <span className={`cand-pay-status cand-pay-status--${E}`}>
                 {E === "paid" && <s.Fragment>✓ Paid ({$n(k)})</s.Fragment>}

@@ -11557,6 +11557,40 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 }
 
 /* Per-candidate "Handler X earns ₹Y (50% of ₹Z)" line under Received ₹ */
+/* Proof-derived received total: the arithmetic behind a read-only field. */
+.cand-receipt-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, .08);
+  border: 1px solid rgba(99, 102, 241, .22);
+}
+.cand-receipt-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: #c7d2fe;
+}
+.cand-receipt-line strong { font-weight: 700; color: #e0e7ff; }
+.cand-receipt-line--over strong { color: #6ee7b7; }
+.cand-receipt-warning {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #fde68a;
+  background: rgba(245, 158, 11, .10);
+  border: 1px solid rgba(245, 158, 11, .30);
+}
+.cand-input:disabled,
+.cand-input[readonly] {
+  opacity: .85;
+  cursor: not-allowed;
+}
+
 .cand-pay-handler-share {
   display: inline-flex;
   flex-wrap: wrap;
