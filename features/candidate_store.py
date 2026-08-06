@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -6445,6 +6446,23 @@ def _store_typed_attachment(
     cdata["candidates"] = rows
     _save(cdata)
     if kind == AttachmentType.PAYMENT_PROOF:
+        # Mirror payment evidence into the managed store so both upload paths
+        # share one durable, checksum-verified home for financial evidence.
+        try:
+            from features import payment_evidence_store
+            payment_evidence_store.store(
+                data,
+                mime_type=mime_type,
+                original_filename=original_name,
+                candidate_id=cid,
+                proof_id=str(entry.get("id") or ""),
+                upload_source="candidate_payment_proof",
+                transaction_reference=str(entry.get("utr_number") or ""),
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not mirror candidate payment evidence"
+            )
         recalculate_received_total(
             cid,
             trigger="proof_added",
