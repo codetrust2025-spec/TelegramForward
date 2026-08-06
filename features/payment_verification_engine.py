@@ -1451,6 +1451,99 @@ def verify_payment_screenshot(
     return result
 
 
+def correct_extraction_amount(
+    *,
+    transaction_reference: str,
+    corrected_amount: int,
+    reason: str,
+    reviewer: str,
+    extractor_version: str = "",
+) -> dict[str, Any]:
+    """Supersede a payment's amount after a confirmed extraction defect.
+
+    `verify_payment_screenshot` deliberately cannot do this. Its idempotency key
+    is the transaction reference, so a re-run finds the existing payment and
+    leaves its amount alone — which is exactly what stops one screenshot being
+    credited twice. Correcting an amount therefore needs its own door, and it
+    stays narrow: it matches one existing payment by reference, records what the
+    amount was before, and never creates a payment, an entitlement or a second
+    ledger entry.
+
+    Identity is untouched. UTR, transaction id, evidence, checksum and the
+    original raw model response all stay exactly as captured.
+    """
+    reference = _norm_text(transaction_reference).replace(" ", "")
+    if not reference:
+        raise ValueError("A transaction reference is required")
+    corrected_amount = int(corrected_amount)
+    if corrected_amount <= 0:
+        raise ValueError("A corrected amount must be positive")
+
+    with _lock:
+        data = _load_ledger()
+        matches = [
+            row
+            for row in data.get("payments") or []
+            if _norm_text(row.get("transaction_reference")).replace(" ", "") == reference
+        ]
+        if not matches:
+            raise ValueError(f"No payment found for reference {transaction_reference}")
+        if len(matches) > 1:
+            raise ValueError(
+                f"{len(matches)} payments share reference {transaction_reference}; "
+                "resolve the duplicate before correcting an amount"
+            )
+        payment = matches[0]
+        previous_minor = int(payment.get("amount_minor") or 0)
+        new_minor = _minor_units(corrected_amount)
+        if previous_minor == new_minor:
+            return {"payment": dict(payment), "changed": False, "corrections": 1}
+
+        history = payment.setdefault("amount_corrections", [])
+        history.append({
+            "corrected_at": _now(),
+            "previous_amount_minor": previous_minor,
+            "previous_amount": _rupees(previous_minor),
+            "new_amount_minor": new_minor,
+            "new_amount": corrected_amount,
+            "previous_verification_state": payment.get("verification_state"),
+            "reviewer": reviewer,
+            "reason": reason,
+            "extractor_version": extractor_version,
+        })
+        payment["amount_minor"] = new_minor
+        payment["amount_source"] = "literal_text_correction"
+        payment["updated_at"] = _now()
+
+        # The posted ledger entry carries the same figure, so it moves with the
+        # payment rather than being re-posted as a second credit.
+        for entry in data.get("entries") or []:
+            if entry.get("payment_id") != payment.get("payment_id"):
+                continue
+            allocations = _allocation_fields(
+                amount_minor=new_minor,
+                receiver_type=str(payment.get("receiver_type") or ""),
+                purpose=str(payment.get("purpose") or "candidate_payment"),
+                referrer=str(payment.get("receiver_registry_name") or ""),
+            )
+            entry.update(allocations)
+            entry["updated_at"] = _now()
+            entry.setdefault("amount_corrections", []).append({
+                "corrected_at": _now(),
+                "previous_amount_minor": previous_minor,
+                "new_amount_minor": new_minor,
+                "reviewer": reviewer,
+            })
+        _save_ledger(data)
+        return {
+            "payment": dict(payment),
+            "changed": True,
+            "previous_amount": _rupees(previous_minor),
+            "new_amount": corrected_amount,
+            "corrections": len(history),
+        }
+
+
 def ledger_entries(*, month: str | None = None, action: str | None = None) -> list[dict[str, Any]]:
     rows = list(_load_ledger().get("entries") or [])
     if month and month != "all":
