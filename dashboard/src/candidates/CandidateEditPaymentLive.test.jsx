@@ -54,6 +54,8 @@ const CANDIDATE = {
   verified_proof_count: 0,
   balance_due: 5000,
   payment_is_proof_derived: false,
+  referral_commission: 0,
+  referral_percentage: 50,
 };
 
 function proofRow(id, name, size) {
@@ -79,7 +81,16 @@ function summary({ received, above = 0, outstanding = 0, count = 1 }) {
     proof_derived: true,
     needs_reconciliation: false,
     reconciliation_gap: 0,
+    referrer: "Pavan Kalyan",
+    referral_percentage: 50,
+    referral_commission: Math.floor(received / 2),
+    referral_basis: received,
+    referrer_complimentary_amount: 0,
   };
+}
+
+function referralLabel() {
+  return document.querySelector(".cand-pay-handler-share")?.textContent || "";
 }
 
 function receivedInput() {
@@ -356,5 +367,108 @@ describe("candidate edit form — live proof-derived received total", () => {
     );
     expect(receivedInput()).toHaveValue(6000);
     expect(document.querySelector(".cand-pay-status--paid")).toBeTruthy();
+  });
+});
+
+
+describe("referral earning label", () => {
+  it("shows 50% of the verified received total, not of the expected minimum", async () => {
+    const { container } = renderModal();
+    await uploadProof(container, (file) => ({
+      status: "ok",
+      candidate: {
+        ...CANDIDATE,
+        payment: 6000,
+        payment_proofs: [proofRow("proof-1", file.name, file.size)],
+      },
+      payment_summary: summary({ received: 6000, above: 1000 }),
+    }));
+
+    await waitFor(() => expect(referralLabel()).toContain("₹3,000"));
+    expect(referralLabel()).toContain("Pavan Kalyan");
+    expect(referralLabel()).not.toContain("₹2,500");
+  });
+
+  it("tracks the referral share as further proofs arrive", async () => {
+    const { container } = renderModal();
+    const first = await uploadProof(
+      container,
+      (file) => ({
+        status: "ok",
+        candidate: {
+          ...CANDIDATE,
+          payment: 5000,
+          payment_proofs: [proofRow("proof-1", file.name, file.size)],
+        },
+        payment_summary: summary({ received: 5000 }),
+      }),
+      "first.png",
+    );
+    await waitFor(() => expect(referralLabel()).toContain("₹2,500"));
+
+    await uploadProof(
+      container,
+      (file) => ({
+        status: "ok",
+        candidate: {
+          ...CANDIDATE,
+          payment: 12000,
+          payment_proofs: [
+            proofRow("proof-1", first.name, first.size),
+            proofRow("proof-2", file.name, file.size),
+          ],
+        },
+        payment_summary: summary({ received: 12000, above: 7000, count: 2 }),
+      }),
+      "second.png",
+    );
+
+    await waitFor(() => expect(referralLabel()).toContain("₹6,000"));
+  });
+
+  it("shows the persisted referral share when the form is reopened", () => {
+    render(
+      <ConfirmProvider>
+        <CandidateEditModal
+          initial={{
+            ...CANDIDATE,
+            payment: 6000,
+            verified_received: 6000,
+            balance_due: 0,
+            verified_proof_count: 1,
+            payment_is_proof_derived: true,
+            referral_commission: 3000,
+            referral_percentage: 50,
+            payment_proofs: [proofRow("proof-1", "receipt.png", 10)],
+          }}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          isAdmin={true}
+        />
+      </ConfirmProvider>,
+    );
+    expect(referralLabel()).toContain("₹3,000");
+  });
+
+  it("never folds a closure complimentary amount into the payment commission", () => {
+    render(
+      <ConfirmProvider>
+        <CandidateEditModal
+          initial={{
+            ...CANDIDATE,
+            payment: 6000,
+            payment_is_proof_derived: true,
+            referral_commission: 3000,
+            referrer_complimentary_amount: 5000,
+            payment_proofs: [proofRow("proof-1", "receipt.png", 10)],
+          }}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          isAdmin={true}
+        />
+      </ConfirmProvider>,
+    );
+    expect(referralLabel()).toContain("₹3,000");
+    expect(referralLabel()).not.toContain("₹8,000");
   });
 });
