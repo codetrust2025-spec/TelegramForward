@@ -43,7 +43,22 @@ PROOF_STATUSES = (
     PROOF_STATUS_REJECTED,
 )
 
+# File availability, mirrored from the verification engine so the receipt layer
+# can refuse evidence it cannot re-read without importing the engine.
+FILE_AVAILABLE = "AVAILABLE"
+FILE_MISSING = "MISSING_FILE"
+FILE_CHECKSUM_MISMATCH = "CHECKSUM_MISMATCH"
+FILE_UNREADABLE = "UNREADABLE"
+FILE_ARCHIVED = "ARCHIVED"
+
+FILE_STATES_BLOCKING_VERIFICATION = frozenset({
+    FILE_MISSING,
+    FILE_CHECKSUM_MISMATCH,
+    FILE_UNREADABLE,
+})
+
 _ENGINE_STATE_TO_STATUS = {
+    "AMOUNT_EXTRACTION_REVIEW_REQUIRED": "NEEDS_REVIEW",
     "UPLOADED": PROOF_STATUS_PENDING_EXTRACTION,
     "EXTRACTION_IN_PROGRESS": PROOF_STATUS_PENDING_EXTRACTION,
     "EXTRACTED": PROOF_STATUS_NEEDS_REVIEW,
@@ -64,15 +79,34 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _coerce_bool_like(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return _clean(value).lower() in {"true", "yes", "1"}
+
+
 def _norm_ref(value: Any) -> str:
     """Fold a transaction reference for comparison — case and spacing vary
     between the bank app, the OCR pass and manual entry."""
     return "".join(_clean(value).lower().split())
 
 
+def file_availability(proof: dict[str, Any]) -> str:
+    if not isinstance(proof, dict):
+        return FILE_AVAILABLE
+    return _clean(proof.get("file_availability")).upper() or FILE_AVAILABLE
+
+
 def proof_status(proof: dict[str, Any]) -> str:
     """Explicit lifecycle status for one proof."""
     if not isinstance(proof, dict):
+        return PROOF_STATUS_NEEDS_REVIEW
+    if file_availability(proof) in FILE_STATES_BLOCKING_VERIFICATION:
+        # The evidence cannot be re-read, so whatever verdict it carries can no
+        # longer be relied on. It is not rejected — the payment may well be
+        # real — it simply needs a human and a replacement file.
+        return PROOF_STATUS_NEEDS_REVIEW
+    if _coerce_bool_like(proof.get("blocks_automatic_reconciliation")):
         return PROOF_STATUS_NEEDS_REVIEW
     state = _clean(proof.get("verification_state")).upper()
     if not state:
