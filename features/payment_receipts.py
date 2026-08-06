@@ -239,6 +239,31 @@ def status_counts(proofs: Iterable[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
+def api_summary(row: dict[str, Any]) -> dict[str, Any]:
+    """The authoritative payment figures for a computed candidate row.
+
+    Returned alongside every proof mutation so the editor can show the new
+    total the moment a proof is verified, instead of waiting for a save round
+    trip. The browser renders these numbers; it never recomputes them.
+    """
+    row = row or {}
+    received = max(0, int(row.get("payment") or 0))
+    expected = max(0, int(row.get("expected_minimum") or row.get("expected_payment") or 0))
+    status = str(row.get("payment_status") or "").upper()
+    return {
+        "verified_proof_total": max(0, int(row.get("verified_proof_total") or 0)),
+        "received_total": received,
+        "expected_amount": expected,
+        "outstanding_amount": max(0, int(row.get("balance_due") or 0)),
+        "above_minimum_amount": max(0, int(row.get("above_minimum") or 0)),
+        "verified_proof_count": max(0, int(row.get("verified_proof_count") or 0)),
+        "payment_status": status or ("UNPAID" if received <= 0 else "PAID"),
+        "proof_derived": bool(row.get("payment_is_proof_derived")),
+        "needs_reconciliation": bool(row.get("payment_needs_reconciliation")),
+        "reconciliation_gap": max(0, int(row.get("payment_reconciliation_gap") or 0)),
+    }
+
+
 def receipt_summary(
     *,
     expected: int,

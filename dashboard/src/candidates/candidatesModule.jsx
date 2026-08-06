@@ -272,7 +272,11 @@ export function PaymentProofUploader({
                 (!proof.size || Number(proof.size) === Number(b.size)),
             ) || nextProofs[nextProofs.length - 1] || null;
           if (L.ai_extraction) setAiResult(L.ai_extraction);
-          if (L.candidate && r != null) r(nextProofs);
+          // Hand the whole authoritative row up, not just the proofs. The
+          // recalculated Received total rides on `candidate`/`payment_summary`,
+          // and dropping it here was why the field stayed stale until Save.
+          if (L.candidate && r != null)
+            r(nextProofs, L.candidate, L.payment_summary);
           if (clearNote) o("");
           l("");
           finish("success", {
@@ -444,7 +448,11 @@ export function PaymentProofUploader({
       ).json();
       if (L.status === "ok") {
         if (r != null) {
-          r(normalizePaymentProofs((A = L.candidate) == null ? undefined : A));
+          r(
+            normalizePaymentProofs((A = L.candidate) == null ? undefined : A),
+            L.candidate,
+            L.payment_summary,
+          );
         }
       } else {
         l(L.message || "Delete failed");
@@ -478,7 +486,7 @@ export function PaymentProofUploader({
               : M,
           );
           if (r != null) {
-            r(L);
+            r(L, O.candidate, O.payment_summary);
           }
           h(null);
         } else {
@@ -1910,7 +1918,7 @@ function ReferencePicker({
     </div>
   );
 }
-function X8({
+export function CandidateEditModal({
   initial: e,
   onClose: t,
   onSave: r,
@@ -1930,9 +1938,49 @@ function X8({
     }
     return C;
   });
-  const [o, u] = w.useState(() =>
+  const [o, setProofs] = w.useState(() =>
     normalizePaymentProofs(e),
   );
+  // Proof mutations return the recalculated row. Fold its payment figures into
+  // the draft straight away so Received, the Paid/Partial badge, outstanding
+  // and the follow-up requirement all reflect the verified proofs before Save.
+  const u = w.useCallback((nextProofs, candidate, paymentSummary) => {
+    setProofs(nextProofs);
+    if (!candidate && !paymentSummary) return;
+    c((draft) => {
+      const next = { ...draft };
+      if (paymentSummary) {
+        next.payment = Number(paymentSummary.received_total) || 0;
+        next.expected_minimum = Number(paymentSummary.expected_amount) || 0;
+        next.verified_received = Number(paymentSummary.received_total) || 0;
+        next.verified_proof_total =
+          Number(paymentSummary.verified_proof_total) || 0;
+        next.above_minimum = Number(paymentSummary.above_minimum_amount) || 0;
+        next.balance_due = Number(paymentSummary.outstanding_amount) || 0;
+        next.verified_proof_count =
+          Number(paymentSummary.verified_proof_count) || 0;
+        next.payment_is_proof_derived = !!paymentSummary.proof_derived;
+        next.payment_needs_reconciliation =
+          !!paymentSummary.needs_reconciliation;
+        next.payment_reconciliation_gap =
+          Number(paymentSummary.reconciliation_gap) || 0;
+      } else if (candidate) {
+        next.payment = Number(candidate.payment) || 0;
+        next.expected_minimum = Number(candidate.expected_minimum) || 0;
+        next.verified_received = Number(candidate.verified_received) || 0;
+        next.verified_proof_total = Number(candidate.verified_proof_total) || 0;
+        next.above_minimum = Number(candidate.above_minimum) || 0;
+        next.balance_due = Number(candidate.balance_due) || 0;
+        next.verified_proof_count = Number(candidate.verified_proof_count) || 0;
+        next.payment_is_proof_derived = !!candidate.payment_is_proof_derived;
+        next.payment_needs_reconciliation =
+          !!candidate.payment_needs_reconciliation;
+        next.payment_reconciliation_gap =
+          Number(candidate.payment_reconciliation_gap) || 0;
+      }
+      return next;
+    });
+  }, []);
   const [d, f] = w.useState(false);
   const [h, x] = w.useState("");
   const [proofUploadBusy, setProofUploadBusy] = w.useState(false);
@@ -1954,7 +2002,7 @@ function X8({
     if (t) t();
   }, [confirmModal, proofUploadBusy, t]);
   w.useEffect(() => {
-    u(normalizePaymentProofs(e));
+    setProofs(normalizePaymentProofs(e));
   }, [e == null ? undefined : e.id]);
   w.useEffect(() => {
     var C;
@@ -2176,7 +2224,14 @@ function X8({
         consultancy: l.service_type === "round_wise" ? false : !!l.consultancy,
         bgv_certificates: !!l.bgv_certificates,
         ctc_percentage: l.ctc_percentage === "" ? "" : Number(l.ctc_percentage),
-        payment: l.payment === "" ? 0 : Number(l.payment),
+        // A proof-derived total belongs to the proofs, so the draft never sends
+        // one back. The server re-derives it regardless; omitting it here stops
+        // a stale snapshot from racing a verification that landed mid-edit.
+        payment: l.payment_is_proof_derived
+          ? undefined
+          : l.payment === ""
+            ? 0
+            : Number(l.payment),
         expected_payment:
           l.expected_payment === ""
             ? os(l.service_type, l.consultancy, l.interview_scope)
@@ -6049,7 +6104,7 @@ function CandidatesPanelImpl() {
         </div>
       )}
       {L && (
-        <X8
+        <CandidateEditModal
           initial={C}
           handlerReference={n ? t : null}
           lockReference={n}

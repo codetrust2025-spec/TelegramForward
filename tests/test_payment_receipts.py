@@ -283,3 +283,43 @@ def test_proof_controlled_row_accepts_a_reduction_from_a_rejected_proof():
     assert summary["verified_received"] == 7000
     assert summary["proof_derived"] is True
     assert summary["needs_reconciliation"] is False
+
+
+def test_api_summary_matches_the_documented_response_shape():
+    """The editor renders these figures verbatim, so the contract is fixed."""
+    row = {
+        "payment": 6000, "expected_minimum": 5000, "verified_proof_total": 6000,
+        "balance_due": 0, "above_minimum": 1000, "verified_proof_count": 1,
+        "payment_status": "paid", "payment_is_proof_derived": True,
+    }
+    assert receipts.api_summary(row) == {
+        "verified_proof_total": 6000,
+        "received_total": 6000,
+        "expected_amount": 5000,
+        "outstanding_amount": 0,
+        "above_minimum_amount": 1000,
+        "verified_proof_count": 1,
+        "payment_status": "PAID",
+        "proof_derived": True,
+        "needs_reconciliation": False,
+        "reconciliation_gap": 0,
+    }
+
+
+def test_api_summary_reports_a_partial_payment():
+    row = {
+        "payment": 3000, "expected_minimum": 5000, "verified_proof_total": 3000,
+        "balance_due": 2000, "above_minimum": 0, "verified_proof_count": 1,
+        "payment_status": "partial", "payment_is_proof_derived": True,
+    }
+    out = receipts.api_summary(row)
+    assert out["payment_status"] == "PARTIAL"
+    assert out["outstanding_amount"] == 2000
+    assert out["above_minimum_amount"] == 0
+
+
+def test_api_summary_survives_a_row_with_nothing_set():
+    out = receipts.api_summary({})
+    assert out["received_total"] == 0
+    assert out["payment_status"] == "UNPAID"
+    assert out["verified_proof_count"] == 0

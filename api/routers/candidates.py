@@ -665,7 +665,13 @@ async def candidates_upload_proof(
             if amount
             else "Payment proof saved; extracted details require manual review."
         )
-    resp = {"status": "ok", "proof": entry, "candidate": row}
+    from features import payment_receipts
+    resp = {
+        "status": "ok", "proof": entry, "candidate": row,
+        # The editor updates Received the moment this lands, so the total is
+        # correct before Save is ever clicked.
+        "payment_summary": payment_receipts.api_summary(row),
+    }
     if ai_extraction:
         resp["ai_extraction"] = ai_extraction
     if fraud_check:
@@ -760,7 +766,11 @@ async def candidates_delete_proof(cid: str, pid: str, request: Request):
     if not ok:
         return {"status": "error", "message": "Proof not found"}
     row = candidate_store.get_candidate(cid)
-    return {"status": "ok", "candidate": row}
+    from features import payment_receipts
+    return {
+        "status": "ok", "candidate": row,
+        "payment_summary": payment_receipts.api_summary(row),
+    }
 @router.patch("/candidates/{cid}/proofs/{pid}")
 async def candidates_update_proof_note(cid: str, pid: str, body: dict, request: Request):
     from core.dashboard_access import assert_candidate_row_access
@@ -774,7 +784,12 @@ async def candidates_update_proof_note(cid: str, pid: str, body: dict, request: 
     entry = candidate_store.update_proof_note(cid, pid, note)
     if entry is None:
         return {"status": "error", "message": "Proof not found"}
-    return {"status": "ok", "proof": entry}
+    row = candidate_store.get_candidate(cid)
+    from features import payment_receipts
+    return {
+        "status": "ok", "proof": entry, "candidate": row,
+        "payment_summary": payment_receipts.api_summary(row),
+    }
 @router.post("/candidates/{cid}/resumes")
 async def candidates_upload_resume(
     request: Request,
