@@ -431,14 +431,9 @@ def verify_live_release(
     if fix_present in ("", "0"):
         problems.append("invite mismatch fix missing from active release")
 
-    pm2_cwd = ssh(
-        client,
-        f"pid=$(pm2 pid {q(PM2_APP)} | tail -n 1); "
-        "test \"${pid:-0}\" -gt 0 && readlink -f /proc/$pid/cwd || true",
-        check=False,
-    ).strip()
-    if pm2_cwd != release:
-        problems.append("PM2 app is offline or running from the wrong release")
+    # Ask the process that actually holds the port, not PM2's own record of
+    # what it thinks it started. Those two disagreeing is the whole failure.
+    problems.extend(verify_serving_process(client, release))
 
     nginx = ssh(
         client,
@@ -504,9 +499,98 @@ def switch_current(client, release: str) -> None:
     ssh(client, f"ln -sfn {q(release)} {q(CURRENT)}.tmp && mv -Tf {q(CURRENT)}.tmp {q(CURRENT)}")
 
 
+APP_PORT = 8000
+APP_PROCESS_PATTERN = "uvicorn_reload.py"
+
+
+def port_owner(client) -> str:
+    """PID actually listening on the app port, which is not always PM2's."""
+    return ssh(
+        client,
+        f"ss -lntpH 'sport = :{APP_PORT}' | grep -o 'pid=[0-9]*' "
+        "| cut -d= -f2 | head -1",
+        check=False,
+    ).strip()
+
+
+def pm2_pid(client) -> str:
+    return ssh(client, f"pm2 pid {q(PM2_APP)} | tail -n 1", check=False).strip()
+
+
 def reload_app(client) -> None:
-    ssh(client, f"cd {q(CURRENT)} && pm2 restart {q(PM2_APP)} --update-env", check=False)
-    ssh(client, "sleep 3", check=False)
+    """Stop, drain the port, start once.
+
+    `pm2 restart` does not guarantee the old interpreter has released the
+    port before the replacement binds. When it does not, the old process keeps
+    serving the previous release while PM2 respawns a child that dies on
+    "address already in use" every few seconds — and because PM2 reports its
+    own doomed child as the app, cwd checks against it pass while production
+    quietly serves stale code. Draining the port is what makes the restart
+    deterministic.
+    """
+    ssh(client, f"pm2 stop {q(PM2_APP)}", check=False)
+    ssh(client, "sleep 2", check=False)
+
+    for attempt in range(6):
+        owner = port_owner(client)
+        stale = ssh(
+            client, f"pgrep -f {q(APP_PROCESS_PATTERN)} || true", check=False
+        ).split()
+        targets = sorted({pid for pid in ([owner] if owner else []) + stale if pid})
+        if not targets:
+            break
+        signal = "-KILL" if attempt >= 3 else "-TERM"
+        log(f"draining port {APP_PORT}: {signal} {' '.join(targets)}")
+        ssh(client, f"kill {signal} {' '.join(targets)} 2>/dev/null || true", check=False)
+        ssh(client, "sleep 2", check=False)
+
+    if port_owner(client):
+        raise SystemExit(
+            f"port {APP_PORT} is still held after draining; refusing to start a "
+            "second process that would crash-loop"
+        )
+
+    ssh(client, f"cd {q(CURRENT)} && pm2 start {q(PM2_APP)}", check=False)
+    ssh(client, "sleep 8", check=False)
+
+
+def verify_serving_process(client, release: str) -> list[str]:
+    """The serving process — not PM2's bookkeeping — must match the release."""
+    problems: list[str] = []
+    owner = port_owner(client)
+    if not owner:
+        return [f"nothing is listening on port {APP_PORT}"]
+
+    managed = pm2_pid(client)
+    if managed and managed != owner:
+        problems.append(
+            f"PM2 reports pid {managed} but pid {owner} owns port {APP_PORT} "
+            "(orphaned server still serving)"
+        )
+
+    cwd = ssh(client, f"readlink -f /proc/{owner}/cwd", check=False).strip()
+    if cwd != release:
+        problems.append(
+            f"serving pid {owner} runs from {cwd or 'an unknown path'}, not {release}"
+        )
+
+    # A pid that changes under us is the respawn loop, whatever the status says.
+    ssh(client, "sleep 15", check=False)
+    if port_owner(client) != owner:
+        problems.append(f"serving pid changed within 15s (was {owner}) — respawn loop")
+    else:
+        ssh(client, "sleep 15", check=False)
+        if port_owner(client) != owner:
+            problems.append(
+                f"serving pid changed within 30s (was {owner}) — respawn loop"
+            )
+
+    extra = ssh(
+        client, f"pgrep -fc {q(APP_PROCESS_PATTERN)} || true", check=False
+    ).strip()
+    if extra.isdigit() and int(extra) > 2:
+        problems.append(f"{extra} app processes are running; expected one server")
+    return problems
 
 
 def rollback(client, previous: str, previous_marker: str = "") -> bool:
