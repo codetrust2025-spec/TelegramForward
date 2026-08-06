@@ -57,6 +57,7 @@ from features.candidate_attachments import (
     parse_attachment_type,
     partition_candidate_attachments,
 )
+from features import payment_receipts
 
 _FILE = os.path.join(DATA_DIR, "candidates.json")
 # Each candidate gets its own folder under here so we never accidentally
@@ -1373,6 +1374,14 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         "paymentReusedByBookingId": _clean_str(
             record.get("paymentReusedByBookingId", base.get("paymentReusedByBookingId"))
         ),
+        # Once a row's received total has been derived from adjudicated proofs,
+        # it stays proof-controlled: later proof changes, including reductions
+        # from a rejected proof, apply without a reconciliation prompt.
+        "payment_proof_controlled": _coerce_bool(
+            record.get(
+                "payment_proof_controlled", base.get("payment_proof_controlled", False)
+            )
+        ),
         "re_service_eligible": _coerce_bool(
             record.get("re_service_eligible", base.get("re_service_eligible", False))
         ),
@@ -1523,8 +1532,18 @@ def _with_computed(row: dict) -> dict:
         bgv_certificates=_coerce_bool(row.get("bgv_certificates")),
     )
     expected = effective_expected_payment(row)
-    received = int(row.get("payment") or 0)
-    balance = max(0, expected - received)
+    # Verified payment proofs are what the candidate actually paid. The typed
+    # figure is only a fallback for rows that predate proof capture, because
+    # deriving those from an empty proof list would erase real money.
+    attachments = partition_candidate_attachments(row)
+    receipts = payment_receipts.receipt_summary(
+        expected=expected,
+        recorded=int(row.get("payment") or 0),
+        proofs=attachments["payment_proofs"],
+        proof_controlled=_coerce_bool(row.get("payment_proof_controlled")),
+    )
+    received = receipts["verified_received"]
+    balance = receipts["outstanding"]
     if received <= 0:
         status = "unpaid"
     elif received >= expected:
@@ -1559,7 +1578,20 @@ def _with_computed(row: dict) -> dict:
         (commissionable_expected * HANDLER_COMMISSION_PCT) // 100
     ) + referrer_bonus
     enriched["company_revenue"] = received - enriched["total_handler_earnings"]
-    attachments = partition_candidate_attachments(enriched)
+    # The Received field is system-calculated whenever proof evidence exists, so
+    # the UI can present it read-only and show the arithmetic behind it.
+    enriched["payment"] = received
+    enriched["recorded_payment"] = receipts["recorded_amount"]
+    enriched["payment_is_proof_derived"] = receipts["proof_derived"]
+    enriched["expected_minimum"] = receipts["expected_minimum"]
+    enriched["verified_received"] = receipts["verified_received"]
+    enriched["verified_proof_total"] = receipts["verified_proof_total"]
+    enriched["verified_proof_count"] = receipts["verified_proof_count"]
+    enriched["above_minimum"] = receipts["above_minimum"]
+    enriched["payment_proof_status_counts"] = receipts["status_counts"]
+    enriched["payment_unevidenced"] = receipts["unevidenced"]
+    enriched["payment_needs_reconciliation"] = receipts["needs_reconciliation"]
+    enriched["payment_reconciliation_gap"] = receipts["reconciliation_gap"]
     payment_proofs = attachments["payment_proofs"]
     enriched.pop("proofs", None)
     enriched["payment_proofs"] = payment_proofs
@@ -4973,11 +5005,12 @@ def finalize_public_booking_payment(
             if not entry:
                 raise ValueError("Could not attach verified payment proof")
             current = get_candidate(cid) or current
-            amount = max(0, int(pending.get("amount_due") or 0))
-            expected = effective_expected_payment(current)
-            patch["payment"] = min(
-                int(current.get("payment") or 0) + amount,
-                expected,
+            # The proof decides the amount, not the invoice. Booking used to add
+            # the amount *due* and clamp the running total to the expected
+            # figure, so a candidate who paid ₹6,000 against a ₹5,000 minimum was
+            # recorded as having paid ₹5,000. Expected is a floor, not a ceiling.
+            patch["payment"] = payment_receipts.verified_proof_total(
+                partition_candidate_attachments(current)["payment_proofs"]
             )
 
     if patch:
@@ -5211,6 +5244,15 @@ def update_candidate(
                 )
             }
             allowed_patch = {k: v for k, v in patch.items() if k in _ALLOWED_FIELDS}
+            # A typed Received amount is not authoritative. Where verified proof
+            # evidence exists the proofs decide the total, so a manual edit
+            # cannot quietly disagree with them.
+            if "payment" in allowed_patch:
+                existing_proofs = partition_candidate_attachments(r)["payment_proofs"]
+                if payment_receipts.has_proof_evidence(existing_proofs):
+                    allowed_patch["payment"] = payment_receipts.verified_proof_total(
+                        existing_proofs
+                    )
             preview = _normalise(allowed_patch, existing=r)
             is_dropped = preview.get("stage") == "dropped"
             phone_key = candidate_phone_identity(preview.get("phone"))
@@ -6393,7 +6435,80 @@ def _store_typed_attachment(
     rows[idx]["updated_at"] = _now_iso()
     cdata["candidates"] = rows
     _save(cdata)
+    if kind == AttachmentType.PAYMENT_PROOF:
+        recalculate_received_total(
+            cid,
+            trigger="proof_added",
+            proof_change="added",
+            proof_id=str(entry.get("id") or ""),
+            reason=f"Payment proof {entry.get('id')} uploaded.",
+        )
     return entry
+
+
+def recalculate_received_total(
+    cid: str,
+    *,
+    trigger: str,
+    reason: str,
+    reviewer: str = "system",
+    proof_change: str = "",
+    proof_id: str = "",
+) -> dict | None:
+    """Re-derive one candidate's received total from their payment proofs.
+
+    Called whenever proof evidence changes — added, replaced, rejected or
+    deleted — so the stored figure never drifts from the evidence. Rows with no
+    proof at all are left alone: their recorded amount is the only record of a
+    payment made before proofs were captured.
+    """
+    cdata = _load()
+    rows = cdata.get("candidates") or []
+    idx = next((i for i, r in enumerate(rows) if r.get("id") == cid), None)
+    if idx is None:
+        return None
+    row = rows[idx]
+    proofs = partition_candidate_attachments(row)["payment_proofs"]
+    if not payment_receipts.has_proof_evidence(proofs):
+        return None
+    previous = int(row.get("payment") or 0)
+    new_total = payment_receipts.verified_proof_total(proofs)
+    already_controlled = _coerce_bool(row.get("payment_proof_controlled"))
+    if new_total < previous and not already_controlled:
+        # Proofs total less than what is recorded. On a row that was never under
+        # proof control this almost always means the earlier payments were made
+        # before proofs were captured, so reducing the total here would delete
+        # real money. Surface it for reconciliation instead.
+        return None
+    if new_total == previous:
+        rows[idx]["payment_proof_controlled"] = True
+        cdata["candidates"] = rows
+        _save(cdata)
+        return None
+    unique = payment_receipts.unique_verified_proofs(proofs)
+    rows[idx]["payment"] = new_total
+    rows[idx]["payment_proof_controlled"] = True
+    rows[idx]["updated_at"] = _now_iso()
+    cdata["candidates"] = rows
+    _save(cdata)
+    from features import payment_recalculation_audit
+    payment_recalculation_audit.record_recalculation(
+        candidate_id=cid,
+        candidate_name=str(row.get("name") or ""),
+        previous_total=previous,
+        new_total=new_total,
+        trigger=trigger,
+        proof_change=proof_change,
+        proof_id=proof_id,
+        reviewer=reviewer,
+        reason=reason,
+        proof_ids=[str(p.get("id") or "") for p in unique],
+        utr=", ".join(
+            str(p.get("utr_number") or "") for p in unique if p.get("utr_number")
+        ),
+        verified_amount=new_total,
+    )
+    return get_candidate(cid)
 
 
 def add_proof(cid: str, *, attachment_type: AttachmentType | str | None = None,
@@ -6489,6 +6604,13 @@ def delete_proof(cid: str, pid: str) -> bool:
                 target_row["updated_at"] = _now_iso()
                 cdata["candidates"] = rows
                 _save(cdata)
+                recalculate_received_total(
+                    cid,
+                    trigger="proof_deleted",
+                    proof_change="deleted",
+                    proof_id=pid,
+                    reason=f"Payment proof {pid} deleted.",
+                )
                 return True
     # If not found on the target row, search all rows with the same name (slot clones)
     if target_row:
@@ -6512,6 +6634,13 @@ def delete_proof(cid: str, pid: str) -> bool:
                     r["updated_at"] = _now_iso()
                     cdata["candidates"] = rows
                     _save(cdata)
+                    recalculate_received_total(
+                        str(r["id"]),
+                        trigger="proof_deleted",
+                        proof_change="deleted",
+                        proof_id=pid,
+                        reason=f"Payment proof {pid} deleted from slot-clone row.",
+                    )
                     return True
     return False
 
