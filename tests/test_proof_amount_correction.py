@@ -177,3 +177,54 @@ def test_correcting_the_same_proof_twice_does_not_stack_history(store):
 def test_unknown_proof_returns_none(store):
     assert cs.correct_proof_amount(store, "nope", corrected_amount=1,
                                    reason="r", reviewer="admin") is None
+
+
+@pytest.fixture()
+def legacy_store(tmp_path, monkeypatch):
+    """A proof stored in the pre-typed `proofs` list, as the production record
+    for Ram Charan is."""
+    monkeypatch.setattr(cs, "_FILE", str(tmp_path / "candidates.json"))
+    monkeypatch.setenv("PAYMENT_RECALCULATION_AUDIT_FILE", str(tmp_path / "a.json"))
+    monkeypatch.setattr(cs, "_load_cache", None)
+    monkeypatch.setattr(cs, "_load_cache_at", 0.0)
+    row = cs.create_candidate({"name": "Legacy Proof", "phone": "9000000010",
+                               "reference": "Pavan Kalyan",
+                               "expected_payment": 20000, "payment": 20000})
+    data = cs._load()
+    for item in data["candidates"]:
+        if item["id"] == row["id"]:
+            item["payment"] = 20000
+            item["payment_proofs"] = []
+            item["proofs"] = [{
+                "id": "3300acabb4ad", "attachment_type": "payment_proof",
+                "legacy_storage": True, "verified_amount": 2000,
+                "verification_state": "VERIFIED_COMPANY_PAYMENT",
+                "utr_number": "678487078430", "sha256": "4e9c6dd0",
+                "filename": "3300acabb4ad.jpg",
+            }]
+    cs._save(data)
+    return row["id"]
+
+
+def test_a_legacy_stored_proof_can_be_corrected(legacy_store):
+    out = cs.correct_proof_amount(legacy_store, "3300acabb4ad",
+                                  corrected_amount=20000, reason="r",
+                                  reviewer="admin")
+    assert out is not None, "legacy `proofs` storage must be searched too"
+    assert out["verified_amount"] == 20000
+    assert out["amount_corrections"][0]["previous_amount"] == 2000
+
+    stored = next(r for r in cs._load()["candidates"] if r["id"] == legacy_store)
+    assert stored["proofs"][0]["verified_amount"] == 20000
+    assert stored["payment_proofs"] == [], "it must not be moved between lists"
+
+
+def test_legacy_correction_reconciles_the_row(legacy_store):
+    cs.correct_proof_amount(legacy_store, "3300acabb4ad", corrected_amount=20000,
+                            reason="r", reviewer="admin")
+    cs.recalculate_received_total(legacy_store, trigger="extraction_correction",
+                                  reason="r", reviewer="admin")
+    row = cs.get_candidate(legacy_store)
+    assert row["payment"] == 20000
+    assert row["verified_proof_total"] == 20000
+    assert row["referral_commission"] == 10000
