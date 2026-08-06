@@ -845,3 +845,96 @@ def test_a_second_slot_for_one_candidate_keeps_the_calendar_identity(tmp_path, m
     assert second["interview_calendar_uid"] == "UID-SECOND"
     stored = candidate_store.get_candidate(second["id"])
     assert stored["interview_calendar_uid"] == "UID-SECOND"
+
+
+CAPGEMINI_ATS_UID = "CDVCAPGB@50250631444abd548e03c35cff206722@ca467375-9795-49c7-874a-d3950f3fd624"
+RECRUITER_INVITE_UID = "040000008200E00074C5B7101A82E0080000000060B80A34D724DD01000000000000000010000000096F06FC596A12409713ABBDB5CE1ADC"
+
+
+def test_cancellation_never_lands_on_the_only_slot_of_a_different_calendar_event(monkeypatch):
+    """Production incident 2026-08-05: Capgemini's ATS cancelled its own 3:30 PM
+    event, but that slot had already left the confirmed list, so the lone
+    remaining slot — an unrelated 5:30 PM invite from the recruiter's own
+    calendar — was cancelled instead."""
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    unrelated = {
+        "id": "slot-530", "name": "Rahul", "slot_confirmed": True,
+        "date": "2099-08-06", "time": "17:30", "time_end": "18:00",
+        "interview_calendar_uid": RECRUITER_INVITE_UID,
+    }
+    _candidate, audits = install_store_fakes(monkeypatch, rows=[unrelated])
+    cancelled = []
+    monkeypatch.setattr(
+        booking.candidate_store, "cancel_interview_slot",
+        lambda **kwargs: cancelled.append(kwargs) or {"id": kwargs["candidate_id"]},
+    )
+    value = result("interview_cancelled", date=None, time=None, timezone=None, round=None)
+    value["calendar"] = {"uid": CAPGEMINI_ATS_UID, "method": "CANCEL", "sequence": 81866364}
+    outcome = execute(value)
+    assert outcome["failure_code"] == "BOOKING_NOT_FOUND"
+    assert cancelled == [], "an unrelated calendar event must never be cancelled"
+    assert audits[-1]["booking_status"] == "Blocked"
+
+
+def test_cancellation_still_applies_to_the_only_slot_of_the_same_calendar_event(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    target = {
+        "id": "slot-330", "name": "Rahul", "slot_confirmed": True,
+        "date": "2099-08-06", "time": "15:30", "time_end": "16:00",
+        "interview_calendar_uid": CAPGEMINI_ATS_UID,
+    }
+    install_store_fakes(monkeypatch, rows=[target])
+    monkeypatch.setattr(
+        booking.candidate_store, "cancel_interview_slot",
+        lambda **kwargs: {"id": kwargs["candidate_id"]},
+    )
+    value = result("interview_cancelled", date=None, time=None, timezone=None, round=None)
+    value["calendar"] = {"uid": CAPGEMINI_ATS_UID, "method": "CANCEL", "sequence": 81866364}
+    outcome = execute(value)
+    assert outcome["status"] == "Cancelled"
+    assert outcome["booking"]["id"] == "slot-330"
+
+
+@pytest.mark.parametrize(("slot_uid", "event_uid"), [
+    ("", CAPGEMINI_ATS_UID),   # slot predates calendar-identity capture
+    (RECRUITER_INVITE_UID, ""),  # plain-text cancellation with no ICS
+    ("", ""),
+])
+def test_single_slot_cancellation_is_unchanged_when_either_uid_is_absent(monkeypatch, slot_uid, event_uid):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    row = {
+        "id": "slot-only", "name": "Rahul", "slot_confirmed": True,
+        "date": "2099-08-06", "time": "17:30", "time_end": "18:00",
+        "interview_calendar_uid": slot_uid,
+    }
+    install_store_fakes(monkeypatch, rows=[row])
+    monkeypatch.setattr(
+        booking.candidate_store, "cancel_interview_slot",
+        lambda **kwargs: {"id": kwargs["candidate_id"]},
+    )
+    value = result("interview_cancelled", date=None, time=None, timezone=None, round=None)
+    if event_uid:
+        value["calendar"] = {"uid": event_uid, "method": "CANCEL", "sequence": 1}
+    outcome = execute(value)
+    assert outcome["status"] == "Cancelled"
+    assert outcome["booking"]["id"] == "slot-only"
+
+
+def test_reschedule_never_moves_the_only_slot_of_a_different_calendar_event(monkeypatch):
+    monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
+    unrelated = {
+        "id": "slot-530", "name": "Rahul", "slot_confirmed": True,
+        "date": "2099-08-06", "time": "17:30", "time_end": "18:00",
+        "interview_calendar_uid": RECRUITER_INVITE_UID,
+    }
+    install_store_fakes(monkeypatch, rows=[unrelated])
+    moved = []
+    monkeypatch.setattr(
+        booking.candidate_store, "update_interview_slot",
+        lambda **kwargs: moved.append(kwargs) or {"id": kwargs["candidate_id"]},
+    )
+    value = result("interview_rescheduled", date="2099-08-07", time="11:00 AM")
+    value["calendar"] = {"uid": CAPGEMINI_ATS_UID, "method": "REQUEST", "sequence": 3}
+    outcome = execute(value)
+    assert outcome["failure_code"] == "BOOKING_NOT_FOUND"
+    assert moved == [], "an unrelated calendar event must never be rescheduled"
