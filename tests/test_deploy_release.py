@@ -207,7 +207,10 @@ def test_verify_live_release_checks_process_proxy_apis_and_public_assets(monkeyp
         "readlink -f /opt/telegramforward/current": "/rel",
         "production.manifest.json": "1",
         "agreed on the date and start time": "1",
-        "pm2 pid": "/rel",
+        "pm2 pid": "500",
+        "sport = :8000": "500",
+        "/cwd": "/rel",
+        "pgrep -fc": "2",
         "nginx -t": "ok",
         "teleautomation.online/health": '{"status":"ok"}',
         "teleautomation.online/bookings/confirm": "422",
@@ -233,6 +236,7 @@ def test_verify_live_release_checks_process_proxy_apis_and_public_assets(monkeyp
     )
 
     assert problems == []
+    assert ran(client, "sport = :8000"), "the port owner must be checked"
     assert ran(client, "pm2 pid")
     assert ran(client, "nginx -t")
     assert ran(client, "/bookings/confirm")
@@ -273,7 +277,9 @@ def test_verify_live_release_reports_critical_runtime_failures(monkeypatch):
     )
 
     assert any("current resolves" in problem for problem in problems)
-    assert any("PM2" in problem for problem in problems)
+    assert any(
+        "port 8000" in problem or "PM2" in problem for problem in problems
+    ), "a serving process that is absent or not PM2's must be reported"
     assert any("Nginx" in problem for problem in problems)
     assert any("/bookings/confirm" in problem for problem in problems)
     assert any("legacy booking" in problem for problem in problems)
@@ -293,7 +299,8 @@ def test_rollback_repoints_current_to_previous(monkeypatch):
     assert dr.rollback(client, "/opt/telegramforward/releases/prev", "previous-sha") is True
     assert ran(client, "/opt/telegramforward/releases/prev")
     assert ran(client, "mv -Tf")
-    assert ran(client, "pm2 restart")
+    assert ran(client, "pm2 stop"), "the old process must be stopped"
+    assert ran(client, "pm2 start"), "exactly one process is started"
     assert ran(client, "previous-sha")
 
 
