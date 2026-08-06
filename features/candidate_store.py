@@ -6479,10 +6479,21 @@ def correct_proof_amount(
     idx = next((i for i, r in enumerate(rows) if r.get("id") == cid), None)
     if idx is None:
         return None
+    # Uploads that predate typed attachments still sit in the legacy `proofs`
+    # list. `partition_candidate_attachments` surfaces both, so a repair that
+    # only searched `payment_proofs` would silently miss exactly the historical
+    # records most likely to need correcting.
+    field = "payment_proofs"
     proofs = list(rows[idx].get("payment_proofs") or [])
     position = next((i for i, p in enumerate(proofs) if str(p.get("id")) == pid), None)
     if position is None:
-        return None
+        legacy = list(rows[idx].get("proofs") or [])
+        position = next(
+            (i for i, p in enumerate(legacy) if str(p.get("id")) == pid), None
+        )
+        if position is None:
+            return None
+        field, proofs = "proofs", legacy
     proof = dict(proofs[position])
     previous = int(proof.get("verified_amount") or 0)
     if previous == corrected_amount:
@@ -6501,7 +6512,7 @@ def correct_proof_amount(
     proof["verified_amount"] = corrected_amount
     proof["amount_source"] = "literal_text_correction"
     proofs[position] = proof
-    rows[idx]["payment_proofs"] = proofs
+    rows[idx][field] = proofs
     rows[idx]["updated_at"] = _now_iso()
     cdata["candidates"] = rows
     _save(cdata)
