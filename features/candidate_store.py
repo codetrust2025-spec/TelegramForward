@@ -6455,6 +6455,59 @@ def _store_typed_attachment(
     return entry
 
 
+def correct_proof_amount(
+    cid: str,
+    pid: str,
+    *,
+    corrected_amount: int,
+    reason: str,
+    reviewer: str,
+    extractor_version: str = "",
+) -> dict | None:
+    """Replace a proof's extracted amount, keeping the superseded one on record.
+
+    The old reading is appended to the proof rather than overwritten, so the
+    evidence trail shows what was believed, what it became, and why. Re-running
+    with the same amount is a no-op, so a repeated repair cannot inflate a
+    total or stack history entries.
+    """
+    corrected_amount = int(corrected_amount)
+    if corrected_amount <= 0:
+        raise ValueError("A corrected amount must be positive")
+    cdata = _load()
+    rows = cdata.get("candidates") or []
+    idx = next((i for i, r in enumerate(rows) if r.get("id") == cid), None)
+    if idx is None:
+        return None
+    proofs = list(rows[idx].get("payment_proofs") or [])
+    position = next((i for i, p in enumerate(proofs) if str(p.get("id")) == pid), None)
+    if position is None:
+        return None
+    proof = dict(proofs[position])
+    previous = int(proof.get("verified_amount") or 0)
+    if previous == corrected_amount:
+        return dict(proof)
+    history = list(proof.get("amount_corrections") or [])
+    history.append({
+        "corrected_at": _now_iso(),
+        "previous_amount": previous,
+        "new_amount": corrected_amount,
+        "previous_verification_state": proof.get("verification_state"),
+        "reviewer": reviewer,
+        "reason": reason,
+        "extractor_version": extractor_version,
+    })
+    proof["amount_corrections"] = history
+    proof["verified_amount"] = corrected_amount
+    proof["amount_source"] = "literal_text_correction"
+    proofs[position] = proof
+    rows[idx]["payment_proofs"] = proofs
+    rows[idx]["updated_at"] = _now_iso()
+    cdata["candidates"] = rows
+    _save(cdata)
+    return dict(proof)
+
+
 def recalculate_received_total(
     cid: str,
     *,
