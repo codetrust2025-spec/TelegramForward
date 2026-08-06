@@ -308,3 +308,111 @@ def test_two_revisions_of_one_event_in_one_mail_are_refused():
 
 def test_a_single_invite_is_unaffected():
     assert trusted_interview_result(decoded(), attachment()) is not None
+
+
+# --- Production incident 2026-08-06: techcarrot Level 1 Interview -------------
+# The invite reached Gmail 15 seconds after a mailbox poll completed and sat in
+# the ~13.5-minute polling gap. Once ingested the pipeline handled it correctly,
+# so these tests pin the identity and trust properties of this exact invite:
+# it must be trusted, and it must never be confused with the three other
+# Ram Charan events on the same day.
+
+TECHCARROT_UID = (
+    "040000008200E00074C5B7101A82E0080000000010DD077CA325DD01"
+    "00000000000000001000000058588176931EE246A7B2AD9D532635D4"
+)
+CAPGEMINI_ATS_UID = (
+    "CDVCAPGB@50250631444abd548e03c35cff206722@ca467375-9795-49c7-874a-d3950f3fd624"
+)
+CAPGEMINI_RECRUITER_UID = (
+    "040000008200E00074C5B7101A82E0080000000060B80A34D724DD01"
+    "0000000000000000100000000096F06FC596A12409713ABBDB5CE1ADC"
+)
+INFOSHARE_UID = (
+    "040000008200E00074C5B7101A82E008000000004BE66DBCE324DD01"
+    "00000000000000001000000001BC1866C4DAE7F4B913FC5A1928C1AD3"
+)
+
+
+def techcarrot_invite(*, attendee="reddycharanms@gmail.com"):
+    """The 6 Aug 2026 techcarrot invite, 2:00-2:30 PM IST."""
+    return "\r\n".join([
+        "BEGIN:VCALENDAR", "VERSION:2.0", "METHOD:REQUEST", "BEGIN:VEVENT",
+        f"UID:{TECHCARROT_UID}", "SEQUENCE:0", "STATUS:CONFIRMED",
+        "DTSTART;TZID=Asia/Kolkata:20260806T140000",
+        "DTEND;TZID=Asia/Kolkata:20260806T143000",
+        "SUMMARY:Level 1 Interview | Frontend Developer-Hyderabad | Reddy Charan M S",
+        "ORGANIZER;CN=Geeta Bora:mailto:geeta.bora@techcarrot.ae",
+        f"ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=TRUE;CN={attendee}:mailto:{attendee}",
+        "ATTENDEE;ROLE=REQ-PARTICIPANT;CN=Sanu Karimulla Khan:mailto:sanu.khan@techcarrot.ae",
+        "LOCATION:Microsoft Teams Meeting",
+        "DESCRIPTION:Dear Charan\, Greetings from techcarrot.",
+        "END:VEVENT", "END:VCALENDAR", "",
+    ])
+
+
+def techcarrot_decoded(**changes):
+    value = {
+        "sender_name": "Geeta Bora", "sender_email": "geeta.bora@techcarrot.ae",
+        "recipient_email": "reddycharanms@gmail.com",
+        "subject": "Level 1 Interview | Frontend Developer-Hyderabad | Reddy Charan M S",
+        "authentication_results":
+            "dkim=none (message not signed) header.d=none;dmarc=none action=none "
+            "header.from=techcarrot.ae;",
+        "received_spf":
+            "pass (google.com: domain of geeta.bora@techcarrot.ae designates "
+            "2a01:111:f403:c201::3 as permitted sender)",
+    }
+    value.update(changes)
+    return value
+
+
+def test_techcarrot_invite_parses_with_both_attendees():
+    value = parse_calendar(techcarrot_invite())
+    assert value["uid"] == TECHCARROT_UID
+    assert value["method"] == "REQUEST"
+    assert value["sequence"] == 0
+    assert value["organizer"] == "geeta.bora@techcarrot.ae"
+    assert value["attendees"] == [
+        "reddycharanms@gmail.com", "sanu.khan@techcarrot.ae",
+    ]
+    assert value["start"].strftime("%I:%M %p") == "02:00 PM"
+    assert value["end"].strftime("%I:%M %p") == "02:30 PM"
+    assert value["timezone"] == "Asia/Kolkata"
+
+
+def test_techcarrot_invite_is_trusted_on_spf_alone():
+    """DKIM and DMARC are absent on this sender; SPF pass with the sending
+    domain is what carries it, and the candidate is a listed attendee."""
+    result = trusted_interview_result(
+        techcarrot_decoded(),
+        [{"filename": "invite.ics", "mime_type": "text/calendar",
+          "text": techcarrot_invite()}],
+    )
+    assert result is not None
+    assert result["status"] == "INTERVIEW_CONFIRMED"
+    assert result["classification_source"] == "ICALENDAR_VERIFIED"
+    assert result["calendar_validation_status"] == "TRUSTED"
+    assert result["calendar"]["uid"] == TECHCARROT_UID
+    assert result["interview"]["time"] == "02:00 PM"
+    assert result["interview"]["date"] == "2026-08-06"
+
+
+def test_techcarrot_invite_is_not_trusted_when_the_candidate_is_not_an_attendee():
+    result = trusted_interview_result(
+        techcarrot_decoded(),
+        [{"filename": "invite.ics", "mime_type": "text/calendar",
+          "text": techcarrot_invite(attendee="someone.else@example.com")}],
+    )
+    assert result is None
+
+
+def test_techcarrot_event_is_distinct_from_the_other_same_day_interviews():
+    """Four Ram Charan events on 6 Aug 2026 from three companies. Identity is
+    the ICS UID and organizer, never the candidate name."""
+    uid = parse_calendar(techcarrot_invite())["uid"]
+    assert uid == TECHCARROT_UID
+    assert uid not in {CAPGEMINI_ATS_UID, CAPGEMINI_RECRUITER_UID, INFOSHARE_UID}
+    assert len({
+        TECHCARROT_UID, CAPGEMINI_ATS_UID, CAPGEMINI_RECRUITER_UID, INFOSHARE_UID,
+    }) == 4
