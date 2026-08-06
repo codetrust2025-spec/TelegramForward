@@ -50,10 +50,14 @@ IMPORTANT: Today's date is {today}.
 Extract these fields from the payment screenshot:
 
 Schema:
-{{"payment_status": "SUCCESS|FAILED|PENDING|UNKNOWN", "direction": "PAID_TO|RECEIVED_FROM|TRANSFERRED_TO|UNKNOWN", "amount": 0, "visible_amounts": [], "currency": "INR", "sender_name": "", "sender_upi_id": "", "sender_phone_number": "", "sender_account_identifier": "", "receiver_name": "", "receiver_upi_id": "", "receiver_phone_number": "", "receiver_account_identifier": "", "credited_to_identifier": "", "debited_from_identifier": "", "transaction_id": "", "utr": "", "transaction_date": "YYYY-MM-DD", "transaction_time": "hh:mm AM/PM", "provider": "", "confidence": {{"payment_status": 0.0, "direction": 0.0, "amount": 0.0, "receiver_name": 0.0, "receiver_upi_id": 0.0, "receiver_phone_number": 0.0, "transaction_id": 0.0, "utr": 0.0}}, "missing_fields": [], "warnings": [], "is_payment_screenshot": true}}
+{{"payment_status": "SUCCESS|FAILED|PENDING|UNKNOWN", "direction": "PAID_TO|RECEIVED_FROM|TRANSFERRED_TO|UNKNOWN", "amount_text": "", "amount": 0, "visible_amounts": [], "currency": "INR", "sender_name": "", "sender_upi_id": "", "sender_phone_number": "", "sender_account_identifier": "", "receiver_name": "", "receiver_upi_id": "", "receiver_phone_number": "", "receiver_account_identifier": "", "credited_to_identifier": "", "debited_from_identifier": "", "transaction_id": "", "utr": "", "transaction_date": "YYYY-MM-DD", "transaction_time": "hh:mm AM/PM", "provider": "", "confidence": {{"payment_status": 0.0, "direction": 0.0, "amount": 0.0, "receiver_name": 0.0, "receiver_upi_id": 0.0, "receiver_phone_number": 0.0, "transaction_id": 0.0, "utr": 0.0}}, "missing_fields": [], "warnings": [], "is_payment_screenshot": true}}
 
 Rules:
-- "amount" is integer rupees. Example: INR 10,000 is 10000. Preserve every digit and never infer paise.
+- "amount_text" is the primary amount COPIED EXACTLY as printed, including the
+  currency symbol and every comma. Example: "₹30,000". Copy it character for
+  character. Do NOT reformat it, round it, or convert it to another unit.
+- "amount" is the same figure as integer rupees. Example: ₹30,000 is 30000.
+  Preserve every digit. Never convert to paise and never do arithmetic on it.
 - "visible_amounts" lists every payment-like rupee amount visible in the receipt.
 - "payment_status" is SUCCESS, PENDING, FAILED, or UNKNOWN.
 - "direction" is critical. A person under "Received from" is the sender, not the receiver.
