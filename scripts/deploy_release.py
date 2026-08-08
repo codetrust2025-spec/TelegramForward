@@ -554,12 +554,36 @@ def reload_app(client) -> None:
     ssh(client, "sleep 8", check=False)
 
 
+def wait_until_settled(client, *, attempts: int = 12, pause: int = 5) -> str:
+    """Give the new process time to bind and PM2 time to notice it.
+
+    Probing the instant a start command returns reads a half-finished handover:
+    the port may be unbound for a moment, or PM2 may still report the previous
+    pid. That produced a rollback of a release that was in fact healthy, so the
+    verification now waits for a steady state before judging one. It waits for
+    agreement rather than a fixed sleep, so a fast start is not punished with a
+    delay and a slow one is not failed early.
+    """
+    owner = ""
+    for attempt in range(attempts):
+        owner = port_owner(client)
+        if owner and pm2_pid(client) == owner:
+            if attempt:
+                log(f"serving process settled after {attempt * pause}s")
+            return owner
+        ssh(client, f"sleep {pause}", check=False)
+    return owner
+
+
 def verify_serving_process(client, release: str) -> list[str]:
     """The serving process — not PM2's bookkeeping — must match the release."""
     problems: list[str] = []
-    owner = port_owner(client)
+    owner = wait_until_settled(client)
     if not owner:
-        return [f"nothing is listening on port {APP_PORT}"]
+        return [
+            f"nothing is listening on port {APP_PORT} after waiting for the "
+            "process to settle"
+        ]
 
     managed = pm2_pid(client)
     if managed and managed != owner:
