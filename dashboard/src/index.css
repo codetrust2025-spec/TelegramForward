@@ -18130,3 +18130,111 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
     gap: 0.72rem;
   }
 }
+
+/* ── Payment Reconciliation & BGV Consultancy ─────────────────────────────
+   Both pages carry a lot of numbers, so the layout stays quiet: one accent,
+   three status tones, and figures right-aligned so columns compare by eye. */
+.recon-page, .bgv-page { padding: 20px; max-width: 1500px; margin: 0 auto; }
+.recon-page--empty, .bgv-page--empty { display: flex; flex-direction: column;
+  align-items: center; gap: 12px; padding: 60px 20px; color: #94a3b8; }
+.recon-head, .bgv-head { display: flex; flex-wrap: wrap; gap: 12px;
+  align-items: flex-start; justify-content: space-between; margin-bottom: 18px; }
+.recon-title, .bgv-title { margin: 0; font-size: 20px; color: #e0e7ff; }
+.recon-sub, .bgv-sub { margin: 4px 0 0; font-size: 13px; color: #94a3b8;
+  max-width: 62ch; line-height: 1.5; }
+.recon-head-actions, .bgv-head-actions { display: flex; gap: 8px; }
+.recon-btn, .bgv-btn { padding: 7px 12px; border-radius: 8px; font-size: 13px;
+  color: #e0e7ff; background: rgba(99,102,241,.16);
+  border: 1px solid rgba(99,102,241,.32); cursor: pointer; text-decoration: none; }
+.recon-btn:hover, .bgv-btn:hover { background: rgba(99,102,241,.26); }
+.recon-btn--ghost, .bgv-btn--ghost { background: transparent; }
+.bgv-btn--xs { padding: 4px 9px; font-size: 12px; }
+
+.recon-cards, .bgv-cards { display: grid; gap: 10px; margin-bottom: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.recon-card, .bgv-card { display: flex; flex-direction: column; gap: 2px;
+  padding: 12px; border-radius: 10px; text-align: left;
+  background: rgba(148,163,184,.07); border: 1px solid rgba(148,163,184,.16);
+  cursor: pointer; }
+.recon-card:disabled { cursor: default; }
+.recon-card--on { background: rgba(99,102,241,.18);
+  border-color: rgba(99,102,241,.44); }
+.recon-card-value, .bgv-card-value { font-size: 19px; font-weight: 700;
+  color: #e0e7ff; }
+.recon-card-label, .bgv-card-label { font-size: 12px; color: #94a3b8; }
+
+.recon-toolbar, .bgv-toolbar { display: flex; flex-wrap: wrap; gap: 10px;
+  align-items: center; margin-bottom: 12px; }
+.recon-search, .bgv-search { flex: 1 1 260px; padding: 8px 11px;
+  border-radius: 8px; font-size: 13px; color: #e0e7ff;
+  background: rgba(15,23,42,.6); border: 1px solid rgba(148,163,184,.22); }
+.recon-count, .bgv-count { font-size: 12px; color: #94a3b8; }
+
+.recon-table-wrap, .bgv-table-wrap { overflow-x: auto; border-radius: 10px;
+  border: 1px solid rgba(148,163,184,.16); }
+.recon-table, .bgv-table { width: 100%; border-collapse: collapse;
+  font-size: 13px; min-width: 900px; }
+.recon-table th, .bgv-table th { text-align: left; padding: 10px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: #94a3b8; background: rgba(15,23,42,.5); white-space: nowrap; }
+.recon-table td, .bgv-table td { padding: 10px; color: #cbd5e1;
+  border-top: 1px solid rgba(148,163,184,.10); vertical-align: top; }
+.recon-table td:nth-child(n+2):nth-child(-n+8),
+.bgv-table td:nth-child(n+3):nth-child(-n+7) { text-align: right;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.recon-name { display: block; color: #e0e7ff; font-weight: 600; }
+.recon-note { font-size: 11px; color: #a5b4fc; }
+.recon-evidence { font-size: 11px; }
+.recon-action { color: #94a3b8; font-size: 12px; line-height: 1.45;
+  min-width: 260px; }
+.recon-empty, .bgv-muted { padding: 18px; color: #94a3b8; font-size: 13px; }
+.recon-error, .bgv-error { color: #fca5a5; font-size: 13px; }
+
+.recon-tag, .bgv-tag { display: inline-block; padding: 3px 8px;
+  border-radius: 999px; font-size: 11px; white-space: nowrap; }
+.recon-tag--ok, .bgv-tag--ok { color: #6ee7b7;
+  background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.3); }
+.recon-tag--warn, .bgv-tag--warn { color: #fde68a;
+  background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.3); }
+.recon-tag--bad, .bgv-tag--bad { color: #fca5a5;
+  background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.3); }
+.bgv-tag--muted { color: #94a3b8; background: rgba(148,163,184,.12);
+  border: 1px solid rgba(148,163,184,.28); }
+
+.bgv-detail { display: flex; flex-direction: column; gap: 16px; }
+.bgv-detail-head { display: flex; flex-wrap: wrap; gap: 10px;
+  align-items: flex-start; justify-content: space-between; }
+.bgv-detail-name { margin: 0; font-size: 18px; color: #e0e7ff; }
+.bgv-balances { display: grid; gap: 8px 18px; margin: 0;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  padding: 14px; border-radius: 10px; background: rgba(148,163,184,.07);
+  border: 1px solid rgba(148,163,184,.16); }
+.bgv-balances div { display: flex; flex-direction: column; }
+.bgv-balances dt { font-size: 11px; color: #94a3b8; }
+.bgv-balances dd { margin: 0; font-size: 15px; color: #e0e7ff;
+  font-variant-numeric: tabular-nums; }
+.bgv-warn { padding: 10px 12px; border-radius: 8px; font-size: 13px;
+  color: #fde68a; background: rgba(245,158,11,.10);
+  border: 1px solid rgba(245,158,11,.30); }
+.bgv-section h4 { margin: 0 0 8px; font-size: 13px; color: #a5b4fc; }
+.bgv-rows, .bgv-audit { list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 8px; }
+.bgv-audit { padding-left: 16px; list-style: decimal; }
+.bgv-rows li, .bgv-audit li { display: flex; flex-wrap: wrap; gap: 10px;
+  align-items: baseline; font-size: 13px; color: #cbd5e1;
+  padding: 8px 10px; border-radius: 8px; background: rgba(148,163,184,.06); }
+.bgv-row-amount { color: #e0e7ff; font-weight: 600;
+  font-variant-numeric: tabular-nums; }
+.bgv-row-ref { font-size: 12px; color: #a5b4fc; }
+.bgv-row-when, .bgv-audit-when { font-size: 12px; color: #94a3b8; }
+.bgv-row-note { flex: 1 1 100%; font-size: 12px; color: #94a3b8;
+  line-height: 1.45; }
+.bgv-audit-action { font-size: 11px; text-transform: uppercase;
+  letter-spacing: .04em; color: #a5b4fc; }
+.bgv-ok { font-size: 11px; color: #6ee7b7; }
+.bgv-pending { font-size: 11px; color: #fde68a; }
+
+@media (max-width: 720px) {
+  .recon-page, .bgv-page { padding: 12px; }
+  .recon-action { min-width: 180px; }
+}
