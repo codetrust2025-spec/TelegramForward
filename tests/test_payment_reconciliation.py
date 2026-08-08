@@ -111,7 +111,7 @@ def test_excess_beyond_both_obligations_requires_review(env):
     assert record["auto_correctable"] is False
 
 
-def test_an_admin_voided_payment_is_labelled_and_excluded(env):
+def test_an_admin_voided_payment_is_noted_not_used_as_the_label(env):
     cid = add("Voided", "9000000109", payment=30000)
     pve._save_ledger({
         "schema_version": 2, "evidence": [], "entitlements": [], "entries": [],
@@ -121,8 +121,12 @@ def test_an_admin_voided_payment_is_labelled_and_excluded(env):
                       "admin_disposition": "ADMIN_CONFIRMED_NOT_PAID"}],
     })
     record = find(recon.profile_rows(), "Voided")
-    assert record["classification"] == recon.ADMIN_CONFIRMED_NOT_PAID
+    # The void is history, not the profile's current position: this row's money
+    # predates proof capture, and that is what the classification must say.
+    assert record["classification"] == recon.LEGACY_INCOMPLETE_COVERAGE
+    assert record["has_historical_void"] is True
     assert record["admin_voided_payments"] == 1
+    assert any("ADMIN_CONFIRMED_NOT_PAID" in note for note in record["notes"])
     assert record["auto_correctable"] is False
 
 
@@ -179,3 +183,60 @@ def test_csv_export_carries_the_decision_columns(env):
                    "service_allocation", "bgv_allocation", "recommended_action"):
         assert column in header
     assert "Exact" in csv_text
+
+
+def test_a_historical_void_does_not_replace_a_matching_profile(env):
+    """Someone confirming months ago that a payment never happened says nothing
+    about whether the profile balances today."""
+    cid = add("Voided But Balanced", "9000000116", payment=20000,
+              proofs=[proof(20000, pid="p1", utr="U1")])
+    pve._save_ledger({
+        "schema_version": 2, "evidence": [], "entitlements": [], "entries": [],
+        "payments": [{"payment_id": "pay_v", "transaction_reference": "U404",
+                      "amount_minor": 200000, "candidate_id": cid,
+                      "verification_state": "REJECTED",
+                      "admin_disposition": "ADMIN_CONFIRMED_NOT_PAID"}],
+    })
+    record = find(recon.profile_rows(), "Voided But Balanced")
+    assert record["classification"] == recon.EXACT_MATCH
+    assert record["has_historical_void"] is True
+    assert any("ADMIN_CONFIRMED_NOT_PAID" in note for note in record["notes"])
+
+
+def test_a_historical_void_still_blocks_automatic_correction(env):
+    cid = add("Voided And Short", "9000000117", payment=5000, expected=5000,
+              proofs=[proof(6000, pid="p1", utr="U1")])
+    pve._save_ledger({
+        "schema_version": 2, "evidence": [], "entitlements": [], "entries": [],
+        "payments": [{"payment_id": "pay_v", "transaction_reference": "U404",
+                      "amount_minor": 100000, "candidate_id": cid,
+                      "verification_state": "REJECTED",
+                      "admin_disposition": "ADMIN_CONFIRMED_NOT_PAID"}],
+    })
+    record = find(recon.profile_rows(), "Voided And Short")
+    assert record["classification"] == recon.SAFE_AUTOMATIC_CORRECTION
+    assert record["auto_correctable"] is False, "a person still looks at this one"
+
+
+def test_a_live_mismatch_is_not_hidden_behind_a_historical_void(env):
+    cid = add("Voided And Mismatched", "9000000118", payment=20000,
+              proofs=[proof(2000, pid="p1", utr="U1")])
+    pve._save_ledger({
+        "schema_version": 2, "evidence": [], "entitlements": [], "entries": [],
+        "payments": [{"payment_id": "pay_v", "transaction_reference": "U404",
+                      "amount_minor": 100000, "candidate_id": cid,
+                      "verification_state": "REJECTED",
+                      "admin_disposition": "ADMIN_CONFIRMED_NOT_PAID"}],
+    })
+    record = find(recon.profile_rows(), "Voided And Mismatched")
+    assert record["classification"] == recon.GENUINE_MISMATCH
+    assert record["has_historical_void"] is True
+
+
+def test_notes_surface_duplicates_and_pending_review(env):
+    add("Noted", "9000000119", payment=20000, proofs=[
+        proof(20000, pid="p1", utr="U9"), proof(20000, pid="p2", utr="U9"),
+        proof(5000, pid="p3", utr="U8", state="PENDING_MANUAL_REVIEW")])
+    record = find(recon.profile_rows(), "Noted")
+    assert any("more than once" in note for note in record["notes"])
+    assert any("awaiting review" in note for note in record["notes"])
