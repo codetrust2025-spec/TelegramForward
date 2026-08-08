@@ -74,9 +74,10 @@ def test_serving_from_the_wrong_release_is_a_failure(patch_ssh):
 
 def test_nothing_listening_is_a_failure(patch_ssh):
     patch_ssh(FakeSSH(port_owner=""))
-    assert deploy.verify_serving_process(None, RELEASE) == [
-        "nothing is listening on port 8000"
-    ]
+    problems = deploy.verify_serving_process(None, RELEASE)
+    # The wait is exhausted first, so the message says so.
+    assert len(problems) == 1
+    assert "nothing is listening on port 8000" in problems[0]
 
 
 def test_a_changing_pid_is_detected_as_a_respawn_loop(patch_ssh):
@@ -102,3 +103,58 @@ def test_reload_refuses_to_start_while_the_port_is_still_held(patch_ssh):
     patch_ssh(FakeSSH(port_owner="256707"))
     with pytest.raises(SystemExit, match="still held"):
         deploy.reload_app(None)
+
+
+class SettlingSSH(FakeSSH):
+    """A start that takes a few seconds to bind and be noticed by PM2."""
+
+    def __init__(self, *, settle_after=2, **kwargs):
+        super().__init__(**kwargs)
+        self.settle_after = settle_after
+        self.probes = 0
+        self.sleeps = 0
+
+    def __call__(self, _client, command, check=True):
+        if "sport = :8000" in command:
+            self.probes += 1
+            return "" if self.probes <= self.settle_after else self.port_owner
+        if command.startswith("sleep "):
+            self.sleeps += 1
+            return ""
+        return super().__call__(_client, command, check)
+
+
+def test_verification_waits_for_the_process_to_settle(patch_ssh):
+    """A release that binds a moment later must not be rolled back."""
+    fake = patch_ssh(SettlingSSH(port_owner="600", pm2="600", cwd=RELEASE,
+                                 procs="2", settle_after=2))
+    assert deploy.verify_serving_process(None, RELEASE) == []
+    assert fake.sleeps > 0, "it should have waited rather than failed immediately"
+
+
+def test_a_fast_start_is_not_delayed(patch_ssh):
+    fake = patch_ssh(SettlingSSH(port_owner="600", pm2="600", cwd=RELEASE,
+                                 procs="2", settle_after=0))
+    owner = deploy.wait_until_settled(None)
+    assert owner == "600"
+    assert fake.sleeps == 0, "no waiting when it is already steady"
+
+
+def test_a_process_that_never_binds_still_fails(patch_ssh):
+    patch_ssh(SettlingSSH(port_owner="600", pm2="600", cwd=RELEASE,
+                          settle_after=999))
+    problems = deploy.verify_serving_process(None, RELEASE)
+    assert any("nothing is listening" in p for p in problems)
+    assert any("settle" in p for p in problems)
+
+
+def test_settling_waits_for_pm2_to_agree_with_the_port(patch_ssh):
+    """Binding alone is not enough — PM2 must be reporting the same pid."""
+    fake = patch_ssh(FakeSSH(port_owner="600", pm2="599", cwd=RELEASE))
+    owner = deploy.wait_until_settled(None, attempts=3, pause=1)
+    assert owner == "600"
+    assert fake.killed == []
+    problems = deploy.verify_serving_process(None, RELEASE)
+    assert any("owns port 8000" in p for p in problems), (
+        "a lasting disagreement is still reported"
+    )
