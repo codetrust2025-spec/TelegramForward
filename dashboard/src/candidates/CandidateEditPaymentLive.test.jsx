@@ -582,3 +582,58 @@ describe("broken payment evidence actions", () => {
     expect(container).toBeTruthy();
   });
 });
+
+
+describe("BGV summary on the candidate screen", () => {
+  function renderBgv(extra) {
+    return render(
+      <ConfirmProvider>
+        <CandidateEditModal
+          initial={{
+            ...CANDIDATE,
+            name: "sakthivek",
+            service_type: "profile_service",
+            expected_payment: 50000,
+            payment: 30000,
+            payment_is_proof_derived: true,
+            referral_commission: 10000,
+            service_expected: 20000,
+            service_received: 20000,
+            bgv_expected: 30000,
+            bgv_received: 10000,
+            bgv_outstanding: 20000,
+            ...extra,
+          }}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          isAdmin={true}
+        />
+      </ConfirmProvider>,
+    );
+  }
+
+  it("states what was collected, what is owed, and that it is separate", () => {
+    renderBgv();
+    const panel = document.querySelector(".cand-bgv-summary");
+    expect(panel).toBeTruthy();
+    expect(panel.textContent).toContain("₹10,000 collected of ₹30,000");
+    expect(panel.textContent).toContain("managed separately");
+  });
+
+  it("links through to the BGV case", () => {
+    renderBgv();
+    const link = document.querySelector(".cand-bgv-summary-link");
+    expect(link.getAttribute("href")).toContain("/bgv?candidate=sakthivek");
+  });
+
+  it("shows nothing for a candidate without BGV", () => {
+    renderBgv({ bgv_expected: 0, bgv_received: 0 });
+    expect(document.querySelector(".cand-bgv-summary")).toBeNull();
+  });
+
+  it("keeps the referral at the service share, not the whole payment", () => {
+    renderBgv();
+    expect(referralLabel()).toContain("₹10,000");
+    expect(referralLabel()).not.toContain("₹15,000");
+  });
+});

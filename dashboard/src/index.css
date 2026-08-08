@@ -11651,6 +11651,27 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
 .cand-evidence-when { color: #94a3b8; font-size: 11px; }
 .cand-evidence-reason { color: #cbd5e1; font-size: 11px; line-height: 1.4; }
 
+/* BGV money is the company's to pass on, not to keep - say so plainly. */
+.cand-bgv-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(56, 189, 248, .08);
+  border: 1px solid rgba(56, 189, 248, .24);
+}
+.cand-bgv-summary-text { font-size: 12px; color: #bae6fd; }
+.cand-bgv-summary-link {
+  font-size: 12px;
+  color: #7dd3fc;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.cand-bgv-summary-link:hover { text-decoration: underline; }
+
 .cand-pay-handler-share {
   display: inline-flex;
   flex-wrap: wrap;

@@ -2080,6 +2080,12 @@ function K8(e) {
     payment_needs_reconciliation: !!e.payment_needs_reconciliation,
     payment_reconciliation_gap: e.payment_reconciliation_gap,
     referral_commission: e.referral_commission,
+    service_expected: e.service_expected,
+    service_received: e.service_received,
+    service_outstanding: e.service_outstanding,
+    bgv_expected: e.bgv_expected,
+    bgv_received: e.bgv_received,
+    bgv_outstanding: e.bgv_outstanding,
     referral_percentage: e.referral_percentage,
     referral_basis: e.referral_basis,
     referrer_complimentary_amount: e.referrer_complimentary_amount,
@@ -2863,6 +2869,20 @@ export function CandidateEditModal({
                 <span className="cand-receipt-line">
                   Verified proofs <strong>{l.verified_proof_count ?? 0}</strong>
                 </span>
+              </div>
+            )}
+            {(l.bgv_expected ?? 0) > 0 && (
+              <div className="cand-field cand-bgv-summary">
+                <span className="cand-bgv-summary-text">
+                  BGV Consultancy: {$n(l.bgv_received ?? 0)} collected of{" "}
+                  {$n(l.bgv_expected)} — managed separately
+                </span>
+                <a
+                  className="cand-bgv-summary-link"
+                  href={`/bgv?candidate=${encodeURIComponent(l.name || "")}`}
+                >
+                  Open BGV case →
+                </a>
               </div>
             )}
             {l.payment_needs_reconciliation && (
