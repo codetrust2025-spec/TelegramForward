@@ -42,11 +42,13 @@ def _profile_key(row: dict[str, Any]) -> tuple[str, str]:
 
 def _classify(*, recorded, proof_total, adjudicated, unique, allocation,
               statuses, admin_voided, duplicates) -> tuple[str, str]:
-    """One label per profile, most specific first."""
-    if admin_voided:
-        return (ADMIN_CONFIRMED_NOT_PAID,
-                "A payment on this profile was confirmed by an administrator as "
-                "never made; it is excluded from totals.")
+    """One label per profile, describing where its money stands today.
+
+    A historical void is deliberately not considered here. Someone confirming
+    months ago that a payment never happened says nothing about whether the
+    profile balances now, and letting that fact win would hide a live mismatch
+    behind a settled one. It travels as a note instead — see `_notes`.
+    """
     if duplicates:
         return (DUPLICATE_TRANSACTION,
                 f"{duplicates} duplicate transaction reference(s) present; only "
@@ -75,6 +77,25 @@ def _classify(*, recorded, proof_total, adjudicated, unique, allocation,
             f"Verified evidence accounts for only ₹{proof_total:,} of the "
             f"₹{recorded:,} recorded. Do not reduce without confirming the "
             "shortfall is real rather than uncaptured evidence.")
+
+
+def _notes(*, admin_voided: int, duplicates: int, statuses: dict) -> list[str]:
+    """Facts worth surfacing that must not displace the primary classification."""
+    notes: list[str] = []
+    if admin_voided:
+        notes.append(
+            f"Contains {admin_voided} historical ADMIN_CONFIRMED_NOT_PAID "
+            "transaction(s), preserved and excluded from totals."
+        )
+    if duplicates:
+        notes.append(
+            f"{duplicates} transaction reference(s) appear more than once; "
+            "counted as one credit."
+        )
+    review = statuses.get(payment_receipts.PROOF_STATUS_NEEDS_REVIEW) or 0
+    if review:
+        notes.append(f"{review} proof(s) awaiting review.")
+    return notes
 
 
 def profile_rows() -> list[dict[str, Any]]:
@@ -162,8 +183,15 @@ def profile_rows() -> list[dict[str, Any]]:
             "admin_voided_payments": admin_voided,
             "proof_controlled": bool(representative.get("payment_proof_controlled")),
             "classification": classification,
+            "notes": _notes(admin_voided=admin_voided, duplicates=duplicates,
+                            statuses=statuses),
+            "has_historical_void": bool(admin_voided),
             "recommended_action": recommendation,
-            "auto_correctable": classification in AUTO_CORRECTABLE,
+            # A profile carrying an unresolved historical void still needs a
+            # person to look at it, even when today's totals balance.
+            "auto_correctable": (
+                classification in AUTO_CORRECTABLE and not admin_voided
+            ),
         })
     records.sort(key=lambda r: (r["classification"], -abs(r["difference"])))
     return records
