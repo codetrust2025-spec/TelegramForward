@@ -72,6 +72,8 @@ import { AdminPanel } from './components/AdminPanel.jsx'
 import { KnowledgeAssistantPanel } from './components/KnowledgeAssistantPanel.jsx'
 import { RecruitmentMailPanel } from './components/RecruitmentMailPanel.jsx'
 import { OutcomeAuditPanel } from './components/OutcomeAuditPanel.jsx'
+import PaymentReconciliationPanel from './components/PaymentReconciliationPanel.jsx'
+import BgvRegisterPanel from './components/BgvRegisterPanel.jsx'
 import { MailMonitoringNotifications } from './components/MailMonitoringNotifications.jsx'
 import {
   playNewMessageSound,
@@ -2210,6 +2212,10 @@ export default function App() {
         <RecruitmentMailPanel />
       ) : mainView === 'outcome-audit' ? (
         <OutcomeAuditPanel />
+      ) : mainView === 'payment-reconciliation' ? (
+        <PaymentReconciliationPanel />
+      ) : mainView === 'bgv-register' ? (
+        <BgvRegisterPanel />
       ) : mainView === 'mail-notifications' ? (
         <MailMonitoringNotifications />
       ) : mainView === 'data-room' ? (

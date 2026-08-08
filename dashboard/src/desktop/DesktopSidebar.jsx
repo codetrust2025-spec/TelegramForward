@@ -7,6 +7,8 @@ const NAV = [
   { id: "ai-recruitment", label: "AI Mail Review", icon: "AI" },
   { id: "outcome-audit", label: "Mail Audit", icon: "🔍" },
   { id: "mail-notifications", label: "Mail alerts", icon: "🔔" },
+  { id: "payment-reconciliation", label: "Reconciliation", icon: "⚖" },
+  { id: "bgv-register", label: "BGV Consultancy", icon: "🛡" },
   { id: "dashboard", label: "Dashboard", icon: "▣" },
   { id: "accounts", label: "Accounts", icon: "👤" },
   { id: "forwarding", label: "Forwarding", icon: "↻" },

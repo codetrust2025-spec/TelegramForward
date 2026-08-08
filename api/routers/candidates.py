@@ -1232,3 +1232,25 @@ async def bgv_set_status(case_id: str, body: dict, request: Request):
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
     return {"status": "ok", "case": case}
+
+
+# ── Payment reconciliation ──────────────────────────────────────────────────
+
+@router.get("/payments/reconciliation")
+async def payments_reconciliation(request: Request):
+    """Read-only preview. Applying a correction is a separate, explicit act."""
+    from features import payment_reconciliation
+
+    return {"status": "ok", **await asyncio.to_thread(payment_reconciliation.preview)}
+
+
+@router.get("/payments/reconciliation.csv")
+async def payments_reconciliation_csv(request: Request):
+    from features import payment_reconciliation
+
+    records = await asyncio.to_thread(payment_reconciliation.profile_rows)
+    return Response(
+        content="\ufeff" + payment_reconciliation.csv_rows(records),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="payment_reconciliation.csv"'},
+    )
