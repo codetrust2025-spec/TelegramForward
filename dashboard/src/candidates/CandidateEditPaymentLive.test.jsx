@@ -472,3 +472,113 @@ describe("referral earning label", () => {
     expect(referralLabel()).not.toContain("₹8,000");
   });
 });
+
+
+describe("broken payment evidence actions", () => {
+  function brokenProof(state = "MISSING_FILE") {
+    return {
+      id: "proof-broken",
+      attachment_type: "payment_proof",
+      original_name: "lost.jpg",
+      url: "/candidates/cand-alluraiah/proofs/proof-broken",
+      verification_state: "VERIFIED_COMPANY_PAYMENT",
+      file_availability: state,
+      uploaded_at: "2026-06-22T14:36:30+00:00",
+      size: 1024,
+    };
+  }
+
+  function renderWithProof(proof) {
+    return render(
+      <ConfirmProvider>
+        <CandidateEditModal
+          initial={{ ...CANDIDATE, payment: 30000, payment_proofs: [proof] }}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          isAdmin={true}
+        />
+      </ConfirmProvider>,
+    );
+  }
+
+  it("offers re-upload, archive and history when the file is unavailable", () => {
+    renderWithProof(brokenProof());
+    expect(screen.getByText("Original file unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Re-upload proof" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Archive reference" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Evidence history" })).toBeInTheDocument();
+  });
+
+  it("names the specific problem for a damaged file", () => {
+    renderWithProof(brokenProof("CHECKSUM_MISMATCH"));
+    expect(
+      screen.getByText("Stored file does not match its checksum"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows no problem banner for readable evidence", () => {
+    renderWithProof(brokenProof("AVAILABLE"));
+    expect(screen.queryByRole("button", { name: "Re-upload proof" })).toBeNull();
+  });
+
+  it("treats an archived reference as settled, not broken", () => {
+    renderWithProof(brokenProof("ARCHIVED"));
+    expect(screen.queryByRole("button", { name: "Archive reference" })).toBeNull();
+  });
+
+  it("loads and renders the evidence history timeline", async () => {
+    globalThis.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: "ok",
+        history: {
+          proof_id: "proof-broken",
+          stored_in: "payment_proofs",
+          checksum: "abc123",
+          verified_amount: 30000,
+          counts_towards_total: 0,
+          verification_state: "VERIFIED_COMPANY_PAYMENT",
+          file_availability: "MISSING_FILE",
+          utr_number: "250859628039",
+          transaction_id: "T2606221827542453052641",
+          events: [
+            { kind: "uploaded", at: "2026-06-22T14:36:30+00:00",
+              summary: "Proof uploaded" },
+            { kind: "verification_changed", at: "2026-08-06T12:00:00+00:00",
+              summary: "VERIFIED_COMPANY_PAYMENT → AMOUNT_EXTRACTION_REVIEW_REQUIRED",
+              actor: "administrator", reason: "factor-of-ten defect" },
+          ],
+        },
+      }),
+    });
+    renderWithProof(brokenProof());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Evidence history" }));
+    });
+    await waitFor(() =>
+      expect(document.querySelector(".cand-evidence-history")).toBeTruthy(),
+    );
+    expect(screen.getByText("250859628039")).toBeInTheDocument();
+    expect(screen.getByText("Proof uploaded")).toBeInTheDocument();
+    expect(screen.getByText("factor-of-ten defect")).toBeInTheDocument();
+    expect(screen.getByText("MISSING_FILE")).toBeInTheDocument();
+  });
+
+  it("applies the refreshed summary after archiving", async () => {
+    globalThis.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: "ok",
+        candidate: { ...CANDIDATE, payment: 30000, payment_proofs: [] },
+        payment_summary: summary({ received: 30000, above: 25000 }),
+        financially_unchanged: true,
+      }),
+    });
+    const { container } = renderWithProof(brokenProof());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Archive reference" }));
+    });
+    await waitFor(() => expect(receivedInput()).toHaveValue(30000));
+    expect(container).toBeTruthy();
+  });
+});

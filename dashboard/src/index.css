@@ -11591,6 +11591,66 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   cursor: not-allowed;
 }
 
+/* Broken payment evidence: the problem, then what can be done about it. */
+.cand-proof-broken {
+  margin-top: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, .10);
+  border: 1px solid rgba(245, 158, 11, .30);
+}
+.cand-proof-broken-label {
+  display: block;
+  font-size: 11px;
+  color: #fde68a;
+  margin-bottom: 6px;
+}
+.cand-proof-broken-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.cand-evidence-history {
+  margin: 10px 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(99, 102, 241, .08);
+  border: 1px solid rgba(99, 102, 241, .22);
+}
+.cand-evidence-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: #e0e7ff;
+}
+.cand-evidence-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px 14px;
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+.cand-evidence-facts div { display: flex; flex-direction: column; }
+.cand-evidence-facts dt { color: #a5b4fc; font-size: 11px; }
+.cand-evidence-facts dd { margin: 0; color: #e0e7ff; }
+.cand-evidence-checksum { word-break: break-all; font-size: 10px; }
+.cand-evidence-events {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+.cand-evidence-events li { display: flex; flex-direction: column; gap: 1px; }
+.cand-evidence-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: #a5b4fc;
+}
+.cand-evidence-summary { color: #e0e7ff; }
+.cand-evidence-when { color: #94a3b8; font-size: 11px; }
+.cand-evidence-reason { color: #cbd5e1; font-size: 11px; line-height: 1.4; }
+
 .cand-pay-handler-share {
   display: inline-flex;
   flex-wrap: wrap;

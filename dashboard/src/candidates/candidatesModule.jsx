@@ -92,6 +92,22 @@ function createProofUploadJob(file) {
     proof: null,
   };
 }
+// Evidence the server can no longer re-read. ARCHIVED is excluded: that is a
+// deliberate retirement, not a problem waiting to be fixed.
+const BROKEN_EVIDENCE_STATES = {
+  MISSING_FILE: "Original file unavailable",
+  CHECKSUM_MISMATCH: "Stored file does not match its checksum",
+  UNREADABLE: "Stored file could not be read",
+};
+
+function isEvidenceBroken(proof) {
+  return Boolean(BROKEN_EVIDENCE_STATES[proof?.file_availability]);
+}
+
+function evidenceProblem(proof) {
+  return BROKEN_EVIDENCE_STATES[proof?.file_availability] || "";
+}
+
 export function PaymentProofUploader({
   candidateId: e,
   proofs: t = [],
@@ -461,6 +477,109 @@ export function PaymentProofUploader({
       l(O.message || "Network error");
     }
   }
+  const [evidenceHistory, setEvidenceHistory] = w.useState(null);
+  const replaceInputRef = w.useRef(null);
+  const [replaceTarget, setReplaceTarget] = w.useState(null);
+
+  function replaceProof(proof) {
+    setReplaceTarget(proof);
+    replaceInputRef.current?.click();
+  }
+
+  async function submitReplacement(fileList) {
+    const file = fileList && fileList[0];
+    const proof = replaceTarget;
+    setReplaceTarget(null);
+    if (replaceInputRef.current) replaceInputRef.current.value = "";
+    if (!file || !proof || !e) return;
+    a(true);
+    l("");
+    try {
+      const ownerId = proofCandidateId(proof, e);
+      const body = new FormData();
+      body.append("file", file);
+      body.append(
+        "reason",
+        "Administrator re-uploaded the original payment screenshot.",
+      );
+      const res = await fetch(
+        `${ve}/candidates/${ownerId}/proofs/${proof.id}/replace`,
+        { method: "POST", body, credentials: "include" },
+      );
+      const payload = await res.json();
+      if (payload.status !== "ok") {
+        l(payload.message || "Replacement failed");
+        return;
+      }
+      if (r != null) {
+        r(
+          normalizePaymentProofs(payload.candidate),
+          payload.candidate,
+          payload.payment_summary,
+        );
+      }
+    } catch (err) {
+      l(err.message || "Network error");
+    } finally {
+      a(false);
+    }
+  }
+
+  async function archiveProof(proof) {
+    if (!e) return;
+    a(true);
+    l("");
+    try {
+      const ownerId = proofCandidateId(proof, e);
+      const res = await fetch(
+        `${ve}/candidates/${ownerId}/proofs/${proof.id}/archive`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            reason: "Original evidence is unavailable and is not being retrieved.",
+          }),
+        },
+      );
+      const payload = await res.json();
+      if (payload.status !== "ok") {
+        l(payload.message || "Archive failed");
+        return;
+      }
+      if (r != null) {
+        r(
+          normalizePaymentProofs(payload.candidate),
+          payload.candidate,
+          payload.payment_summary,
+        );
+      }
+    } catch (err) {
+      l(err.message || "Network error");
+    } finally {
+      a(false);
+    }
+  }
+
+  async function openHistory(proof) {
+    if (!e) return;
+    try {
+      const ownerId = proofCandidateId(proof, e);
+      const res = await fetch(
+        `${ve}/candidates/${ownerId}/proofs/${proof.id}/history`,
+        { credentials: "include" },
+      );
+      const payload = await res.json();
+      if (payload.status === "ok") {
+        setEvidenceHistory(payload.history);
+      } else {
+        l(payload.message || "Could not load evidence history");
+      }
+    } catch (err) {
+      l(err.message || "Network error");
+    }
+  }
+
   async function E(b) {
     if (e) {
       try {
@@ -768,6 +887,78 @@ export function PaymentProofUploader({
           </div>
         </div>
       )}
+      <input
+        ref={replaceInputRef}
+        type="file"
+        accept="image/*,application/pdf"
+        hidden={true}
+        onChange={(ev) => submitReplacement(ev.target.files)}
+      />
+      {evidenceHistory && (
+        <div className="cand-evidence-history">
+          <div className="cand-evidence-history-head">
+            <strong>Evidence history</strong>
+            <button
+              type="button"
+              className="cand-btn cand-btn--xs cand-btn--ghost"
+              onClick={() => setEvidenceHistory(null)}
+            >
+              Close
+            </button>
+          </div>
+          <dl className="cand-evidence-facts">
+            <div>
+              <dt>Amount</dt>
+              <dd>{$n(evidenceHistory.verified_amount)}</dd>
+            </div>
+            <div>
+              <dt>Counts towards total</dt>
+              <dd>{$n(evidenceHistory.counts_towards_total)}</dd>
+            </div>
+            <div>
+              <dt>Verification</dt>
+              <dd>{evidenceHistory.verification_state || "—"}</dd>
+            </div>
+            <div>
+              <dt>File</dt>
+              <dd>{evidenceHistory.file_availability}</dd>
+            </div>
+            <div>
+              <dt>UTR</dt>
+              <dd>{evidenceHistory.utr_number || "—"}</dd>
+            </div>
+            <div>
+              <dt>Transaction</dt>
+              <dd>{evidenceHistory.transaction_id || "—"}</dd>
+            </div>
+            <div>
+              <dt>Checksum</dt>
+              <dd className="cand-evidence-checksum">
+                {evidenceHistory.checksum || "—"}
+              </dd>
+            </div>
+            <div>
+              <dt>Stored in</dt>
+              <dd>{evidenceHistory.stored_in}</dd>
+            </div>
+          </dl>
+          <ol className="cand-evidence-events">
+            {(evidenceHistory.events || []).map((event, index) => (
+              <li key={`${event.kind}-${index}`}>
+                <span className="cand-evidence-kind">{event.kind}</span>
+                <span className="cand-evidence-summary">{event.summary}</span>
+                <span className="cand-evidence-when">
+                  {event.at ? Nx(event.at) : ""}
+                  {event.actor ? ` · ${event.actor}` : ""}
+                </span>
+                {event.reason && (
+                  <span className="cand-evidence-reason">{event.reason}</span>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
       {t.length > 0 && (
         <ul className="cand-proofs-grid">
           {t.map((b) => (
@@ -827,6 +1018,38 @@ export function PaymentProofUploader({
                   <span>·</span>
                   <span>{kx(b.size)}</span>
                 </div>
+                {isEvidenceBroken(b) && (
+                  <div className="cand-proof-broken">
+                    <span className="cand-proof-broken-label">
+                      {evidenceProblem(b)}
+                    </span>
+                    <div className="cand-proof-broken-actions">
+                      <button
+                        type="button"
+                        className="cand-btn cand-btn--xs cand-btn--primary"
+                        onClick={() => replaceProof(b)}
+                        disabled={n}
+                      >
+                        Re-upload proof
+                      </button>
+                      <button
+                        type="button"
+                        className="cand-btn cand-btn--xs cand-btn--ghost"
+                        onClick={() => archiveProof(b)}
+                        disabled={n}
+                      >
+                        Archive reference
+                      </button>
+                      <button
+                        type="button"
+                        className="cand-btn cand-btn--xs cand-btn--ghost"
+                        onClick={() => openHistory(b)}
+                      >
+                        Evidence history
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
               <button
                 type="button"
