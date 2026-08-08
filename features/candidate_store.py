@@ -6568,6 +6568,89 @@ def correct_proof_amount(
     return dict(proof)
 
 
+def _locate_proof(rows: list, cid: str, pid: str):
+    """Find a proof in whichever list holds it, typed or legacy."""
+    idx = next((i for i, r in enumerate(rows) if r.get("id") == cid), None)
+    if idx is None:
+        return None, None, None
+    for field in ("payment_proofs", "proofs"):
+        proofs = list(rows[idx].get(field) or [])
+        position = next(
+            (i for i, p in enumerate(proofs) if str(p.get("id")) == pid), None
+        )
+        if position is not None:
+            return idx, field, (proofs, position)
+    return idx, None, None
+
+
+def set_proof_file_availability(
+    cid: str, pid: str, file_state: str, reason: str, reviewer: str
+) -> dict | None:
+    """Record what happened to a proof's file, leaving its amount alone.
+
+    A file going missing or being archived says nothing about whether the
+    payment occurred, so this never touches the verified amount.
+    """
+    cdata = _load()
+    rows = cdata.get("candidates") or []
+    idx, field, found = _locate_proof(rows, cid, pid)
+    if not found:
+        return None
+    proofs, position = found
+    proof = dict(proofs[position])
+    previous = proof.get("file_availability") or "AVAILABLE"
+    if previous == file_state:
+        return dict(proof)
+    proof.setdefault("file_availability_history", []).append({
+        "recorded_at": _now_iso(), "previous": previous, "new": file_state,
+        "reviewer": reviewer, "reason": reason,
+    })
+    proof["file_availability"] = file_state
+    proofs[position] = proof
+    rows[idx][field] = proofs
+    rows[idx]["updated_at"] = _now_iso()
+    cdata["candidates"] = rows
+    _save(cdata)
+    return dict(proof)
+
+
+def apply_replacement_proof(
+    cid: str, pid: str, replacement: dict, reason: str, reviewer: str
+) -> dict | None:
+    """Point an existing proof record at freshly uploaded evidence.
+
+    The proof keeps its id so everything referring to it still resolves, and the
+    superseded capture is recorded rather than discarded — the fact that the
+    original was lost is itself part of the audit trail.
+    """
+    cdata = _load()
+    rows = cdata.get("candidates") or []
+    idx, field, found = _locate_proof(rows, cid, pid)
+    if not found:
+        return None
+    proofs, position = found
+    proof = dict(proofs[position])
+    proof.setdefault("replacement_history", []).append({
+        "replaced_at": _now_iso(),
+        "previous_checksum": proof.get("sha256"),
+        "previous_filename": proof.get("original_name"),
+        "previous_verified_amount": proof.get("verified_amount"),
+        "previous_verification_state": proof.get("verification_state"),
+        "new_checksum": replacement.get("sha256"),
+        "reviewer": reviewer, "reason": reason,
+    })
+    for key, value in replacement.items():
+        if value not in (None, ""):
+            proof[key] = value
+    proof["replaced_at"] = _now_iso()
+    proofs[position] = proof
+    rows[idx][field] = proofs
+    rows[idx]["updated_at"] = _now_iso()
+    cdata["candidates"] = rows
+    _save(cdata)
+    return dict(proof)
+
+
 def recalculate_received_total(
     cid: str,
     *,

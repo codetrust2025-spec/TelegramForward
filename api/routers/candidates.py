@@ -771,6 +771,213 @@ async def candidates_delete_proof(cid: str, pid: str, request: Request):
         "status": "ok", "candidate": row,
         "payment_summary": payment_receipts.api_summary(row),
     }
+def _reviewer_name(request) -> str:
+    """Who is making this change, for the audit trail.
+
+    Row access is already enforced by assert_candidate_row_access; this only
+    labels the history, so an unnamed session is recorded honestly rather than
+    blocking the correction.
+    """
+    session = getattr(request, "session", None) or {}
+    for key in ("username", "user", "email"):
+        value = str(session.get(key) or "").strip() if hasattr(session, "get") else ""
+        if value:
+            return value
+    return "administrator"
+
+
+@router.get("/candidates/{cid}/proofs/{pid}/history")
+async def candidates_proof_history(cid: str, pid: str, request: Request):
+    """Everything that ever happened to one proof, in order."""
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store, payment_evidence_history
+
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Candidate not found"}
+    assert_candidate_row_access(request, existing)
+    history = await asyncio.to_thread(
+        payment_evidence_history.proof_history, existing, pid
+    )
+    if history is None:
+        return {"status": "error", "message": "Proof not found"}
+    return {"status": "ok", "history": history}
+
+
+@router.post("/candidates/{cid}/proofs/{pid}/archive")
+async def candidates_archive_proof(cid: str, pid: str, request: Request, body: dict = None):
+    """Retire a broken evidence reference without touching the money.
+
+    Archiving says "this file is gone and we have stopped waiting for it". It
+    deliberately changes no financial value: whether the payment happened is a
+    separate question from whether its screenshot survived.
+    """
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store, payment_receipts
+    from features import payment_verification_engine as pve
+    from features.candidate_attachments import partition_candidate_attachments
+
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Candidate not found"}
+    assert_candidate_row_access(request, existing)
+    reviewer = _reviewer_name(request)
+    reason = str((body or {}).get("reason") or "Broken evidence reference archived.")
+
+    proof = next(
+        (p for p in partition_candidate_attachments(existing)["payment_proofs"]
+         if str(p.get("id")) == pid),
+        None,
+    )
+    if proof is None:
+        return {"status": "error", "message": "Proof not found"}
+
+    before = int((candidate_store.get_candidate(cid) or {}).get("payment") or 0)
+    updated = await asyncio.to_thread(
+        candidate_store.set_proof_file_availability, cid, pid,
+        pve.FILE_ARCHIVED, reason, reviewer,
+    )
+    reference = str(proof.get("utr_number") or proof.get("transaction_id") or "")
+    if reference:
+        try:
+            await asyncio.to_thread(
+                pve.mark_file_availability,
+                transaction_reference=reference, file_state=pve.FILE_ARCHIVED,
+                reason=reason, reviewer=reviewer,
+            )
+        except ValueError:
+            # No single ledger payment carries this reference; the proof-side
+            # archive still stands on its own.
+            pass
+    row = candidate_store.get_candidate(cid)
+    after = int((row or {}).get("payment") or 0)
+    return {
+        "status": "ok", "proof": updated, "candidate": row,
+        "payment_summary": payment_receipts.api_summary(row),
+        "financially_unchanged": before == after,
+    }
+
+
+@router.post("/candidates/{cid}/proofs/{pid}/replace")
+async def candidates_replace_proof(
+    request: Request,
+    cid: str,
+    pid: str,
+    file: UploadFile = File(...),
+    reason: str = Form(default=""),
+):
+    """Re-upload evidence for a payment whose original file was lost.
+
+    A replacement is a second capture of the same transaction, not a second
+    transaction. It stores durably, re-extracts, and updates the payment the
+    original proof already belongs to — it never inserts another payment, so no
+    duplicate credit can arise.
+    """
+    from core.dashboard_access import assert_candidate_row_access
+    from features import candidate_store, payment_evidence_store, payment_receipts
+    from features import payment_verification_engine as pve
+    from features.candidate_attachments import partition_candidate_attachments
+
+    existing = candidate_store.get_candidate(cid)
+    if not existing:
+        return {"status": "error", "message": "Candidate not found"}
+    assert_candidate_row_access(request, existing)
+    reviewer = _reviewer_name(request)
+
+    original = next(
+        (p for p in partition_candidate_attachments(existing)["payment_proofs"]
+         if str(p.get("id")) == pid),
+        None,
+    )
+    if original is None:
+        return {"status": "error", "message": "Proof not found"}
+
+    raw = await file.read()
+    if not raw:
+        return {"status": "error", "message": "The replacement file is empty"}
+    mime = file.content_type or "image/jpeg"
+
+    try:
+        stored = await asyncio.to_thread(
+            payment_evidence_store.store, raw,
+            mime_type=mime, original_filename=file.filename or "",
+            candidate_id=cid, proof_id=pid,
+            upload_source="payment_proof_replacement",
+            replaces_checksum=str(original.get("sha256") or ""),
+            transaction_reference=str(original.get("utr_number") or ""),
+        )
+    except (ValueError, RuntimeError) as exc:
+        return {"status": "error", "message": f"Could not store the replacement: {exc}"}
+
+    if original.get("sha256") and stored["sha256"] != original.get("sha256"):
+        try:
+            await asyncio.to_thread(
+                payment_evidence_store.link_replacement,
+                original_checksum=str(original.get("sha256")),
+                replacement_checksum=stored["sha256"],
+                reviewer=reviewer,
+                reason=reason or "Original evidence file was not retrievable.",
+            )
+        except ValueError:
+            pass
+
+    extraction = {}
+    try:
+        extraction = await asyncio.to_thread(
+            pve.verify_payment_screenshot, raw, mime,
+            source_module="payment_proof_replacement",
+            entity_id=cid, candidate_id=cid,
+            entity_name=str(existing.get("name") or ""),
+            referrer_hint=str(existing.get("reference") or ""),
+            purpose="candidate_payment", payment_scope="PROFILE",
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced to the reviewer verbatim
+        return {
+            "status": "error",
+            "message": f"The replacement was stored but could not be read: {exc}",
+            "stored_checksum": stored["sha256"],
+        }
+
+    updated = await asyncio.to_thread(
+        candidate_store.apply_replacement_proof, cid, pid,
+        {
+            "sha256": stored["sha256"],
+            "storage_key": stored["storage_key"],
+            "original_name": file.filename or "",
+            "mime_type": mime,
+            "size": stored["byte_size"],
+            "verified_amount": int(extraction.get("amount") or 0),
+            "verification_state": str(extraction.get("verification_state") or ""),
+            "utr_number": str(extraction.get("utr_number") or ""),
+            "transaction_id": str(extraction.get("transaction_id") or ""),
+            "receiver_name": str(extraction.get("receiver_name") or ""),
+            "file_availability": pve.FILE_AVAILABLE,
+        },
+        reason or "Replacement evidence uploaded.", reviewer,
+    )
+    if updated is None:
+        return {"status": "error", "message": "Proof not found"}
+
+    await asyncio.to_thread(
+        candidate_store.recalculate_received_total, cid,
+        trigger="proof_replaced", proof_change="replaced", proof_id=pid,
+        reviewer=reviewer,
+        reason=reason or "Replacement evidence uploaded and verified.",
+    )
+    row = candidate_store.get_candidate(cid)
+    return {
+        "status": "ok", "proof": updated, "candidate": row,
+        "payment_summary": payment_receipts.api_summary(row),
+        "replacement": {
+            "checksum": stored["sha256"],
+            "storage_key": stored["storage_key"],
+            "deduplicated": stored["deduplicated"],
+            "extracted_amount": int(extraction.get("amount") or 0),
+            "verification_state": extraction.get("verification_state"),
+        },
+    }
+
+
 @router.patch("/candidates/{cid}/proofs/{pid}")
 async def candidates_update_proof_note(cid: str, pid: str, body: dict, request: Request):
     from core.dashboard_access import assert_candidate_row_access
