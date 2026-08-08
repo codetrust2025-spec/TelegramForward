@@ -131,7 +131,7 @@ def test_explicit_labeled_invite_uses_original_image_without_vision(monkeypatch)
     accenture
     Hi Rama Krishnam Raju,
     We can confirm that your Skills Interview is all set.
-    Date: 30-Jul-2026
+    Date: 30-Jul-2099
     Time: 03:00 PM until! 04:00 PM GMT+05:30 India Standard Time
     The conversation will be Virtual Interview
     """
@@ -144,7 +144,7 @@ def test_explicit_labeled_invite_uses_original_image_without_vision(monkeypatch)
     original = b"original-full-resolution-image"
     result = invite_extract.extract_interview_invite_with_ollama(original, "image/jpeg")
 
-    assert result["date"] == "2026-07-30"
+    assert result["date"] == "2099-07-30"
     assert result["time"] == "15:00"
     assert result["time_end"] == "16:00"
     assert result["timezone"] == "Asia/Kolkata"
@@ -156,10 +156,10 @@ def test_explicit_labeled_invite_uses_original_image_without_vision(monkeypatch)
 
 
 def test_matching_ai_and_ocr_extraction_remains_successful(monkeypatch):
-    ocr_text = "Interview scheduled 30-Jul-2026 at 03:00 PM IST"
+    ocr_text = "Interview scheduled 30-Jul-2099 at 03:00 PM IST"
     vision = json.dumps(
         {
-            "interview_date": "2026-07-30",
+            "interview_date": "2099-07-30",
             "start_time": "03:00 PM",
             "end_time": "03:30 PM",
             "timezone": "Asia/Kolkata",
@@ -172,7 +172,7 @@ def test_matching_ai_and_ocr_extraction_remains_successful(monkeypatch):
     result = invite_extract.extract_interview_invite_with_ollama(b"original", "image/jpeg")
 
     assert result["auto_booking_safe"] is True
-    assert result["interview_date"] == "2026-07-30"
+    assert result["interview_date"] == "2099-07-30"
     assert result["start_time"] == "03:00 PM"
 
 

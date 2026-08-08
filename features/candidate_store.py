@@ -58,6 +58,7 @@ from features.candidate_attachments import (
     parse_attachment_type,
     partition_candidate_attachments,
 )
+from features import payment_allocation
 from features import payment_receipts
 
 _FILE = os.path.join(DATA_DIR, "candidates.json")
@@ -295,6 +296,23 @@ def effective_expected_payment(row: dict) -> int:
     return expected
 
 
+def payment_allocation_for(row: dict) -> dict:
+    """How this row's verified money splits between service and BGV.
+
+    `expected_payment` already includes the BGV charge, so the service
+    obligation is what remains once the pass-through is taken out.
+    """
+    bgv_enabled = _coerce_bool(row.get("bgv_certificates"))
+    bgv_expected = BGV_CERTIFICATES_PAYMENT if bgv_enabled else 0
+    expected = effective_expected_payment(row)
+    return payment_allocation.allocate(
+        verified_total=int(row.get("payment") or 0),
+        service_expected=max(0, expected - bgv_expected),
+        bgv_expected=bgv_expected,
+        bgv_enabled=bgv_enabled,
+    )
+
+
 def referrer_commission_basis(row: dict) -> int:
     """Rupee basis for handler commission before the 50% split.
 
@@ -304,14 +322,12 @@ def referrer_commission_basis(row: dict) -> int:
     received = int(row.get("payment") or 0)
     if received <= 0:
         return 0
-    bgv_charge = BGV_CERTIFICATES_PAYMENT if _coerce_bool(row.get("bgv_certificates")) else 0
-    # Commission follows the money actually received, not the invoice. The basis
-    # used to be capped at the agreed amount, so a candidate who paid ₹6,000
-    # against a ₹5,000 minimum earned their referrer commission on ₹5,000.
-    # Expected is a floor, and everything above it is still revenue the referrer
-    # brought in. Only the BGV pass-through stays excluded — a third party bills
-    # that ₹30k and it never becomes company revenue.
-    return max(0, received - bgv_charge)
+    # Commission follows the money actually received, not the invoice, and only
+    # the service part of it. Subtracting the BGV charge from the total was too
+    # blunt: a candidate who owes ₹20,000 service plus ₹30,000 BGV and has paid
+    # ₹30,000 has settled the service in full, so ₹20,000 is commissionable —
+    # the old arithmetic gave ₹0. Allocation decides which money is which.
+    return payment_allocation.commissionable_amount(payment_allocation_for(row))
 
 
 def referrer_commission_amount(row: dict) -> int:
@@ -1577,6 +1593,16 @@ def _with_computed(row: dict) -> dict:
     enriched["referral_commission"] = base_commission
     enriched["referral_percentage"] = HANDLER_COMMISSION_PCT
     enriched["referral_basis"] = referrer_commission_basis(row)
+    allocation = payment_allocation_for(row)
+    enriched["payment_allocation"] = allocation
+    enriched["service_expected"] = allocation["service_expected"]
+    enriched["service_received"] = allocation["service_received"]
+    enriched["service_outstanding"] = allocation["service_outstanding"]
+    enriched["bgv_expected"] = allocation["bgv_expected"]
+    enriched["bgv_received"] = allocation["bgv_received"]
+    enriched["bgv_outstanding"] = allocation["bgv_outstanding"]
+    enriched["unallocated_excess"] = allocation["unallocated_excess"]
+    enriched["needs_excess_review"] = allocation["needs_excess_review"]
     enriched["referrer_complimentary_amount"] = referrer_bonus
     enriched["admin_complimentary_amount"] = admin_bonus
     # Candidate rows are shown under their own referrer. The admin bonus is
@@ -1587,7 +1613,12 @@ def _with_computed(row: dict) -> dict:
     enriched["handler_commission_max"] = (
         (commissionable_expected * HANDLER_COMMISSION_PCT) // 100
     ) + referrer_bonus
-    enriched["company_revenue"] = received - enriched["total_handler_earnings"]
+    # BGV money is collected on a third party's behalf, so it is never company
+    # revenue. Only the service part of what was received is.
+    enriched["company_revenue"] = (
+        payment_allocation_for(row)["service_received"]
+        - enriched["total_handler_earnings"]
+    )
     # The Received field is system-calculated whenever proof evidence exists, so
     # the UI can present it read-only and show the arithmetic behind it.
     enriched["payment"] = received
