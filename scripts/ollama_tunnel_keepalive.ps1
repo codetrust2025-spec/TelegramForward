@@ -43,7 +43,31 @@ param(
 $ErrorActionPreference = "Continue"
 
 $SshKey = Join-Path $env:USERPROFILE ".ssh\teleautomation_vps_ed25519"
-$LogDir = Join-Path $env:LOCALAPPDATA "TeleAutomation\logs"
+
+function Resolve-LogDirectory {
+    <#
+        Scheduled Task processes do not always inherit LOCALAPPDATA. When it is
+        missing, Join-Path returned a *relative* path, New-Item created it
+        wherever the task happened to start, and every Write-TunnelLog then
+        failed silently — the tunnel ran perfectly while producing no log at
+        all, which is precisely the case someone needs the log for.
+
+        USERPROFILE is present in that context (ssh finds its key by it), so
+        derive from it and only fall back to TEMP if even that is gone.
+    #>
+    foreach ($base in @(
+        $env:LOCALAPPDATA,
+        $(if ($env:USERPROFILE) { Join-Path $env:USERPROFILE "AppData\Local" }),
+        $env:TEMP
+    )) {
+        if ([string]::IsNullOrWhiteSpace($base)) { continue }
+        if (-not [System.IO.Path]::IsPathRooted($base)) { continue }
+        return (Join-Path $base "TeleAutomation\logs")
+    }
+    throw "No usable location for the tunnel log: LOCALAPPDATA, USERPROFILE and TEMP are all unset."
+}
+
+$LogDir = Resolve-LogDirectory
 $LogFile = Join-Path $LogDir "ollama-tunnel-$NodeName.log"
 
 New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
