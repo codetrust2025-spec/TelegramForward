@@ -40,6 +40,26 @@ VERIFICATION_STATES = {
     "AMOUNT_EXTRACTION_REVIEW_REQUIRED",
 }
 
+# States in which a stored payment put no money against any entity. Only a
+# payment that actually credited someone can be double-counted, so only those
+# may block the same evidence from being verified elsewhere.
+NON_CREDITING_VERIFICATION_STATES = frozenset(
+    {
+        "UPLOADED",
+        "EXTRACTION_IN_PROGRESS",
+        "EXTRACTED",
+        "PENDING_MANUAL_REVIEW",
+        "INCOMPLETE_PAYMENT_EVIDENCE",
+        "UNKNOWN_RECEIVER",
+        "DUPLICATE_PAYMENT",
+        "EXTRACTION_FAILED",
+        "FAILED_PAYMENT",
+        "REJECTED",
+        "REVERSED",
+        "AMOUNT_EXTRACTION_REVIEW_REQUIRED",
+    }
+)
+
 # Whether the original evidence file is still there to be re-read. Kept apart
 # from the verification verdict: a payment can be genuinely verified while its
 # screenshot has since been lost, and that combination has to be visible rather
@@ -109,6 +129,23 @@ def _norm_upi(value: Any) -> str:
 def _valid_upi(value: Any) -> bool:
     normalized = _norm_upi(value)
     return bool(re.fullmatch(r"[a-z0-9._-]{2,}@[a-z][a-z0-9.-]{1,}", normalized))
+
+
+_MASK_RUN_RE = re.compile(r"[x*#•·]{3,}")
+
+
+def _is_masked_identifier(value: Any) -> bool:
+    """True when the payment app redacted the payee handle instead of showing it.
+
+    PhonePe and GPay render the payee VPA as ``XXXXXX4573@ybl``. That mask is a
+    placeholder for an account, not an account: it matches no registry entry and
+    every masked handle from the same bank looks alike. Treating it as a real
+    identifier both suppressed the name fallback and raised a false
+    ``receiver_identifier_conflict``, so a genuine company payment resolved to
+    an unknown receiver.
+    """
+    local = _norm_upi(value).split("@", 1)[0]
+    return bool(local) and bool(_MASK_RUN_RE.search(local))
 
 
 def _norm_digits(value: Any, *, last: int = 0) -> str:
@@ -410,6 +447,12 @@ def classify_receiver(
 ) -> dict[str, Any]:
     """Deterministically match extracted receiver facts to the registry."""
     upi = _norm_upi(extraction.get("receiver_upi_id"))
+    upi_masked = _is_masked_identifier(upi)
+    if upi_masked:
+        # Drop it from matching entirely so the screenshot is treated the same
+        # as one that showed no handle at all, rather than one whose handle
+        # disagrees with the registry.
+        upi = ""
     raw_phone = (
         extraction.get("receiver_phone_number")
         or extraction.get("receiver_phone")
@@ -462,6 +505,7 @@ def classify_receiver(
                 (_valid_upi(upi) if upi else False) or phone or account
             ),
             "receiver_identifier_conflict": bool(stable_identifier_present and name_matches),
+            "receiver_identifier_masked": upi_masked,
             "receiver_name_match_candidates": [row["id"] for row in name_matches],
             "receiver_account_active": False,
             "receiver_account_verified": False,
@@ -480,6 +524,7 @@ def classify_receiver(
             "receiver_identifier_present": raw_identifier_present,
             "receiver_identifier_complete": True,
             "receiver_identifier_conflict": False,
+            "receiver_identifier_masked": upi_masked,
             "receiver_account_active": False,
             "receiver_account_verified": False,
         }
@@ -500,6 +545,7 @@ def classify_receiver(
         "receiver_identifier_present": stable_identifier_present,
         "receiver_identifier_complete": matched_by in {"upi", "phone", "account"},
         "receiver_identifier_conflict": False,
+        "receiver_identifier_masked": upi_masked,
         "receiver_account_active": currently_active,
         "receiver_account_verified": verified,
         "matched_company_id": record.get("company_id") or "",
@@ -931,6 +977,16 @@ def _verification_state(
     )
 
 
+def _credited_payment(payment: dict[str, Any] | None) -> bool:
+    """True when a stored payment actually put money against its entity."""
+    if not payment:
+        return False
+    state = str(payment.get("verification_state") or "")
+    if state in NON_CREDITING_VERIFICATION_STATES:
+        return False
+    return int(payment.get("amount_minor") or 0) > 0
+
+
 def _payment_scope(value: str) -> str:
     normalized = str(value or "").strip().upper()
     return normalized if normalized in {"ROUND", "PROFILE", "SLOT", "OTHER"} else "OTHER"
@@ -1003,38 +1059,50 @@ def _record_verification_unlocked(
         key="idempotency_key",
     )
 
+    def _same_transaction(row: dict[str, Any]) -> bool:
+        if row.get("idempotency_key") == idem:
+            return True
+        if row.get("evidence_id") == evidence.get("evidence_id"):
+            return True
+        return bool(
+            references
+            and set(references.values()).intersection(
+                {
+                    str(value or "")
+                    for value in (row.get("transaction_references") or {}).values()
+                }
+            )
+        )
+
+    matched = [row for row in data["payments"] if _same_transaction(row)]
     existing_payment = next(
         (
             row
-            for row in data["payments"]
-            if row.get("idempotency_key") == idem
-            or bool(
-                set(references.values()).intersection(
-                    {
-                        str(value or "")
-                        for value in (row.get("transaction_references") or {}).values()
-                    }
-                )
-            )
+            for row in matched
+            if str(row.get("source_entity_id") or "") == str(entity_id or "")
         ),
         None,
     )
-    evidence_payment = next(
+    # Only a payment that actually credited someone can be double-counted. A
+    # rejected or unreadable earlier attempt — the same screenshot first
+    # uploaded against the wrong profile, say — used to latch this evidence to
+    # that profile forever, so the correct candidate could never be verified and
+    # silently stayed at zero. Such an attempt is now stepped over, and this
+    # entity gets its own payment row.
+    duplicate_source = next(
         (
             row
-            for row in data["payments"]
-            if row.get("evidence_id") == evidence.get("evidence_id")
+            for row in matched
+            if entity_id
+            and row.get("source_entity_id")
+            and row.get("source_entity_id") != entity_id
+            and _credited_payment(row)
         ),
         None,
     )
-    existing_payment = existing_payment or evidence_payment
-    duplicate_cross_entity = bool(
-        existing_payment
-        and entity_id
-        and existing_payment.get("source_entity_id")
-        and existing_payment.get("source_entity_id") != entity_id
-    )
+    duplicate_cross_entity = bool(duplicate_source)
     if duplicate_cross_entity:
+        existing_payment = duplicate_source
         result["verification_state"] = "DUPLICATE_PAYMENT"
         result["deterministic_verified"] = False
         result["company_payment_verified"] = False
