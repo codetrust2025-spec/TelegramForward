@@ -55,6 +55,10 @@ _API_ROOTS = frozenset({
     "data-room", "public", "bookings",
     "metrics", "alerts", "handler-expenses", "handler-salaries", "voice",
     "webhooks", "whatsapp", "push", "devices", "demo-tools", "workspace", "fleet", "api",
+    # Anything absent here is taken for a client-side route and waved past the
+    # auth middleware, so an API root that is forgotten answers without a
+    # session. These two carry reconciliation and BGV figures.
+    "payments", "bgv",
 })
 
 
