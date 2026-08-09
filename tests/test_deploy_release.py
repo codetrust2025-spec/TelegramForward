@@ -15,6 +15,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import deploy_release as dr  # noqa: E402
 
+# A canonical nginx config proxying every root the dashboard needs. A root
+# missing from this alternation is not a syntax error: nginx serves the SPA
+# shell, the browser gets HTML where it expected JSON, and the page fails with
+# no server-side trace. That is how the Reconciliation and BGV pages shipped
+# dead, so the deployer now refuses a config that has lost one.
+NGINX_CANONICAL = (
+    "location ~ ^/(api|payments|bgv|bookings|public|state|health|inbox|crm|ai|"
+    "admin|system|groups|account|accounts|login|auth|message|start|stop|stats|"
+    "metrics|progress|handlers|candidates|data-room|voice|push|devices|"
+    "demo-tools|webhooks|whatsapp|handler-expenses|handler-salaries|"
+    "company-expenses|operator-tasks|alerts|workspace|analytics|refresh-joined|"
+    "fleet|forward-message|favicon\\.ico|favicon\\.svg) {\n"
+    "    proxy_pass http://127.0.0.1:8000;\n"
+    "}\n"
+)
+
 
 class FakeSSH:
     """Records commands and replays scripted answers.
@@ -211,7 +227,11 @@ def test_verify_live_release_checks_process_proxy_apis_and_public_assets(monkeyp
         "sport = :8000": "500",
         "/cwd": "/rel",
         "pgrep -fc": "2",
-        "nginx -t": "ok",
+        "nginx -t": "nginx: configuration file /etc/nginx/nginx.conf test is successful",
+        "readlink -f /etc/nginx/sites-enabled/telegramforward": (
+            "/etc/nginx/sites-available/telegramforward"
+        ),
+        "cat /etc/nginx/sites-available/telegramforward": NGINX_CANONICAL,
         "teleautomation.online/health": '{"status":"ok"}',
         "teleautomation.online/bookings/confirm": "422",
         "teleautomation.online/public/slots/book": "410",
@@ -241,6 +261,104 @@ def test_verify_live_release_checks_process_proxy_apis_and_public_assets(monkeyp
     assert ran(client, "nginx -t")
     assert ran(client, "/bookings/confirm")
     assert ran(client, "/public/slots/book")
+
+
+def _healthy_nginx_answers():
+    """The subset of answers the nginx gates read, all in their good state."""
+    return {
+        "127.0.0.1:8000/health": '{"status":"ok"}',
+        "dashboard_handlers.yaml": "yes",
+        "_handler_accounts": "9",
+        "bookings/confirm'": "1",
+        "status=410": "1",
+        "sha256sum /rel/static/assets/a.js": "js-hash",
+        "sha256sum /rel/static/assets/a.css": "css-hash",
+        "readlink -f /opt/telegramforward/current": "/rel",
+        "production.manifest.json": "1",
+        "agreed on the date and start time": "1",
+        "pm2 pid": "500",
+        "sport = :8000": "500",
+        "/cwd": "/rel",
+        "pgrep -fc": "2",
+        "nginx -t": "nginx: configuration file /etc/nginx/nginx.conf test is successful",
+        "readlink -f /etc/nginx/sites-enabled/telegramforward": (
+            "/etc/nginx/sites-available/telegramforward"
+        ),
+        "cat /etc/nginx/sites-available/telegramforward": NGINX_CANONICAL,
+        "teleautomation.online/health": '{"status":"ok"}',
+        "teleautomation.online/bookings/confirm": "422",
+        "teleautomation.online/public/slots/book": "410",
+        "teleautomation.online/assets/a.js": "js-hash",
+        "teleautomation.online/assets/a.css": "css-hash",
+        "curl -sf -m 15 https://teleautomation.online/": (
+            '<script src="assets/a.js"></script><link href="assets/a.css">'
+        ),
+    }
+
+
+def _verify_with(monkeypatch, **overrides):
+    answers = _healthy_nginx_answers()
+    answers.update(overrides)
+    client = FakeSSH(answers=answers)
+    monkeypatch.setattr(dr, "ssh", fake_ssh_factory(client))
+    return dr.verify_live_release(
+        client,
+        "/rel",
+        {
+            "js": "assets/a.js",
+            "css": "assets/a.css",
+            "js_sha256": "js-hash",
+            "css_sha256": "css-hash",
+        },
+        "c" * 40,
+    )
+
+
+def test_duplicate_server_blocks_block_the_deploy(monkeypatch):
+    """A stray file in sites-enabled -- a backup, say -- loads as a second
+    server block for the same name and silently shadows the real one. nginx
+    still reports the config valid, so only the warning gives it away."""
+    problems = _verify_with(
+        monkeypatch,
+        **{
+            "nginx -t": (
+                "nginx: [warn] conflicting server name "
+                '"teleautomation.online" on 0.0.0.0:443, ignored\n'
+                "nginx: configuration file /etc/nginx/nginx.conf test is successful"
+            )
+        },
+    )
+    assert any("duplicate server blocks" in p for p in problems), problems
+
+
+def test_sites_enabled_must_be_a_symlink_to_the_canonical_file(monkeypatch):
+    """A regular file in sites-enabled drifts from sites-available, and the
+    archived copy taken at build time comes from sites-available -- so the
+    release record stops matching what is actually serving."""
+    problems = _verify_with(
+        monkeypatch,
+        **{
+            "readlink -f /etc/nginx/sites-enabled/telegramforward": (
+                "/etc/nginx/sites-enabled/telegramforward"
+            )
+        },
+    )
+    assert any("not a symlink to sites-available" in p for p in problems), problems
+
+
+def test_a_canonical_config_missing_a_proxy_root_blocks_the_deploy(monkeypatch):
+    """Exactly the Reconciliation/BGV failure: the root is absent, nginx serves
+    the SPA instead of proxying, and the page dies with no server-side trace."""
+    stripped = NGINX_CANONICAL.replace("payments|", "").replace("bgv|", "")
+    problems = _verify_with(
+        monkeypatch,
+        **{"cat /etc/nginx/sites-available/telegramforward": stripped},
+    )
+    assert any("does not proxy" in p and "payments" in p for p in problems), problems
+
+
+def test_a_healthy_nginx_setup_raises_nothing(monkeypatch):
+    assert _verify_with(monkeypatch) == []
 
 
 def test_verify_live_release_reports_critical_runtime_failures(monkeypatch):
