@@ -6568,6 +6568,176 @@ def correct_proof_amount(
     return dict(proof)
 
 
+def clear_false_duplicate(
+    cid: str, pid: str, *, reason: str, reviewer: str
+) -> dict | None:
+    """Release a proof wrongly flagged as a duplicate of another candidate's.
+
+    A screenshot first uploaded against the wrong profile used to stay latched
+    to that profile even after the attempt there was rejected and the profile
+    deleted, leaving the candidate who actually paid stuck at zero. The engine
+    no longer creates that state, but rows already carrying it need releasing.
+
+    The claim is checked rather than taken on trust: the release happens only
+    when no payment anywhere in the ledger actually credited this transaction to
+    someone else. A real double-spend still refuses.
+    """
+    from features.payment_verification_engine import (
+        _credited_payment,
+        _load_ledger,
+        _norm_text,
+    )
+
+    if not str(reason or "").strip() or not str(reviewer or "").strip():
+        raise ValueError("Clearing a duplicate needs both a reviewer and a reason")
+
+    cdata = _load()
+    rows = cdata.get("candidates") or []
+    idx, field, located = _locate_proof(rows, cid, pid)
+    if idx is None or located is None:
+        return None
+    proofs, position = located
+    proof = dict(proofs[position])
+    if str(proof.get("verification_state") or "").upper() != "DUPLICATE_PAYMENT":
+        return dict(proof)
+
+    references = {
+        _norm_text(proof.get(key)).replace(" ", "")
+        for key in ("utr_number", "transaction_id", "reference_number")
+        if _norm_text(proof.get(key)).replace(" ", "")
+    }
+    for payment in _load_ledger().get("payments") or []:
+        if not _credited_payment(payment):
+            continue
+        if str(payment.get("source_entity_id") or "") == str(cid):
+            continue
+        held = {
+            str(value or "")
+            for value in (payment.get("transaction_references") or {}).values()
+        }
+        if references & held:
+            raise ValueError(
+                f"Proof {pid} really is a duplicate: payment "
+                f"{payment.get('payment_id')} already credited this transaction "
+                f"to {payment.get('source_entity_id')}"
+            )
+
+    history = list(proof.get("duplicate_releases") or [])
+    history.append({
+        "released_at": _now_iso(),
+        "previous_verification_state": "DUPLICATE_PAYMENT",
+        # What the fixed engine produces for this evidence: the receiver
+        # question is still open, so it credits nothing until answered.
+        "new_verification_state": "INCOMPLETE_PAYMENT_EVIDENCE",
+        "checked_references": sorted(references),
+        "reviewer": reviewer,
+        "reason": reason,
+    })
+    proof["duplicate_releases"] = history
+    proof["verification_state"] = "INCOMPLETE_PAYMENT_EVIDENCE"
+    proof["ledger_status"] = "unposted"
+    proofs[position] = proof
+    rows[idx][field] = proofs
+    rows[idx]["updated_at"] = _now_iso()
+    cdata["candidates"] = rows
+    _save(cdata)
+    return dict(proof)
+
+
+CONFIRMABLE_RECEIVER_TYPES = {
+    "company": "VERIFIED_COMPANY_PAYMENT",
+    "referrer": "VERIFIED_REFERRER_PAYMENT",
+}
+
+# Only a proof the engine declined for want of a stable receiver identifier may
+# be confirmed this way. Anything rejected, failed, duplicated or unreadable was
+# refused for a different reason, and a confirmation of *who* was paid says
+# nothing about those.
+RECEIVER_CONFIRMABLE_STATES = {
+    "INCOMPLETE_PAYMENT_EVIDENCE",
+    "UNKNOWN_RECEIVER",
+    "PENDING_MANUAL_REVIEW",
+}
+
+
+def confirm_proof_receiver(
+    cid: str,
+    pid: str,
+    *,
+    receiver_type: str,
+    receiver_name: str,
+    reason: str,
+    reviewer: str,
+) -> dict | None:
+    """Record an out-of-band confirmation of who received one payment.
+
+    Payment apps redact the payee handle — PhonePe prints it as
+    ``XXXXXX4573@ybl`` — so verification has no stable identifier to match and
+    correctly refuses to credit on a name alone. Someone who owns the receiving
+    account can settle that question; nothing else can.
+
+    The confirmation is deliberately scoped to this one proof and is never
+    written to the receiver registry, so it cannot make some future masked
+    handle verify by itself. It does not touch the extracted amount either: it
+    answers only who was paid, and the screenshot still says how much.
+    """
+    receiver_type = str(receiver_type or "").strip().lower()
+    if receiver_type not in CONFIRMABLE_RECEIVER_TYPES:
+        raise ValueError(
+            f"receiver_type must be one of {sorted(CONFIRMABLE_RECEIVER_TYPES)}"
+        )
+    if not str(reason or "").strip() or not str(reviewer or "").strip():
+        raise ValueError("A receiver confirmation needs both a reviewer and a reason")
+
+    cdata = _load()
+    rows = cdata.get("candidates") or []
+    idx, field, located = _locate_proof(rows, cid, pid)
+    if idx is None or located is None:
+        return None
+    proofs, position = located
+    proof = dict(proofs[position])
+
+    previous_state = str(proof.get("verification_state") or "").strip().upper()
+    confirmed_state = CONFIRMABLE_RECEIVER_TYPES[receiver_type]
+    if previous_state == confirmed_state:
+        return dict(proof)
+    if previous_state not in RECEIVER_CONFIRMABLE_STATES:
+        raise ValueError(
+            f"Proof {pid} is in {previous_state or 'no state'}, which was not a "
+            "receiver question; re-adjudicate it before confirming a receiver"
+        )
+    if payment_receipts.file_availability(proof) in (
+        payment_receipts.FILE_STATES_BLOCKING_VERIFICATION
+    ):
+        raise ValueError(
+            f"Proof {pid} cannot be re-read, so its amount cannot be relied on"
+        )
+
+    history = list(proof.get("receiver_confirmations") or [])
+    history.append({
+        "confirmed_at": _now_iso(),
+        "previous_verification_state": previous_state,
+        "new_verification_state": confirmed_state,
+        "receiver_type": receiver_type,
+        "receiver_name": receiver_name,
+        "reviewer": reviewer,
+        "reason": reason,
+        "is_original_system_capture": False,
+    })
+    proof["receiver_confirmations"] = history
+    proof["verification_state"] = confirmed_state
+    proof["receiver_type"] = receiver_type
+    proof["receiver_confirmed_by"] = reviewer
+    proof["receiver_match"] = "administrator_confirmation"
+    proof["company_payment_verified"] = receiver_type == "company"
+    proofs[position] = proof
+    rows[idx][field] = proofs
+    rows[idx]["updated_at"] = _now_iso()
+    cdata["candidates"] = rows
+    _save(cdata)
+    return dict(proof)
+
+
 def _locate_proof(rows: list, cid: str, pid: str):
     """Find a proof in whichever list holds it, typed or legacy."""
     idx = next((i for i, r in enumerate(rows) if r.get("id") == cid), None)
