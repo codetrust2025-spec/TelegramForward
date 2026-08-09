@@ -57,6 +57,7 @@ def _node_status(node_id:str)->dict:
         for model in required
     }
     status['required_models']=availability
+    status['endpoint']=ollama_nodes.base_url_for(node_id)
     status['ready']=bool(status.get('endpoint_reachable')) and all(availability.values())
     if status.get('endpoint_reachable') and not status['ready']:
         status['status']='degraded'
@@ -146,11 +147,15 @@ def install_recruitment_mail_routes(app):
         ])
         return {'status':'ok','primary_node':ollama_nodes.primary_node_id(),'nodes':nodes}
     @app.post('/api/ai-recruitment/ollama/nodes/{node_id}/primary')
-    async def ollama_set_primary(node_id:str,request:Request):
+    async def ollama_set_primary(node_id:str,request:Request,override:bool=False):
         _guard();require_fleet_admin(request)
         try:status=await asyncio.to_thread(_node_status,node_id)
         except ValueError as exc:raise HTTPException(404,'Unknown Ollama node') from exc
-        if not status.get('ready'):
+        # A node that fails its model check stays unselectable unless an admin
+        # says so deliberately. Kept as an explicit opt-in rather than a silent
+        # allow, because a primary that cannot run the model takes every AI
+        # feature down until someone notices.
+        if not status.get('ready') and not override:
             raise HTTPException(409,'This node cannot become primary until it is online and all required models are installed.')
         await asyncio.to_thread(ollama_nodes.set_primary_node,node_id)
         status['primary']=True

@@ -83,6 +83,16 @@ const human = (value) =>
     .toLowerCase()
     .replace(/\b\w/g, (c) => c.toUpperCase());
 
+/** Epoch seconds from the node breaker into something readable at a glance. */
+const whenever = (epochSeconds) => {
+  if (!epochSeconds) return "—";
+  const seconds = Math.max(0, Math.round(Date.now() / 1000 - epochSeconds));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
+  return `${Math.round(seconds / 86400)}d ago`;
+};
+
 const AI_FAILURE_REASONS = {
   OLLAMA_CONNECTION_FAILED: "Ollama connection failed",
   OLLAMA_REQUEST_TIMEOUT: "Ollama request timed out",
@@ -1480,15 +1490,54 @@ function AiNodeManager({
                       : `${node.response_time_ms} ms`}
                   </dd>
                 </div>
+                <div>
+                  <dt>Endpoint</dt>
+                  <dd>{node.endpoint || "—"}</dd>
+                </div>
+                <div>
+                  <dt>Acceleration</dt>
+                  <dd>
+                    {node.gpu
+                      ? node.gpu.accelerated
+                        ? `GPU ${Math.round((node.gpu.gpu_fraction || 0) * 100)}%`
+                        : "CPU only"
+                      : "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Ollama</dt>
+                  <dd>{node.ollama_version || "—"}</dd>
+                </div>
+                <div>
+                  <dt>Last success</dt>
+                  <dd>{whenever(node.breaker?.last_success_at)}</dd>
+                </div>
+                <div>
+                  <dt>Last failure</dt>
+                  <dd>{whenever(node.breaker?.last_failure_at)}</dd>
+                </div>
               </dl>
+              {node.breaker?.in_cooldown && (
+                <small className="sot-ai-node-error">
+                  Cooling off after {node.breaker.consecutive_failures} failures
+                  {node.breaker.cooldown_remaining_s
+                    ? ` — retrying in ${node.breaker.cooldown_remaining_s}s`
+                    : ""}
+                </small>
+              )}
               <div className="sot-ai-node-actions">
                 {!node.primary && (
                   <button
                     type="button"
-                    disabled={busy || !node.ready}
+                    disabled={busy}
                     onClick={() => onMakePrimary(node)}
+                    title={
+                      node.ready
+                        ? `Route AI work to ${node.label}`
+                        : "This node is failing its model check — you will be asked to confirm"
+                    }
                   >
-                    Set primary
+                    {node.ready ? "Set primary" : "Set primary anyway"}
                   </button>
                 )}
                 <button
@@ -2485,8 +2534,20 @@ export default function RecruitmentMailPanelRedesign() {
   const makePrimaryNode = (node) =>
     run(
       async () => {
+        // A node failing its model check would take every AI feature down if it
+        // became primary, so the override is a deliberate answer, not a default.
+        let override = false;
+        if (!node.ready) {
+          const proceed = window.confirm(
+            `${node.label} is not passing its model health check.\n\n` +
+              "Making it primary can stop payment extraction, interview " +
+              "booking and Mail Audit from working.\n\nSet it as primary anyway?",
+          );
+          if (!proceed) return;
+          override = true;
+        }
         await request(
-          `/api/ai-recruitment/ollama/nodes/${node.id}/primary`,
+          `/api/ai-recruitment/ollama/nodes/${node.id}/primary${override ? "?override=true" : ""}`,
           { method: "POST", body: "{}" },
         );
         await refreshOllama(false);
