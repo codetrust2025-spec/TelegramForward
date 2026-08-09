@@ -339,3 +339,49 @@ def test_force_still_allows_a_deliberate_override(monkeypatch):
 def test_missing_models_reports_every_gap(monkeypatch):
     _stub_installed(monkeypatch, {"rtx4060": []})
     assert ollama_nodes.missing_models("rtx4060") == ["qwen2.5:7b", MODEL]
+
+
+def test_a_missing_model_does_not_cool_a_node_down(monkeypatch):
+    """The pool runs mixed inventories: rtx4060 carries the vision model but
+    not the text one. The breaker is per node while a missing model is per
+    model, so counting text misses as failures would cool rtx4060 down and then
+    drop it from vision work too — losing the fast node for the exact job it is
+    best at."""
+    monkeypatch.setenv("OLLAMA_NODE_FAILURE_THRESHOLD", "2")
+    ollama_nodes.set_primary_node("rtx4060", force=True)
+
+    def fake(node_id, *, model, timeout=5, deep=True):
+        has = {"rtx4060": {MODEL}, "jagadeesh": {MODEL, "qwen2.5:7b"}}.get(node_id, set())
+        return {
+            "id": node_id, "label": node_id, "primary": False, "status": "online",
+            "endpoint_reachable": True, "model_available": model in has,
+            "model_loaded": False, "response_time_ms": 5, "error": None,
+            "breaker": ollama_nodes.breaker_state(node_id), "available": True,
+        }
+
+    monkeypatch.setattr(ollama_nodes, "node_health", fake)
+
+    # Several text requests, each of which rtx4060 cannot serve.
+    for _ in range(5):
+        assert (
+            ollama_nodes.select_available_node(model="qwen2.5:7b")["node_id"]
+            == "jagadeesh"
+        )
+
+    assert ollama_nodes.in_cooldown("rtx4060") is False
+    assert ollama_nodes.breaker_state("rtx4060")["consecutive_failures"] == 0
+
+    # ...and vision still goes to the fast node afterwards.
+    assert ollama_nodes.select_available_node(model=MODEL)["node_id"] == "rtx4060"
+
+
+def test_an_unreachable_node_is_still_penalised(monkeypatch):
+    """The relaxation above must not blunt the breaker for real outages."""
+    monkeypatch.setenv("OLLAMA_NODE_FAILURE_THRESHOLD", "2")
+    # rtx4060 must be first in line, or selection returns jagadeesh without
+    # ever probing it and the breaker legitimately stays closed.
+    ollama_nodes.set_primary_node("rtx4060", force=True)
+    _stub_health(monkeypatch, {"jagadeesh"})
+    for _ in range(2):
+        ollama_nodes.select_available_node(model=MODEL)
+    assert ollama_nodes.in_cooldown("rtx4060") is True
