@@ -51,7 +51,8 @@ New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 function Write-TunnelLog {
     param([string]$Message)
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    Add-Content -LiteralPath $LogFile -Value "[$timestamp] $Message"
+    # Pinned, because Add-Content defaults to the system ANSI codepage.
+    Add-Content -LiteralPath $LogFile -Value "[$timestamp] $Message" -Encoding utf8
 }
 
 # One tunnel per laptop. Two processes racing for the same VPS port means one
@@ -83,20 +84,40 @@ try {
             }
 
             Write-TunnelLog "Starting reverse tunnel: VPS 127.0.0.1:$VpsPort -> laptop 127.0.0.1:$LocalOllamaPort"
-            & ssh.exe `
-                -N -T `
-                -i $SshKey `
-                -o BatchMode=yes `
-                -o IdentitiesOnly=yes `
-                -o StrictHostKeyChecking=yes `
-                -o ExitOnForwardFailure=yes `
-                -o ServerAliveInterval=30 `
-                -o ServerAliveCountMax=3 `
-                -o ConnectTimeout=10 `
-                -R "127.0.0.1:${VpsPort}:127.0.0.1:${LocalOllamaPort}" `
-                "$VpsUser@$VpsHostName" 2>> $LogFile
 
-            Write-TunnelLog "SSH exited with code $LASTEXITCODE; reconnecting in $RetrySeconds seconds."
+            # `2>> $LogFile` writes UTF-16LE on Windows PowerShell 5.1, so
+            # ssh's own errors landed in a different encoding from every other
+            # line in the file and the log became unreadable — exactly when
+            # someone is trying to diagnose a dead tunnel. Capture stderr to
+            # its own file and fold it back through the normal logger, so the
+            # whole log is one encoding.
+            $sshArgs = @(
+                "-N", "-T",
+                "-i", $SshKey,
+                "-o", "BatchMode=yes",
+                "-o", "IdentitiesOnly=yes",
+                "-o", "StrictHostKeyChecking=yes",
+                "-o", "ExitOnForwardFailure=yes",
+                "-o", "ServerAliveInterval=30",
+                "-o", "ServerAliveCountMax=3",
+                "-o", "ConnectTimeout=10",
+                "-R", "127.0.0.1:${VpsPort}:127.0.0.1:${LocalOllamaPort}",
+                "$VpsUser@$VpsHostName"
+            )
+            $stderrFile = Join-Path $env:TEMP "ollama-tunnel-$NodeName.stderr"
+            $process = Start-Process -FilePath "ssh.exe" `
+                -ArgumentList $sshArgs `
+                -NoNewWindow -Wait -PassThru `
+                -RedirectStandardError $stderrFile
+
+            if (Test-Path -LiteralPath $stderrFile) {
+                Get-Content -LiteralPath $stderrFile |
+                    Where-Object { $_ -and $_.Trim() } |
+                    ForEach-Object { Write-TunnelLog "ssh: $_" }
+                Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue
+            }
+
+            Write-TunnelLog "SSH exited with code $($process.ExitCode); reconnecting in $RetrySeconds seconds."
         }
         catch {
             Write-TunnelLog "Prerequisite failed ($($_.Exception.Message)); retrying in $RetrySeconds seconds."

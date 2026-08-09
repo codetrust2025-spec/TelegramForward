@@ -11,7 +11,8 @@
 
     No password is stored anywhere. Authentication is the dedicated SSH key at
     %USERPROFILE%\.ssh\teleautomation_vps_ed25519, whose public half must
-    already be in the VPS's authorized_keys.
+    already be in /home/teleautomation-tunnel/.ssh/authorized_keys on the VPS,
+    carrying permitlisten="127.0.0.1:<VpsPort>" for this node's own port.
 
 .EXAMPLE
     .\ollama_tunnel_task_setup.ps1 -VpsPort 11437 -NodeName rtx4060
@@ -33,7 +34,9 @@ $sshKey = Join-Path $env:USERPROFILE ".ssh\teleautomation_vps_ed25519"
 if (-not (Test-Path -LiteralPath $sshKey)) {
     Write-Warning "SSH key missing at $sshKey."
     Write-Warning "Create it with:  ssh-keygen -t ed25519 -f `"$sshKey`" -C ollama-tunnel-$NodeName"
-    Write-Warning "Then add the .pub contents to the VPS root authorized_keys before the task will work."
+    Write-Warning "Then add the .pub contents to /home/teleautomation-tunnel/.ssh/authorized_keys on the VPS."
+    Write-Warning "Not root's authorized_keys: the tunnel account is confined to remote forwarding of one port."
+    Write-Warning "The entry needs permitlisten=`"127.0.0.1:$VpsPort`" or sshd refuses the forward."
 }
 
 $taskName = "TeleAutomation Ollama Tunnel ($NodeName)"
