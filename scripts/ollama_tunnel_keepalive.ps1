@@ -30,7 +30,12 @@ param(
     [string]$NodeName,
 
     [string]$VpsHostName = "187.127.169.159",
-    [string]$VpsUser = "root",
+    # The dedicated tunnel account, not root. sshd confines it to remote
+    # forwarding of 127.0.0.1:11435-11437 with no TTY, no agent forwarding and a
+    # forced command, so a laptop key that leaks cannot be used for anything
+    # else. Praveen's older tunnel still connects as root; that is the weaker
+    # path and should be migrated onto this account.
+    [string]$VpsUser = "teleautomation-tunnel",
     [int]$LocalOllamaPort = 11434,
     [int]$RetrySeconds = 10
 )
