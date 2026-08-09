@@ -185,14 +185,27 @@ def chat(
     chosen = (model or configured_models()["text"]).strip()
     if not chosen:
         raise AIGatewayError("No AI model is configured", code="OLLAMA_MODEL_NOT_FOUND")
-    selected_node = ollama_nodes.primary_node_id()
+    # Route to the first node in the preference order that passes its model
+    # check, rather than insisting on the configured primary. This only chooses
+    # where the request runs; the persisted primary is untouched, so a single
+    # unhealthy probe cannot move production's primary around.
+    health_timeout = _remaining(
+        deadline_monotonic,
+        _env_float("OLLAMA_HEALTH_TIMEOUT_SECONDS", 10),
+    )
+    try:
+        chosen_node = ollama_nodes.select_available_node(
+            model=chosen, timeout=health_timeout
+        )
+        selected_node = chosen_node["node_id"]
+    except RuntimeError:
+        # Fall back to the configured primary so the error the caller sees is
+        # the specific health failure below, not a generic selection message.
+        selected_node = ollama_nodes.primary_node_id()
     selected_base_url = ollama_nodes.base_url_for(selected_node)
     status = health(
         model=chosen,
-        timeout=_remaining(
-            deadline_monotonic,
-            _env_float("OLLAMA_HEALTH_TIMEOUT_SECONDS", 10),
-        ),
+        timeout=health_timeout,
         node_id=selected_node,
     )
     if not status["endpoint_reachable"]:
