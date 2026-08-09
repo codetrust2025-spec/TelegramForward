@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { usePendingWorksContextOptional } from "../dailyOps/PendingWorksProvider.jsx";
 
-const NAV = [
+export const NAV = [
   { id: "knowledge", label: "Ask AI", icon: "AI" },
   { id: "daily-briefing", label: "Daily briefing", icon: "☀" },
   { id: "ai-recruitment", label: "AI Mail Review", icon: "AI" },

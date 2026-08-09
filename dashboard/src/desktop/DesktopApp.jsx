@@ -12,6 +12,8 @@ import { DailyBriefingCard } from "../components/DailyBriefingCard.jsx";
 import { RecruitmentMailPanel } from "../components/RecruitmentMailPanel.jsx";
 import { MailMonitoringNotifications } from "../components/MailMonitoringNotifications.jsx";
 import { OutcomeAuditPanel } from "../components/OutcomeAuditPanel.jsx";
+import PaymentReconciliationPanel from "../components/PaymentReconciliationPanel.jsx";
+import BgvRegisterPanel from "../components/BgvRegisterPanel.jsx";
 import { LogPanel } from "../components/LogPanel.jsx";
 import { ProgressHubPanel } from "../components/ProgressHubPanel.jsx";
 import { SetupMainPanel } from "../components/SetupMainPanel.jsx";
@@ -56,6 +58,8 @@ function sidebarActiveId(mainView, desktopPage, workspaceMode) {
   if (mainView === "ai-recruitment") return "ai-recruitment";
   if (mainView === "mail-notifications") return "mail-notifications";
   if (mainView === "outcome-audit") return "outcome-audit";
+  if (mainView === "payment-reconciliation") return "payment-reconciliation";
+  if (mainView === "bgv-register") return "bgv-register";
   if (mainView === "daily-ops") return "daily-ops";
   if (mainView === "data-room") return "data";
   if (desktopPage === "setup" || desktopPage === "login") return "accounts";
@@ -189,6 +193,12 @@ export function DesktopApp({
         case "outcome-audit":
           setMainView("outcome-audit");
           break;
+        case "payment-reconciliation":
+          setMainView("payment-reconciliation");
+          break;
+        case "bgv-register":
+          setMainView("bgv-register");
+          break;
         case "daily-ops":
           setMainView("daily-ops");
           break;
@@ -290,6 +300,10 @@ export function DesktopApp({
     content = <MailMonitoringNotifications />;
   } else if (mainView === "outcome-audit") {
     content = <OutcomeAuditPanel />;
+  } else if (mainView === "payment-reconciliation") {
+    content = <PaymentReconciliationPanel />;
+  } else if (mainView === "bgv-register") {
+    content = <BgvRegisterPanel />;
   } else if (mainView === "daily-ops") {
     bodyClass += " desktop-body--daily-ops";
     content = (
