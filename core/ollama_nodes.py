@@ -89,17 +89,104 @@ def _valid_node_ids() -> set[str]:
     return {node["id"] for node in configured_nodes()}
 
 
+def _read_state() -> dict[str, Any]:
+    with _LOCK:
+        try:
+            saved = json.loads(_state_path().read_text(encoding="utf-8"))
+            return saved if isinstance(saved, dict) else {}
+        except (FileNotFoundError, OSError, ValueError, TypeError):
+            return {}
+
+
+def _write_state(update: dict[str, Any]) -> None:
+    """Merge into the state file rather than replacing it.
+
+    The file holds more than the primary now, so writing a fresh object would
+    silently drop whatever else was in it.
+    """
+    path = _state_path()
+    with _LOCK:
+        current = _read_state()
+        current.update(update)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(current, indent=2, sort_keys=True) + "\n"
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+                temporary = Path(handle.name)
+            os.replace(temporary, path)
+        finally:
+            if temporary and temporary.exists():
+                temporary.unlink(missing_ok=True)
+
+
+def model_node_preference() -> dict[str, str]:
+    """Which node should serve a given model first, ahead of the primary.
+
+    A node with 8 GB of VRAM cannot hold both the text and vision models at
+    once: measured on the RTX 4060, alternating between them reloaded on every
+    single request and took vision from 2.4s to 11.5s. Making that node primary
+    therefore *loses* to leaving it alone, because primary attracts both routes.
+
+    Pinning a model to a node instead keeps each machine holding one model
+    resident, which is where the speed actually comes from. It is a preference
+    and nothing more: if the pinned node cannot serve, selection carries on down
+    the normal order.
+    """
+    preference: dict[str, str] = {}
+    raw = (os.getenv("OLLAMA_MODEL_NODE_PREFERENCE") or "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                preference.update({str(k): str(v) for k, v in parsed.items()})
+        except ValueError:
+            pass
+    saved = _read_state().get("model_nodes")
+    if isinstance(saved, dict):
+        preference.update({str(k): str(v) for k, v in saved.items()})
+    valid = _valid_node_ids()
+    return {model: node for model, node in preference.items() if node in valid}
+
+
+def set_model_node(model: str, node_id: str | None, *, force: bool = False) -> None:
+    """Pin a model to a node, or pass node_id=None to unpin it."""
+    wanted = str(model or "").strip()
+    if not wanted:
+        raise ValueError("A model name is required")
+    saved = dict(_read_state().get("model_nodes") or {})
+    if node_id is None:
+        saved.pop(wanted, None)
+    else:
+        selected = str(node_id).strip()
+        if selected not in _valid_node_ids():
+            raise ValueError("Unknown Ollama node")
+        if not force:
+            status = node_health(selected, model=wanted, timeout=10)
+            if not status["endpoint_reachable"]:
+                raise RuntimeError(f"{selected} is not reachable")
+            if not status["model_available"]:
+                raise ValueError(f"{selected} does not have {wanted} installed")
+        saved[wanted] = selected
+    _write_state({"model_nodes": saved})
+
+
 def primary_node_id() -> str:
     default = (os.getenv("OLLAMA_PRIMARY_NODE") or _DEFAULT_PRIMARY).strip()
     if default not in _valid_node_ids():
         default = _DEFAULT_PRIMARY
-    with _LOCK:
-        try:
-            saved = json.loads(_state_path().read_text(encoding="utf-8"))
-            selected = str(saved.get("primary_node") or "")
-            return selected if selected in _valid_node_ids() else default
-        except (FileNotFoundError, OSError, ValueError, TypeError):
-            return default
+    selected = str(_read_state().get("primary_node") or "")
+    return selected if selected in _valid_node_ids() else default
 
 
 def required_models() -> list[str]:
@@ -149,28 +236,7 @@ def set_primary_node(node_id: str, *, force: bool = False) -> str:
                 f"{selected} is missing required model(s): {', '.join(absent)}. "
                 "Install them, or pass force=True to accept a degraded primary."
             )
-    path = _state_path()
-    with _LOCK:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps({"primary_node": selected}, indent=2) + "\n"
-        temporary: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=path.parent,
-                prefix=f".{path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-                temporary = Path(handle.name)
-            os.replace(temporary, path)
-        finally:
-            if temporary and temporary.exists():
-                temporary.unlink(missing_ok=True)
+    _write_state({"primary_node": selected})
     return selected
 
 
@@ -464,11 +530,17 @@ def verify_inference(
         }
 
 
-def candidate_order() -> list[str]:
-    """Preference order for routing: the chosen primary, then the rest."""
+def candidate_order(model: str | None = None) -> list[str]:
+    """Routing order: a node pinned to this model, then the primary, then rest."""
     ordered = [item["id"] for item in configured_nodes()]
+    head: list[str] = []
+    pinned = model_node_preference().get(str(model or "")) if model else None
+    if pinned and pinned in ordered:
+        head.append(pinned)
     primary = primary_node_id()
-    return [primary] + [item for item in ordered if item != primary]
+    if primary not in head:
+        head.append(primary)
+    return head + [item for item in ordered if item not in head]
 
 
 def select_available_node(
@@ -486,7 +558,7 @@ def select_available_node(
     explicit admin action.
     """
     attempts: list[dict[str, Any]] = []
-    order = candidate_order()
+    order = candidate_order(model)
     cooling = [nid for nid in order if in_cooldown(nid)]
     # If every node is cooling there is nothing to be gained by refusing; try
     # them anyway so a total outage still gets probed rather than hard-failing.

@@ -385,3 +385,96 @@ def test_an_unreachable_node_is_still_penalised(monkeypatch):
     for _ in range(2):
         ollama_nodes.select_available_node(model=MODEL)
     assert ollama_nodes.in_cooldown("rtx4060") is True
+
+
+# ── pinning a model to a node ───────────────────────────────────────────────
+
+
+def test_a_pinned_model_goes_to_its_node_ahead_of_the_primary(monkeypatch):
+    """An 8 GB card cannot hold the text and vision models at once — measured
+    on the RTX 4060, alternating reloaded on every request and took vision from
+    2.4s to 11.5s. Promoting it therefore loses, because primary attracts both
+    routes. Pinning vision to it keeps one model resident on each machine."""
+    _stub_health(monkeypatch, {"rtx4060", "jagadeesh", "our_machine"})
+    ollama_nodes.set_primary_node("jagadeesh", force=True)
+    ollama_nodes.set_model_node(MODEL, "rtx4060", force=True)
+
+    assert ollama_nodes.select_available_node(model=MODEL)["node_id"] == "rtx4060"
+    # An unpinned model still follows the primary.
+    assert (
+        ollama_nodes.select_available_node(model="qwen2.5:7b")["node_id"] == "jagadeesh"
+    )
+
+
+def test_a_pin_is_a_preference_not_a_requirement(monkeypatch):
+    """If the pinned node is down the work still runs; a pin must not become a
+    single point of failure."""
+    _stub_health(monkeypatch, {"jagadeesh", "our_machine"})
+    ollama_nodes.set_primary_node("jagadeesh", force=True)
+    ollama_nodes.set_model_node(MODEL, "rtx4060", force=True)
+
+    chosen = ollama_nodes.select_available_node(model=MODEL)
+    assert chosen["node_id"] == "jagadeesh"
+    assert any(a["node"] == "rtx4060" for a in chosen["attempts"])
+
+
+def test_a_pin_survives_a_primary_change(monkeypatch, tmp_path):
+    """Both live in the same state file; writing one must not drop the other."""
+    ollama_nodes.set_model_node(MODEL, "rtx4060", force=True)
+    ollama_nodes.set_primary_node("our_machine", force=True)
+
+    saved = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    assert saved["primary_node"] == "our_machine"
+    assert saved["model_nodes"] == {MODEL: "rtx4060"}
+    assert ollama_nodes.model_node_preference() == {MODEL: "rtx4060"}
+
+
+def test_a_pin_can_be_removed(monkeypatch):
+    _stub_health(monkeypatch, {"rtx4060", "jagadeesh"})
+    ollama_nodes.set_primary_node("jagadeesh", force=True)
+    ollama_nodes.set_model_node(MODEL, "rtx4060", force=True)
+    assert ollama_nodes.select_available_node(model=MODEL)["node_id"] == "rtx4060"
+
+    ollama_nodes.set_model_node(MODEL, None)
+
+    assert ollama_nodes.model_node_preference() == {}
+    assert ollama_nodes.select_available_node(model=MODEL)["node_id"] == "jagadeesh"
+
+
+def test_pinning_to_a_node_without_the_model_is_refused(monkeypatch):
+    def fake(node_id, *, model, timeout=5, deep=True):
+        return {
+            "id": node_id, "label": node_id, "primary": False, "status": "online",
+            "endpoint_reachable": True, "model_available": False,
+            "model_loaded": False, "response_time_ms": 5, "error": None,
+            "breaker": ollama_nodes.breaker_state(node_id), "available": True,
+        }
+
+    monkeypatch.setattr(ollama_nodes, "node_health", fake)
+    with pytest.raises(ValueError, match="does not have"):
+        ollama_nodes.set_model_node(MODEL, "rtx4060")
+
+
+def test_pinning_to_an_unknown_node_is_refused():
+    with pytest.raises(ValueError, match="Unknown Ollama node"):
+        ollama_nodes.set_model_node(MODEL, "nonsense", force=True)
+
+
+def test_an_env_default_can_seed_the_pin(monkeypatch):
+    monkeypatch.setenv(
+        "OLLAMA_MODEL_NODE_PREFERENCE", json.dumps({MODEL: "rtx4060"})
+    )
+    assert ollama_nodes.model_node_preference() == {MODEL: "rtx4060"}
+    # Saved state wins over the environment default.
+    ollama_nodes.set_model_node(MODEL, "jagadeesh", force=True)
+    assert ollama_nodes.model_node_preference() == {MODEL: "jagadeesh"}
+
+
+def test_a_pin_to_a_node_that_no_longer_exists_is_ignored(monkeypatch):
+    monkeypatch.setenv(
+        "OLLAMA_MODEL_NODE_PREFERENCE", json.dumps({MODEL: "a-retired-node"})
+    )
+    assert ollama_nodes.model_node_preference() == {}
+    _stub_health(monkeypatch, {"jagadeesh"})
+    ollama_nodes.set_primary_node("jagadeesh", force=True)
+    assert ollama_nodes.select_available_node(model=MODEL)["node_id"] == "jagadeesh"
