@@ -46,14 +46,22 @@ $SshKey = Join-Path $env:USERPROFILE ".ssh\teleautomation_vps_ed25519"
 
 function Resolve-LogDirectory {
     <#
-        Scheduled Task processes do not always inherit LOCALAPPDATA. When it is
-        missing, Join-Path returned a *relative* path, New-Item created it
-        wherever the task happened to start, and every Write-TunnelLog then
-        failed silently — the tunnel ran perfectly while producing no log at
-        all, which is precisely the case someone needs the log for.
+        Defensive only. Join-Path throws when handed a null, so if LOCALAPPDATA
+        were ever absent both $LogDir and $LogFile would end up null and every
+        Write-TunnelLog would fail silently — the tunnel running perfectly while
+        producing no log at all, which is precisely the case someone needs the
+        log for. Deriving from the first rooted candidate removes that failure
+        mode, and throwing beats degrading to silence.
 
-        USERPROFILE is present in that context (ssh finds its key by it), so
-        derive from it and only fall back to TEMP if even that is gone.
+        This was NOT observed in production. It was reported as a live incident
+        and that report was mistaken: the log was being written correctly all
+        along, and the reader was inside an MSIX container that redirects
+        %LOCALAPPDATA% to a private per-app copy. The hardening is still worth
+        keeping, but nothing here was ever broken. To read the real file from a
+        containerised shell, go through \\localhost\C$\... instead.
+
+        USERPROFILE is reliably present (ssh finds its key by it), so derive
+        from that, and only fall back to TEMP if even it is gone.
     #>
     foreach ($base in @(
         $env:LOCALAPPDATA,
