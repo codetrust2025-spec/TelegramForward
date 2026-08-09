@@ -102,10 +102,53 @@ def primary_node_id() -> str:
             return default
 
 
-def set_primary_node(node_id: str) -> str:
+def required_models() -> list[str]:
+    """Every model the application needs, not just the vision one.
+
+    The pool serves text and vision from different models, so a node carrying
+    only one of them is useless as primary however fast it is.
+    """
+    try:
+        from core.ai_gateway import configured_models
+
+        models = configured_models()
+    except Exception:  # pragma: no cover - configuration unavailable
+        return []
+    ordered = (models.get("text"), models.get("validator"), models.get("vision"))
+    return list(dict.fromkeys(name for name in ordered if name))
+
+
+def missing_models(node_id: str, *, timeout: float = 10) -> list[str]:
+    """Which required models this node does not have installed."""
+    wanted = required_models()
+    if not wanted:
+        return []
+    status = node_health(node_id, model=wanted[0], timeout=timeout)
+    if not status["endpoint_reachable"]:
+        raise RuntimeError(f"{node_id} is not reachable")
+    installed = status.get("installed_models") or []
+    return [name for name in wanted if not _model_available(name, installed)]
+
+
+def set_primary_node(node_id: str, *, force: bool = False) -> str:
+    """Point production at a node.
+
+    Verifies the node actually carries every required model first. The HTTP
+    layer already refused an unready node, but a direct call could bypass that
+    — and did: rtx4060 was promoted on the strength of the vision model alone
+    while lacking the text model, which took invite extraction down until the
+    primary was reverted. The check belongs here, next to the write.
+    """
     selected = str(node_id or "").strip()
     if selected not in _valid_node_ids():
         raise ValueError("Unknown Ollama node")
+    if not force:
+        absent = missing_models(selected)
+        if absent:
+            raise ValueError(
+                f"{selected} is missing required model(s): {', '.join(absent)}. "
+                "Install them, or pass force=True to accept a degraded primary."
+            )
     path = _state_path()
     with _LOCK:
         path.parent.mkdir(parents=True, exist_ok=True)
