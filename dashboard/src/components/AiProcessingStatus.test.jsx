@@ -135,3 +135,97 @@ describe("AiProcessingStatus mode badge", () => {
     expect(screen.getByRole("status").getAttribute("aria-label")).toMatch(/AI only/);
   });
 });
+
+describe("elapsed time", () => {
+  it("counts up while the work is in flight", () => {
+    vi.useFakeTimers();
+    render(<AiProcessingStatus state="processing" title="Reading invite" />);
+
+    expect(screen.getByText("0.0s")).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(4200);
+    });
+
+    expect(screen.getByText("4.2s")).toBeTruthy();
+  });
+
+  it("keeps the final number after the work finishes, so it can still be read", () => {
+    vi.useFakeTimers();
+    const view = render(<AiProcessingStatus state="processing" title="Reading invite" />);
+
+    act(() => {
+      vi.advanceTimersByTime(3500);
+    });
+    view.rerender(<AiProcessingStatus state="success" title="Reading invite" />);
+
+    // Frozen, not cleared and not still ticking.
+    expect(screen.getByText("3.5s")).toBeTruthy();
+    act(() => {
+      vi.advanceTimersByTime(5500);
+    });
+    expect(screen.getByText("3.5s")).toBeTruthy();
+  });
+
+  it("keeps counting through a retry, because the wait is what matters", () => {
+    vi.useFakeTimers();
+    const view = render(<AiProcessingStatus state="processing" title="Reading invite" />);
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    view.rerender(<AiProcessingStatus state="retrying" title="Reading invite" />);
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(screen.getByText("5.0s")).toBeTruthy();
+  });
+
+  it("reads minutes and seconds once past a minute", () => {
+    vi.useFakeTimers();
+    render(<AiProcessingStatus state="processing" title="Reading invite" />);
+
+    act(() => {
+      vi.advanceTimersByTime(171000);
+    });
+
+    expect(screen.getByText("2m 51s")).toBeTruthy();
+  });
+
+  it("can be turned off by the caller", () => {
+    vi.useFakeTimers();
+    render(<AiProcessingStatus state="processing" title="Reading invite" showElapsed={false} />);
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(screen.queryByText(/\ds$/)).toBeNull();
+  });
+
+  it("ticks in whole seconds when motion is reduced", () => {
+    stubReducedMotion(true);
+    vi.useFakeTimers();
+    render(<AiProcessingStatus state="processing" title="Reading invite" />);
+
+    // A tenth of a second must not redraw the number under reduced motion.
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(screen.getByText("0.0s")).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(screen.getByText("1.0s")).toBeTruthy();
+  });
+
+  it("includes the elapsed time in the accessible label", () => {
+    vi.useFakeTimers();
+    render(<AiProcessingStatus state="processing" title="Reading invite" />);
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+
+    expect(screen.getByRole("status").getAttribute("aria-label")).toContain("6.0s");
+  });
+});
