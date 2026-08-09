@@ -79,6 +79,53 @@ function useRotatingMessage(active, messages, reducedMotion) {
   return messages[Math.min(index, messages.length - 1)] || "";
 }
 
+/**
+ * Time the work actually took, from entering an active state to leaving it.
+ *
+ * The rotating copy and the trail both say "something is happening" without
+ * saying how long for, so a 4-second read and a 40-second one look identical
+ * while you wait. The elapsed count is a real measurement rather than invented
+ * progress, and it keeps its final value once the work stops so the number can
+ * still be read afterwards — which is the point when comparing inference nodes.
+ *
+ * A retry keeps counting rather than restarting: the honest answer to "how long
+ * has this taken" is the whole wait, not the latest attempt.
+ */
+function useElapsed(active, enabled, reducedMotion) {
+  const [ms, setMs] = useState(null);
+  const startedAt = useRef(null);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    if (!active) {
+      startedAt.current = null;
+      return undefined;
+    }
+    if (startedAt.current === null) {
+      startedAt.current = Date.now();
+      setMs(0);
+    }
+    // A number changing ten times a second is motion; someone who asked for
+    // stillness gets whole seconds instead of tenths.
+    const period = reducedMotion ? 1000 : 100;
+    const timer = window.setInterval(() => {
+      if (startedAt.current !== null) setMs(Date.now() - startedAt.current);
+    }, period);
+    return () => window.clearInterval(timer);
+  }, [active, enabled, reducedMotion]);
+
+  return ms;
+}
+
+export function formatElapsed(ms) {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return null;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return `${minutes}m ${String(rest).padStart(2, "0")}s`;
+}
+
 export const MODE_LABELS = { "ocr+ai": "OCR + AI", ai: "AI only" };
 
 export default function AiProcessingStatus({
@@ -91,6 +138,8 @@ export default function AiProcessingStatus({
   messages = AI_STAGE_MESSAGES,
   /** Real 0–100 progress only. Omit entirely when none exists. */
   progress = null,
+  /** Show how long the work has been running, and how long it took. */
+  showElapsed = true,
   onRetry,
   onCancel,
   retryLabel = "Retry",
@@ -105,6 +154,14 @@ export default function AiProcessingStatus({
   const copy = STATE_COPY[state] || STATE_COPY.processing;
   const detail = message || (state === "processing" ? rotating : copy.detail);
 
+  const elapsedMs = useElapsed(active, showElapsed, reducedMotion);
+  const elapsedText = showElapsed ? formatElapsed(elapsedMs) : null;
+  const elapsedTitle = active
+    ? "Time so far"
+    : state === "success"
+      ? "Time taken"
+      : "Time before it stopped";
+
   const hasRealProgress =
     typeof progress === "number" && Number.isFinite(progress) && progress >= 0;
   const clamped = hasRealProgress ? Math.min(100, Math.max(0, progress)) : null;
@@ -113,8 +170,11 @@ export default function AiProcessingStatus({
 
   // Announce politely: this is status, never an interruption.
   const ariaLabel = useMemo(
-    () => [title, modeLabel, copy.label, detail].filter(Boolean).join(" — "),
-    [title, modeLabel, copy.label, detail],
+    () =>
+      [title, modeLabel, copy.label, detail, elapsedText && `${elapsedTitle} ${elapsedText}`]
+        .filter(Boolean)
+        .join(" — "),
+    [title, modeLabel, copy.label, detail, elapsedText, elapsedTitle],
   );
 
   const classes = [
@@ -155,12 +215,26 @@ export default function AiProcessingStatus({
           <span className="aips__title">
             {title}
             {modeLabel && <span className="aips__mode">{modeLabel}</span>}
+            {/* Anchored to the title rather than the message, which rotates and
+                would make a trailing counter jump about. */}
+            {elapsedText && (
+              <span className="aips__elapsed" title={elapsedTitle}>
+                {elapsedText}
+              </span>
+            )}
           </span>
         )}
         {variant !== "card" && modeLabel && (
           <span className="aips__mode aips__mode--inline">{modeLabel}</span>
         )}
-        <span className="aips__message">{detail || copy.label}</span>
+        <span className="aips__message">
+          {detail || copy.label}
+          {variant !== "card" && elapsedText && (
+            <span className="aips__elapsed aips__elapsed--inline" title={elapsedTitle}>
+              {elapsedText}
+            </span>
+          )}
+        </span>
         {hasRealProgress && (
           <span
             className="aips__meter"

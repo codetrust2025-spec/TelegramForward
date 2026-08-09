@@ -93,7 +93,16 @@
 
 /* ── body ────────────────────────────────────────────────────────────────── */
 .aips__body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto; }
-.aips__title { font-weight: 700; font-size: var(--text-md, 12px); letter-spacing: 0.02em; color: var(--text, #eef2f7); }
+/* Flex so the elapsed count can sit at the far end of the row. */
+.aips__title {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  font-weight: 700;
+  font-size: var(--text-md, 12px);
+  letter-spacing: 0.02em;
+  color: var(--text, #eef2f7);
+}
 .aips__message { color: var(--text-muted, #a8b4c4); overflow: hidden; text-overflow: ellipsis; }
 .aips--success .aips__message,
 .aips--error .aips__message,
@@ -176,6 +185,41 @@
   vertical-align: middle;
 }
 .aips__mode--inline { margin-left: 0; margin-top: 2px; align-self: flex-start; }
+
+/* Elapsed time.
+   Pushed to the end of the title row so it sits away from the label, and
+   tabular figures keep the digits from shuffling as the count ticks. */
+.aips__elapsed {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--aips-accent-soft);
+  color: var(--aips-accent);
+  font-size: var(--text-xs, 10px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.aips__elapsed--inline {
+  margin-left: 8px;
+  padding: 0 4px;
+  background: transparent;
+  opacity: 0.75;
+}
+
+/* The count is the one honest number here; keep it legible when the surface
+   turns red or green rather than inheriting the state colour. */
+.aips--success .aips__elapsed,
+.aips--timeout .aips__elapsed,
+.aips--error .aips__elapsed {
+  background: transparent;
+  border: 1px solid currentColor;
+  opacity: 0.85;
+}
 
 /* Admin OCR switch */
 .ocr-policy__mode {
