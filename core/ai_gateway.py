@@ -339,9 +339,30 @@ def chat_structured(
 
 
 def health(*, model: str | None = None, timeout: float | None = None, node_id: str | None = None) -> dict[str, Any]:
-    """Check endpoint and configured model without exposing network details."""
+    """Can this model be served? Reports on whichever node would actually run it.
+
+    Callers use this as a gate — invite extraction refuses to run when it says
+    no — so answering for the configured primary alone made a degraded primary
+    look like a total outage. That is exactly what happened: rtx4060 became
+    primary carrying the vision model but not the text one, and every invite
+    read reported the AI unavailable while jagadeesh sat there able to serve it.
+
+    An explicit node_id still reports on that node, which is what the admin
+    screen and the post-selection check in chat() both want.
+    """
     configured = (model or configured_models()["text"]).strip()
-    selected_node = node_id or ollama_nodes.primary_node_id()
+    if node_id:
+        selected_node = node_id
+    else:
+        try:
+            selected_node = ollama_nodes.select_available_node(
+                model=configured,
+                timeout=timeout or _env_float("OLLAMA_HEALTH_TIMEOUT_SECONDS", 10),
+            )["node_id"]
+        except RuntimeError:
+            # Nothing could serve it; report against the primary so the error
+            # describes the node the operator expects to be in charge.
+            selected_node = ollama_nodes.primary_node_id()
     selected_base_url = ollama_nodes.base_url_for(selected_node)
     host_id = ollama_nodes.inference_host_id(selected_node)
     started = time.monotonic()
