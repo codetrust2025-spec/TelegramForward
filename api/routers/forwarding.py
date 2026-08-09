@@ -54,14 +54,20 @@ from core.demo_tools_api import install_demo_tools_routes
 from core.recruitment_mail_api import install_recruitment_mail_routes
 from fastapi import APIRouter
 
+from server import _require_fleet_admin
+
 router = APIRouter()
 
-@router.get("/forward-message/settings")
+@router.get(
+    "/forward-message/settings", dependencies=[Depends(_require_fleet_admin)]
+)
 async def forward_message_settings_get():
     from services.forward_message_service import forward_message_service
 
     return {"status": "ok", "settings": forward_message_service.get_settings()}
-@router.post("/forward-message/settings")
+@router.post(
+    "/forward-message/settings", dependencies=[Depends(_require_fleet_admin)]
+)
 async def forward_message_settings_post(body: dict):
     from services.forward_message_service import forward_message_service
 

@@ -40,6 +40,13 @@ _PUBLIC_EXACT = frozenset({
     "/webhooks/whatsapp",
     "/push/vapid-public-key",
     "/bookings/confirm",
+    # Static pages that must be readable without an account: OAuth consent
+    # review and app-store listings fetch them anonymously. They were only ever
+    # reachable because their roots were missing from _API_ROOTS, so deriving
+    # roots from the route table would have started returning 401 for them.
+    "/privacy",
+    "/terms",
+    "/oauth-home",
 })
 
 _PUBLIC_PREFIXES = (
@@ -55,11 +62,53 @@ _API_ROOTS = frozenset({
     "data-room", "public", "bookings",
     "metrics", "alerts", "handler-expenses", "handler-salaries", "voice",
     "webhooks", "whatsapp", "push", "devices", "demo-tools", "workspace", "fleet", "api",
-    # Anything absent here is taken for a client-side route and waved past the
-    # auth middleware, so an API root that is forgotten answers without a
-    # session. These two carry reconciliation and BGV figures.
     "payments", "bgv",
 })
+
+# Roots discovered from the routes the app actually registers.
+#
+# _API_ROOTS alone was fail-open: is_spa_shell_request treats an unrecognised
+# first segment as a client-side route, so the auth middleware waved the GET
+# through and the real API route answered it — anonymously. Every root anyone
+# forgot to add here became a silent authorisation hole, which is how
+# /payments, /bgv, /company-expenses and /forward-message all ended up readable
+# without a session.
+#
+# Deriving the set from the app inverts that default: a route that exists is
+# protected whether or not anyone remembered to list it. _API_ROOTS is kept as a
+# seed for paths served outside the APIRoute table (websockets, mounts) and for
+# use before registration has run.
+_DISCOVERED_API_ROOTS: set[str] = set()
+
+
+def register_api_roots(app: Any) -> frozenset[str]:
+    """Record the first path segment of every route the app registers.
+
+    Call once after all routers are mounted. Paths that are explicitly public
+    stay public: this only decides which roots are *API* roots, and
+    is_public_path is still consulted first.
+    """
+    from fastapi.routing import APIRoute
+
+    discovered: set[str] = set()
+    for route in getattr(app, "routes", []):
+        if not isinstance(route, APIRoute):
+            continue
+        stripped = route.path.strip("/")
+        if not stripped:
+            continue
+        first = stripped.split("/")[0]
+        # A path that starts with a parameter has no fixed root to key on.
+        if first.startswith("{"):
+            continue
+        discovered.add(first)
+    _DISCOVERED_API_ROOTS.update(discovered)
+    return frozenset(discovered)
+
+
+def api_roots() -> frozenset[str]:
+    """Every first path segment that belongs to the API rather than the SPA."""
+    return frozenset(_API_ROOTS | _DISCOVERED_API_ROOTS)
 
 
 def _refresh_dashboard_env_from_file() -> None:
@@ -446,7 +495,7 @@ def is_spa_shell_request(method: str, path: str) -> bool:
     if not stripped:
         return True
     first = stripped.split("/")[0]
-    return first not in _API_ROOTS
+    return first not in api_roots()
 
 
 def username_from_request_cookies(cookies: dict) -> str | None:

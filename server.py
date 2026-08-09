@@ -1299,6 +1299,13 @@ app.include_router(inbox_router)
 from api.routers.stats import router as stats_router
 app.include_router(stats_router)
 
+# Every router is mounted by this point. Tell the auth layer which first path
+# segments belong to the API, so a root nobody added to _API_ROOTS by hand can
+# no longer be mistaken for a client-side route and answered without a session.
+from core import dashboard_auth_vps as _dashboard_auth_for_roots
+
+_dashboard_auth_for_roots.register_api_roots(app)
+
 
 # ── Frontend (production) ───────────────────────────────────────────────────────
 

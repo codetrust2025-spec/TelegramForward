@@ -371,7 +371,7 @@ async def handler_expense_delete_proof(eid: str, pid: str):
     if not ok:
         return {"status": "error", "message": "Proof not found"}
     return {"status": "ok"}
-@router.get("/company-expenses")
+@router.get("/company-expenses", dependencies=[Depends(_require_fleet_admin)])
 async def company_expenses_list(
     month: str | None = Query(default=None),
     category: str | None = Query(default=None),
@@ -432,7 +432,9 @@ async def company_expenses_delete(eid: str):
     from features import company_expenses
     ok = company_expenses.delete_expense(eid)
     return {"status": "ok" if ok else "not_found"}
-@router.get("/company-expenses/total")
+@router.get(
+    "/company-expenses/total", dependencies=[Depends(_require_fleet_admin)]
+)
 async def company_expenses_total(month: str | None = Query(default=None)):
     """Combined view: handler payouts + company expenses = total expenditure."""
     from features import company_expenses
