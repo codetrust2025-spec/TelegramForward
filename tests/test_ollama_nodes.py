@@ -15,7 +15,10 @@ def test_jagadeesh_is_default_primary(monkeypatch, tmp_path):
 def test_primary_selection_is_persisted(monkeypatch, tmp_path):
     state = tmp_path / "nodes.json"
     monkeypatch.setenv("OLLAMA_NODE_STATE_FILE", str(state))
-    assert ollama_nodes.set_primary_node("our_machine") == "our_machine"
+    # force=True because this covers persistence, not the readiness check —
+    # that gate is exercised in test_ollama_pool_failover.py and would
+    # otherwise need a live node to answer.
+    assert ollama_nodes.set_primary_node("our_machine", force=True) == "our_machine"
     assert json.loads(state.read_text(encoding="utf-8")) == {
         "primary_node": "our_machine"
     }

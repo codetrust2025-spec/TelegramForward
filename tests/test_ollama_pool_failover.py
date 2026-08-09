@@ -98,7 +98,7 @@ def test_an_existing_jagadeesh_override_still_wins(monkeypatch):
 
 
 def test_a_chosen_primary_survives_a_restart(monkeypatch, tmp_path):
-    ollama_nodes.set_primary_node("our_machine")
+    ollama_nodes.set_primary_node("our_machine", force=True)
     saved = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
     assert saved["primary_node"] == "our_machine"
     # A new process reads the file rather than the code default.
@@ -114,20 +114,20 @@ def test_an_unknown_persisted_primary_falls_back_instead_of_crashing(tmp_path):
 
 def test_selecting_an_unknown_node_is_refused():
     with pytest.raises(ValueError):
-        ollama_nodes.set_primary_node("nonsense")
+        ollama_nodes.set_primary_node("nonsense", force=True)
 
 
 # ── failover ────────────────────────────────────────────────────────────────
 
 
 def test_requests_go_to_the_primary_while_it_is_healthy(monkeypatch):
-    ollama_nodes.set_primary_node("jagadeesh")
+    ollama_nodes.set_primary_node("jagadeesh", force=True)
     _stub_health(monkeypatch, {"jagadeesh", "our_machine"})
     assert ollama_nodes.select_available_node(model=MODEL)["node_id"] == "jagadeesh"
 
 
 def test_an_unhealthy_primary_fails_over_to_the_next_node(monkeypatch):
-    ollama_nodes.set_primary_node("rtx4060")
+    ollama_nodes.set_primary_node("rtx4060", force=True)
     _stub_health(monkeypatch, {"jagadeesh", "our_machine"})
     chosen = ollama_nodes.select_available_node(model=MODEL)
     assert chosen["node_id"] == "jagadeesh"
@@ -135,14 +135,14 @@ def test_an_unhealthy_primary_fails_over_to_the_next_node(monkeypatch):
 
 
 def test_a_second_failure_falls_through_to_the_third_node(monkeypatch):
-    ollama_nodes.set_primary_node("rtx4060")
+    ollama_nodes.set_primary_node("rtx4060", force=True)
     _stub_health(monkeypatch, {"our_machine"})
     assert ollama_nodes.select_available_node(model=MODEL)["node_id"] == "our_machine"
 
 
 def test_a_node_missing_the_model_is_not_selected(monkeypatch):
     """An open port is not health. A node can accept TCP and still be useless."""
-    ollama_nodes.set_primary_node("jagadeesh")
+    ollama_nodes.set_primary_node("jagadeesh", force=True)
 
     def fake(node_id, *, model, timeout=5, deep=True):
         return {
@@ -184,7 +184,7 @@ def test_repeated_failures_open_the_breaker(monkeypatch):
 
 def test_a_cooling_node_is_skipped_even_when_it_is_the_primary(monkeypatch):
     monkeypatch.setenv("OLLAMA_NODE_FAILURE_THRESHOLD", "2")
-    ollama_nodes.set_primary_node("jagadeesh")
+    ollama_nodes.set_primary_node("jagadeesh", force=True)
     _stub_health(monkeypatch, {"jagadeesh", "our_machine"})
     for _ in range(2):
         ollama_nodes.record_failure("jagadeesh", "timeout")
@@ -193,7 +193,7 @@ def test_a_cooling_node_is_skipped_even_when_it_is_the_primary(monkeypatch):
 
 def test_a_recovered_node_rejoins_once_it_succeeds(monkeypatch):
     monkeypatch.setenv("OLLAMA_NODE_FAILURE_THRESHOLD", "2")
-    ollama_nodes.set_primary_node("jagadeesh")
+    ollama_nodes.set_primary_node("jagadeesh", force=True)
     _stub_health(monkeypatch, {"jagadeesh", "our_machine"})
     for _ in range(2):
         ollama_nodes.record_failure("jagadeesh", "timeout")
@@ -218,7 +218,7 @@ def test_when_everything_is_cooling_the_pool_still_probes(monkeypatch):
 def test_failover_never_rewrites_the_configured_primary(monkeypatch):
     """The anti-flap rule. Routing around a sick node is per-request; changing
     production's primary stays a deliberate admin action."""
-    ollama_nodes.set_primary_node("rtx4060")
+    ollama_nodes.set_primary_node("rtx4060", force=True)
     _stub_health(monkeypatch, {"our_machine"})
 
     for _ in range(5):
@@ -262,3 +262,80 @@ def test_a_generation_error_counts_as_a_failure(monkeypatch):
     monkeypatch.setattr(ollama_nodes, "_request", boom)
     assert ollama_nodes.verify_inference("jagadeesh", model=MODEL)["ok"] is False
     assert ollama_nodes.breaker_state("jagadeesh")["last_error"] == "OSError"
+
+
+# ── promotion must verify every required model, not just one ────────────────
+
+
+def _stub_installed(monkeypatch, per_node):
+    """node_health reporting a specific installed-model list per node."""
+
+    def fake(node_id, *, model, timeout=5, deep=True):
+        installed = per_node.get(node_id)
+        reachable = installed is not None
+        return {
+            "id": node_id, "label": node_id, "primary": False,
+            "status": "online" if reachable else "offline",
+            "endpoint_reachable": reachable,
+            "model": model,
+            "model_available": bool(installed and model in installed),
+            "model_loaded": False, "response_time_ms": 5, "error": None,
+            "installed_models": installed or [],
+            "breaker": ollama_nodes.breaker_state(node_id),
+            "available": reachable,
+        }
+
+    monkeypatch.setattr(ollama_nodes, "node_health", fake)
+    monkeypatch.setattr(
+        ollama_nodes, "required_models", lambda: ["qwen2.5:7b", MODEL]
+    )
+
+
+def test_a_node_missing_the_text_model_cannot_become_primary(monkeypatch):
+    """The regression this guard exists for. rtx4060 was promoted on the
+    strength of the vision model alone, while lacking the text model that
+    invite extraction actually calls, and booking broke until it was reverted.
+    Fast on vision is not the same as able to serve."""
+    _stub_installed(monkeypatch, {
+        "rtx4060": [MODEL],                    # vision only
+        "jagadeesh": ["qwen2.5:7b", MODEL],
+        "our_machine": ["qwen2.5:7b", MODEL],
+    })
+    ollama_nodes.set_primary_node("jagadeesh", force=True)
+
+    with pytest.raises(ValueError, match="missing required model"):
+        ollama_nodes.set_primary_node("rtx4060")
+
+    assert ollama_nodes.primary_node_id() == "jagadeesh", "primary must not move"
+
+
+def test_the_error_names_the_model_that_is_missing(monkeypatch):
+    _stub_installed(monkeypatch, {"rtx4060": [MODEL], "jagadeesh": ["qwen2.5:7b", MODEL]})
+    with pytest.raises(ValueError, match="qwen2.5:7b"):
+        ollama_nodes.set_primary_node("rtx4060")
+
+
+def test_a_fully_stocked_node_promotes_normally(monkeypatch):
+    _stub_installed(monkeypatch, {
+        "rtx4060": ["qwen2.5:7b", MODEL],
+        "jagadeesh": ["qwen2.5:7b", MODEL],
+    })
+    assert ollama_nodes.set_primary_node("rtx4060") == "rtx4060"
+    assert ollama_nodes.primary_node_id() == "rtx4060"
+
+
+def test_an_unreachable_node_cannot_become_primary(monkeypatch):
+    _stub_installed(monkeypatch, {"jagadeesh": ["qwen2.5:7b", MODEL]})
+    with pytest.raises(RuntimeError, match="not reachable"):
+        ollama_nodes.set_primary_node("rtx4060")
+
+
+def test_force_still_allows_a_deliberate_override(monkeypatch):
+    """An admin who confirms the warning can still select a degraded node."""
+    _stub_installed(monkeypatch, {"rtx4060": [MODEL], "jagadeesh": ["qwen2.5:7b", MODEL]})
+    assert ollama_nodes.set_primary_node("rtx4060", force=True) == "rtx4060"
+
+
+def test_missing_models_reports_every_gap(monkeypatch):
+    _stub_installed(monkeypatch, {"rtx4060": []})
+    assert ollama_nodes.missing_models("rtx4060") == ["qwen2.5:7b", MODEL]

@@ -1,6 +1,6 @@
 """Authenticated API for candidate mailbox tracking and AI review."""
 from __future__ import annotations
-import asyncio, base64, hashlib, hmac, json, logging, os, time
+import asyncio, base64, functools, hashlib, hmac, json, logging, os, time
 from datetime import date, datetime, timedelta, timezone
 from fastapi import HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
@@ -157,7 +157,7 @@ def install_recruitment_mail_routes(app):
         # feature down until someone notices.
         if not status.get('ready') and not override:
             raise HTTPException(409,'This node cannot become primary until it is online and all required models are installed.')
-        await asyncio.to_thread(ollama_nodes.set_primary_node,node_id)
+        await asyncio.to_thread(functools.partial(ollama_nodes.set_primary_node,node_id,force=bool(override)))
         status['primary']=True
         return {'status':'ok','primary_node':node_id,'node':status}
     @app.post('/api/ai-recruitment/ollama/nodes/{node_id}/unload')
