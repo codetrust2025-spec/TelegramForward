@@ -313,6 +313,13 @@ export function SubmitSlotPage() {
   const [validationError, setValidationError] = useState(null)
   const [aiExtraction, setAiExtraction] = useState(null)
   const [aiBlocked, setAiBlocked] = useState('')
+  // How long the invite read took. Owned here rather than inside
+  // AiProcessingStatus because the processing card and the success strip are
+  // different elements: swapping them unmounts the card, and a timer living in
+  // it would vanish at the exact moment the number becomes worth reading. Held
+  // until the file is replaced or the booking is confirmed.
+  const [aiElapsedMs, setAiElapsedMs] = useState(null)
+  const parseStartedAtRef = useRef(null)
   const [userEditedFields, setUserEditedFields] = useState({})
   const [paymentAiResult, setPaymentAiResult] = useState(null)
   const [paymentAnalysing, setPaymentAnalysing] = useState(false)
@@ -434,6 +441,18 @@ export function SubmitSlotPage() {
     if (sessionPreview) URL.revokeObjectURL(sessionPreview)
   }, [slotPreview, sessionPreview])
 
+  // Tick while the read is in flight; the exact final value is pinned in the
+  // parse function's finally block.
+  useEffect(() => {
+    if (!parsing) return undefined
+    const timer = window.setInterval(() => {
+      if (parseStartedAtRef.current) {
+        setAiElapsedMs(Date.now() - parseStartedAtRef.current)
+      }
+    }, 100)
+    return () => window.clearInterval(timer)
+  }, [parsing])
+
   async function parseScreenshot(file) {
     if (!file) { setParsedSlot(null); setAiExtraction(null); setAiBlocked(''); return }
     // Extraction is slow, so a second click (or a rapid re-upload) could
@@ -441,6 +460,8 @@ export function SubmitSlotPage() {
     // winner's result. Ignore re-entry while one is already in flight.
     if (parseInFlightRef.current) return
     parseInFlightRef.current = true
+    parseStartedAtRef.current = Date.now()
+    setAiElapsedMs(0)
     setParsing(true); setError(''); setSuccess(''); setAiExtraction(null); setAiBlocked('')
     try {
       // Try AI extraction first
@@ -522,7 +543,16 @@ export function SubmitSlotPage() {
       setAiBlocked('')
       setParsing(false)
       return
-    } finally { setParsing(false); parseInFlightRef.current = false }
+    } finally {
+      setParsing(false)
+      parseInFlightRef.current = false
+      // Pin the exact duration however the read ended — success, blocked, or
+      // thrown — so the figure shown afterwards is the real one rather than
+      // wherever the ticker happened to stop.
+      if (parseStartedAtRef.current) {
+        setAiElapsedMs(Date.now() - parseStartedAtRef.current)
+      }
+    }
 
     // No OCR-only fallback: a single source must never populate booking data.
     setParsedSlot(null)
@@ -541,6 +571,7 @@ export function SubmitSlotPage() {
   async function onSlotFileChange(file) {
     if (slotPreview) URL.revokeObjectURL(slotPreview)
     setSlotFile(file || null); setParsedSlot(null); setManualDate(''); setManualTime(''); setSuccess(''); setAiExtraction(null); setAiBlocked(''); setUserEditedFields({})
+    setAiElapsedMs(null); parseStartedAtRef.current = null
     if (file) clearValidationError('invite')
     if (file) { setSlotPreview(URL.createObjectURL(file)); await parseScreenshot(file) }
     else setSlotPreview('')
@@ -660,6 +691,8 @@ export function SubmitSlotPage() {
       setPaymentDue(null)
       setAiExtraction(null)
       setAiBlocked('')
+      setAiElapsedMs(null)
+      parseStartedAtRef.current = null
       setUserEditedFields({})
       setPaymentAiResult(null)
       setPaymentAnalysing(false)
@@ -892,6 +925,7 @@ export function SubmitSlotPage() {
                     state="processing"
                     title="Reading invite"
                     mode={aiExtraction?.processing_mode || null}
+                    elapsedMs={aiElapsedMs}
                   />
                 )}
                 {!parsing && aiExtraction && !aiBlocked && (
@@ -901,6 +935,7 @@ export function SubmitSlotPage() {
                     title="Reading invite"
                     message="AI reading completed"
                     mode={aiExtraction?.processing_mode || null}
+                    elapsedMs={aiElapsedMs}
                   />
                 )}
                 {!parsing && aiBlocked && (
@@ -910,6 +945,7 @@ export function SubmitSlotPage() {
                     title="Reading invite"
                     message={aiBlocked}
                     mode={aiExtraction?.processing_mode || null}
+                    elapsedMs={aiElapsedMs}
                     onRetry={slotFile ? () => parseScreenshot(slotFile) : undefined}
                     onCancel={() => onSlotFileChange(null)}
                     retryLabel="Retry"

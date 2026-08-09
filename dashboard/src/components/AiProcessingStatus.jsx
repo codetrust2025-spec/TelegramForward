@@ -140,6 +140,15 @@ export default function AiProcessingStatus({
   progress = null,
   /** Show how long the work has been running, and how long it took. */
   showElapsed = true,
+  /**
+   * Supply the measurement instead of timing internally.
+   *
+   * Callers that swap this component out between states — a processing card
+   * replaced by a success strip, say — unmount it, and internal timing dies
+   * with the instance. Those callers own the request, so they should own the
+   * clock and pass the result here.
+   */
+  elapsedMs = null,
   onRetry,
   onCancel,
   retryLabel = "Retry",
@@ -154,8 +163,11 @@ export default function AiProcessingStatus({
   const copy = STATE_COPY[state] || STATE_COPY.processing;
   const detail = message || (state === "processing" ? rotating : copy.detail);
 
-  const elapsedMs = useElapsed(active, showElapsed, reducedMotion);
-  const elapsedText = showElapsed ? formatElapsed(elapsedMs) : null;
+  const controlled = typeof elapsedMs === "number" && Number.isFinite(elapsedMs);
+  const internalMs = useElapsed(active, showElapsed && !controlled, reducedMotion);
+  const elapsedText = showElapsed
+    ? formatElapsed(controlled ? elapsedMs : internalMs)
+    : null;
   const elapsedTitle = active
     ? "Time so far"
     : state === "success"
