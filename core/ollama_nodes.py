@@ -499,7 +499,11 @@ def select_available_node(
             attempts.append({"node": node_id, "reason": "unreachable"})
             continue
         if not status["model_available"]:
-            record_failure(node_id, "model missing")
+            # Not a health failure. The breaker is per node while this is per
+            # model, so counting it would let text requests cool down a node
+            # that serves vision perfectly well — and a node carrying only the
+            # vision model would be dropped from vision work too, which is
+            # exactly backwards. Skip it for this model and leave it healthy.
             attempts.append({"node": node_id, "reason": "model missing"})
             continue
         if require_inference:
