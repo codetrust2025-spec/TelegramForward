@@ -229,3 +229,54 @@ describe("elapsed time", () => {
     expect(screen.getByRole("status").getAttribute("aria-label")).toContain("6.0s");
   });
 });
+
+describe("caller-supplied elapsed time", () => {
+  it("survives being swapped for a different element", () => {
+    // The real defect: the processing card and the success strip are separate
+    // elements, so the card unmounts and any timer inside it dies exactly when
+    // the number becomes worth reading. A supplied value has no such problem.
+    const view = render(
+      <AiProcessingStatus variant="card" state="processing" title="Reading invite" elapsedMs={4200} />,
+    );
+    expect(screen.getByText("4.2s")).toBeTruthy();
+
+    view.rerender(
+      <AiProcessingStatus
+        variant="inline"
+        state="success"
+        title="Reading invite"
+        message="AI reading completed"
+        elapsedMs={4200}
+      />,
+    );
+
+    expect(screen.getByText("AI reading completed")).toBeTruthy();
+    expect(screen.getByText("4.2s")).toBeTruthy();
+  });
+
+  it("is shown on a failure too, so a slow timeout is visible", () => {
+    render(
+      <AiProcessingStatus state="error" title="Reading invite" message="Nope" elapsedMs={31500} />,
+    );
+    expect(screen.getByText("31.5s")).toBeTruthy();
+  });
+
+  it("does not run its own clock when a value is supplied", () => {
+    vi.useFakeTimers();
+    render(<AiProcessingStatus state="processing" title="Reading invite" elapsedMs={1000} />);
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    // Still the supplied figure — the caller owns the clock.
+    expect(screen.getByText("1.0s")).toBeTruthy();
+  });
+
+  it("falls back to timing itself when no value is supplied", () => {
+    vi.useFakeTimers();
+    render(<AiProcessingStatus state="processing" title="Reading invite" />);
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getByText("2.0s")).toBeTruthy();
+  });
+});
