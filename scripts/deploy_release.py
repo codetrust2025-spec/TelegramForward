@@ -435,13 +435,48 @@ def verify_live_release(
     # what it thinks it started. Those two disagreeing is the whole failure.
     problems.extend(verify_serving_process(client, release))
 
-    nginx = ssh(
+    nginx_output = ssh(client, "nginx -t 2>&1 || true", check=False)
+    if "test is successful" not in nginx_output:
+        problems.append("Nginx configuration test failed")
+    # A stray file in sites-enabled — a backup, say — loads as a second server
+    # block for the same name and silently shadows the real one.
+    if "conflicting server name" in nginx_output:
+        problems.append("Nginx has duplicate server blocks (conflicting server name)")
+
+    # sites-available is the canonical copy and sites-enabled must be a symlink
+    # to it, or the two drift and a relink quietly reverts whatever the live
+    # file had. The archived copy taken at build time comes from sites-available
+    # too, so drift there also poisons the release record.
+    enabled_target = ssh(
         client,
-        "nginx -t > /dev/null 2>&1 && echo ok || echo failed",
+        "readlink -f /etc/nginx/sites-enabled/telegramforward || true",
         check=False,
     ).strip()
-    if nginx != "ok":
-        problems.append("Nginx configuration test failed")
+    if enabled_target != "/etc/nginx/sites-available/telegramforward":
+        problems.append(
+            "nginx sites-enabled is not a symlink to sites-available "
+            f"(resolves to {enabled_target or 'nothing'})"
+        )
+
+    canonical = ssh(
+        client,
+        "cat /etc/nginx/sites-available/telegramforward 2>/dev/null || true",
+        check=False,
+    )
+    # Roots the dashboard cannot function without. A root missing here is not a
+    # syntax error: nginx serves the SPA shell instead, the browser gets HTML
+    # where it expected JSON, and the page fails with no server-side trace.
+    required_roots = [
+        "api", "auth", "candidates", "stats", "accounts", "payments", "bgv",
+        "company-expenses", "handler-expenses", "data-room", "inbox", "health",
+    ]
+    absent = [
+        root
+        for root in required_roots
+        if f"({root}|" not in canonical and f"|{root}|" not in canonical
+    ]
+    if absent:
+        problems.append(f"nginx canonical config does not proxy: {', '.join(absent)}")
 
     public_health = ssh(
         client,
