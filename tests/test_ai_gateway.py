@@ -50,11 +50,26 @@ def test_health_separates_missing_primary_from_reachable_service(monkeypatch):
     assert result["diagnostic_status"] == "PRIMARY_MODEL_MISSING"
 
 
-def test_invalid_base_url_is_configuration_error(monkeypatch):
-    monkeypatch.setenv("OLLAMA_BASE_URL", "not-a-url")
+def test_invalid_node_url_is_configuration_error(monkeypatch):
+    """A malformed endpoint is a configuration fault, not a service outage.
+
+    The variable moved: node URLs now come from each node's own
+    OLLAMA_NODE_*_URL, never from the generic OLLAMA_BASE_URL, so the fault is
+    injected where the node is actually addressed. The distinction under test is
+    unchanged — an operator must not go hunting for a dead laptop when the real
+    problem is a typo in configuration.
+    """
+    monkeypatch.setenv("OLLAMA_NODE_JAGADEESH_URL", "not-a-url")
     result = ai_gateway.health(model="gemma4:12b")
     assert result["diagnostic_status"] == "CONFIGURATION_ERROR"
     assert result["serviceReachable"] is False
+
+
+def test_a_generic_base_url_can_no_longer_misconfigure_a_node(monkeypatch):
+    """OLLAMA_BASE_URL is inert for node addressing — the production defect."""
+    monkeypatch.setenv("OLLAMA_BASE_URL", "not-a-url")
+    result = ai_gateway.health(model="gemma4:12b")
+    assert result["diagnostic_status"] != "CONFIGURATION_ERROR"
 
 
 def test_missing_model_stops_before_chat(monkeypatch):
