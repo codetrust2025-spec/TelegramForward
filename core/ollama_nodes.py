@@ -45,9 +45,16 @@ def configured_nodes() -> list[dict[str, str]]:
         {
             "id": "jagadeesh",
             "label": "Jagadeesh",
+            # Deliberately does NOT fall back to OLLAMA_BASE_URL. That variable
+            # names "some Ollama", not this node, and the two drifted apart in
+            # production: a stale OLLAMA_BASE_URL of 11434 resolved `jagadeesh`
+            # to the VPS's own CPU Ollama while the Jagadeesh laptop sat idle on
+            # 11435. Every text request ran on four shared cores and nothing
+            # failed loudly, because 11434 happens to have qwen2.5:7b installed
+            # so the model check passed. A node id resolves from its own
+            # variable or the documented default — never from a generic one.
             "base_url": (
                 os.getenv("OLLAMA_NODE_JAGADEESH_URL")
-                or os.getenv("OLLAMA_BASE_URL")
                 or "http://127.0.0.1:11435"
             ).rstrip("/"),
         },
