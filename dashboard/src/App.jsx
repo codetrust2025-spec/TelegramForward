@@ -82,6 +82,8 @@ import {
   notifyIncomingDm,
 } from './notifications/notificationEvents.js'
 import { GlobalNotificationSounds } from './notifications/GlobalNotificationSounds.jsx'
+import { StartWorkModal } from './attendance/StartWorkModal.jsx'
+import AttendanceAdminPanel from './attendance/AttendanceAdminPanel.jsx'
 import { IncomingCallModal } from './components/crm/IncomingCallModal.jsx'
 import { computeInboxUnreadTotal, formatUnreadBadgeCount } from './utils/inboxUnread.js'
 import { syncTabUnreadBadge, resetTabUnreadBadge } from './utils/tabUnreadBadge.js'
@@ -93,6 +95,7 @@ import { DesktopApp } from './desktop/DesktopApp.jsx'
 import { PendingWorksProvider } from './dailyOps/PendingWorksProvider.jsx'
 import './recruitmentMail.css'
 import './outcomeAudit.css'
+import './attendance.css'
 
 
 function mergeInboxConversationList(convs, conversation, { clearUnread = false } = {}) {
@@ -1603,6 +1606,7 @@ export default function App() {
           inboxUnreadTotal={inboxUnreadTotal}
           crmState={crmState}
         />
+        <StartWorkModal />
         <div
           className={`app-shell app-shell--mobile-ui app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}
         >
@@ -1837,6 +1841,7 @@ export default function App() {
           inboxUnreadTotal={inboxUnreadTotal}
           crmState={crmState}
         />
+        <StartWorkModal />
         <div
           className={`app-shell app-shell--desktop-ui app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}
         >
@@ -2214,6 +2219,8 @@ export default function App() {
         <OutcomeAuditPanel />
       ) : mainView === 'payment-reconciliation' ? (
         <PaymentReconciliationPanel />
+      ) : mainView === 'attendance' ? (
+        <AttendanceAdminPanel />
       ) : mainView === 'bgv-register' ? (
         <BgvRegisterPanel />
       ) : mainView === 'mail-notifications' ? (
