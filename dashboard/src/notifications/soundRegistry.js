@@ -17,6 +17,7 @@ import {
   stopUnreadGhost,
 } from './sounds/unreadGhost.js'
 import { startCallRing, stopCallRing } from './sounds/callRing.js'
+import { playCallReminder, startCallReminder, stopCallReminder } from './sounds/callReminder.js'
 import { playSla5Marimba } from './sounds/sla5Marimba.js'
 import { playSla10Pulse, startSla10Pulse, stopSla10Pulse } from './sounds/sla10Pulse.js'
 import { playSla20Siren, startSla20Siren, stopSla20Siren } from './sounds/sla20Siren.js'
@@ -29,6 +30,7 @@ export const NOTIFICATION_IDS = [
   'dm',
   'unread_ghost',
   'incoming_call',
+  'call_reminder',
   'sla_5',
   'sla_10',
   'sla_20',
@@ -85,6 +87,17 @@ export const NOTIFICATION_SOUNDS = {
     quietHours: true,
     crmToggle: false,
     dedupe: 'call id: ringing starts, ended stops; re-ring of a live call ignored',
+  },
+  call_reminder: {
+    id: 'call_reminder',
+    label: 'Scheduled call reminder',
+    play: playCallReminder,
+    start: startCallReminder,
+    stop: stopCallReminder,
+    loop: true,
+    quietHours: true,
+    crmToggle: false,
+    dedupe: 'reminder id, once per reminder for the session',
   },
   sla_5: {
     id: 'sla_5',

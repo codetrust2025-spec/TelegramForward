@@ -51,18 +51,29 @@ export function notifyIncomingCall({ callId = null } = {}) {
   return startNotification('incoming_call')
 }
 
+/**
+ * Silence the call sounds.
+ *
+ * Stops the reminder as well as the ring. Before these were separate sounds,
+ * one stop covered both because they were literally the same loop; keeping
+ * that lifecycle means the existing "call handled" paths still leave the app
+ * quiet rather than stranding a reminder ringing behind a dismissed modal.
+ */
 export function notifyCallEnded() {
   ringingCallId = null
   stopNotification('incoming_call')
+  stopNotification('call_reminder')
 }
+
+/* ── scheduled call reminder ─────────────────────────────────────────── */
 
 /**
  * A scheduled call has come due.
  *
- * This deliberately reuses the incoming-call ring: a call you owe someone and a
- * call arriving are the same demand on the user, and the app has always used
- * one ring for both. Its own dedupe set means a reminder cannot re-ring while
- * a real call is ringing, and vice versa.
+ * This has its own sound rather than borrowing the incoming-call ring. The two
+ * events ask for opposite things — a call arriving must be answered now, a
+ * reminder means you owe someone a call — and a shared ring made a reminder
+ * indistinguishable from a live call until you looked at the screen.
  */
 const alertedReminders = new Set()
 
@@ -70,7 +81,11 @@ export function notifyCallReminder(reminderId) {
   const key = String(reminderId ?? 'unknown')
   if (alertedReminders.has(key)) return false
   alertedReminders.add(key)
-  return startNotification('incoming_call')
+  return startNotification('call_reminder')
+}
+
+export function stopCallReminder() {
+  stopNotification('call_reminder')
 }
 
 /* ── inbox unread ambience ───────────────────────────────────────────── */

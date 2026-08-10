@@ -12,8 +12,8 @@ import { NOTIFICATION_IDS, NOTIFICATION_SOUNDS } from './soundRegistry.js'
 import { installRecordingAudioStub } from './audioTestStub.js'
 
 describe('notification sound catalogue', () => {
-  it('covers exactly the ten audible notifications', () => {
-    expect(NOTIFICATION_IDS).toHaveLength(10)
+  it('covers exactly the eleven audible notifications', () => {
+    expect(NOTIFICATION_IDS).toHaveLength(11)
     expect(Object.keys(NOTIFICATION_SOUNDS).sort()).toEqual([...NOTIFICATION_IDS].sort())
   })
 
@@ -45,7 +45,13 @@ describe('notification sound catalogue', () => {
       else expect(entry.stop, id).toBeNull()
     }
     const looping = NOTIFICATION_IDS.filter((id) => NOTIFICATION_SOUNDS[id].loop)
-    expect(looping.sort()).toEqual(['incoming_call', 'sla_10', 'sla_20', 'unread_ghost'])
+    expect(looping.sort()).toEqual([
+      'call_reminder',
+      'incoming_call',
+      'sla_10',
+      'sla_20',
+      'unread_ghost',
+    ])
   })
 })
 
@@ -108,6 +114,26 @@ describe('every sound renders a different signature', () => {
     expect(bellWaveforms).toEqual(['sine'])
     expect(fanfareWaveforms).toEqual(['sawtooth'])
     expect(bellPitches).not.toEqual(fanfarePitches)
+  })
+
+  it('separates the scheduled call reminder from the incoming call ring', () => {
+    audio.reset()
+    NOTIFICATION_SOUNDS.incoming_call.play()
+    const ringWaveforms = [...new Set(audio.record.oscillatorTypes)]
+    const ringPitches = [...new Set(audio.record.frequencies)]
+    NOTIFICATION_SOUNDS.incoming_call.stop()
+
+    audio.reset()
+    NOTIFICATION_SOUNDS.call_reminder.play()
+    const reminderWaveforms = [...new Set(audio.record.oscillatorTypes)]
+    const reminderPitches = [...new Set(audio.record.frequencies)]
+    NOTIFICATION_SOUNDS.call_reminder.stop()
+
+    // Sine tones held together versus a gliding triangle figure. The reminder
+    // used to *be* the ring, so this is the regression that matters most here.
+    expect(ringWaveforms).toEqual(['sine'])
+    expect(reminderWaveforms).toEqual(['triangle'])
+    expect(reminderPitches).not.toEqual(ringPitches)
   })
 
   it('builds the ghost ambience from noise, unlike every event sound', () => {

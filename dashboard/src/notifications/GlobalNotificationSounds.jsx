@@ -22,6 +22,7 @@ import {
   notifyCallReminder,
   notifyGmailReconnect,
   notifyTrackedMail,
+  stopCallReminder,
   stopUnreadAmbience,
   syncUnreadAmbience,
 } from './notificationEvents.js'
@@ -167,6 +168,7 @@ export function GlobalNotificationSounds({
   useEffect(
     () => () => {
       stopUnreadAmbience()
+      stopCallReminder()
       resetReplyAlertSounds()
     },
     [],

@@ -34,6 +34,7 @@ const {
   notifyInterviewReminder,
   notifyIncomingCall,
   notifyCallEnded,
+  notifyCallReminder,
   syncUnreadAmbience,
   stopUnreadAmbience,
   __resetNotificationEvents,
@@ -164,6 +165,45 @@ describe('incoming call', () => {
   it('does not ring during quiet hours', () => {
     policy.muted = true
     expect(notifyIncomingCall({ callId: 'c2' })).toBe(false)
+    notifyCallEnded()
+  })
+})
+
+describe('scheduled call reminder', () => {
+  it('does not borrow the incoming-call ring', () => {
+    audio.reset()
+    notifyIncomingCall({ callId: 'ring' })
+    const ringWaveforms = [...new Set(audio.record.oscillatorTypes)]
+    notifyCallEnded()
+
+    audio.reset()
+    notifyCallReminder('rem-1')
+    const reminderWaveforms = [...new Set(audio.record.oscillatorTypes)]
+    notifyCallEnded()
+
+    expect(ringWaveforms).toEqual(['sine'])
+    expect(reminderWaveforms).toEqual(['triangle'])
+  })
+
+  it('sounds once per reminder', () => {
+    expect(notifyCallReminder('rem-2')).toBe(true)
+    expect(notifyCallReminder('rem-2')).toBe(false)
+    notifyCallEnded()
+  })
+
+  it('is silenced by the same call-handled path as the ring', () => {
+    notifyCallReminder('rem-3')
+    notifyCallEnded()
+    audio.reset()
+    // Nothing further should be scheduled once the loop is stopped.
+    expect(audio.record.oscillators).toBe(0)
+  })
+
+  it('respects quiet hours, as it did when it shared the ring', () => {
+    policy.muted = true
+    audio.reset()
+    expect(notifyCallReminder('rem-4')).toBe(false)
+    expect(audio.record.oscillators).toBe(0)
     notifyCallEnded()
   })
 })
