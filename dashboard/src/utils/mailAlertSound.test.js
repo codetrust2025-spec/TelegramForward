@@ -1,39 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  isTrackedMailAlert,
-  playGmailReconnectAlertSound,
-  playMailAlertSound,
-} from './mailAlertSound.js'
+import { isTrackedMailAlert, showMailAlertNotification } from './mailAlertSound.js'
 
-// notificationSound.js caches the AudioContext for the whole module lifetime, so
-// the stub is installed once and this array is shared by every test.
-const started = []
-
-/** Minimal Web Audio stub — records how many oscillators got started. */
-function installAudioStub() {
-  const node = () => ({
-    connect: vi.fn(),
-    gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn() },
-    frequency: { setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn() },
-    Q: { setValueAtTime: vi.fn() },
-    detune: { setValueAtTime: vi.fn() },
-    start: vi.fn(function start(at) { started.push(at) }),
-    stop: vi.fn(),
-  })
-  window.AudioContext = vi.fn(() => ({
-    state: 'running',
-    currentTime: 0,
-    destination: {},
-    createGain: node,
-    createOscillator: node,
-    createBiquadFilter: node,
-  }))
-}
-
-describe('mail alert sound', () => {
-  beforeEach(() => { installAudioStub(); started.length = 0 })
-  afterEach(() => { vi.useRealTimers() })
-
+/**
+ * The sounds moved to src/notifications/sounds/ — see soundRegistry.test.js for
+ * the proof that selections and interview bookings are now different sounds
+ * rather than two sweep counts of one klaxon. What stays this module's job is
+ * the classification list and the desktop notification, including asking the
+ * operating system not to add its own chime on top of ours.
+ */
+describe('tracked mail classification', () => {
   it('tracks selection and interview booking classifications only', () => {
     expect(isTrackedMailAlert('job_selection_confirmed')).toBe(true)
     expect(isTrackedMailAlert('interview_confirmed')).toBe(true)
@@ -42,29 +17,59 @@ describe('mail alert sound', () => {
     expect(isTrackedMailAlert('')).toBe(false)
     expect(isTrackedMailAlert(undefined)).toBe(false)
   })
+})
 
-  it('plays once per event even when both live sockets deliver it', () => {
-    expect(playMailAlertSound({ eventId: 'evt-1' })).toBe(true)
-    expect(playMailAlertSound({ eventId: 'evt-1' })).toBe(false)
-    expect(playMailAlertSound({ eventId: 'evt-2' })).toBe(true)
+describe('desktop notification', () => {
+  let created
+
+  beforeEach(() => {
+    created = []
+    class FakeNotification {
+      constructor(title, options) {
+        created.push({ title, options })
+        this.title = title
+        this.options = options
+      }
+
+      close() {}
+    }
+    FakeNotification.permission = 'granted'
+    FakeNotification.requestPermission = vi.fn(() => Promise.resolve('granted'))
+    vi.stubGlobal('Notification', FakeNotification)
   })
 
-  it('gives selections a longer burst than interview bookings', () => {
-    playMailAlertSound({ eventId: 'normal', urgent: false })
-    const normal = started.length
-    started.length = 0
-    playMailAlertSound({ eventId: 'urgent', urgent: true })
-    expect(started.length).toBeGreaterThan(normal)
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
-  it('uses a separate short fault pattern for Gmail reconnect alerts', () => {
-    playMailAlertSound({ eventId: 'mail-tone', urgent: true })
-    const mailOscillators = started.length
-    started.length = 0
+  it('asks for a silent notification so the OS chime does not double our sound', () => {
+    showMailAlertNotification({
+      classification: 'offer_received',
+      candidate_name: 'Asha',
+      notification_id: 'n-1',
+    })
+    expect(created).toHaveLength(1)
+    expect(created[0].options.silent).toBe(true)
+  })
 
-    expect(playGmailReconnectAlertSound({ eventId: 'reconnect-tone' })).toBe(true)
-    expect(started).toHaveLength(6)
-    expect(started.length).not.toBe(mailOscillators)
-    expect(playGmailReconnectAlertSound({ eventId: 'reconnect-tone' })).toBe(false)
+  it('keeps the booking notification silent too, and still shows it', () => {
+    showMailAlertNotification({
+      event: 'slot_auto_booked',
+      candidate_name: 'Asha',
+      company_name: 'Acme',
+      interview_date: '2026-08-04',
+      start_time: '17:00',
+      booking_id: 'b-9',
+    })
+    expect(created).toHaveLength(1)
+    expect(created[0].options.silent).toBe(true)
+    expect(created[0].title).toContain('Interview Auto-Booked')
+    expect(created[0].options.body).toContain('Asha')
+  })
+
+  it('stays quiet when permission was refused', () => {
+    Notification.permission = 'denied'
+    showMailAlertNotification({ classification: 'offer_received', candidate_name: 'Asha' })
+    expect(created).toHaveLength(0)
   })
 })

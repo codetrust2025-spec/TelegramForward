@@ -1,10 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API } from "../config.js";
 import { useConfirm } from "../context/ConfirmContext.jsx";
-import {
-  playGmailReconnectAlertSound,
-  showMailAlertNotification,
-} from "../utils/mailAlertSound.js";
+import { needsReconnect } from "../utils/mailboxStatus.js";
 import { ButtonContent, InlineLoader, OverlayLoader } from "../Loader.jsx";
 
 const request = async (path, options = {}) => {
@@ -2343,9 +2340,6 @@ export default function RecruitmentMailPanelRedesign() {
   const allRows = useMemo(
     () =>
       mailboxes.map((row) => {
-        const error = String(
-          row.mailbox.last_error_message || "",
-        ).toLowerCase();
         const syncStatus = String(
           row.stats.latest_sync_status || "",
         ).toUpperCase();
@@ -2354,9 +2348,7 @@ export default function RecruitmentMailPanelRedesign() {
             ? "SYNCING"
             : syncStatus === "QUEUED"
               ? "SYNC_QUEUED"
-              : row.mailbox.connection_status === "ERROR" ||
-                  error.includes("expired") ||
-                  error.includes("revoked")
+              : needsReconnect(row.mailbox)
                 ? "RECONNECT_REQUIRED"
                 : !row.mailbox.monitoring_enabled
                   ? "PAUSED"
@@ -2365,39 +2357,10 @@ export default function RecruitmentMailPanelRedesign() {
       }),
     [mailboxes],
   );
-  useEffect(() => {
-    const storageKey = "teleautomation:gmail-reconnect-alerted";
-    const disconnected = allRows.filter((row) => row.uiStatus === "RECONNECT_REQUIRED");
-    let alerted = [];
-    try {
-      alerted = JSON.parse(sessionStorage.getItem(storageKey) || "[]");
-    } catch {
-      alerted = [];
-    }
-    const alertedIds = new Set(alerted.map(String));
-    const newlyDisconnected = disconnected.filter(
-      (row) => !alertedIds.has(String(row.mailbox.id)),
-    );
-    if (newlyDisconnected.length) {
-      const names = newlyDisconnected.map((row) => row.candidate.name).filter(Boolean);
-      playGmailReconnectAlertSound({
-        eventId: `gmail-reconnect-${newlyDisconnected.map((row) => row.mailbox.id).sort().join("-")}`,
-      });
-      showMailAlertNotification({
-        status: "Gmail connection expired",
-        candidate_name: names.length === 1 ? names[0] : `${names.length} candidate accounts`,
-        notification_id: `gmail-reconnect-${newlyDisconnected.map((row) => row.mailbox.id).sort().join("-")}`,
-      });
-    }
-    try {
-      sessionStorage.setItem(
-        storageKey,
-        JSON.stringify(disconnected.map((row) => String(row.mailbox.id))),
-      );
-    } catch {
-      /* session storage is optional */
-    }
-  }, [allRows]);
+  // The Gmail reconnect fault alert moved to GlobalNotificationSounds, which
+  // polls mailbox health for the whole session. An expired token used to be
+  // silent unless this page happened to be open — which is exactly when nobody
+  // was looking at it.
   const rows = useMemo(
     () =>
       candidateId

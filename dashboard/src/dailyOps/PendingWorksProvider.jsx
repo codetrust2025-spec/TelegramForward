@@ -1,7 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { API } from '../config.js'
 import { useAuth } from '../context/AuthContext.jsx'
-import { useInterviewNotifications } from './useInterviewNotifications.js'
 
 const PendingWorksContext = createContext(null)
 
@@ -117,8 +116,8 @@ export function PendingWorksProvider({ children, mainView = 'dashboard' }) {
   const deferCandidates = mainView === 'candidates'
   const authReady = !authEnabled || (authenticated && !authLoading)
 
-  // Browser notifications 20 min before interviews
-  useInterviewNotifications()
+  // Interview reminders moved to GlobalNotificationSounds, alongside every
+  // other notification sound, so this provider is only about pending work.
 
   const pendingWorks = usePendingWorksQuery({
     enabled: authReady && !deferCandidates,
