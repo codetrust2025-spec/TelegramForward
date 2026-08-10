@@ -43,7 +43,10 @@ class FakeHeaders(dict):
 
 
 class FakeRequest:
-    def __init__(self, *, forwarded=None, peer="10.0.0.9"):
+    # The default peer is loopback because that is what nginx connects from:
+    # `proxy_pass http://127.0.0.1:8000`. A test that wants to simulate a
+    # request which skipped the proxy passes a public peer explicitly.
+    def __init__(self, *, forwarded=None, peer="127.0.0.1"):
         headers = {}
         if forwarded is not None:
             headers["x-forwarded-for"] = forwarded
@@ -191,6 +194,40 @@ def test_percentage_is_credited_days_over_elapsed_scheduled_days():
     assert summary["attendance_percentage"] == 75.0
 
 
+def test_an_in_progress_month_is_not_scored_against_days_that_have_not_happened(monkeypatch):
+    """Nobody is absent for a day that has not arrived.
+
+    On the 10th, the denominator must stop at the 10th. Counting the rest of the
+    month would show a person at a fraction of their real attendance for most of
+    every month, and that number is meant to inform pay.
+    """
+    for day in ("2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07",
+                "2026-08-08", "2026-08-10"):
+        attendance.record_start(employee_id="EMP-0001", started_at=at(day, "09:00"))
+
+    # Pin "today" only for the summary; pinning it earlier would also pin the
+    # day each record was written to, collapsing them all onto one date.
+    monkeypatch.setattr(cfg, "ist_date_str", lambda moment=None: "2026-08-10")
+    summary = attendance.employee_month_summary("EMP-0001", "2026-08")
+
+    # Aug 1 (Sat) through Aug 10 (Mon), minus the two Sundays = 8 scheduled.
+    assert summary["scheduled_working_days"] == 8
+    assert summary["scheduled_through"] == "2026-08-10"
+    assert summary["days_recorded"] == 7
+    assert summary["days_absent"] == 1  # only Aug 1, not the rest of the month
+    assert summary["attendance_percentage"] == 87.5
+
+
+def test_a_completed_month_is_scored_against_its_whole_calendar(monkeypatch):
+    """Once the month is over, the full configured calendar is the denominator."""
+    monkeypatch.setattr(cfg, "ist_date_str", lambda moment=None: "2026-09-15")
+    summary = attendance.employee_month_summary("EMP-0001", "2026-08")
+
+    full_august = len(cfg.scheduled_working_days("2026-08", through="2026-08-31"))
+    assert summary["scheduled_working_days"] == full_august
+    assert summary["scheduled_working_days"] == 25  # 26 Mon-Sat days, less one holiday
+
+
 def test_late_days_are_recorded_but_not_credited_by_default():
     attendance.record_start(employee_id="EMP-0001", started_at=at("2026-08-03", "11:00"))
     summary = attendance.employee_month_summary("EMP-0001", "2026-08", through="2026-08-03")
@@ -248,6 +285,43 @@ def test_a_client_cannot_spoof_an_office_ip_through_x_forwarded_for():
     result = office_network.verify(FakeRequest(forwarded="203.0.113.5, 8.8.8.8"))
     assert result["verified"] is False
     assert result["ip"] == "8.8.8.8"
+
+
+def test_a_request_that_skipped_the_proxy_cannot_forge_an_office_ip():
+    """The app binds 0.0.0.0:8000 with no firewall, so it is reachable directly
+    as well as through nginx.
+
+    A request that skipped nginx carries whatever X-Forwarded-For its sender
+    typed. Believing it would let anyone record attendance from anywhere with
+    one curl flag, so the header is only honoured when the connection came from
+    a trusted proxy.
+    """
+    direct = FakeRequest(forwarded="203.0.113.44", peer="8.8.8.8")
+    result = office_network.verify(direct)
+    assert result["verified"] is False
+    assert result["ip"] == "8.8.8.8"  # the real peer, not the claimed office IP
+
+
+def test_the_same_header_is_honoured_when_it_arrives_through_the_proxy():
+    """The counterpart: identical header, trusted peer, and it works."""
+    through_nginx = FakeRequest(forwarded="203.0.113.44", peer="127.0.0.1")
+    assert office_network.verify(through_nginx)["verified"] is True
+
+
+def test_only_configured_proxies_are_trusted(isolated):
+    isolated.write_text(
+        json.dumps(
+            {
+                "working_weekdays": [0],
+                "office_ip_allowlist": ["203.0.113.0/24"],
+                "trusted_proxy_ips": ["10.20.0.5"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert office_network.verify(FakeRequest(forwarded="203.0.113.44", peer="10.20.0.5"))["verified"] is True
+    # loopback is no longer trusted once the list is overridden
+    assert office_network.verify(FakeRequest(forwarded="203.0.113.44", peer="127.0.0.1"))["verified"] is False
 
 
 def test_an_empty_allowlist_fails_closed_rather_than_open(isolated):

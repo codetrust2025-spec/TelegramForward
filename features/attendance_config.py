@@ -121,6 +121,15 @@ def load_config() -> dict:
             if str(item).strip()
         ],
         "trusted_proxy_hops": _positive_int(raw.get("trusted_proxy_hops"), 1),
+        # Which immediate peers are allowed to have their X-Forwarded-For
+        # believed. Defaults to loopback because that is where nginx connects
+        # from; a request arriving from anywhere else did not come through the
+        # proxy and its forwarding headers are self-reported.
+        "trusted_proxy_ips": [
+            str(item).strip()
+            for item in (raw.get("trusted_proxy_ips") or ["127.0.0.1", "::1"])
+            if str(item).strip()
+        ],
     }
 
 
@@ -142,6 +151,7 @@ def save_config(patch: dict) -> dict:
         "credited_states",
         "office_ip_allowlist",
         "trusted_proxy_hops",
+        "trusted_proxy_ips",
     }
     for key, value in patch.items():
         if key in allowed:

@@ -22,17 +22,34 @@ NO_ALLOWLIST = "allowlist_not_configured"
 NO_CLIENT_IP = "client_ip_unavailable"
 
 
-def client_ip(request, *, trusted_proxy_hops: int | None = None) -> str | None:
-    """The caller's real IP, counting in from the right of the proxy chain.
+def peer_is_trusted_proxy(peer: object, trusted: list[str]) -> bool:
+    """Whether the machine that opened this connection is one of our proxies."""
+    address = _parse(peer)
+    if address is None:
+        return False
+    return any(_matches(address, rule) for rule in trusted)
 
-    With one nginx in front (the deployment here), the rightmost
-    ``X-Forwarded-For`` entry is the one nginx appended, and is therefore the
-    peer nginx actually saw. Entries further left are whatever the client chose
-    to send and are ignored.
+
+def client_ip(request, *, config: dict | None = None) -> str | None:
+    """The caller's real IP.
+
+    Two conditions before ``X-Forwarded-For`` is believed at all:
+
+    1. The connection has to come *from* a proxy we trust. The app binds
+       0.0.0.0:8000 on this host with no firewall, so it is reachable directly
+       as well as through nginx. A request that skipped nginx carries whatever
+       forwarding header its sender typed, and honouring that would let anyone
+       claim an office IP with one curl flag — defeating the whole check.
+    2. Then the entry is counted in from the *right* by the number of proxies
+       actually in front, because nginx appends the peer it saw. Entries further
+       left are client-supplied and are ignored.
     """
-    hops = load_config()["trusted_proxy_hops"] if trusted_proxy_hops is None else trusted_proxy_hops
+    cfg = config or load_config()
+    hops = cfg["trusted_proxy_hops"]
+    peer = getattr(getattr(request, "client", None), "host", None)
+    peer_text = str(peer) if peer else None
 
-    if hops > 0:
+    if hops > 0 and peer_is_trusted_proxy(peer_text, cfg["trusted_proxy_ips"]):
         forwarded = (request.headers.get("x-forwarded-for") or "").strip()
         if forwarded:
             chain = [part.strip() for part in forwarded.split(",") if part.strip()]
@@ -42,8 +59,7 @@ def client_ip(request, *, trusted_proxy_hops: int | None = None) -> str | None:
                 if _parse(candidate) is not None:
                     return candidate
 
-    peer = getattr(getattr(request, "client", None), "host", None)
-    return str(peer) if peer else None
+    return peer_text
 
 
 def _parse(value: object):
@@ -74,7 +90,7 @@ def verify(request, *, config: dict | None = None) -> dict:
     """
     cfg = config or load_config()
     allowlist = cfg["office_ip_allowlist"]
-    ip_text = client_ip(request, trusted_proxy_hops=cfg["trusted_proxy_hops"])
+    ip_text = client_ip(request, config=cfg)
 
     if not ip_text:
         return {"verified": False, "ip": None, "reason": NO_CLIENT_IP, "matched_rule": None}

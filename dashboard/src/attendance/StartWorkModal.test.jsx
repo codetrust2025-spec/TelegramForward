@@ -151,6 +151,55 @@ describe('once per day', () => {
     expect(await screen.findByRole('dialog')).toBeTruthy()
   })
 
+  it('prompts for the new day on a tab left open across IST midnight', async () => {
+    // 12:00 IST on the 10th — the tab is open and the prompt has been answered.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-10T06:30:00Z'))
+    try {
+      render(<StartWorkModal />)
+      await act(async () => {
+        await Promise.resolve()
+      })
+      await click(screen.getByRole('button', { name: 'Not now' }))
+      expect(screen.queryByRole('dialog')).toBeNull()
+
+      // Nobody touches the browser. The IST day rolls over.
+      api.fetchToday.mockResolvedValue({ ...TODAY, date: '2026-08-11' })
+      vi.setSystemTime(new Date('2026-08-10T18:31:00Z')) // 00:01 IST on the 11th
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(61000)
+      })
+
+      // No refresh, no new login, no remount — the prompt is simply back.
+      expect(screen.getByRole('dialog')).toBeTruthy()
+      expect(screen.getByText(/Good morning/)).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not re-prompt while the IST day has not changed', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-10T06:30:00Z'))
+    try {
+      render(<StartWorkModal />)
+      await act(async () => {
+        await Promise.resolve()
+      })
+      await click(screen.getByRole('button', { name: 'Not now' }))
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10 * 60000)
+      })
+
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(api.fetchToday).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps one employee dismissal from silencing another', async () => {
     const first = render(<StartWorkModal />)
     await click(await screen.findByRole('button', { name: 'Not now' }))

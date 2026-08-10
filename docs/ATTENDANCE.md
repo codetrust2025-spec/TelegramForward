@@ -26,6 +26,11 @@ Dismissing the prompt with **Not now** also suppresses it until the next IST
 day — "once per day" is taken literally. A day dismissed or missed can still be
 recorded by an admin through the override path.
 
+Dashboards get left open overnight, so the client watches for the IST date to
+change (once a minute, and whenever the tab becomes visible again) and re-asks
+the server. The next working day's prompt therefore appears on its own, with no
+refresh and no new login.
+
 ## Employee identity
 
 Handlers were only `{username, reference, password}`, and money buckets by the
@@ -86,7 +91,8 @@ attendance stays unconfigured and the prompt does not appear.
   "credited_states": ["early", "on_time", "grace"],
 
   "office_ip_allowlist": ["203.0.113.0/24", "198.51.100.7"],
-  "trusted_proxy_hops": 1
+  "trusted_proxy_hops": 1,
+  "trusted_proxy_ips": ["127.0.0.1", "::1"]
 }
 ```
 
@@ -97,6 +103,7 @@ attendance stays unconfigured and the prompt does not appear.
 | `credited_states` | Which arrival states count toward the percentage. Late is excluded by default — a policy choice, so it is configuration. |
 | `office_ip_allowlist` | Approved public IPs or CIDRs. Empty means unverifiable, and Start Work stays blocked for everyone. |
 | `trusted_proxy_hops` | Proxies in front of the app (nginx = 1). |
+| `trusted_proxy_ips` | Which immediate peers may have their `X-Forwarded-For` believed. Defaults to loopback, which is where nginx connects from. |
 
 ### Arrival states
 
@@ -126,10 +133,28 @@ browser. "Connected to office Wi-Fi" is therefore only checkable as "arriving
 from an approved public IP", and that check must happen server-side — anything
 the page reports about itself is writable by whoever is sitting at the page.
 
-The subtlety is `X-Forwarded-For`. A client can send that header itself, so
-trusting the leftmost entry would let anyone claim an office IP with one curl
-flag. `features/office_network.py` counts in from the **right** by
-`trusted_proxy_hops`, so only hops appended by our own proxy are trusted.
+The subtlety is `X-Forwarded-For`, and it has two halves.
+
+**Which entry.** A client can send that header itself, so trusting the leftmost
+entry would let anyone claim an office IP with one curl flag.
+`features/office_network.py` counts in from the **right** by
+`trusted_proxy_hops`, because nginx appends the peer it actually saw
+(`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`).
+
+**Whether to believe it at all.** Counting from the right only helps if a proxy
+appended something. This app binds `0.0.0.0:8000`, so it is reachable directly
+as well as through nginx, and a request that skipped nginx carries a header
+consisting solely of what its sender typed. `X-Forwarded-For` is therefore only
+honoured when the connection came *from* a peer in `trusted_proxy_ips`.
+Otherwise the peer address itself is used, which for a direct request is the
+caller's real address and will not be in the office allowlist.
+
+> **Infrastructure note.** On the current production host the app answers on the
+> public IP at port 8000 (`ufw` inactive, `iptables` INPUT policy `ACCEPT`), so
+> nginx can be bypassed. The trusted-peer rule above means attendance cannot be
+> forged that way, but binding the app to `127.0.0.1` or firewalling 8000 is
+> still worth doing on its own merits. No production configuration was changed
+> by this feature.
 
 Every ambiguity fails closed: unparseable IP, no allowlist configured, or no
 client address at all all come back unverified. An attendance record that cannot

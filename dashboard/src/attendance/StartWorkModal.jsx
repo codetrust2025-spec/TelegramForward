@@ -13,12 +13,28 @@
  * nagging the employee.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useDialogA11y } from '../hooks/useDialogA11y.js'
 import { fetchToday, startWork } from './attendanceApi.js'
 
 const DISMISS_KEY = 'attendance_prompt_dismissed'
+const ROLLOVER_CHECK_MS = 60000
+
+/**
+ * Today's date in IST, as the server counts it.
+ *
+ * Dashboards are left open overnight. Without this the component would hold
+ * yesterday's answer for as long as the tab lived, and the employee would only
+ * discover the missed day at payroll.
+ */
+function istToday() {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date())
+  } catch {
+    return null
+  }
+}
 
 function dismissedKey(employeeId, date) {
   return `${DISMISS_KEY}:${employeeId}:${date}`
@@ -55,25 +71,49 @@ export function StartWorkModal() {
 
   const dialogRef = useDialogA11y(open, close)
 
+  const knownDateRef = useRef(null)
+
+  const refresh = useCallback(async () => {
+    try {
+      const data = await fetchToday()
+      knownDateRef.current = data.date
+      setToday(data)
+      if (data.prompt && !wasDismissedToday(data.employee_id, data.date)) setOpen(true)
+    } catch {
+      /* attendance must never block the dashboard from loading */
+    }
+  }, [])
+
   useEffect(() => {
     if (!authenticated) {
       setOpen(false)
       return undefined
     }
-    let cancelled = false
-    fetchToday()
-      .then((data) => {
-        if (cancelled) return
-        setToday(data)
-        if (data.prompt && !wasDismissedToday(data.employee_id, data.date)) setOpen(true)
-      })
-      .catch(() => {
-        /* attendance must never block the dashboard from loading */
-      })
-    return () => {
-      cancelled = true
+    refresh()
+    return undefined
+  }, [authenticated, refresh])
+
+  /* A tab left open across IST midnight has to pick up the new working day on
+   * its own. Polling the date rather than scheduling a timer to the exact
+   * boundary keeps this correct across sleep, suspend and clock changes. */
+  useEffect(() => {
+    if (!authenticated) return undefined
+
+    const checkRollover = () => {
+      const now = istToday()
+      if (now && knownDateRef.current && now !== knownDateRef.current) refresh()
     }
-  }, [authenticated])
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') checkRollover()
+    }
+
+    const timer = window.setInterval(checkRollover, ROLLOVER_CHECK_MS)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [authenticated, refresh])
 
   const onStart = async () => {
     setBusy(true)
