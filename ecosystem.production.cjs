@@ -25,7 +25,11 @@ module.exports = {
       env: {
         PYTHONUNBUFFERED: "1",
         PYTHONPATH: "/opt/telegramforward",
-        HOST: "0.0.0.0",
+        // Loopback only. nginx is the sole front door — it proxies to
+        // 127.0.0.1:8000 — so binding wider published the backend on the host's
+        // public IP with no firewall in front of it, letting callers reach the
+        // API without passing through the proxy at all.
+        HOST: "127.0.0.1",
         PORT: "8000",
         NO_RELOAD: "1",
         LOG_LEVEL: "info",
