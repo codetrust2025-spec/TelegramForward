@@ -6,7 +6,27 @@
  *   pm2 save
  */
 const path = require("path");
-const ROOT = __dirname;
+
+// Production runs from an immutable release directory with a `current` symlink:
+//
+//   /opt/telegramforward/current -> /opt/telegramforward/releases/<sha>
+//   /opt/telegramforward/venv                 (shared, NOT inside a release)
+//
+// Node resolves symlinks, so __dirname here is the *release* directory even
+// when this file is loaded through `current`. Deriving both paths from it was
+// wrong in two ways at once: the interpreter pointed at a venv that does not
+// exist inside a release, so `pm2 start ecosystem.production.cjs` failed to
+// boot; and cwd pinned PM2 to today's release, so the next deploy would move
+// the symlink while PM2 kept running the old code and reported success.
+//
+// So: run from the symlink, and take the venv from the deployment root. The
+// flat-layout case (no releases/ parent) keeps the original behaviour, which is
+// what a local or legacy checkout needs.
+const HERE = __dirname;
+const IN_RELEASE = path.basename(path.dirname(HERE)) === "releases";
+const DEPLOY_ROOT = IN_RELEASE ? path.dirname(path.dirname(HERE)) : HERE;
+const ROOT = IN_RELEASE ? path.join(DEPLOY_ROOT, "current") : HERE;
+const VENV_PYTHON = path.join(DEPLOY_ROOT, "venv", "bin", "python3");
 
 module.exports = {
   apps: [
@@ -14,7 +34,7 @@ module.exports = {
       name: "telegram-backend",
       cwd: ROOT,
       script: path.join("scripts", "uvicorn_reload.py"),
-      interpreter: path.join(ROOT, "venv", "bin", "python3"),
+      interpreter: VENV_PYTHON,
       watch: false,
       autorestart: true,
       max_restarts: 30,
