@@ -96,7 +96,9 @@ def _log_invite_extraction_trace(
     raw_start = result.pop("_model_raw_start_time", "")
     raw_end = result.pop("_model_raw_end_time", "")
     result["invite_trace_id"] = trace_id
-    logger.info(
+    # Production intentionally filters ordinary INFO traffic. This provenance
+    # must survive so an AM/PM incident can be proven end to end.
+    logger.warning(
         "Invite booking trace phase=extract outcome=%s trace_id=%s image_sha256=%s "
         "raw_date=%r raw_start=%r raw_end=%r normalized_date=%r "
         "normalized_start=%r normalized_end=%r normalized_time_24h=%r "
@@ -632,7 +634,7 @@ def install_public_slot_routes(app) -> None:
                 "otherwise enter them manually."
             )
         image_sha256 = hashlib.sha256(slot_image or b"").hexdigest()
-        logger.info(
+        logger.warning(
             "Invite booking trace phase=confirm_received trace_id=%s image_sha256=%s "
             "extracted_start=%r displayed_date=%r displayed_time=%r "
             "submitted_date=%r submitted_time=%r submitted_end=%r",
@@ -738,7 +740,7 @@ def install_public_slot_routes(app) -> None:
                 failure_reason=str(e),
             )
 
-        logger.info(
+        logger.warning(
             "Invite booking trace phase=confirm_stored trace_id=%s image_sha256=%s "
             "stored_date=%r stored_time=%r stored_end=%r action=%s",
             trace_id,

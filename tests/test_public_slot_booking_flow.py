@@ -161,6 +161,14 @@ def test_invite_trace_records_raw_normalized_submitted_and_stored_times(
     assert "submitted_time='04:00'" in messages
     assert f"phase=confirm_stored trace_id={trace_id}" in messages
     assert "stored_time='04:00'" in messages
+    trace_records = [
+        record
+        for record in caplog.records
+        if record.name == "core.public_slot_api"
+        and record.getMessage().startswith("Invite booking trace")
+    ]
+    assert len(trace_records) == 3
+    assert all(record.levelno == logging.WARNING for record in trace_records)
 
 
 def test_missing_payment_blocks_confirmation_without_records(monkeypatch, tmp_path):
