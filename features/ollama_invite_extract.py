@@ -254,6 +254,23 @@ def validate_12h_time_format(time_value: str) -> bool:
     return bool(re.match(r'^(0[1-9]|1[0-2]):[0-5]\d\s(AM|PM)$', time_value))
 
 
+def normalize_model_time_to_12h(time_value: str) -> str:
+    """Normalize a vision-model time without inventing a missing meridiem.
+
+    A bare hour from 01 through 12 is ambiguous: ``04:00`` may mean either
+    4 AM or 4 PM. Twenty-four-hour values outside that range remain
+    unambiguous, and explicit AM/PM values keep their existing behavior.
+    """
+    raw = str(time_value or "").strip()
+    bare = re.fullmatch(r"(\d{1,2}):(\d{2})", raw)
+    if bare:
+        hour, minute = int(bare.group(1)), int(bare.group(2))
+        if 1 <= hour <= 12 and 0 <= minute <= 59:
+            return ""
+    normalized = normalize_time_to_12h(raw)
+    return normalized if validate_12h_time_format(normalized) else ""
+
+
 def normalize_time_to_24h(time_value: str) -> str:
     normalized = normalize_time_to_12h(time_value)
     match = re.match(r"^(\d{2}):(\d{2})\s+(AM|PM)$", normalized)
@@ -1053,7 +1070,23 @@ def _extract_with_ai_only(
         ]
         return _finish(result)
 
+    raw_start = str(
+        extracted.get("_model_raw_start_time", extracted.get("start_time")) or ""
+    )
+    raw_end = str(
+        extracted.get("_model_raw_end_time", extracted.get("end_time")) or ""
+    )
+    normalized_start = normalize_model_time_to_12h(raw_start)
+    normalized_end = normalize_model_time_to_12h(raw_end) if raw_end else ""
+    ambiguous_start = bool(raw_start and not normalized_start)
+    extracted["start_time"] = normalized_start
+    extracted["end_time"] = normalized_end
     extracted = validate_invite_extraction(extracted)
+    if ambiguous_start:
+        extracted.setdefault("warnings", []).append(
+            "The AI returned a start time without a reliable AM or PM. "
+            "Choose AM or PM manually before confirming."
+        )
     extracted["extraction_source"] = "ollama"
     extracted["primary_model"] = used_model
     extracted["backup_model"] = "" if ollama_only else OLLAMA_BACKUP_VISION_MODEL
@@ -1063,7 +1096,7 @@ def _extract_with_ai_only(
         extracted["ollama_only_test"] = True
 
     has_date = bool(str(extracted.get("interview_date") or "").strip())
-    has_start = bool(normalize_time_to_12h(str(extracted.get("start_time") or "")))
+    has_start = validate_12h_time_format(str(extracted.get("start_time") or ""))
     if has_date and has_start and not ollama_only:
         extracted["auto_booking_safe"] = True
         extracted["manual_fields_required"] = False
