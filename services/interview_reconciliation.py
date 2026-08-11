@@ -17,7 +17,7 @@ from typing import Any
 
 from core.db.connection import get_connection
 from core import recruitment_mail_store as mail_store
-from features import candidate_store
+from features import candidate_identity, candidate_store
 
 
 TERMINAL_MESSAGE_STATUS = "INTERVIEW_RECONCILED"
@@ -164,16 +164,42 @@ def _lock_booking(cur, booking_id: str) -> dict[str, Any]:
 
 
 def _canonical_identity(cur, candidate_id: str) -> str:
-    cur.execute(
-        """SELECT COALESCE(
-             (SELECT canonical_candidate_id FROM candidate_identity_links
-              WHERE alias_candidate_id=%s LIMIT 1),
-             %s
-           )""",
-        (candidate_id, candidate_id),
+    """Label one candidate with the representative of its identity cluster.
+
+    This used to be a single ``candidate_identity_links`` hop, which is not
+    transitive and not idempotent — see ``features.candidate_identity`` for why
+    that table alone cannot answer the question. The label is only ever written
+    onto the evidence row; the safety decision below uses cluster membership.
+    """
+    try:
+        cluster = candidate_identity.identity_cluster(cur, candidate_id)
+    except candidate_identity.IdentityClusterTooLarge as exc:
+        raise InterviewReconciliationError("IDENTITY_RESOLUTION_UNSAFE", str(exc)) from exc
+    if not cluster:
+        return str(candidate_id or "")
+    return candidate_identity.cluster_representative(cur, cluster) or str(
+        candidate_id or ""
     )
-    row = cur.fetchone()
-    return str((row or [candidate_id])[0] or candidate_id)
+
+
+def _same_identity(cur, message_candidate_id: str, booking_candidate_id: str) -> bool:
+    """Do the mail and the booking describe one person?
+
+    Compares identity *clusters*, not single-hop canonical ids. Two rows of the
+    same person routinely carry different canonical ids — migration 010 assigns
+    them per key group rather than per person — so comparing labels rejects
+    legitimate reconciliations and, worse, could accept two people who happen
+    to share a stale label.
+    """
+    try:
+        return candidate_identity.same_identity(
+            cur, message_candidate_id, booking_candidate_id
+        )
+    except candidate_identity.IdentityClusterTooLarge as exc:
+        # A closure this wide means a blank or shared key has joined unrelated
+        # people. Refusing is the only safe answer: silently proceeding could
+        # attach one person's interview evidence to another's booking.
+        raise InterviewReconciliationError("IDENTITY_RESOLUTION_UNSAFE", str(exc)) from exc
 
 
 def _failed_analysis(cur, mailbox_message_id: str) -> tuple[dict[str, Any], str]:
@@ -459,13 +485,14 @@ def reconcile_interview_message_to_booking(
                     "MESSAGE_CANDIDATE_CHANGED",
                     "Mailbox message candidate changed before its advisory lock was acquired.",
                 )
-            message_canonical = _canonical_identity(cur, str(message.get("candidate_id") or ""))
-            booking_canonical = _canonical_identity(cur, str(booking.get("id") or booking_id))
-            if message_canonical != booking_canonical:
+            message_candidate_id = str(message.get("candidate_id") or "")
+            booking_candidate_id = str(booking.get("id") or booking_id)
+            if not _same_identity(cur, message_candidate_id, booking_candidate_id):
                 raise InterviewReconciliationError(
                     "CANDIDATE_MISMATCH",
                     "Mailbox message and booking belong to different candidate identities.",
                 )
+            message_canonical = _canonical_identity(cur, message_candidate_id)
 
             before_hash = _validate_booking(
                 booking,
