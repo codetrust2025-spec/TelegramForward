@@ -30,8 +30,25 @@ vi.mock('../context/AuthContext.jsx', () => ({
 // The reminder poll has its own suite; keep its timer out of this one.
 vi.mock('./useInterviewReminders.js', () => ({ useInterviewReminders: () => {} }))
 
+// Quiet hours are a function of the wall clock, so leaving the real policy in
+// place made this suite pass or fail depending on what time the machine ran it:
+// green locally in the afternoon, red on CI at 06:17 UTC, which is inside the
+// 23:00-08:00 window. What is under test here is global delivery, not the mute
+// policy — that has its own suite — so the policy is pinned open.
+vi.mock('../utils/soundQuietHours.js', () => ({
+  isMessageSoundMuted: () => false,
+  isInQuietHours: () => false,
+  isQuietHoursEnabled: () => true,
+  setQuietHoursEnabled: () => {},
+  formatQuietHoursRange: () => '11 PM – 8 AM',
+  msUntilQuietHoursEnd: () => 0,
+  QUIET_HOURS_START: 23,
+  QUIET_HOURS_END: 8,
+}))
+
 const { GlobalNotificationSounds } = await import('./GlobalNotificationSounds.jsx')
 const { __resetNotificationEvents } = await import('./notificationEvents.js')
+const { stopUnreadGhost } = await import('./sounds/unreadGhost.js')
 
 let audio
 
@@ -45,6 +62,11 @@ beforeEach(() => {
   audio = installRecordingAudioStub()
   mailHandler = null
   __resetNotificationEvents()
+  // The ambience is a module-level singleton: startUnreadGhost() returns early
+  // while it is already running, creating no nodes. A test that inherited a
+  // running loop from an earlier case would therefore see zero buffer sources
+  // and fail on ordering rather than on behaviour.
+  stopUnreadGhost()
   sessionStorage.clear()
   vi.stubGlobal(
     'fetch',

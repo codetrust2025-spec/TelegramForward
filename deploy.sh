@@ -32,7 +32,9 @@ cd ..
 echo "[4/6] Setting up PM2 (production)..."
 npm install -g pm2 --silent
 pm2 delete all 2>/dev/null || true
-HOST=0.0.0.0 PORT=8000 NO_RELOAD=1 pm2 start ecosystem.production.cjs
+# HOST deliberately not set here: the ecosystem config binds 127.0.0.1 so nginx
+# is the only way in. A shell prefix would have overridden it.
+PORT=8000 NO_RELOAD=1 pm2 start ecosystem.production.config.js
 pm2 save
 pm2 startup | tail -1 | bash
 
