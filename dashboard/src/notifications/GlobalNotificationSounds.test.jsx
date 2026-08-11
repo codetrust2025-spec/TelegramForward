@@ -32,6 +32,7 @@ vi.mock('./useInterviewReminders.js', () => ({ useInterviewReminders: () => {} }
 
 const { GlobalNotificationSounds } = await import('./GlobalNotificationSounds.jsx')
 const { __resetNotificationEvents } = await import('./notificationEvents.js')
+const { stopUnreadGhost } = await import('./sounds/unreadGhost.js')
 
 let audio
 
@@ -45,6 +46,11 @@ beforeEach(() => {
   audio = installRecordingAudioStub()
   mailHandler = null
   __resetNotificationEvents()
+  // The ambience is a module-level singleton: startUnreadGhost() returns early
+  // while it is already running, creating no nodes. A test that inherited a
+  // running loop from an earlier case would therefore see zero buffer sources
+  // and fail on ordering rather than on behaviour.
+  stopUnreadGhost()
   sessionStorage.clear()
   vi.stubGlobal(
     'fetch',
