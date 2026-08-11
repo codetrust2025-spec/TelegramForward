@@ -418,9 +418,12 @@ export function MailboxRow({ row, busy, onAction }) {
             <span className="sot-avatar">{initials(row.candidate.name)}</span>
             <div>
               <strong>{row.candidate.name}</strong>
-              <small>
-                Candidate ID: {row.candidate.phone || row.candidate.id}
-              </small>
+              {/* Phone and candidate id are shown on separate labelled lines.
+                  This table is used to diagnose duplicate identities, so two
+                  candidate rows that share a phone number must stay visually
+                  distinguishable by their real candidate id. */}
+              <small>Phone: {row.candidate.phone || "Not added"}</small>
+              <small>Candidate ID: {row.candidate.id}</small>
             </div>
           </div>
         </td>
