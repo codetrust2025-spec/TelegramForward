@@ -16,7 +16,20 @@ from typing import Any
 class FakeIdentityCursor:
     def __init__(self, *, candidates=(), links=(), mailboxes=()):
         self.candidates = [dict(row) for row in candidates]
-        self.links = list(links)
+        # Links may be given as (alias, canonical) or with an explicit method
+        # and verified flag. A bare pair defaults to a *derived* mapping —
+        # the kind migration 010 recomputes — because that is what most rows
+        # in production are, and treating them as declared would be the
+        # optimistic assumption the resolver must never make.
+        self.links = [
+            (
+                row[0],
+                row[1],
+                row[2] if len(row) > 2 else "VERIFIED_PHONE",
+                row[3] if len(row) > 3 else True,
+            )
+            for row in links
+        ]
         self.mailboxes = list(mailboxes)
         self._result: list[tuple] = []
         self.queries: list[str] = []
@@ -32,7 +45,7 @@ class FakeIdentityCursor:
         self.queries.append(sql)
         collapsed = " ".join(sql.split())
         if "FROM candidate_identity_links" in collapsed:
-            self._result = [(alias, canonical) for alias, canonical in self.links]
+            self._result = list(self.links)
         elif "FROM candidate_mailboxes" in collapsed:
             self._result = [
                 (cid, email.lower()) for cid, email in self.mailboxes if "@" in email

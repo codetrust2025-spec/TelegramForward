@@ -283,6 +283,107 @@ def test_strong_evidence_still_joins_rows_with_different_phones():
     assert candidate_identity.same_identity(cur, "s1", "s2")
 
 
+# ── derived link rows are history, not proof ─────────────────────────────────
+
+
+def test_stale_derived_link_cannot_merge_two_conflicting_people():
+    """The exact scenario the link table makes possible.
+
+    candidate_identity_links is the artifact we already know goes stale and
+    inconsistent. If a row in it were treated as proof of identity, one bad
+    historical mapping would bypass every phone, email and name protection.
+    """
+    cur = FakeCursor(
+        candidates=[
+            profile("A", "Rahul Sharma", phone="9000000001", email="rahul.a@example.com"),
+            profile("B", "Rahul Sharma", phone="9000000002", email="rahul.b@example.com"),
+        ],
+        links=[("A", "B", "VERIFIED_PHONE", True)],
+    )
+
+    assert candidate_identity.identity_cluster(cur, "A") == {"A"}
+    assert candidate_identity.identity_cluster(cur, "B") == {"B"}
+    assert not candidate_identity.same_identity(cur, "A", "B")
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["VERIFIED_PHONE", "VERIFIED_PERSONAL_EMAIL", "GMAIL_ACCOUNT_MAPPING", "SELF"],
+)
+def test_no_derived_link_method_overrides_contradictory_evidence(method):
+    cur = FakeCursor(
+        candidates=[
+            profile("d1", "Person One", phone="9000000011", email="one@example.com"),
+            profile("d2", "Person Two", phone="9000000012", email="two@example.com"),
+        ],
+        links=[("d1", "d2", method, True)],
+    )
+
+    assert not candidate_identity.same_identity(cur, "d1", "d2")
+
+
+def test_derived_link_still_joins_when_nothing_contradicts_it():
+    """Downgrading derived links must not make them useless.
+
+    With no conflicting identifier anywhere in the reachable set, a derived
+    mapping is still the best evidence available and should be honoured.
+    """
+    cur = FakeCursor(
+        candidates=[
+            profile("e1", "Person One", phone="9000000021"),
+            profile("e2", "Clone Row"),
+        ],
+        links=[("e2", "e1", "GMAIL_ACCOUNT_MAPPING", True)],
+    )
+
+    assert candidate_identity.same_identity(cur, "e1", "e2")
+
+
+def test_explicit_profile_relationship_joins_despite_name_and_email_drift():
+    """A human-declared relationship is the one mapping that outranks drift."""
+    cur = FakeCursor(
+        candidates=[
+            profile("f1", "Ananya Krishnan", phone="9000000031", email="old@example.com"),
+            profile("f2", "Ananya K", phone="9000000032", email="new@example.com"),
+        ],
+        links=[("f2", "f1", "EXPLICIT_PROFILE_RELATIONSHIP", True)],
+    )
+
+    assert candidate_identity.same_identity(cur, "f1", "f2")
+    assert candidate_identity.identity_cluster(cur, "f1") == {"f1", "f2"}
+
+
+def test_explicit_payload_relationship_joins_despite_drift():
+    """The same assertion recorded on the row itself, not in the link table."""
+    cur = FakeCursor(
+        candidates=[
+            profile("g10", "Ananya Krishnan", phone="9000000041", email="old@example.com"),
+            profile(
+                "g11",
+                "Ananya K",
+                phone="9000000042",
+                email="new@example.com",
+                profile_candidate_id="g10",
+            ),
+        ],
+    )
+
+    assert candidate_identity.same_identity(cur, "g10", "g11")
+
+
+def test_unverified_explicit_link_is_treated_as_derived():
+    """verified=false is not a decision anyone stands behind."""
+    cur = FakeCursor(
+        candidates=[
+            profile("h1", "Person One", phone="9000000051", email="one@example.com"),
+            profile("h2", "Person Two", phone="9000000052", email="two@example.com"),
+        ],
+        links=[("h1", "h2", "EXPLICIT_PROFILE_RELATIONSHIP", False)],
+    )
+
+    assert not candidate_identity.same_identity(cur, "h1", "h2")
+
+
 def test_two_different_people_never_share_an_identity():
     cur = FakeCursor(
         candidates=[

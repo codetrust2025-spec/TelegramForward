@@ -69,6 +69,13 @@ from features import candidate_store
 # rather than silently treat everyone as one candidate.
 MAX_CLUSTER_SIZE = 64
 
+# The only link method that records a decision rather than a recomputation.
+# Migration 010 writes it from payload canonical_candidate_id/profile_candidate_id,
+# so it carries a human assertion; VERIFIED_PHONE, VERIFIED_PERSONAL_EMAIL,
+# GMAIL_ACCOUNT_MAPPING and SELF are all derived from keys the resolver reads
+# directly, and are the mappings known to go stale.
+STRONG_LINK_METHODS = frozenset({"EXPLICIT_PROFILE_RELATIONSHIP"})
+
 
 class IdentityClusterTooLarge(RuntimeError):
     """The closure joined implausibly many rows — refuse rather than guess."""
@@ -133,12 +140,20 @@ class _Components:
         return {key for key in self.parent if self.find(key) == root}
 
 
-def _fetch_links(cur) -> list[tuple[str, str]]:
+def _fetch_links(cur) -> list[tuple[str, str, str, bool]]:
     cur.execute(
-        """SELECT alias_candidate_id,canonical_candidate_id
+        """SELECT alias_candidate_id,canonical_candidate_id,match_method,verified
            FROM candidate_identity_links"""
     )
-    return [(str(row[0] or ""), str(row[1] or "")) for row in cur.fetchall()]
+    return [
+        (
+            str(row[0] or ""),
+            str(row[1] or ""),
+            str(row[2] or "").strip().upper(),
+            bool(row[3]),
+        )
+        for row in cur.fetchall()
+    ]
 
 
 def _fetch_mailboxes(cur) -> list[tuple[str, str]]:
@@ -182,16 +197,22 @@ def _fetch_candidate_rows(cur) -> list[dict[str, Any]]:
 
 def _strong_components(
     rows: dict[str, dict[str, Any]],
-    links: Iterable[tuple[str, str]],
+    links: Iterable[tuple[str, str, str, bool]],
     mailboxes: Iterable[tuple[str, str]],
 ) -> _Components:
-    """Join every row that shares an identifier the person actually holds."""
+    """Join every row that shares an identifier the person actually holds.
+
+    Link rows are admitted here only when they record a human-declared profile
+    relationship. Every other method in that table is *derived* — migration 010
+    recomputed it from keys — and derived history must not outrank the raw
+    evidence it was derived from. Those become guarded weak edges instead.
+    """
     components = _Components()
     for cid in rows:
         components.find(cid)
 
-    for alias, canonical in links:
-        if alias and canonical:
+    for alias, canonical, method, verified in links:
+        if alias and canonical and verified and method in STRONG_LINK_METHODS:
             components.union(alias, canonical)
 
     for cid, row in rows.items():
@@ -237,15 +258,22 @@ def _conflicting(members: Iterable[str], rows: dict[str, dict[str, Any]]) -> boo
     return len(phones) > 1 or len(emails) > 1
 
 
-def _apply_name_edges(
-    components: _Components, rows: dict[str, dict[str, Any]]
-) -> None:
-    """Join by canonical name only where it cannot fuse two real identities.
+def _weak_groups(
+    rows: dict[str, dict[str, Any]], links: Iterable[tuple[str, str, str, bool]]
+) -> list[tuple[str, frozenset[str]]]:
+    """Candidate joins that are suggestive but not proof of identity.
 
-    Round-wise support rows repeat a name without being that person's profile,
-    so they never join by name — mirroring
-    ``candidate_store.candidate_identity_ids``.
+    Two kinds, both conflict-guarded:
+
+    * canonical name — round-wise support rows repeat a name without being
+      that person's profile, so they never join by name, mirroring
+      ``candidate_store.candidate_identity_ids``;
+    * derived ``candidate_identity_links`` rows — the phone/email/mailbox/self
+      groupings migration 010 recomputes, which are exactly the mappings we
+      know go stale and inconsistent.
     """
+    groups: list[tuple[str, frozenset[str]]] = []
+
     by_name: dict[str, set[str]] = {}
     for cid, row in rows.items():
         if not _is_profile_row(row):
@@ -253,22 +281,57 @@ def _apply_name_edges(
         key = _name_key(row.get("name"))
         if key:
             by_name.setdefault(key, set()).add(cid)
+    groups.extend(
+        (f"name:{key}", frozenset(ids)) for key, ids in by_name.items() if len(ids) > 1
+    )
 
-    for _key, ids in sorted(by_name.items()):
-        roots = {components.find(cid) for cid in ids}
-        if len(roots) < 2:
+    by_canonical: dict[str, set[str]] = {}
+    for alias, canonical, method, verified in links:
+        if not (alias and canonical) or alias == canonical:
             continue
-        reachable: set[str] = set()
-        for root in roots:
-            reachable |= components.members(root)
-        if _conflicting(reachable, rows):
-            # This name spans people who hold different identifiers. Under
-            # transitivity one such edge would fuse both of their clusters, so
-            # the name yields nothing and each side keeps its own identity.
-            continue
-        ordered = sorted(roots)
-        for root in ordered[1:]:
-            components.union(ordered[0], root)
+        if verified and method in STRONG_LINK_METHODS:
+            continue  # already applied as a strong edge
+        by_canonical.setdefault(canonical, set()).update({alias, canonical})
+    groups.extend(
+        (f"link:{canonical}", frozenset(ids))
+        for canonical, ids in by_canonical.items()
+        if len(ids) > 1
+    )
+
+    return sorted(groups)
+
+
+def _apply_weak_edges(
+    components: _Components,
+    rows: dict[str, dict[str, Any]],
+    groups: list[tuple[str, frozenset[str]]],
+) -> None:
+    """Apply weak joins that cannot fuse two identities, to a fixpoint.
+
+    Merging one group can make another group's reachable set conflicting, so
+    passes repeat until nothing changes. Groups are visited in sorted order so
+    the result never depends on dictionary or row ordering.
+    """
+    for _pass in range(len(groups) + 1):
+        merged_any = False
+        for _label, ids in groups:
+            roots = {components.find(cid) for cid in ids}
+            if len(roots) < 2:
+                continue
+            reachable: set[str] = set()
+            for root in roots:
+                reachable |= components.members(root)
+            if _conflicting(reachable, rows):
+                # This group spans people holding different identifiers. Under
+                # transitivity one such edge would fuse both of their clusters,
+                # so it yields nothing and each side keeps its own identity.
+                continue
+            ordered = sorted(roots)
+            for root in ordered[1:]:
+                components.union(ordered[0], root)
+            merged_any = True
+        if not merged_any:
+            return
 
 
 def identity_cluster(cur, candidate_id: str) -> frozenset[str]:
@@ -284,8 +347,9 @@ def identity_cluster(cur, candidate_id: str) -> frozenset[str]:
         return frozenset()
 
     rows = {row["id"]: row for row in _fetch_candidate_rows(cur) if row["id"]}
-    components = _strong_components(rows, _fetch_links(cur), _fetch_mailboxes(cur))
-    _apply_name_edges(components, rows)
+    links = _fetch_links(cur)
+    components = _strong_components(rows, links, _fetch_mailboxes(cur))
+    _apply_weak_edges(components, rows, _weak_groups(rows, links))
 
     cluster = components.members(seed) | {seed}
     if len(cluster) > MAX_CLUSTER_SIZE:
