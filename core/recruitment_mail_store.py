@@ -644,10 +644,31 @@ def schedule_ai_retry(message_id: str, *, succeeded: bool) -> None:
               updated_at=now() WHERE id=%s""",(message_id,))
 
 
-def is_duplicate_content(candidate_id:str,message_id:str,message_hash:str,body_hash:str)->bool:
+def is_duplicate_content(candidate_id:str,message_id:str,message_hash:str,body_hash:str,subject:str|None=None)->bool:
+    """Has this candidate already had an event from an identical message?
+
+    Two independent tests, and the difference matters:
+
+    ``message_hash`` covers sender + subject + sent_at, so it identifies the
+    same message arriving twice. That test is exact and is left alone.
+
+    ``body_hash`` is the looser one, and on its own it is too loose. A recruiter
+    who books two different interviews from the same template sends two mails
+    whose bodies are byte-identical — the substance lives in the subject and in
+    the invitation, not the covering note. That happened: two Sourcebae invites
+    for the same candidate shared body hash b039d324…, so the second interview
+    was dropped as a resend of the first and never reached booking at all.
+
+    So a body match now also requires the subject to match. A genuine resend
+    still has both; two different interviews do not.
+    """
     with get_connection() as conn,conn.cursor() as cur:
         cur.execute("""SELECT 1 FROM mailbox_messages m JOIN ai_recruitment_events e ON e.mailbox_message_id=m.id
-          WHERE m.candidate_id=%s AND m.id<>%s AND (m.message_hash=%s OR (m.body_hash=%s AND %s<>%s)) LIMIT 1""",(candidate_id,message_id,message_hash,body_hash,body_hash,content_hash_empty()))
+          WHERE m.candidate_id=%s AND m.id<>%s AND (
+                m.message_hash=%s
+                OR (m.body_hash=%s AND %s<>%s
+                    AND COALESCE(m.subject,'')=COALESCE(%s,''))
+          ) LIMIT 1""",(candidate_id,message_id,message_hash,body_hash,body_hash,content_hash_empty(),subject))
         return cur.fetchone() is not None
 
 

@@ -36,6 +36,54 @@ def _publish(event_type: str, **payload: Any) -> None:
         logger.debug("Mail real-time event unavailable type=%s", event_type, exc_info=True)
 
 
+def _publish_ignored_interview(
+    mailbox: dict[str, Any],
+    decoded: dict[str, Any],
+    attachments: list[dict[str, Any]] | None,
+    status: str,
+    reason: str,
+) -> dict[str, Any] | None:
+    """Surface a mail that was dropped while carrying an interview.
+
+    Both the duplicate check and the routing filter drop a message by returning
+    early, which wrote a processing_status on the row and nothing else — no
+    notification, nothing on any screen. An invite could therefore disappear
+    with no trace an operator would ever see, which is exactly how a Sourcebae
+    invite for a 4:15pm interview went missing.
+
+    Only messages that still parse as an interview are surfaced, so ordinary
+    marketing noise being filtered does not become operator work. Returns the
+    interview signal it found, for callers that want to log it.
+    """
+    try:
+        from services.calendar_invite_parser import trusted_interview_result
+
+        signal = trusted_interview_result(decoded, list(attachments or []))
+    except Exception:  # a broken parser must not break ingestion
+        logger.debug("Interview signal check failed", exc_info=True)
+        return None
+    if not signal:
+        return None
+
+    logger.warning(
+        "Interview-bearing mail dropped candidate=%s status=%s reason=%s subject=%r date=%s time=%s",
+        mailbox.get("candidate_id"), status, reason,
+        str(decoded.get("subject") or "")[:120],
+        signal.get("interview_date"), signal.get("interview_time"),
+    )
+    _publish(
+        "interview_mail_ignored",
+        candidate_id=mailbox.get("candidate_id"),
+        gmail_message_id=decoded.get("provider_message_id"),
+        subject=decoded.get("subject"),
+        processing_status=status,
+        reason=reason,
+        interview_date=signal.get("interview_date"),
+        interview_time=signal.get("interview_time"),
+    )
+    return signal
+
+
 def _failure_review_result(message: dict[str, Any], exc: Exception) -> dict[str, Any]:
     code = getattr(exc, "code", None) or type(exc).__name__
     context = classify_context(
@@ -1132,8 +1180,15 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
     if not created and not reprocess and str(row.get("processing_status") or "").upper() != "FILTERED":
         return None
     previous_status=row.get("processing_status")
-    if not reprocess and store.is_duplicate_content(mailbox["candidate_id"], row["id"], decoded["message_hash"], decoded["body_hash"]):
+    if not reprocess and store.is_duplicate_content(
+        mailbox["candidate_id"], row["id"], decoded["message_hash"], decoded["body_hash"],
+        decoded.get("subject"),
+    ):
         store.mark_message_status(row["id"], "DUPLICATE_CONTENT", reason="DUPLICATE_MESSAGE")
+        # A dropped mail that was carrying an interview must not vanish without
+        # trace. Dedupe runs before the calendar fallback below, so this is the
+        # one place that can see an invite being discarded.
+        _publish_ignored_interview(mailbox, decoded, safe, "DUPLICATE_CONTENT", "DUPLICATE_MESSAGE")
         return None
     for attachment in processed:
         if attachment.get("checksum"):
@@ -1151,6 +1206,7 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
         if reprocess:
             store.archive_event_for_message(row["id"], status="IGNORED_NOT_OFFER_RELATED", reason=route["reason"])
         store.mark_message_status(row["id"], "IGNORED_NOT_OFFER_RELATED", reason=route["reason"])
+        _publish_ignored_interview(mailbox, decoded, safe, "IGNORED_NOT_OFFER_RELATED", route["reason"])
         if reprocess: store.mark_reprocessed(row["id"],previous_status,"IGNORED_NOT_OFFER_RELATED","HISTORICAL_RULE_RESCAN")
         return None
     routed_status = str((route.get("context") or {}).get("status") or "")
