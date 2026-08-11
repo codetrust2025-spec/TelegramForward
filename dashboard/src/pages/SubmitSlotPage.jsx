@@ -116,6 +116,13 @@ export function appendInviteTraceFields(fd, { extraction, displayDate, displayTi
   fd.append('invite_extracted_start_time', extraction?.start_time || extraction?.time || '')
 }
 
+export function manualSlotFieldsForAiRetry({ manualDate, manualTime, userEditedFields }) {
+  return {
+    date: userEditedFields?.date ? manualDate : '',
+    time: userEditedFields?.time ? manualTime : '',
+  }
+}
+
 function platformLabel(platform) {
   const map = { teams: 'Microsoft Teams', zoom: 'Zoom', gmail: 'Gmail', google_calendar: 'Google Calendar', barraiser: 'BarRaiser' }
   return map[platform] || platform || ''
@@ -488,13 +495,19 @@ export function SubmitSlotPage() {
     return () => window.clearInterval(timer)
   }, [parsing])
 
-  async function parseScreenshot(file) {
+  async function parseScreenshot(file, { preserveUserEdits = false } = {}) {
     if (!file) { setParsedSlot(null); setAiExtraction(null); setAiBlocked(''); return }
     // Extraction is slow, so a second click (or a rapid re-upload) could
     // previously start a parallel request and let the loser overwrite the
     // winner's result. Ignore re-entry while one is already in flight.
     if (parseInFlightRef.current) return
     parseInFlightRef.current = true
+    const retained = preserveUserEdits
+      ? manualSlotFieldsForAiRetry({ manualDate, manualTime, userEditedFields })
+      : { date: '', time: '' }
+    setManualDate(retained.date)
+    setManualTime(retained.time)
+    setParsedSlot(null)
     parseStartedAtRef.current = Date.now()
     setAiElapsedMs(0)
     setParsing(true); setError(''); setSuccess(''); setAiExtraction(null); setAiBlocked('')
@@ -986,7 +999,7 @@ export function SubmitSlotPage() {
                     message={aiBlocked}
                     mode={aiExtraction?.processing_mode || null}
                     elapsedMs={aiElapsedMs}
-                    onRetry={slotFile ? () => parseScreenshot(slotFile) : undefined}
+                    onRetry={slotFile ? () => parseScreenshot(slotFile, { preserveUserEdits: true }) : undefined}
                     onCancel={() => onSlotFileChange(null)}
                     retryLabel="Retry"
                     cancelLabel="Remove file"

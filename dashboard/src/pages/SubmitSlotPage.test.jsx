@@ -3,7 +3,7 @@ import React from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { appendInviteTraceFields, compactInviteDetectionLabel, SubmitSlotPage, to24h } from './SubmitSlotPage.jsx'
+import { appendInviteTraceFields, compactInviteDetectionLabel, manualSlotFieldsForAiRetry, SubmitSlotPage, to24h } from './SubmitSlotPage.jsx'
 
 function jsonResponse(payload) {
   return Promise.resolve({
@@ -32,6 +32,20 @@ describe('Book Interview Slot flow', () => {
     expect(fd.get('invite_display_date')).toBe('2026-08-12')
     expect(fd.get('invite_display_time')).toBe('04:00 PM')
     expect(fd.get('invite_extracted_start_time')).toBe('04:00 PM')
+  })
+
+  it('clears AI-derived retry values but preserves values the user edited', () => {
+    expect(manualSlotFieldsForAiRetry({
+      manualDate: '2026-08-12',
+      manualTime: '04:00 AM',
+      userEditedFields: {},
+    })).toEqual({ date: '', time: '' })
+
+    expect(manualSlotFieldsForAiRetry({
+      manualDate: '2026-08-12',
+      manualTime: '04:00 PM',
+      userEditedFields: { date: true, time: true },
+    })).toEqual({ date: '2026-08-12', time: '04:00 PM' })
   })
 
   it('shows only laptop, compact model, and confidence', () => {
