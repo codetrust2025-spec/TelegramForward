@@ -109,6 +109,13 @@ export function to24h(val) {
   return `${String(h).padStart(2,'0')}:${min}`
 }
 
+export function appendInviteTraceFields(fd, { extraction, displayDate, displayTime }) {
+  if (extraction?.invite_trace_id) fd.append('invite_trace_id', extraction.invite_trace_id)
+  fd.append('invite_display_date', displayDate || '')
+  fd.append('invite_display_time', displayTime || '')
+  fd.append('invite_extracted_start_time', extraction?.start_time || extraction?.time || '')
+}
+
 function platformLabel(platform) {
   const map = { teams: 'Microsoft Teams', zoom: 'Zoom', gmail: 'Gmail', google_calendar: 'Google Calendar', barraiser: 'BarRaiser' }
   return map[platform] || platform || ''
@@ -676,6 +683,11 @@ export function SubmitSlotPage() {
       if (bookingSlot?.date) fd.append('date', bookingSlot.date)
       if (bookingSlot?.time) fd.append('time', bookingSlot.time)
       if (bookingSlot?.time_end) fd.append('time_end', bookingSlot.time_end)
+      appendInviteTraceFields(fd, {
+        extraction: aiExtraction,
+        displayDate: manualDate || parsedSlot?.date || '',
+        displayTime: manualTime || parsedSlot?.time || '',
+      })
       if (bookingSlot?.interview_round) fd.append('interview_round', bookingSlot.interview_round)
       const technology = serviceType === 'round_wise'
         ? roundWiseTechnology

@@ -3,7 +3,7 @@ import React from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { compactInviteDetectionLabel, SubmitSlotPage, to24h } from './SubmitSlotPage.jsx'
+import { appendInviteTraceFields, compactInviteDetectionLabel, SubmitSlotPage, to24h } from './SubmitSlotPage.jsx'
 
 function jsonResponse(payload) {
   return Promise.resolve({
@@ -18,6 +18,20 @@ describe('Book Interview Slot flow', () => {
   it('converts the displayed 12-hour selection to the existing API format', () => {
     expect(to24h('02:15 PM')).toBe('14:15')
     expect(to24h('12:05 AM')).toBe('00:05')
+  })
+
+  it('carries extraction and displayed-time provenance into confirmation', () => {
+    const fd = new FormData()
+    appendInviteTraceFields(fd, {
+      extraction: { invite_trace_id: 'a'.repeat(32), start_time: '04:00 PM' },
+      displayDate: '2026-08-12',
+      displayTime: '04:00 PM',
+    })
+
+    expect(fd.get('invite_trace_id')).toBe('a'.repeat(32))
+    expect(fd.get('invite_display_date')).toBe('2026-08-12')
+    expect(fd.get('invite_display_time')).toBe('04:00 PM')
+    expect(fd.get('invite_extracted_start_time')).toBe('04:00 PM')
   })
 
   it('shows only laptop, compact model, and confidence', () => {

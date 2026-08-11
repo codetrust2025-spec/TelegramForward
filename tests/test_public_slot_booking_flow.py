@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -95,7 +97,70 @@ def test_failed_invite_extraction_creates_no_candidate(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert response.json()["data"]["manual_fields_required"] is True
+    assert len(response.json()["data"]["invite_trace_id"]) == 32
     assert cs.list_candidates(stage="all", month="all") == []
+
+
+def test_invite_trace_records_raw_normalized_submitted_and_stored_times(
+    monkeypatch, tmp_path, caplog
+):
+    monkeypatch.setattr(
+        "features.ollama_invite_extract.extract_interview_invite_with_ollama",
+        lambda *_args, **_kwargs: {
+            "_model_raw_interview_date": "2026-08-12",
+            "_model_raw_start_time": "04:00",
+            "_model_raw_end_time": "05:00 PM",
+            "interview_date": "2026-08-12",
+            "start_time": "04:00 AM",
+            "end_time": "05:00 PM",
+            "time": "04:00",
+            "confidence_score": 95,
+            "auto_booking_safe": True,
+            "manual_fields_required": False,
+            "primary_model": "qwen3-vl:8b-instruct",
+            "inference_node_id": "rtx4060",
+            "extraction_method": "ai_only",
+        },
+    )
+    caplog.set_level(logging.INFO, logger="core.public_slot_api")
+    client = _client(monkeypatch, tmp_path)
+
+    extracted = client.post(
+        "/public/slots/extract-invite-ai",
+        files={"file": ("invite.jpg", b"same-invite", "image/jpeg")},
+    )
+    assert extracted.status_code == 200
+    data = extracted.json()["data"]
+    trace_id = data["invite_trace_id"]
+    assert "_model_raw_start_time" not in data
+
+    booking = _booking(_upload(client))
+    booking.update(
+        {
+            "time": "04:00",
+            "time_end": "04:30",
+            "invite_trace_id": trace_id,
+            "invite_display_date": "2026-08-12",
+            "invite_display_time": "04:00 AM",
+            "invite_extracted_start_time": data["start_time"],
+        }
+    )
+    confirmed = client.post(
+        "/bookings/confirm",
+        data=booking,
+        files={"file": ("invite.jpg", b"same-invite", "image/jpeg")},
+    )
+    assert confirmed.status_code == 200
+
+    messages = "\n".join(caplog.messages)
+    assert f"phase=extract outcome=complete trace_id={trace_id}" in messages
+    assert "raw_start='04:00'" in messages
+    assert "normalized_start='04:00 AM'" in messages
+    assert f"phase=confirm_received trace_id={trace_id}" in messages
+    assert "displayed_time='04:00 AM'" in messages
+    assert "submitted_time='04:00'" in messages
+    assert f"phase=confirm_stored trace_id={trace_id}" in messages
+    assert "stored_time='04:00'" in messages
 
 
 def test_missing_payment_blocks_confirmation_without_records(monkeypatch, tmp_path):
