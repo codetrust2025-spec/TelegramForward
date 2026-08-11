@@ -751,7 +751,70 @@ def attachments_for_message(message_id: str, *, include_text: bool=False) -> lis
         cur.execute(f"SELECT {fields} FROM mailbox_attachments a LEFT JOIN mailbox_attachment_cache c ON c.checksum=a.checksum WHERE a.mailbox_message_id=%s ORDER BY a.created_at",(message_id,));return _rows(cur)
 
 
+_INTERVIEW_CLASSIFICATIONS = {"interview_confirmed", "interview_cancelled", "interview_rescheduled"}
+
+# One interview is described by several mails, so the lookup has to reach back
+# far enough to find the first of them without trawling a candidate's history.
+_CALENDAR_LOOKBACK_DAYS = 30
+
+
+def _interview_identity(result: dict[str,Any]) -> dict[str,Any]:
+    interview=result.get('interview') or {}; recruiter=result.get('recruiter') or {}; company=result.get('company') or {}
+    return {
+        'interview_date': interview.get('date'), 'interview_time': interview.get('time'),
+        'recruiter_email': recruiter.get('email'), 'company_domain': company.get('domain'),
+        'calendar_uid': result.get('calendar_uid'), 'calendar_sequence': result.get('calendar_sequence'),
+    }
+
+
+def existing_interview_event(candidate_id: str, result: dict[str,Any]) -> dict[str,Any] | None:
+    """The event this interview mail repeats, if one is already recorded.
+
+    Only interviews are considered. An offer letter and its covering note are a
+    different problem with different rules, and collapsing them here would be a
+    silent behaviour change to a path nobody asked about.
+    """
+    from features import interview_event_identity
+
+    if str(result.get('classification') or '').strip().lower() not in _INTERVIEW_CLASSIFICATIONS:
+        return None
+    incoming=_interview_identity(result)
+    # Nothing to match on: no calendar identity and no schedule.
+    if not incoming['calendar_uid'] and not (incoming['interview_date'] and incoming['interview_time']):
+        return None
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""SELECT * FROM ai_recruitment_events
+          WHERE candidate_id=%s AND created_at > now() - (%s || ' days')::interval
+          ORDER BY created_at DESC LIMIT 100""",(candidate_id,str(_CALENDAR_LOOKBACK_DAYS)))
+        rows=_rows(cur)
+    return interview_event_identity.duplicate_of(rows,incoming)
+
+
+def attach_calendar_identity(event_id: str, uid: Any, sequence: Any) -> None:
+    """Record the calendar's identity on an event that was created without it.
+
+    The covering note is classified by AI and has no UID; the invitation that
+    follows does. Writing it onto the existing row is what lets the *next*
+    delivery — a resend, or Google's second copy — be recognised by UID rather
+    than by schedule.
+    """
+    if not uid:
+        return
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""UPDATE ai_recruitment_events SET calendar_uid=%s,calendar_sequence=%s,updated_at=now()
+          WHERE id=%s AND calendar_uid IS NULL""",(str(uid),sequence,event_id))
+
+
 def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, model: str, duration_ms: int) -> dict[str,Any]:
+    # One interview, one event. The recruiter's covering note and the calendar
+    # invitation arrive a minute apart describing the same meeting, and neither
+    # message_hash nor the subject-scoped body_hash dedupe can relate them —
+    # they differ in both. Returning the event already recorded keeps a single
+    # row, a single notification and a single booking attempt.
+    already=existing_interview_event(candidate_id,result)
+    if already:
+        attach_calendar_identity(already['id'],result.get('calendar_uid'),result.get('calendar_sequence'))
+        return already
     event_id=_id(); interview=result.get('interview') or {}; offer=result.get('offer') or {}; company=result.get('company') or {}; job=result.get('job') or {}; recruiter=result.get('recruiter') or {}
     validation_status=str(result.get('validation_status') or 'NEEDS_REVIEW').upper()
     review_state='AUTO_VALIDATED' if validation_status=='AUTO_VALIDATED' else 'PENDING'
@@ -765,10 +828,10 @@ def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, m
         cur.execute("""INSERT INTO ai_recruitment_events(id,candidate_id,mailbox_message_id,primary_status,confidence,company_name,company_domain,job_title,
           recruiter_name,recruiter_email,interview_date,interview_time,interview_mode,offered_ctc,currency,joining_date,offer_date,offer_expiry_date,
           structured_result,summary,requires_manual_review,review_status,visible_in_offer_review,original_primary_status,ignore_reason,ignored_at,
-          ai_model,prompt_name,prompt_version,schema_version,processing_duration_ms,created_at,updated_at)
+          ai_model,prompt_name,prompt_version,schema_version,processing_duration_ms,calendar_uid,calendar_sequence,created_at,updated_at)
           VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,
-            CASE WHEN %s THEN NULL ELSE now() END,%s,'recruitment_email_status_extraction_v3','v3','selection_offer_event_v1',%s,now(),now()) RETURNING *""",
-          (event_id,candidate_id,message_id,status,result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),interview.get('date'),interview.get('time'),interview.get('mode'),offer.get('offered_ctc'),offer.get('currency'),offer.get('joining_date'),offer.get('offer_date'),offer.get('offer_expiry_date'),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')) if visible else False,review_status,visible,original_status if not visible else None,ignore_reason,visible,model,duration_ms))
+            CASE WHEN %s THEN NULL ELSE now() END,%s,'recruitment_email_status_extraction_v3','v3','selection_offer_event_v1',%s,%s,%s,now(),now()) RETURNING *""",
+          (event_id,candidate_id,message_id,status,result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),interview.get('date'),interview.get('time'),interview.get('mode'),offer.get('offered_ctc'),offer.get('currency'),offer.get('joining_date'),offer.get('offer_date'),offer.get('offer_expiry_date'),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')) if visible else False,review_status,visible,original_status if not visible else None,ignore_reason,visible,model,duration_ms,(str(result.get('calendar_uid')) if result.get('calendar_uid') else None),result.get('calendar_sequence')))
         event=_rows(cur)[0]
         canonical_id=canonical_candidate_id(candidate_id)
         cur.execute("""UPDATE ai_recruitment_events SET canonical_candidate_id=%s,validation_status=%s,
