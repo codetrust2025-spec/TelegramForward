@@ -2551,8 +2551,21 @@ def find_interview_slot_conflicts(
     time_end: str = "",
     *,
     exclude_candidate_id: str | None = None,
+    attendee: str | None = None,
 ) -> list[dict]:
-    """Confirmed slots on the same day that overlap the proposed time range."""
+    """Confirmed slots on the same day that overlap the proposed time range.
+
+    A clash is a clash for *a person*. Two candidates interviewed at the same
+    hour by two different attendees are not competing for anything, and
+    blocking one of them loses a real interview to a scheduling rule that was
+    never about the schedule.
+
+    So when the caller says who will attend, only that attendee's slots count.
+    When it does not — or when either side's attendee is unknown — every
+    overlap still counts, because an unattributed clash is exactly the case
+    where guessing is unsafe. Existing callers that pass no attendee therefore
+    behave exactly as before.
+    """
     day = _clean_str(date)[:10]
     if len(day) != 10:
         return []
@@ -2560,6 +2573,7 @@ def find_interview_slot_conflicts(
     if not proposed:
         return []
     exclude = _clean_str(exclude_candidate_id or "")
+    wanted_attendee = _clean_str(attendee or "").casefold()
     conflicts: list[dict] = []
     for raw in _load().get("candidates") or []:
         if raw.get("stage") in {"dropped", "fail"}:
@@ -2576,13 +2590,17 @@ def find_interview_slot_conflicts(
         if not existing or not _slot_ranges_overlap(proposed, existing):
             continue
         row = _with_computed(raw)
+        existing_attendee = row_interview_attendee(row)
+        if wanted_attendee and _clean_str(existing_attendee).casefold() and _clean_str(existing_attendee).casefold() != wanted_attendee:
+            # Different people, same hour — not a clash.
+            continue
         conflicts.append({
             "id": cid,
             "name": row.get("name") or "",
             "date": slot_date,
             "time": row.get("time") or "",
             "time_end": row.get("time_end") or "",
-            "interview_attendee": row_interview_attendee(row),
+            "interview_attendee": existing_attendee,
         })
     conflicts.sort(
         key=lambda r: (
