@@ -2,7 +2,7 @@
  * Production PM2 — backend only, serves built static/ on :8000.
  * No file watch, no Vite dev server.
  *
- *   pm2 start ecosystem.production.cjs
+ *   pm2 start ecosystem.production.config.js
  *   pm2 save
  */
 const path = require("path");

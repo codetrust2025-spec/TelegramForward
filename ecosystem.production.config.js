@@ -2,7 +2,7 @@
  * Production PM2 — backend only, serves built static/ on :8000.
  * No file watch, no Vite dev server.
  *
- *   pm2 start ecosystem.production.cjs
+ *   pm2 start ecosystem.production.config.js
  *   pm2 save
  */
 const path = require("path");
@@ -15,7 +15,7 @@ const path = require("path");
 // Node resolves symlinks, so __dirname here is the *release* directory even
 // when this file is loaded through `current`. Deriving both paths from it was
 // wrong in two ways at once: the interpreter pointed at a venv that does not
-// exist inside a release, so `pm2 start ecosystem.production.cjs` failed to
+// exist inside a release, so `pm2 start ecosystem.production.config.js` failed to
 // boot; and cwd pinned PM2 to today's release, so the next deploy would move
 // the symlink while PM2 kept running the old code and reported success.
 //
