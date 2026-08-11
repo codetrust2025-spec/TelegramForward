@@ -64,6 +64,18 @@ def test_ai_only_success_is_not_blocked_by_missing_ocr(ai_only, ocr_forbidden):
     assert not result.get("failure_reason")
 
 
+def test_ai_only_preserves_model_time_before_normalization(ai_only, ocr_forbidden, monkeypatch):
+    raw = {**VISION_JSON, "start_time": "04:00", "end_time": "17:00"}
+    monkeypatch.setattr(oie, "parse_strict_json_response", lambda _r: dict(raw))
+
+    result = oie.extract_interview_invite_with_ollama(b"image-bytes", "image/png")
+
+    assert result["_model_raw_start_time"] == "04:00"
+    assert result["_model_raw_end_time"] == "17:00"
+    assert result["start_time"] == "04:00 AM"
+    assert result["end_time"] == "05:00 PM"
+
+
 def test_ai_only_never_calls_any_ocr_function(ai_only, ocr_forbidden):
     oie.extract_interview_invite_with_ollama(b"image-bytes", "image/png")
 

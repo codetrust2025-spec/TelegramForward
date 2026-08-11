@@ -984,6 +984,19 @@ def _ai_only_vision_extraction(image_data: bytes) -> tuple[dict[str, Any] | None
             )
             if extracted:
                 used_model = OLLAMA_BACKUP_VISION_MODEL
+    if extracted:
+        # Preserve exactly what the vision model supplied before normalization.
+        # The public API removes these private fields from its response after
+        # writing the correlated, non-image diagnostic trace.
+        extracted.setdefault(
+            "_model_raw_interview_date", str(extracted.get("interview_date") or "")
+        )
+        extracted.setdefault(
+            "_model_raw_start_time", str(extracted.get("start_time") or "")
+        )
+        extracted.setdefault(
+            "_model_raw_end_time", str(extracted.get("end_time") or "")
+        )
     return extracted, used_model
 
 

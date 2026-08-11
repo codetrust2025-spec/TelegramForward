@@ -6,6 +6,8 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
+import uuid
 from threading import Lock
 from typing import Any
 
@@ -43,7 +45,7 @@ def invite_extraction_timeout_seconds() -> int:
     return min(value, INVITE_EXTRACTION_TIMEOUT_CEILING)
 
 
-def _invite_extraction_fallback(warning: str) -> dict:
+def _invite_extraction_fallback(warning: str, *, trace_id: str = "") -> dict:
     """Sanitized manual-entry payload. Creates no candidate and no booking."""
     return {
         "status": "ok",
@@ -64,8 +66,60 @@ def _invite_extraction_fallback(warning: str) -> dict:
             "is_payment_screenshot": False,
             "looks_like_interview_invite": True,
             "manual_fields_required": True,
+            "invite_trace_id": trace_id,
         },
     }
+
+
+def _invite_trace_id(value: str = "") -> str:
+    """Return a safe correlation id without logging candidate-controlled text."""
+    supplied = str(value or "").strip().lower()
+    if re.fullmatch(r"[0-9a-f]{32}", supplied):
+        return supplied
+    return uuid.uuid4().hex
+
+
+def _invite_trace_value(value: Any, *, limit: int = 80) -> str:
+    """Bound and flatten diagnostic values before writing public input to logs."""
+    return " ".join(str(value or "").split())[:limit]
+
+
+def _log_invite_extraction_trace(
+    *,
+    trace_id: str,
+    image_sha256: str,
+    result: dict[str, Any],
+    outcome: str = "complete",
+) -> None:
+    """Log only the time provenance needed to diagnose AM/PM drift."""
+    raw_date = result.pop("_model_raw_interview_date", "")
+    raw_start = result.pop("_model_raw_start_time", "")
+    raw_end = result.pop("_model_raw_end_time", "")
+    result["invite_trace_id"] = trace_id
+    logger.info(
+        "Invite booking trace phase=extract outcome=%s trace_id=%s image_sha256=%s "
+        "raw_date=%r raw_start=%r raw_end=%r normalized_date=%r "
+        "normalized_start=%r normalized_end=%r normalized_time_24h=%r "
+        "model=%s node=%s safe=%s method=%s",
+        outcome,
+        trace_id,
+        image_sha256,
+        _invite_trace_value(raw_date),
+        _invite_trace_value(raw_start),
+        _invite_trace_value(raw_end),
+        _invite_trace_value(result.get("interview_date") or result.get("date")),
+        _invite_trace_value(result.get("start_time")),
+        _invite_trace_value(result.get("end_time")),
+        _invite_trace_value(result.get("time")),
+        _invite_trace_value(result.get("primary_model")),
+        _invite_trace_value(
+            result.get("inference_node_id") or result.get("inference_node_label")
+        ),
+        bool(result.get("auto_booking_safe")),
+        _invite_trace_value(
+            result.get("extraction_method") or result.get("extraction_source")
+        ),
+    )
 
 
 def _json_error(message: str, status: int = 400, **extra: Any) -> JSONResponse:
@@ -230,6 +284,8 @@ def install_public_slot_routes(app) -> None:
         """AI-powered interview invite extraction using Ollama vision models."""
         raw = await file.read()
         mime = file.content_type or "image/jpeg"
+        trace_id = _invite_trace_id()
+        image_sha256 = hashlib.sha256(raw).hexdigest()
         try:
             from features.ollama_invite_extract import extract_interview_invite_with_ollama
 
@@ -246,12 +302,36 @@ def install_public_slot_routes(app) -> None:
                 "AI invite extraction exceeded %ss; returning manual-entry fallback",
                 invite_extraction_timeout_seconds(),
             )
-            return _invite_extraction_fallback(
-                "Invite reading took too long. Retry or enter the date and time manually."
+            fallback = _invite_extraction_fallback(
+                "Invite reading took too long. Retry or enter the date and time manually.",
+                trace_id=trace_id,
             )
+            _log_invite_extraction_trace(
+                trace_id=trace_id,
+                image_sha256=image_sha256,
+                result=fallback["data"],
+                outcome="timeout",
+            )
+            return fallback
         except Exception as exc:
             logger.exception("AI invite extraction failed")
-            return _invite_extraction_fallback(f"AI extraction failed: {exc}. Use manual entry.")
+            fallback = _invite_extraction_fallback(
+                f"AI extraction failed: {exc}. Use manual entry.",
+                trace_id=trace_id,
+            )
+            _log_invite_extraction_trace(
+                trace_id=trace_id,
+                image_sha256=image_sha256,
+                result=fallback["data"],
+                outcome="error",
+            )
+            return fallback
+
+        _log_invite_extraction_trace(
+            trace_id=trace_id,
+            image_sha256=image_sha256,
+            result=result,
+        )
         
         is_success = bool(result and result.get("confidence_score", 0) > 0)
         if not result.get("auto_booking_safe"):
@@ -462,8 +542,13 @@ def install_public_slot_routes(app) -> None:
         notes: str = Form(default=""),
         payment_proof_id: str = Form(default=""),
         idempotency_key: str = Form(default=""),
+        invite_trace_id: str = Form(default=""),
+        invite_display_date: str = Form(default=""),
+        invite_display_time: str = Form(default=""),
+        invite_extracted_start_time: str = Form(default=""),
         file: UploadFile | None = File(default=None),
     ):
+        trace_id = _invite_trace_id(invite_trace_id)
         normalized_service_type = service_type.strip() or "round_wise"
         normalized_technology = technology.strip()
         normalized_phone = phone.strip() if normalized_service_type == "round_wise" else ""
@@ -546,6 +631,20 @@ def install_public_slot_routes(app) -> None:
                 "Automatic booking is allowed only after dual-source AI verification; "
                 "otherwise enter them manually."
             )
+        image_sha256 = hashlib.sha256(slot_image or b"").hexdigest()
+        logger.info(
+            "Invite booking trace phase=confirm_received trace_id=%s image_sha256=%s "
+            "extracted_start=%r displayed_date=%r displayed_time=%r "
+            "submitted_date=%r submitted_time=%r submitted_end=%r",
+            trace_id,
+            image_sha256,
+            _invite_trace_value(invite_extracted_start_time),
+            _invite_trace_value(invite_display_date),
+            _invite_trace_value(invite_display_time),
+            _invite_trace_value(day),
+            _invite_trace_value(slot_time),
+            _invite_trace_value(slot_end),
+        )
         booking_key = hashlib.sha256(
             "|".join(
                 [
@@ -638,6 +737,17 @@ def install_public_slot_routes(app) -> None:
                 status=500,
                 failure_reason=str(e),
             )
+
+        logger.info(
+            "Invite booking trace phase=confirm_stored trace_id=%s image_sha256=%s "
+            "stored_date=%r stored_time=%r stored_end=%r action=%s",
+            trace_id,
+            image_sha256,
+            _invite_trace_value(row.get("date")),
+            _invite_trace_value(row.get("time")),
+            _invite_trace_value(row.get("time_end")),
+            _invite_trace_value(action),
+        )
 
         async def _notify() -> None:
             try:
