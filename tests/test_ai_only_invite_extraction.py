@@ -93,6 +93,22 @@ def test_ai_only_reports_its_mode_and_that_ocr_was_not_used(ai_only, ocr_forbidd
     assert result["extraction_method"] == "ai_only"
 
 
+def test_ai_only_reports_the_laptop_that_returned_the_vision_result(
+    ai_only, ocr_forbidden, monkeypatch
+):
+    response = oie.InferenceResponse(
+        "{}",
+        node_id="jagadeesh",
+        node_label="Jagadeesh",
+    )
+    monkeypatch.setattr(oie, "call_ollama_vision_model", lambda *a, **k: response)
+
+    result = oie.extract_interview_invite_with_ollama(b"image-bytes", "image/png")
+
+    assert result["inference_node_id"] == "jagadeesh"
+    assert result["inference_node_label"] == "Jagadeesh"
+
+
 def test_ai_only_incomplete_data_allows_manual_confirmation(ai_only, ocr_forbidden, monkeypatch):
     partial = {**VISION_JSON, "start_time": ""}
     monkeypatch.setattr(oie, "parse_strict_json_response", lambda _r: dict(partial))

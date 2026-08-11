@@ -61,6 +61,41 @@ OLLAMA_TIMEOUT = _invite_model_timeout()
 OLLAMA_TEXT_TIMEOUT = min(int(os.environ.get("OLLAMA_TEXT_TIMEOUT", "60")), OLLAMA_TIMEOUT)
 
 
+class InferenceResponse(str):
+    """Model text plus the node that actually produced it.
+
+    Keeping this string-compatible preserves the parser and its test seams while
+    carrying the gateway metadata needed by the public invite UI.
+    """
+
+    def __new__(
+        cls,
+        content: str,
+        *,
+        node_id: str = "",
+        node_label: str = "",
+    ):
+        value = super().__new__(cls, content)
+        value.node_id = node_id
+        value.node_label = node_label
+        return value
+
+
+def _attach_inference_node(
+    extracted: dict[str, Any] | None,
+    response: str | None,
+) -> dict[str, Any] | None:
+    if not extracted or response is None:
+        return extracted
+    node_id = str(getattr(response, "node_id", "") or "").strip()
+    node_label = str(getattr(response, "node_label", "") or "").strip()
+    if node_id:
+        extracted["inference_node_id"] = node_id
+    if node_label:
+        extracted["inference_node_label"] = node_label
+    return extracted
+
+
 def _ollama_only_test_mode() -> bool:
     """Return True only for the explicit diagnostic mode."""
     return os.environ.get("INVITE_EXTRACTION_MODE", "").strip().lower() == "ollama_only"
@@ -299,7 +334,13 @@ def call_ollama_vision_model(
             think=False,
             workload="interview_screenshot_vision",
         )
-        return result.content or None
+        if not result.content:
+            return None
+        return InferenceResponse(
+            result.content,
+            node_id=result.node_id,
+            node_label=result.node_label,
+        )
     except AIGatewayError as exc:
         logger.warning("Ollama interview vision failed model=%s code=%s", model_name, exc.code)
         return None
@@ -380,7 +421,7 @@ def retry_invalid_json_once(
         RETRY_PROMPT,
     )
     if response:
-        return parse_strict_json_response(response)
+        return _attach_inference_node(parse_strict_json_response(response), response)
     return None
 
 
@@ -737,7 +778,9 @@ def _extract_with_ocr_and_ai(
     used_model = OLLAMA_VISION_MODEL
     
     if response:
-        extracted = parse_strict_json_response(response)
+        extracted = _attach_inference_node(
+            parse_strict_json_response(response), response
+        )
         if not extracted:
             logger.info("Invalid JSON from vision, retrying...")
             extracted = retry_invalid_json_once(OLLAMA_VISION_MODEL, img_b64, response)
@@ -754,7 +797,9 @@ def _extract_with_ocr_and_ai(
             OLLAMA_BACKUP_VISION_MODEL, img_b64, _get_invite_prompt(), timeout=OLLAMA_TIMEOUT
         )
         if backup_response:
-            extracted = parse_strict_json_response(backup_response)
+            extracted = _attach_inference_node(
+                parse_strict_json_response(backup_response), backup_response
+            )
             if extracted:
                 used_model = OLLAMA_BACKUP_VISION_MODEL
     
@@ -918,7 +963,11 @@ def _ai_only_vision_extraction(image_data: bytes) -> tuple[dict[str, Any] | None
     response = call_ollama_vision_model(
         OLLAMA_VISION_MODEL, img_b64, _get_invite_prompt(), timeout=OLLAMA_TIMEOUT
     )
-    extracted = parse_strict_json_response(response) if response else None
+    extracted = (
+        _attach_inference_node(parse_strict_json_response(response), response)
+        if response
+        else None
+    )
     if response and not extracted:
         extracted = retry_invalid_json_once(OLLAMA_VISION_MODEL, img_b64, response)
     if (
@@ -930,7 +979,9 @@ def _ai_only_vision_extraction(image_data: bytes) -> tuple[dict[str, Any] | None
             OLLAMA_BACKUP_VISION_MODEL, img_b64, _get_invite_prompt(), timeout=OLLAMA_TIMEOUT
         )
         if backup:
-            extracted = parse_strict_json_response(backup)
+            extracted = _attach_inference_node(
+                parse_strict_json_response(backup), backup
+            )
             if extracted:
                 used_model = OLLAMA_BACKUP_VISION_MODEL
     return extracted, used_model

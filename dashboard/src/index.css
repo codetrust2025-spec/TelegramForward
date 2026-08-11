@@ -18064,7 +18064,7 @@ html:has(.app-shell--view-candidates)::-webkit-scrollbar-thumb:active {
   background: rgba(16, 185, 129, 0.18);
   font-size: 0.62rem;
   font-weight: 800;
-  text-transform: uppercase;
+  text-transform: none;
 }
 .submit-slot-screen .sbs-detected__main {
   display: flex;

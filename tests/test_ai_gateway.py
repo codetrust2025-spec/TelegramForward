@@ -200,6 +200,36 @@ def test_chat_sends_explicit_think_setting(monkeypatch):
     assert captured["think"] is False
 
 
+def test_chat_reports_the_node_that_served_the_request(monkeypatch):
+    monkeypatch.setattr(
+        ai_gateway.ollama_nodes,
+        "select_available_node",
+        lambda **_kwargs: {
+            "node_id": "rtx4060",
+            "base_url": "http://127.0.0.1:11437",
+            "was_primary": True,
+            "attempts": [],
+        },
+    )
+    monkeypatch.setattr(ai_gateway, "health", lambda **kwargs: {
+        "endpoint_reachable": True, "model_available": True,
+        "error_message": None, "error_code": None,
+    })
+    monkeypatch.setattr(
+        ai_gateway,
+        "_request_json",
+        lambda *args, **kwargs: {"message": {"content": '{"ok": true}'}},
+    )
+
+    result = ai_gateway.chat(
+        messages=[{"role": "user", "content": "test"}],
+        model="qwen3-vl:8b-instruct",
+    )
+
+    assert result.node_id == "rtx4060"
+    assert result.node_label == "RTX 4060"
+
+
 def test_structured_chat_rejects_schema_mismatch(monkeypatch):
     monkeypatch.setattr(ai_gateway, "health", lambda **kwargs: {
         "endpoint_reachable": True, "model_available": True,

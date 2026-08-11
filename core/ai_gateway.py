@@ -32,6 +32,8 @@ class AIResult:
     content: str
     model: str
     duration_ms: int
+    node_id: str = ""
+    node_label: str = ""
 
 
 class AIGatewayError(RuntimeError):
@@ -290,7 +292,14 @@ def chat(
                     workload, host_id, chosen, attempt + 1, duration_ms,
                 )
                 ollama_status.record_request_success(duration_ms)
-                return AIResult(content=content, model=chosen, duration_ms=duration_ms)
+                selected_node_record = ollama_nodes.node(selected_node)
+                return AIResult(
+                    content=content,
+                    model=chosen,
+                    duration_ms=duration_ms,
+                    node_id=selected_node,
+                    node_label=str(selected_node_record.get("label") or selected_node),
+                )
             except AIGatewayError as exc:
                 last_error = exc
                 ollama_status.record_request_failure(exc.code, str(exc))
