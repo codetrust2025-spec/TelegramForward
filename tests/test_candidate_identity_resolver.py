@@ -166,6 +166,123 @@ def test_round_wise_row_sharing_a_name_is_not_pulled_in():
 # ── genuinely different people ───────────────────────────────────────────────
 
 
+# ── name is a weak edge: it must never fuse two real identities ──────────────
+
+
+def test_same_name_different_phones_stay_separate():
+    """Two real people share a name. A name alone must not merge them."""
+    cur = FakeCursor(
+        candidates=[
+            profile("a1", "Rahul Sharma", phone="9111111111"),
+            profile("b1", "Rahul Sharma", phone="9222222222"),
+        ],
+    )
+
+    assert candidate_identity.identity_cluster(cur, "a1") == {"a1"}
+    assert candidate_identity.identity_cluster(cur, "b1") == {"b1"}
+    assert not candidate_identity.same_identity(cur, "a1", "b1")
+
+
+def test_same_name_different_personal_emails_stay_separate():
+    cur = FakeCursor(
+        candidates=[
+            profile("a2", "Priya Nair", email="priya.one@example.com"),
+            profile("b2", "Priya Nair", email="priya.two@example.com"),
+        ],
+    )
+
+    assert not candidate_identity.same_identity(cur, "a2", "b2")
+
+
+def test_same_name_different_mailboxes_stay_separate():
+    cur = FakeCursor(
+        candidates=[
+            profile("a3", "Vikram Iyer", phone="9333333331"),
+            profile("b3", "Vikram Iyer", phone="9333333332"),
+        ],
+        mailboxes=[("a3", "vikram.one@gmail.com"), ("b3", "vikram.two@gmail.com")],
+    )
+
+    assert not candidate_identity.same_identity(cur, "a3", "b3")
+
+
+def test_shared_name_does_not_bridge_two_strong_clusters():
+    """The dangerous shape: X--phone--X2, X2 shares a name with Y2, Y2--phone--Y.
+
+    Without a guard, transitivity turns one shared name into a bridge and
+    fuses two unrelated people's entire histories.
+    """
+    cur = FakeCursor(
+        candidates=[
+            profile("x1", "Person X", phone="9444444441"),
+            profile("x2", "Bridge Name", phone="9444444441"),
+            profile("y2", "Bridge Name", phone="9444444442"),
+            profile("y1", "Person Y", phone="9444444442"),
+        ],
+    )
+
+    x_cluster = candidate_identity.identity_cluster(cur, "x1")
+    y_cluster = candidate_identity.identity_cluster(cur, "y1")
+
+    assert x_cluster == {"x1", "x2"}
+    assert y_cluster == {"y1", "y2"}
+    assert not candidate_identity.same_identity(cur, "x1", "y1")
+
+
+def test_keyless_row_matching_two_conflicting_people_joins_neither():
+    """An unidentifiable row must not become a bridge either.
+
+    A row with no phone and no email whose name matches two people holding
+    different phones is genuinely ambiguous. Attaching it to whichever side
+    was visited first would be arbitrary and would fuse both clusters, so the
+    name yields nothing and every side keeps its own identity.
+    """
+    cur = FakeCursor(
+        candidates=[
+            profile("k1", "Ambiguous Name", phone="9555555551"),
+            profile("k2", "Ambiguous Name", phone=""),
+            profile("k3", "Ambiguous Name", phone="9555555552"),
+        ],
+    )
+
+    assert not candidate_identity.same_identity(cur, "k1", "k3")
+    assert not candidate_identity.same_identity(cur, "k1", "k2")
+    assert candidate_identity.identity_cluster(cur, "k2") == {"k2"}
+
+
+def test_name_edge_still_joins_when_only_one_identity_is_present():
+    """The guard must not break the case it exists to allow.
+
+    One row carries the phone, the other carries none — a single identity, so
+    the name edge is safe and must still apply.
+    """
+    cur = FakeCursor(
+        candidates=[
+            profile("g1", "Ram Charan M S", phone=""),
+            profile("g2", "Reddy Charan M S", phone="8328646540"),
+        ],
+    )
+
+    assert candidate_identity.same_identity(cur, "g1", "g2")
+
+
+def test_strong_evidence_still_joins_rows_with_different_phones():
+    """The conflict guard applies to name edges only.
+
+    Two rows joined by a shared mailbox are the same person even if their
+    phone fields disagree — that is strong evidence, not a name coincidence.
+    """
+    cur = FakeCursor(
+        candidates=[
+            profile("s1", "Someone", phone="9666666661"),
+            profile("s2", "Someone Else Entirely", phone="9666666662"),
+        ],
+        mailboxes=[("s1", "shared.account@gmail.com"), ("s2", "shared.account@gmail.com")],
+    )
+
+    assert candidate_identity.same_identity(cur, "s1", "s2")
+
+
 def test_two_different_people_never_share_an_identity():
     cur = FakeCursor(
         candidates=[

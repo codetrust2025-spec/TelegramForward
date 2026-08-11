@@ -32,19 +32,10 @@ class FakeIdentityCursor:
         self.queries.append(sql)
         collapsed = " ".join(sql.split())
         if "FROM candidate_identity_links" in collapsed:
-            ids = set(params[0]) | set(params[1] if len(params) > 1 else [])
-            self._result = [
-                (alias, canonical)
-                for alias, canonical in self.links
-                if alias in ids or canonical in ids
-            ]
+            self._result = [(alias, canonical) for alias, canonical in self.links]
         elif "FROM candidate_mailboxes" in collapsed:
-            ids = set(params[0])
-            addresses = {email.lower() for cid, email in self.mailboxes if cid in ids}
             self._result = [
-                (cid, email.lower())
-                for cid, email in self.mailboxes
-                if email.lower() in addresses
+                (cid, email.lower()) for cid, email in self.mailboxes if "@" in email
             ]
         elif "FROM candidates_store" in collapsed:
             self._result = [
