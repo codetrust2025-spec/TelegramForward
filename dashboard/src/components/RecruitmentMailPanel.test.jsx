@@ -337,6 +337,84 @@ describe("RecruitmentMailPanel", () => {
       screen.getByRole("cell", { name: /Test Candidate/ }),
     ).toBeInTheDocument();
   });
+  it("labels the phone as a phone and keeps candidates sharing one distinct", async () => {
+    fetch.mockImplementation(async (url) => {
+      const path = String(url);
+      if (path.includes("/candidates?"))
+        return {
+          ok: true,
+          json: async () => ({
+            status: "ok",
+            candidates: [
+              {
+                id: "candidate-alpha",
+                name: "Shared Phone One",
+                phone: "8328646540",
+                stage: "in_progress",
+                service_type: "profile_service",
+              },
+              {
+                id: "candidate-beta",
+                name: "Shared Phone Two",
+                phone: "8328646540",
+                stage: "in_progress",
+                service_type: "profile_service",
+              },
+            ],
+          }),
+        };
+      if (path.includes("/candidate-mailboxes/overview"))
+        return {
+          ok: true,
+          json: async () => ({
+            status: "ok",
+            mailboxes: [
+              {
+                mailbox: {
+                  id: "mailbox-alpha",
+                  candidate_id: "candidate-alpha",
+                  email_address: "alpha@gmail.com",
+                  connection_status: "CONNECTED",
+                  monitoring_enabled: true,
+                },
+                stats: {},
+              },
+              {
+                mailbox: {
+                  id: "mailbox-beta",
+                  candidate_id: "candidate-beta",
+                  email_address: "beta@gmail.com",
+                  connection_status: "CONNECTED",
+                  monitoring_enabled: true,
+                },
+                stats: {},
+              },
+            ],
+          }),
+        };
+      return { ok: true, json: async () => payloadFor(path) };
+    });
+
+    render(
+      <ConfirmProvider>
+        <RecruitmentMailPanel />
+      </ConfirmProvider>,
+    );
+
+    await screen.findByText("alpha@gmail.com");
+    // A phone number presented as a candidate id made two distinct candidates
+    // read as one during an identity investigation.  The label must match the
+    // value it describes.
+    expect(screen.queryByText(/Candidate ID: 8328646540/)).toBeNull();
+    expect(screen.getAllByText("Phone: 8328646540")).toHaveLength(2);
+    // Two candidates sharing a phone stay distinguishable by their real ids.
+    expect(
+      screen.getByText("Candidate ID: candidate-alpha"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Candidate ID: candidate-beta"),
+    ).toBeInTheDocument();
+  });
   it("keeps mailbox administration separate from mail review reporting", async () => {
     fetch.mockImplementation(async (url, options = {}) => {
       const path = String(url);
