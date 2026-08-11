@@ -12,6 +12,8 @@ actually has to answer.
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
 from features import candidate_identity
@@ -281,6 +283,101 @@ def test_strong_evidence_still_joins_rows_with_different_phones():
     )
 
     assert candidate_identity.same_identity(cur, "s1", "s2")
+
+
+# ── weak-edge confluence: order must not decide who keeps the bridge ─────────
+
+
+def test_ambiguous_weak_chain_joins_nothing():
+    """A(111) — B(nothing) — C(222), joined only by weak edges.
+
+    Accepting A-B first makes B-C conflicting; accepting B-C first makes A-B
+    conflicting. Either way the survivor would be chosen by iteration order,
+    not by evidence. The whole weakly connected region is ambiguous, so none
+    of it is applied and B joins neither side.
+    """
+    cur = FakeCursor(
+        candidates=[
+            profile("A", "Person A", phone="111111111"),
+            profile("B", "Bridge Row"),
+            profile("C", "Person C", phone="222222222"),
+        ],
+        links=[
+            ("B", "A", "GMAIL_ACCOUNT_MAPPING", True),
+            ("B", "C", "GMAIL_ACCOUNT_MAPPING", True),
+        ],
+    )
+
+    assert candidate_identity.identity_cluster(cur, "A") == {"A"}
+    assert candidate_identity.identity_cluster(cur, "B") == {"B"}
+    assert candidate_identity.identity_cluster(cur, "C") == {"C"}
+    assert not candidate_identity.same_identity(cur, "A", "B")
+    assert not candidate_identity.same_identity(cur, "B", "C")
+    assert not candidate_identity.same_identity(cur, "A", "C")
+
+
+def test_ambiguous_weak_chain_of_mixed_kinds_joins_nothing():
+    """The same hole must not reopen when the two weak edges differ in kind.
+
+    Here one side is a canonical-name edge and the other a derived link, so a
+    guard applied per-kind rather than per-region would still let B attach.
+    """
+    cur = FakeCursor(
+        candidates=[
+            profile("m1", "Shared Name", phone="333333331"),
+            profile("m2", "Shared Name"),
+            profile("m3", "Different Person", phone="333333332"),
+        ],
+        links=[("m2", "m3", "VERIFIED_PHONE", True)],
+    )
+
+    assert candidate_identity.identity_cluster(cur, "m1") == {"m1"}
+    assert candidate_identity.identity_cluster(cur, "m2") == {"m2"}
+    assert candidate_identity.identity_cluster(cur, "m3") == {"m3"}
+
+
+def test_weak_chain_without_contradiction_still_merges_end_to_end():
+    """The guard must reject ambiguity, not weak evidence as such."""
+    cur = FakeCursor(
+        candidates=[
+            profile("w1", "Person W", phone="444444441"),
+            profile("w2", "Bridge One"),
+            profile("w3", "Bridge Two"),
+        ],
+        links=[
+            ("w2", "w1", "GMAIL_ACCOUNT_MAPPING", True),
+            ("w2", "w3", "GMAIL_ACCOUNT_MAPPING", True),
+        ],
+    )
+
+    assert candidate_identity.identity_cluster(cur, "w1") == {"w1", "w2", "w3"}
+    assert candidate_identity.same_identity(cur, "w1", "w3")
+
+
+def test_ambiguous_weak_chain_result_is_independent_of_row_and_link_order():
+    """Prove the answer comes from evidence, not from iteration order."""
+    rows = [
+        profile("A", "Person A", phone="111111111"),
+        profile("B", "Bridge Row"),
+        profile("C", "Person C", phone="222222222"),
+    ]
+    links = [
+        ("B", "A", "GMAIL_ACCOUNT_MAPPING", True),
+        ("B", "C", "GMAIL_ACCOUNT_MAPPING", True),
+    ]
+
+    seen = set()
+    for row_order in itertools.permutations(rows):
+        for link_order in itertools.permutations(links):
+            cur = FakeCursor(candidates=list(row_order), links=list(link_order))
+            seen.add(
+                tuple(
+                    tuple(sorted(candidate_identity.identity_cluster(cur, seed)))
+                    for seed in ("A", "B", "C")
+                )
+            )
+
+    assert seen == {(("A",), ("B",), ("C",))}
 
 
 # ── derived link rows are history, not proof ─────────────────────────────────

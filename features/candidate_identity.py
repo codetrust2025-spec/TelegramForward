@@ -306,32 +306,45 @@ def _apply_weak_edges(
     rows: dict[str, dict[str, Any]],
     groups: list[tuple[str, frozenset[str]]],
 ) -> None:
-    """Apply weak joins that cannot fuse two identities, to a fixpoint.
+    """Apply weak joins one whole region at a time, or not at all.
 
-    Merging one group can make another group's reachable set conflicting, so
-    passes repeat until nothing changes. Groups are visited in sorted order so
-    the result never depends on dictionary or row ordering.
+    Evaluating weak edges one pair at a time is not safe even in a fixed
+    order. Given ``A(phone 111) — B(no identifiers) — C(phone 222)`` joined by
+    two weak edges, accepting A–B first makes B–C conflicting, and accepting
+    B–C first makes A–B conflicting. Both orders are reproducible, but which
+    side keeps B is then decided by iteration order rather than by evidence.
+
+    So weak edges are evaluated by *region*: the connected sub-graph they form
+    over strong components. If anything anywhere in a region contradicts —
+    two phones, two personal emails — the entire region's weak edges are
+    discarded and every strong component in it keeps its own identity. B joins
+    neither side, because nothing in the data says which side it belongs to.
+
+    This is deliberately conservative: one contradiction can discard weak
+    evidence elsewhere in the same region. That is the fail-closed direction,
+    and a refused link surfaces as a recoverable CANDIDATE_MISMATCH.
     """
-    for _pass in range(len(groups) + 1):
-        merged_any = False
-        for _label, ids in groups:
-            roots = {components.find(cid) for cid in ids}
-            if len(roots) < 2:
-                continue
-            reachable: set[str] = set()
-            for root in roots:
-                reachable |= components.members(root)
-            if _conflicting(reachable, rows):
-                # This group spans people holding different identifiers. Under
-                # transitivity one such edge would fuse both of their clusters,
-                # so it yields nothing and each side keeps its own identity.
-                continue
-            ordered = sorted(roots)
-            for root in ordered[1:]:
-                components.union(ordered[0], root)
-            merged_any = True
-        if not merged_any:
-            return
+    regions = _Components()
+    for _label, ids in groups:
+        roots = sorted({components.find(cid) for cid in ids})
+        for other in roots[1:]:
+            regions.union(roots[0], other)
+
+    by_region: dict[str, set[str]] = {}
+    for root in list(regions.parent):
+        by_region.setdefault(regions.find(root), set()).add(root)
+
+    for _region_root, strong_roots in sorted(by_region.items()):
+        if len(strong_roots) < 2:
+            continue
+        reachable: set[str] = set()
+        for root in strong_roots:
+            reachable |= components.members(root)
+        if _conflicting(reachable, rows):
+            continue
+        ordered = sorted(strong_roots)
+        for root in ordered[1:]:
+            components.union(ordered[0], root)
 
 
 def identity_cluster(cur, candidate_id: str) -> frozenset[str]:
