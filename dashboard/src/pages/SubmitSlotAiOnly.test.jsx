@@ -43,6 +43,8 @@ const AI_ONLY_SUCCESS = {
   auto_booking_safe: true,
   manual_fields_required: false,
   extraction_method: 'ai_only',
+  inference_node_label: 'RTX 4060',
+  primary_model: 'qwen3-vl:8b-instruct',
   interview_date: '2026-08-10',
   start_time: '02:30 PM',
   end_time: '03:30 PM',
@@ -68,6 +70,9 @@ describe('booking with the global OCR switch off', () => {
     // The detected panel is what appears when the booking is accepted; the
     // manual-entry fallback and its OCR blocker must not be shown at all.
     await waitFor(() => expect(document.querySelector('.sbs-detected')).toBeInTheDocument())
+    expect(document.querySelector('.sbs-detected__badge')).toHaveTextContent(
+      'RTX · qwen3-vl · 90%',
+    )
     expect(document.querySelector('.sbs-detected__time').textContent).toContain('02:30 PM')
     expect(document.querySelector('.sbs-manual')).toBeNull()
     expect(document.body.textContent).not.toMatch(/OCR/)

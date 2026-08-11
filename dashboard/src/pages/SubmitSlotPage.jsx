@@ -145,6 +145,34 @@ function uniqueNonEmptyTags(values) {
   })
 }
 
+export function compactInviteDetectionLabel(extraction) {
+  const confidence = Number(extraction?.confidence_score || 0)
+  const rawNode = String(
+    extraction?.inference_node_label || extraction?.inference_node_id || '',
+  ).trim()
+  const nodeAliases = {
+    rtx4060: 'RTX',
+    'rtx 4060': 'RTX',
+    jagadeesh: 'Jagadeesh',
+    our_machine: 'Praveen',
+    praveen: 'Praveen',
+  }
+  const node = nodeAliases[rawNode.toLowerCase()] || rawNode
+  const rawModel = String(
+    extraction?.primary_model || extraction?.detected_by || '',
+  ).trim()
+  const model = rawModel
+    .replace(/\s*\([^)]*\)\s*/g, '')
+    .split(/\s+\+\s+|\s+verified\b/i)
+    .pop()
+    .split(':')[0]
+    .trim()
+  const source = node || model || 'AI'
+  const parts = node && model ? [node, model] : [source]
+  if (confidence > 0) parts.push(`${confidence}%`)
+  return parts.join(' · ')
+}
+
 /**
  * Read a fetch Response that is expected to be JSON.
  *
@@ -956,9 +984,7 @@ export function SubmitSlotPage() {
               {aiExtraction && !aiBlocked && aiExtraction.confidence_score > 0 && (
                 <div className="sbs-detected">
                   <span className={`sbs-detected__badge ${aiExtraction.confidence_score >= 90 ? 'sbs-detected__badge--green' : aiExtraction.confidence_score >= 70 ? 'sbs-detected__badge--yellow' : 'sbs-detected__badge--red'}`}>
-                    {aiExtraction.detected_by
-                      ? `Detected by ${aiExtraction.detected_by} · ${aiExtraction.confidence_score}%`
-                      : `AI verified · ${aiExtraction.confidence_score}%`}
+                    {compactInviteDetectionLabel(aiExtraction)}
                   </span>
                   <div className="sbs-detected__main">
                     {aiExtraction.interview_date && <span className="sbs-detected__date">{formatFriendlyDate(aiExtraction.interview_date)}</span>}

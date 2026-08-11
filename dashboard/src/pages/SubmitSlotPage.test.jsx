@@ -3,7 +3,7 @@ import React from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { SubmitSlotPage, to24h } from './SubmitSlotPage.jsx'
+import { compactInviteDetectionLabel, SubmitSlotPage, to24h } from './SubmitSlotPage.jsx'
 
 function jsonResponse(payload) {
   return Promise.resolve({
@@ -18,6 +18,21 @@ describe('Book Interview Slot flow', () => {
   it('converts the displayed 12-hour selection to the existing API format', () => {
     expect(to24h('02:15 PM')).toBe('14:15')
     expect(to24h('12:05 AM')).toBe('00:05')
+  })
+
+  it('shows only laptop, compact model, and confidence', () => {
+    expect(compactInviteDetectionLabel({
+      inference_node_label: 'RTX 4060',
+      primary_model: 'qwen3-vl:8b-instruct',
+      detected_by: 'qwen3-vl:8b-instruct (AI only)',
+      confidence_score: 95,
+    })).toBe('RTX · qwen3-vl · 95%')
+
+    expect(compactInviteDetectionLabel({
+      inference_node_label: 'Jagadeesh',
+      primary_model: 'qwen3-vl:8b-instruct',
+      confidence_score: 95,
+    })).toBe('Jagadeesh · qwen3-vl · 95%')
   })
 
   beforeEach(() => {
