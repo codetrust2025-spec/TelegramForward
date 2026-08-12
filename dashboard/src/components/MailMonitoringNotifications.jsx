@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { API } from "../config.js";
 import { subscribeMailEvents, subscribeMailStatus } from "../notifications/mailEventStream.js";
 import { useDialogA11y } from "../hooks/useDialogA11y.js";
-import { formatIstDateTime, formatScheduleDateTime } from "../utils/istTime.js";
+import { formatIstDateTime, formatScheduleDateTime, formatScheduleIstDateTime } from "../utils/istTime.js";
 import { useConfirm } from "../context/ConfirmContext.jsx";
 import { MailMonitoringTabs } from "./MailMonitoringTabs.jsx";
 import { InlineLoader, OverlayLoader } from "../Loader.jsx";
@@ -174,10 +174,17 @@ function NotificationDetail({ item, onClose, onChanged }) {
     window.alert(rows.length ? rows.map((row) => `${when(row.created_at)} — ${row.booking_status}${row.failure_message ? ` — ${row.failure_message}` : ""}`).join("\n") : "No booking audit history found.");
   };
   const originalEmail = item.event_detail?.received_email;
+  // Empty when the invite is already IST, so the extra line appears only when
+  // the reader actually has to convert something.
+  const istInterviewTime = formatScheduleIstDateTime(
+    item.interview_date,
+    item.interview_time,
+    item.interview_timezone,
+  );
   return <div className="mail-detail-backdrop" role="presentation" onClick={(event) => event.target === event.currentTarget && onClose()}>
     <section ref={dialogRef} className="mail-detail" role="dialog" aria-modal="true" aria-label="Mail monitoring notification">
       <header><div><h3>{item.candidate_status || human(item.classification)}</h3><p>{item.candidate_name || "Candidate"} · {item.company_name || "Company unavailable"}</p></div><button type="button" onClick={onClose} aria-label="Close">×</button></header>
-      <dl><div><dt>Email</dt><dd>{item.email_subject || "No subject"}</dd></div><div><dt>From</dt><dd>{item.sender_name || item.sender_email || "Unknown"}</dd></div><div><dt>Mail received</dt><dd>{when(item.email_received_at)}</dd></div><div><dt>Tool detected</dt><dd>{when(item.created_at)}</dd></div><div><dt>AI confidence</dt><dd>{confidence(item.ai_confidence)}</dd></div>{item.booking_status && <div><dt>Booking</dt><dd>{item.booking_status}</dd></div>}{item.interview_date && <div><dt>Interview</dt><dd>{formatScheduleDateTime(item.interview_date, item.interview_time, item.interview_timezone)}</dd></div>}{item.interview_round && <div><dt>Round</dt><dd>{item.interview_round}</dd></div>}{(() => {
+      <dl><div><dt>Email</dt><dd>{item.email_subject || "No subject"}</dd></div><div><dt>From</dt><dd>{item.sender_name || item.sender_email || "Unknown"}</dd></div><div><dt>Mail received</dt><dd>{when(item.email_received_at)}</dd></div><div><dt>Tool detected</dt><dd>{when(item.created_at)}</dd></div><div><dt>AI confidence</dt><dd>{confidence(item.ai_confidence)}</dd></div>{item.booking_status && <div><dt>Booking</dt><dd>{item.booking_status}</dd></div>}{item.interview_date && <div><dt>Interview</dt><dd>{formatScheduleDateTime(item.interview_date, item.interview_time, item.interview_timezone)}</dd></div>}{istInterviewTime && <div><dt>IST Time</dt><dd>{istInterviewTime}</dd></div>}{item.interview_round && <div><dt>Round</dt><dd>{item.interview_round}</dd></div>}{(() => {
         const reason = blockingReason(item);
         if (!reason) return null;
         return <>
