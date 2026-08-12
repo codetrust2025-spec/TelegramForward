@@ -142,6 +142,87 @@ describe('gmail reconnect fault', () => {
     policy.muted = true
     expect(notifyGmailReconnect([{ id: 9, name: 'Z' }])).toBe(true)
   })
+
+  /**
+   * The reported production fault: the dashboard listed several mailboxes as
+   * Reconnect Required while the desktop notification read "0 candidate
+   * accounts". The rows below are the real health-payload shape, which carries
+   * no name — the old summary counted named rows only, so every alert was zero.
+   */
+  describe('summary body for real health rows', () => {
+    let shown
+
+    const withNotification = (fn) => {
+      shown = []
+      class StubNotification {
+        static permission = 'granted'
+        static requestPermission = () => Promise.resolve('granted')
+        constructor(title, options) {
+          shown.push({ title, body: options?.body || '' })
+        }
+        close() {}
+        addEventListener() {}
+      }
+      const previous = globalThis.Notification
+      globalThis.Notification = StubNotification
+      try {
+        fn()
+      } finally {
+        if (previous === undefined) delete globalThis.Notification
+        else globalThis.Notification = previous
+      }
+    }
+
+    const broken = (id, candidateId, email) => ({
+      id,
+      candidateId,
+      email,
+      name: '',
+    })
+
+    it('never says "0 candidate accounts" when mailboxes are broken', () => {
+      withNotification(() => {
+        expect(
+          notifyGmailReconnect([
+            broken('m1', 'c1', 'manojkamble9882@gmail.com'),
+            broken('m2', 'c2', 'sailajachennu2@gmail.com'),
+            broken('m3', 'c3', 'rapoluudaykumar009@gmail.com'),
+          ]),
+        ).toBe(true)
+      })
+      expect(shown).toHaveLength(1)
+      expect(shown[0].body).not.toContain('0 candidate accounts')
+      expect(shown[0].body).not.toMatch(/\b0\b/)
+      expect(shown[0].body).toBe('3 Gmail accounts across 3 candidates')
+    })
+
+    it('labels a lone broken mailbox by its address', () => {
+      withNotification(() => {
+        notifyGmailReconnect([broken('m1', 'c1', 'karunakarthummala6@gmail.com')])
+      })
+      expect(shown[0].body).toBe('karunakarthummala6@gmail.com')
+    })
+
+    it('does not re-notify while the same mailboxes stay broken', () => {
+      const rows = [
+        broken('m1', 'c1', 'a@gmail.com'),
+        broken('m2', 'c2', 'b@gmail.com'),
+      ]
+      withNotification(() => {
+        expect(notifyGmailReconnect(rows)).toBe(true)
+        expect(notifyGmailReconnect(rows)).toBe(false)
+        expect(notifyGmailReconnect(rows)).toBe(false)
+      })
+      expect(shown).toHaveLength(1)
+    })
+
+    it('stays silent when nothing is broken', () => {
+      withNotification(() => {
+        expect(notifyGmailReconnect([])).toBe(false)
+      })
+      expect(shown).toHaveLength(0)
+    })
+  })
 })
 
 describe('interview reminder', () => {
