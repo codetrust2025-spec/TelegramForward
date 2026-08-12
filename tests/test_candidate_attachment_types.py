@@ -73,6 +73,85 @@ def test_slot_and_payment_attachments_never_mix(monkeypatch, tmp_path):
     assert evidence["id"] != payment["id"]
 
 
+def _two_slot_screenshots(state):
+    """An auto-booking evidence image later joined by a manual upload."""
+    older = candidate_store.add_slot_screenshot_proof(
+        "candidate-1",
+        data=b"auto-evidence",
+        original_name="auto-booking-evidence.png",
+        mime_type="image/png",
+        metadata={"booking_id": "booking-1"},
+    )
+    newer = candidate_store.add_slot_screenshot_proof(
+        "candidate-1",
+        data=b"manual-invite",
+        original_name="invite.jpg",
+        mime_type="image/jpeg",
+        metadata={"booking_id": "booking-1"},
+    )
+    stamps = {
+        older["id"]: "2026-08-07T07:47:01.104800+00:00",
+        newer["id"]: "2026-08-11T04:11:09.618185+00:00",
+    }
+    for entry in state["candidates"][0]["slot_screenshot_proofs"]:
+        entry["uploaded_at"] = stamps[entry["id"]]
+    return older, newer
+
+
+def test_several_slot_screenshots_resolve_to_the_newest(monkeypatch, tmp_path):
+    """Two screenshots must not hide the screenshot entirely.
+
+    A booking with an auto-booking evidence image plus a later manual upload
+    reported "Not available" on the interview roster while both files sat on
+    disk, because resolution only returned a proof when exactly one existed.
+    """
+    state = _store(monkeypatch, tmp_path)
+    _older, newer = _two_slot_screenshots(state)
+
+    evidence = candidate_store._latest_slot_screenshot_proof(state["candidates"][0])
+    assert evidence is not None
+    assert evidence["id"] == newer["id"]
+
+
+def test_the_roster_api_returns_the_screenshot_for_multiple_proofs(monkeypatch, tmp_path):
+    state = _store(monkeypatch, tmp_path)
+    _older, newer = _two_slot_screenshots(state)
+
+    rows = candidate_store._enrich_interview_rows_with_slot_screenshots(
+        [{"id": "candidate-1", "name": "Typed Candidate"}]
+    )
+    proof = rows[0].get("slot_screenshot_proof")
+    assert proof, "the roster row must carry the screenshot the UI renders"
+    assert proof["id"] == newer["id"]
+    assert proof["url"] == (
+        f"/candidates/candidate-1/attachments/slot_screenshot_proof/{newer['id']}"
+    )
+
+
+def test_a_single_slot_screenshot_still_resolves(monkeypatch, tmp_path):
+    state = _store(monkeypatch, tmp_path)
+    only = candidate_store.add_slot_screenshot_proof(
+        "candidate-1",
+        data=b"slot",
+        original_name="invite.jpg",
+        mime_type="image/jpeg",
+        metadata={"booking_id": "booking-1"},
+    )
+    evidence = candidate_store._latest_slot_screenshot_proof(state["candidates"][0])
+    assert evidence["id"] == only["id"]
+
+
+def test_no_screenshot_is_the_only_case_that_resolves_to_nothing(monkeypatch, tmp_path):
+    """"Not available" must mean no proof exists, never "too many to choose"."""
+    state = _store(monkeypatch, tmp_path)
+    assert candidate_store._latest_slot_screenshot_proof(state["candidates"][0]) is None
+
+    rows = candidate_store._enrich_interview_rows_with_slot_screenshots(
+        [{"id": "candidate-1", "name": "Typed Candidate"}]
+    )
+    assert "slot_screenshot_proof" not in rows[0]
+
+
 def test_profile_photo_is_separate(monkeypatch, tmp_path):
     state = _store(monkeypatch, tmp_path)
     photo = candidate_store.set_profile_photo(
