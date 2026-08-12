@@ -362,6 +362,7 @@ export function SubmitSlotPage() {
   // until the file is replaced or the booking is confirmed.
   const [aiElapsedMs, setAiElapsedMs] = useState(null)
   const parseStartedAtRef = useRef(null)
+  const submittingRef = useRef(false)
   const [userEditedFields, setUserEditedFields] = useState({})
   const [paymentAiResult, setPaymentAiResult] = useState(null)
   const [paymentAnalysing, setPaymentAnalysing] = useState(false)
@@ -687,6 +688,10 @@ export function SubmitSlotPage() {
     if (isPastDate) {
       return showValidationError('invite_datetime', 'Interview date is in the past. Select today or a future date.')
     }
+    // `busy` only disables the button after a re-render, so a fast double click
+    // could reach the boundary twice. The ref closes that window synchronously.
+    if (submittingRef.current) return
+    submittingRef.current = true
     setValidationError(null)
     setBusy(true); setError(''); setSuccess('')
     try {
@@ -757,7 +762,7 @@ export function SubmitSlotPage() {
       await refresh()
       setTimeout(() => { setTab('confirmed'); setSuccess('') }, 2000)
     } catch { setError('Network error — try again') }
-    finally { setBusy(false) }
+    finally { submittingRef.current = false; setBusy(false) }
   }
 
   return (
@@ -1088,7 +1093,12 @@ export function SubmitSlotPage() {
               {success && <div className="sbs-alert sbs-alert--success sbs-success-anim"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{flexShrink:0}}><path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg><span>{success}</span></div>}
 
               <div className="sbs-sticky-action">
-                <button type="submit" className="sbs-cta sbs-cta--ready" disabled={busy || parsing || isPastDate || !!aiBlocked}>
+                {/* Disabled while the success banner is up: the form has just
+                    been cleared, so a ready-looking button there invites a
+                    click against an empty form. It re-enables once the banner
+                    clears, which keeps the per-field validation guidance that
+                    pressing Confirm on an incomplete form is meant to give. */}
+                <button type="submit" className="sbs-cta sbs-cta--ready" disabled={busy || parsing || isPastDate || !!aiBlocked || !!success}>
                   <span>{busy ? <Spinner size={18} /> : parsing ? 'Reading invite...' : 'Confirm booking'}</span>
                 </button>
               </div>
