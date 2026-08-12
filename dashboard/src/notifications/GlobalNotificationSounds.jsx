@@ -15,7 +15,7 @@
 import { useEffect, useRef } from 'react'
 import { API } from '../config.js'
 import { useAuth } from '../context/AuthContext.jsx'
-import { needsReconnect } from '../utils/mailboxStatus.js'
+import { reconnectRequiredMailboxes } from '../utils/mailboxStatus.js'
 import { REPLY_CHECK_INTERVAL_MS } from '../utils/replyAlert.js'
 import { subscribeMailEvents } from './mailEventStream.js'
 import {
@@ -93,13 +93,7 @@ export function GlobalNotificationSounds({
           .catch(() => null)
         if (!body || cancelled) return
 
-        const disconnected = (body.mailboxes || [])
-          .filter((mailbox) => needsReconnect(mailbox))
-          .map((mailbox) => ({
-            id: mailbox.id,
-            name: mailbox.candidate_name || mailbox.name || '',
-          }))
-        notifyGmailReconnect(disconnected)
+        notifyGmailReconnect(reconnectRequiredMailboxes(body.mailboxes))
       } catch {
         /* a health blip must not break the session */
       }
