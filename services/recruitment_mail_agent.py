@@ -552,6 +552,61 @@ def prefilter_decision(subject: str, body: str, sender_name: str = "", sender_em
     return {"qualified": False, "score": 0.0, "status": "IGNORED_NOT_OFFER_RELATED", "evidence": [], "ignore_reason": "NO_SELECTION_OR_OFFER_SIGNAL"}
 
 
+_INVITE_STRUCTURE_CUES = (
+    "microsoft teams meeting", "teams.microsoft.com", "meet.google.com",
+    "zoom.us", "webex.com", "calendar invitation", "when:", "dtstart",
+    "begin:vevent", "organiser:", "organizer:", "join the meeting",
+    "join microsoft teams", "meeting id:", "add to calendar",
+)
+_ROLE_TITLE_CUES = (
+    "engineer", "developer", "analyst", "architect", "consultant", "devops",
+    "sre", "tester", "designer", "administrator", "specialist", "lead",
+    "scientist", "programmer", "full stack", "fullstack", "backend",
+    "frontend", "qa",
+)
+# Wording that frames the meeting as being *about a person for a role*. This is
+# the part an ordinary internal meeting does not have: "Discussion with Ramu
+# about the budget" carries no role title, and a sprint invite carries neither.
+_MEETING_ABOUT_PERSON_CUES = (
+    "discussion with", "discussion for", "discussion regarding",
+    "technical discussion", "call with", "screening", "screening round",
+    "round with", "meeting with", "conversation with", "profile discussion",
+)
+
+
+def recruiting_invite_signal(
+    subject: str, body: str, sender_email: str = "",
+    attachments: list[dict[str, Any]] | None = None,
+) -> bool:
+    """Does this look like a recruiting calendar invite that never says "interview"?
+
+    Real invites arrive titled "Discussion with <candidate> for <role>" on a
+    Teams/Meet link, and were dropped as NO_RECRUITMENT_ROUTING_SIGNAL because
+    no keyword matched. Routing on "discussion" alone would pull in every
+    internal meeting, so three independent structured signals are required
+    together: a calendar/meeting invite structure, a job-role-like title, and
+    wording framing the meeting around a person. Any one or two of those is not
+    enough, so an ordinary business discussion still fails closed.
+    """
+    subject_text = str(subject or "").casefold()
+    body_text = str(body or "").casefold()
+    attachment_text = " ".join(
+        str(item.get("text") or "") + " " + str(item.get("filename") or "")
+        for item in (attachments or [])
+    ).casefold()
+    everything = " ".join((subject_text, body_text, attachment_text))
+
+    has_invite_structure = (
+        any(cue in everything for cue in _INVITE_STRUCTURE_CUES)
+        or ".ics" in attachment_text
+    )
+    # The role must be named in the subject line: a signature block or a
+    # footer mentioning "engineer" elsewhere is not what this is about.
+    has_role_title = any(cue in subject_text for cue in _ROLE_TITLE_CUES)
+    is_about_a_person = any(cue in subject_text for cue in _MEETING_ABOUT_PERSON_CUES)
+    return bool(has_invite_structure and has_role_title and is_about_a_person)
+
+
 def relevance_score(subject: str, body: str, filenames: list[str] | None = None, thread_context: list[dict[str, Any]] | None = None) -> float:
     # Filenames alone are intentionally excluded from qualification.
     return float(prefilter_decision(subject, body, thread_context=thread_context)["score"])
@@ -605,6 +660,8 @@ def routing_decision(
     # marketing noise through the model.
     if any(re.search(rf"\b{re.escape(cue)}\b", combined) for cue in ambiguous_recruitment_cues):
         return {"send_to_ai": True, "score": max(0.25, float(context.get("score") or 0)), "reason": "AMBIGUOUS_RECRUITMENT", "context": context}
+    if recruiting_invite_signal(subject, body, sender_email, attachments):
+        return {"send_to_ai": True, "score": max(0.3, float(context.get("score") or 0)), "reason": "RECRUITING_CALENDAR_INVITE", "context": context}
     return {"send_to_ai": False, "score": 0.0, "reason": "NO_RECRUITMENT_ROUTING_SIGNAL", "context": context}
 
 
