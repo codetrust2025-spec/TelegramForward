@@ -228,7 +228,26 @@ STATUS_SIGNALS = [
     ("BACKGROUND_VERIFICATION", ("background verification", "pre-employment verification", "background check")),
     ("DOCUMENT_VERIFICATION", ("document verification", "submit employment documents", "documents for verification")),
     ("COMPENSATION_CONFIRMATION", ("compensation confirmation", "confirmed compensation", "annual ctc is", "salary package is")),
-    ("INTERVIEW_SHORTLISTED", ("shortlisted for the next interview", "shortlisted for the technical interview", "shortlisted for hr interview")),
+    # Shortlisting is an outcome in its own right, not only a preamble to an
+    # interview. These phrases used to require the word "interview" right after
+    # "shortlisted for", so a plain selection mail — "your profile is
+    # provisionally shortlisted for Python Django with <company>" — matched
+    # nothing here, fell through to the model, and was ignored for carrying no
+    # interview date or time. Every phrase below states the selection outcome
+    # explicitly, so a bare document request with no such wording still cannot
+    # reach this status.
+    ("INTERVIEW_SHORTLISTED", (
+        "shortlisted for the next interview", "shortlisted for the technical interview",
+        "shortlisted for hr interview",
+        "provisionally shortlisted", "profile is shortlisted",
+        "profile has been shortlisted", "profile is provisionally shortlisted",
+        "you have been shortlisted", "you are shortlisted",
+        "we have shortlisted your", "shortlisted for the role",
+        "shortlisted for the position", "candidature has been shortlisted",
+        "candidature has been provisionally shortlisted",
+        "shortlisted for further discussion", "shortlisted for hr discussion",
+        "moved forward to the next stage", "moving forward to the hr round",
+    )),
     # These phrases route interview mail to Ollama but never determine the
     # actionable outcome. Only the validated contextual model may upgrade an
     # update to confirmed/rescheduled/cancelled.
