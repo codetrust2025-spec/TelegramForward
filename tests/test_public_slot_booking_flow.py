@@ -173,6 +173,68 @@ def test_confirmed_booking_is_returned_by_the_confirmed_slots_api(monkeypatch, t
     ), f"confirmed booking missing from confirmed-slots API: {payload}"
 
 
+def test_confirmed_slots_carry_their_booking_source(monkeypatch, tmp_path):
+    """The page labels how a slot was booked, so the source must be exposed."""
+    client = _client(monkeypatch, tmp_path)
+    from datetime import date as _date, timedelta as _timedelta
+
+    ahead = (_date.today() + _timedelta(days=5)).isoformat()
+    booking = _booking(_upload(client))
+    booking.update({"date": ahead, "idempotency_key": f"raju-source-{ahead}"})
+    assert _confirm(client, booking).status_code == 200
+
+    slots = client.get("/public/slots/booked").json()["slots"]
+    mine = [s for s in slots if s["date"] == ahead and "Raju" in s["name"]]
+    assert mine, f"booking missing from confirmed slots: {slots}"
+    assert "interview_booking_source" in mine[0]
+    assert mine[0]["interview_booking_source"] == "candidate_booked"
+
+
+def _legacy_slot(name: str, ahead: str, notes: str = "") -> dict:
+    return cs.create_candidate(
+        {
+            "name": name, "phone": "9000000123",
+            "service_type": "profile_service", "interview_round": "L1",
+            "date": ahead, "time": "10:00", "time_end": "10:30",
+            "slot_confirmed": True, "notes": notes,
+        },
+        allow_slot_without_rules=True,
+    )
+
+
+def test_a_legacy_row_resolves_through_the_shared_source_resolver(monkeypatch, tmp_path):
+    """Legacy rows go through the resolver Daily Ops uses, not a second guess.
+
+    The resolver reads the persisted booking note, so an older AI-mail row is
+    still recognised without a data migration, and the confirmed-slots page
+    cannot disagree with the roster about the same booking.
+    """
+    client = _client(monkeypatch, tmp_path)
+    from datetime import date as _date, timedelta as _timedelta
+
+    ahead = (_date.today() + _timedelta(days=6)).isoformat()
+    _legacy_slot("Legacy Person", ahead)
+    _legacy_slot(
+        "Legacy Ai Person",
+        ahead,
+        notes="Automatically booked from validated interview email (AI Mail Monitoring).",
+    )
+
+    slots = client.get("/public/slots/booked").json()["slots"]
+    by_name = {s["name"]: s for s in slots if s["date"] == ahead}
+    assert "Legacy Person" in by_name, f"legacy booking missing: {slots}"
+
+    # Every returned slot carries the field, so the badge always has an input.
+    for slot in slots:
+        assert "interview_booking_source" in slot
+
+    # The note is persisted evidence, so it is honoured rather than ignored.
+    assert by_name["Legacy Ai Person"]["interview_booking_source"] == "ai_auto_booked"
+    # A row with neither an explicit source nor an AI note keeps the resolver's
+    # documented default, matching what Daily Ops already shows for it.
+    assert by_name["Legacy Person"]["interview_booking_source"] == "candidate_booked"
+
+
 def test_success_is_never_reported_without_a_persisted_slot(monkeypatch, tmp_path):
     """If the store hands back a row with no slot, the boundary must not 200."""
     client = _client(monkeypatch, tmp_path)
