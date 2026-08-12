@@ -3393,6 +3393,12 @@ def public_booked_interview_slots(*, days: int = 60) -> dict:
             "date": _normalize_iso_date(slot_date),
             "time": slot_time,
             "time_end": slot_end,
+            # Provenance so the page can label how the slot was booked, through
+            # the same resolver Daily Ops uses so the two surfaces cannot
+            # disagree. It reads the stored source, then the persisted booking
+            # note for older AI-mail rows — never anything the UI knows. An
+            # unresolved row yields "" and the page shows plain "Booked".
+            "interview_booking_source": interview_booking_source(row),
         })
     slots.sort(key=_slot_chronological_sort_key)
     return {
