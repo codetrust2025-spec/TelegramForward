@@ -130,8 +130,111 @@ export function formatScheduleDateTime(dateValue, timeValue, timeZone = '') {
     }
   }
 
+  // Deliberately unchanged: this field is the record of what was detected, so
+  // the source zone is rendered exactly as parsed. The IST reading is offered
+  // as a separate field rather than by rewriting this one.
   const zoneLabel = timeZone === IST_TIMEZONE ? ' IST' : (timeZone ? ` (${timeZone})` : '')
   return timeLabel ? `${dateLabel}, ${timeLabel}${zoneLabel}` : `${dateLabel}${zoneLabel}`
+}
+
+/**
+ * Is this zone already India Standard Time?
+ *
+ * Invites arrive tagged Asia/Calcutta as often as Asia/Kolkata — they are the
+ * same zone, the former being the older IANA name — so both must read as IST
+ * rather than being labelled like a foreign zone.
+ */
+export function isIstTimeZone(timeZone) {
+  const zone = String(timeZone || '').trim().toLowerCase()
+  return zone === 'asia/kolkata' || zone === 'asia/calcutta' || zone === 'ist'
+}
+
+/** The offset of `timeZone` at a given instant, in ms. */
+function timeZoneOffsetMs(utcMs, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(new Date(utcMs))
+  const field = {}
+  for (const part of parts) field[part.type] = part.value
+  const asUtc = Date.UTC(
+    Number(field.year),
+    Number(field.month) - 1,
+    Number(field.day),
+    Number(field.hour) % 24,
+    Number(field.minute),
+    Number(field.second),
+  )
+  return asUtc - utcMs
+}
+
+/**
+ * Turn a wall-clock date/time in `timeZone` into a real instant.
+ *
+ * Asking Intl what the zone reads at a guessed instant, then correcting by the
+ * difference, is the one conversion path here — no offset is ever added by
+ * hand, so DST zones and half-hour zones are both handled by the platform's
+ * own tz database. The second pass settles the guess when it landed on the
+ * other side of a DST transition.
+ */
+function scheduleInstant(dateValue, timeValue, timeZone) {
+  const dateMatch = String(dateValue || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  const timeMatch = String(timeValue || '').trim().match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i)
+  if (!dateMatch || !timeMatch || !timeZone) return null
+
+  let hour = Number(timeMatch[1])
+  const minute = Number(timeMatch[2])
+  const period = String(timeMatch[3] || '').toUpperCase()
+  if (period === 'AM') hour %= 12
+  if (period === 'PM') hour = (hour % 12) + 12
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null
+
+  const wallClock = Date.UTC(
+    Number(dateMatch[1]),
+    Number(dateMatch[2]) - 1,
+    Number(dateMatch[3]),
+    hour,
+    minute,
+  )
+  let offset
+  try {
+    offset = timeZoneOffsetMs(wallClock, timeZone)
+  } catch {
+    return null // an unknown zone name must not take the view down
+  }
+  let instant = wallClock - offset
+  const settled = timeZoneOffsetMs(instant, timeZone)
+  if (settled !== offset) instant = wallClock - settled
+  const date = new Date(instant)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+/**
+ * The same moment rendered in IST, or '' when the schedule is already IST.
+ *
+ * Callers show this as a separate line so the invite's own wording is never
+ * rewritten. Date rollover is implicit: the instant is formatted in IST, so a
+ * late-evening UTC slot correctly reads as the next day.
+ */
+export function formatScheduleIstDateTime(dateValue, timeValue, timeZone = '') {
+  if (!timeZone || isIstTimeZone(timeZone)) return ''
+  const instant = scheduleInstant(dateValue, timeValue, timeZone)
+  if (!instant) return ''
+  return `${instant.toLocaleString(IST_LOCALE, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: IST_TIMEZONE,
+  })} IST`
 }
 
 /** Short: Jun 3, 10:28 am (no year if same calendar year optional via caller) */

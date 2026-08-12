@@ -680,11 +680,18 @@ def install_public_slot_routes(app) -> None:
                     for candidate in cs.list_candidates(stage="all", month="all")
                     if str(candidate.get("id") or "")
                 }
+                # A previous attempt only satisfies this one if it actually
+                # booked the slot. The key is stored on the candidate row before
+                # the slot is applied, so an attempt blocked after that point
+                # leaves the key behind on a row with no date and
+                # slot_confirmed false; matching on the key alone replayed that
+                # row as a success forever and made the slot unbookable.
                 existing_booking = next(
                     (
                         candidate
                         for candidate in cs.list_candidates(stage="all", month="all")
                         if str(candidate.get("booking_idempotency_key") or "").strip() == booking_key
+                        and cs.candidate_has_confirmed_slot(candidate)
                     ),
                     None,
                 )
@@ -738,6 +745,28 @@ def install_public_slot_routes(app) -> None:
                 "Booking confirmation failed. No candidate or booking was created.",
                 status=500,
                 failure_reason=str(e),
+            )
+
+        # Success is reported only for a row that really carries the slot. A
+        # response of 200 with an unbooked row is what put "Slot confirmed" on
+        # screen while Confirmed slots stayed empty, so it is refused here
+        # rather than left to the caller to notice.
+        if not cs.candidate_has_confirmed_slot(row):
+            logger.error(
+                "Invite booking trace phase=confirm_unpersisted trace_id=%s "
+                "image_sha256=%s action=%s row_id=%r stored_date=%r stored_time=%r",
+                trace_id,
+                image_sha256,
+                _invite_trace_value(action),
+                str(row.get("id") or ""),
+                _invite_trace_value(row.get("date")),
+                _invite_trace_value(row.get("time")),
+            )
+            return _json_error(
+                "Booking did not complete. The interview slot was not saved — "
+                "try again, and if it repeats report this invite.",
+                status=500,
+                failure_reason=f"confirm_unpersisted action={action}",
             )
 
         logger.warning(

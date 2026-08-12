@@ -11,6 +11,7 @@ import {
   isTrackedMailAlert,
   showMailAlertNotification,
 } from '../utils/mailAlertSound.js'
+import { describeReconnectTargets } from '../utils/mailboxStatus.js'
 import { getMaxReplyAlertLevel } from '../utils/replyAlert.js'
 import { isMessageSoundMuted } from '../utils/soundQuietHours.js'
 import { playNotification, startNotification, stopNotification } from './notificationSounds.js'
@@ -195,7 +196,11 @@ export function notifyGmailReconnect(disconnected) {
   const newly = disconnected.filter((row) => !alerted.has(String(row.id)))
 
   if (newly.length) {
-    const names = newly.map((row) => row.name).filter(Boolean)
+    // Count the mailboxes, not the subset that happens to carry a name. The
+    // health payload has no name column, so filtering to named rows collapsed
+    // every real alert to "0 candidate accounts" while the dashboard listed
+    // the same mailboxes as Reconnect Required.
+    const summary = describeReconnectTargets(newly)
     const eventId = `gmail-reconnect-${newly.map((row) => String(row.id)).sort().join('-')}`
     playNotification('gmail_reconnect')
     try {
@@ -205,7 +210,7 @@ export function notifyGmailReconnect(disconnected) {
     }
     showMailAlertNotification({
       status: 'Gmail connection expired',
-      candidate_name: names.length === 1 ? names[0] : `${names.length} candidate accounts`,
+      candidate_name: summary,
       notification_id: eventId,
     })
   }

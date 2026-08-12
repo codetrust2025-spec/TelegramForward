@@ -2307,9 +2307,22 @@ def _latest_slot_screenshot_proof(row: dict) -> dict | None:
             _, entry = hit
             return _slim_slot_screenshot_proof(cid, entry)
     hits = partition_candidate_attachments(row)["slot_screenshot_proofs"]
-    if len(hits) == 1:
-        return _slim_slot_screenshot_proof(cid, hits[0])
-    return None
+    if not hits:
+        return None
+    # More than one screenshot accumulates whenever a slot is re-uploaded, or
+    # when auto-booking evidence is later joined by a manual upload. Returning
+    # None for that case hid the screenshot completely and the roster read
+    # "Not available" for a booking that had two of them on disk. The roster
+    # shows one thumbnail, and the newest upload is the one that describes the
+    # current booking — which is what this function's name already promised.
+    latest = max(
+        hits,
+        key=lambda proof: (
+            _clean_str(proof.get("uploaded_at")),
+            _clean_str(proof.get("id")),
+        ),
+    )
+    return _slim_slot_screenshot_proof(cid, latest)
 
 
 def _resolve_slot_screenshot_proof(
@@ -3380,6 +3393,12 @@ def public_booked_interview_slots(*, days: int = 60) -> dict:
             "date": _normalize_iso_date(slot_date),
             "time": slot_time,
             "time_end": slot_end,
+            # Provenance so the page can label how the slot was booked, through
+            # the same resolver Daily Ops uses so the two surfaces cannot
+            # disagree. It reads the stored source, then the persisted booking
+            # note for older AI-mail rows — never anything the UI knows. An
+            # unresolved row yields "" and the page shows plain "Booked".
+            "interview_booking_source": interview_booking_source(row),
         })
     slots.sort(key=_slot_chronological_sort_key)
     return {
@@ -3991,6 +4010,15 @@ def _candidate_has_confirmed_slot(row: dict) -> bool:
         return False
     day = _clean_str(row.get("date"))[:10]
     return len(day) == 10
+
+
+def candidate_has_confirmed_slot(row: dict) -> bool:
+    """Does this row really carry a confirmed slot?
+
+    Public view of the same predicate the importer uses, so the booking
+    boundary can refuse to report success for a row that never got one.
+    """
+    return _candidate_has_confirmed_slot(row)
 
 
 def _duplicate_candidate_slot(
@@ -4677,11 +4705,20 @@ def _import_confirmed_interview_slot(
     is_round_wise = _normalise_service_type(service_type, {}) == "round_wise"
     booking_key = _clean_str(idempotency_key)
     if booking_key:
+        # Only a row that actually carries the confirmed slot may satisfy the
+        # retry. The key is written to the candidate row before the slot is
+        # applied, so a confirm that was blocked afterwards leaves the key on a
+        # row with no date, no time and slot_confirmed false. Matching on the
+        # key alone then returned that row as a success for every later attempt
+        # at the same slot — the caller saw "confirmed" while nothing was ever
+        # booked, and the slot could never be re-booked because the poisoned key
+        # short-circuited each retry.
         previous = next(
             (
                 row
                 for row in list_candidates(stage="all", month="all")
                 if _clean_str(row.get("booking_idempotency_key")) == booking_key
+                and _candidate_has_confirmed_slot(row)
             ),
             None,
         )

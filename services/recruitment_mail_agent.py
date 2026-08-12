@@ -228,7 +228,26 @@ STATUS_SIGNALS = [
     ("BACKGROUND_VERIFICATION", ("background verification", "pre-employment verification", "background check")),
     ("DOCUMENT_VERIFICATION", ("document verification", "submit employment documents", "documents for verification")),
     ("COMPENSATION_CONFIRMATION", ("compensation confirmation", "confirmed compensation", "annual ctc is", "salary package is")),
-    ("INTERVIEW_SHORTLISTED", ("shortlisted for the next interview", "shortlisted for the technical interview", "shortlisted for hr interview")),
+    # Shortlisting is an outcome in its own right, not only a preamble to an
+    # interview. These phrases used to require the word "interview" right after
+    # "shortlisted for", so a plain selection mail — "your profile is
+    # provisionally shortlisted for Python Django with <company>" — matched
+    # nothing here, fell through to the model, and was ignored for carrying no
+    # interview date or time. Every phrase below states the selection outcome
+    # explicitly, so a bare document request with no such wording still cannot
+    # reach this status.
+    ("INTERVIEW_SHORTLISTED", (
+        "shortlisted for the next interview", "shortlisted for the technical interview",
+        "shortlisted for hr interview",
+        "provisionally shortlisted", "profile is shortlisted",
+        "profile has been shortlisted", "profile is provisionally shortlisted",
+        "you have been shortlisted", "you are shortlisted",
+        "we have shortlisted your", "shortlisted for the role",
+        "shortlisted for the position", "candidature has been shortlisted",
+        "candidature has been provisionally shortlisted",
+        "shortlisted for further discussion", "shortlisted for hr discussion",
+        "moved forward to the next stage", "moving forward to the hr round",
+    )),
     # These phrases route interview mail to Ollama but never determine the
     # actionable outcome. Only the validated contextual model may upgrade an
     # update to confirmed/rescheduled/cancelled.
@@ -533,6 +552,61 @@ def prefilter_decision(subject: str, body: str, sender_name: str = "", sender_em
     return {"qualified": False, "score": 0.0, "status": "IGNORED_NOT_OFFER_RELATED", "evidence": [], "ignore_reason": "NO_SELECTION_OR_OFFER_SIGNAL"}
 
 
+_INVITE_STRUCTURE_CUES = (
+    "microsoft teams meeting", "teams.microsoft.com", "meet.google.com",
+    "zoom.us", "webex.com", "calendar invitation", "when:", "dtstart",
+    "begin:vevent", "organiser:", "organizer:", "join the meeting",
+    "join microsoft teams", "meeting id:", "add to calendar",
+)
+_ROLE_TITLE_CUES = (
+    "engineer", "developer", "analyst", "architect", "consultant", "devops",
+    "sre", "tester", "designer", "administrator", "specialist", "lead",
+    "scientist", "programmer", "full stack", "fullstack", "backend",
+    "frontend", "qa",
+)
+# Wording that frames the meeting as being *about a person for a role*. This is
+# the part an ordinary internal meeting does not have: "Discussion with Ramu
+# about the budget" carries no role title, and a sprint invite carries neither.
+_MEETING_ABOUT_PERSON_CUES = (
+    "discussion with", "discussion for", "discussion regarding",
+    "technical discussion", "call with", "screening", "screening round",
+    "round with", "meeting with", "conversation with", "profile discussion",
+)
+
+
+def recruiting_invite_signal(
+    subject: str, body: str, sender_email: str = "",
+    attachments: list[dict[str, Any]] | None = None,
+) -> bool:
+    """Does this look like a recruiting calendar invite that never says "interview"?
+
+    Real invites arrive titled "Discussion with <candidate> for <role>" on a
+    Teams/Meet link, and were dropped as NO_RECRUITMENT_ROUTING_SIGNAL because
+    no keyword matched. Routing on "discussion" alone would pull in every
+    internal meeting, so three independent structured signals are required
+    together: a calendar/meeting invite structure, a job-role-like title, and
+    wording framing the meeting around a person. Any one or two of those is not
+    enough, so an ordinary business discussion still fails closed.
+    """
+    subject_text = str(subject or "").casefold()
+    body_text = str(body or "").casefold()
+    attachment_text = " ".join(
+        str(item.get("text") or "") + " " + str(item.get("filename") or "")
+        for item in (attachments or [])
+    ).casefold()
+    everything = " ".join((subject_text, body_text, attachment_text))
+
+    has_invite_structure = (
+        any(cue in everything for cue in _INVITE_STRUCTURE_CUES)
+        or ".ics" in attachment_text
+    )
+    # The role must be named in the subject line: a signature block or a
+    # footer mentioning "engineer" elsewhere is not what this is about.
+    has_role_title = any(cue in subject_text for cue in _ROLE_TITLE_CUES)
+    is_about_a_person = any(cue in subject_text for cue in _MEETING_ABOUT_PERSON_CUES)
+    return bool(has_invite_structure and has_role_title and is_about_a_person)
+
+
 def relevance_score(subject: str, body: str, filenames: list[str] | None = None, thread_context: list[dict[str, Any]] | None = None) -> float:
     # Filenames alone are intentionally excluded from qualification.
     return float(prefilter_decision(subject, body, thread_context=thread_context)["score"])
@@ -586,6 +660,8 @@ def routing_decision(
     # marketing noise through the model.
     if any(re.search(rf"\b{re.escape(cue)}\b", combined) for cue in ambiguous_recruitment_cues):
         return {"send_to_ai": True, "score": max(0.25, float(context.get("score") or 0)), "reason": "AMBIGUOUS_RECRUITMENT", "context": context}
+    if recruiting_invite_signal(subject, body, sender_email, attachments):
+        return {"send_to_ai": True, "score": max(0.3, float(context.get("score") or 0)), "reason": "RECRUITING_CALENDAR_INVITE", "context": context}
     return {"send_to_ai": False, "score": 0.0, "reason": "NO_RECRUITMENT_ROUTING_SIGNAL", "context": context}
 
 
@@ -1026,6 +1102,66 @@ def _prompt_json(value: Any) -> str:
     )
 
 
+_SHORTLIST_CANDIDATE_STATUSES = {
+    "interview shortlisted", "shortlisted", "candidate shortlisted",
+    "profile shortlisted",
+}
+# Wording that states the shortlist outcome. A label alone is not enough: the
+# mail itself has to say it, so a generic document request can never be
+# promoted no matter what the model puts in candidate_status.
+_SHORTLIST_EVIDENCE_PHRASES = (
+    "provisionally shortlisted", "profile is shortlisted",
+    "profile has been shortlisted", "profile is provisionally shortlisted",
+    "you have been shortlisted", "you are shortlisted",
+    "we have shortlisted your", "shortlisted for the role",
+    "shortlisted for the position", "candidature has been shortlisted",
+    "candidature has been provisionally shortlisted",
+    "shortlisted for further discussion", "shortlisted for hr discussion",
+)
+# Only these are promotable. A confirmed/cancelled interview, an offer or a
+# rejection already carries a stronger outcome and must never be overwritten.
+_SHORTLIST_PROMOTABLE_STATUSES = {"MANUAL_REVIEW_REQUIRED", "INTERVIEW_UPDATE"}
+
+
+def normalise_shortlist_status(value: dict[str, Any], message: dict[str, Any] | None = None) -> bool:
+    """Map a model result that plainly describes a shortlist onto the canonical status.
+
+    The model reads these mails correctly — it returned candidate_status
+    "Interview Shortlisted", is_selection_or_offer_related true and a reason
+    naming the provisional shortlist — but parked the result at
+    MANUAL_REVIEW_REQUIRED/INTERVIEW_UPDATE because no interview slot was
+    offered. Shortlisting is the outcome; the document list is the next action.
+
+    Runs after the schema guard, on the validated result, so the guard still
+    sees exactly what the model produced. Returns whether it promoted anything.
+    """
+    status = str(value.get("status") or "").upper()
+    if status not in _SHORTLIST_PROMOTABLE_STATUSES:
+        return False
+    if not value.get("is_selection_or_offer_related"):
+        return False
+
+    label = str(value.get("candidate_status") or "").strip().lower()
+    # Evidence must come from the mail itself, never from the model's own prose:
+    # a summary that says "shortlisted" about a bare document request would
+    # otherwise promote it on the strength of the model's wording alone.
+    haystack = " ".join(str(part or "").lower() for part in (
+        (message or {}).get("subject"), (message or {}).get("body"),
+    ))
+    stated = any(phrase in haystack for phrase in _SHORTLIST_EVIDENCE_PHRASES)
+    # Both the model's own label and the wording in the mail must agree, so a
+    # merely ambiguous recruitment update stays in manual review.
+    if label not in _SHORTLIST_CANDIDATE_STATUSES or not stated:
+        return False
+
+    value["status"] = "INTERVIEW_SHORTLISTED"
+    value["is_selection_or_offer_related"] = True
+    value["should_create_review_record"] = True
+    value["requires_manual_review"] = False
+    value["shortlist_normalised_from"] = status
+    return True
+
+
 def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | None = None) -> tuple[dict[str, Any], str, int]:
     payload = _analysis_payload(message, attachment_texts)
     routing_context = routing_decision(
@@ -1136,6 +1272,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
         except ValueError as exc:
             raise AIGatewayError(f"Ollama response failed schema validation: {exc}", code="OLLAMA_SCHEMA_VALIDATION_FAILED") from exc
         logger.info("Ollama recruitment response schema validated")
+        normalise_shortlist_status(result, message)
         result["primary_status"] = result["status"]
         result["classification_source"] = "OLLAMA"
         result["ai_validation_status"] = "VALIDATED"
