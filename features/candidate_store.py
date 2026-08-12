@@ -3993,6 +3993,15 @@ def _candidate_has_confirmed_slot(row: dict) -> bool:
     return len(day) == 10
 
 
+def candidate_has_confirmed_slot(row: dict) -> bool:
+    """Does this row really carry a confirmed slot?
+
+    Public view of the same predicate the importer uses, so the booking
+    boundary can refuse to report success for a row that never got one.
+    """
+    return _candidate_has_confirmed_slot(row)
+
+
 def _duplicate_candidate_slot(
     source: dict,
     *,
@@ -4677,11 +4686,20 @@ def _import_confirmed_interview_slot(
     is_round_wise = _normalise_service_type(service_type, {}) == "round_wise"
     booking_key = _clean_str(idempotency_key)
     if booking_key:
+        # Only a row that actually carries the confirmed slot may satisfy the
+        # retry. The key is written to the candidate row before the slot is
+        # applied, so a confirm that was blocked afterwards leaves the key on a
+        # row with no date, no time and slot_confirmed false. Matching on the
+        # key alone then returned that row as a success for every later attempt
+        # at the same slot — the caller saw "confirmed" while nothing was ever
+        # booked, and the slot could never be re-booked because the poisoned key
+        # short-circuited each retry.
         previous = next(
             (
                 row
                 for row in list_candidates(stage="all", month="all")
                 if _clean_str(row.get("booking_idempotency_key")) == booking_key
+                and _candidate_has_confirmed_slot(row)
             ),
             None,
         )
