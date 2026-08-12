@@ -1045,6 +1045,66 @@ def _prompt_json(value: Any) -> str:
     )
 
 
+_SHORTLIST_CANDIDATE_STATUSES = {
+    "interview shortlisted", "shortlisted", "candidate shortlisted",
+    "profile shortlisted",
+}
+# Wording that states the shortlist outcome. A label alone is not enough: the
+# mail itself has to say it, so a generic document request can never be
+# promoted no matter what the model puts in candidate_status.
+_SHORTLIST_EVIDENCE_PHRASES = (
+    "provisionally shortlisted", "profile is shortlisted",
+    "profile has been shortlisted", "profile is provisionally shortlisted",
+    "you have been shortlisted", "you are shortlisted",
+    "we have shortlisted your", "shortlisted for the role",
+    "shortlisted for the position", "candidature has been shortlisted",
+    "candidature has been provisionally shortlisted",
+    "shortlisted for further discussion", "shortlisted for hr discussion",
+)
+# Only these are promotable. A confirmed/cancelled interview, an offer or a
+# rejection already carries a stronger outcome and must never be overwritten.
+_SHORTLIST_PROMOTABLE_STATUSES = {"MANUAL_REVIEW_REQUIRED", "INTERVIEW_UPDATE"}
+
+
+def normalise_shortlist_status(value: dict[str, Any], message: dict[str, Any] | None = None) -> bool:
+    """Map a model result that plainly describes a shortlist onto the canonical status.
+
+    The model reads these mails correctly — it returned candidate_status
+    "Interview Shortlisted", is_selection_or_offer_related true and a reason
+    naming the provisional shortlist — but parked the result at
+    MANUAL_REVIEW_REQUIRED/INTERVIEW_UPDATE because no interview slot was
+    offered. Shortlisting is the outcome; the document list is the next action.
+
+    Runs after the schema guard, on the validated result, so the guard still
+    sees exactly what the model produced. Returns whether it promoted anything.
+    """
+    status = str(value.get("status") or "").upper()
+    if status not in _SHORTLIST_PROMOTABLE_STATUSES:
+        return False
+    if not value.get("is_selection_or_offer_related"):
+        return False
+
+    label = str(value.get("candidate_status") or "").strip().lower()
+    # Evidence must come from the mail itself, never from the model's own prose:
+    # a summary that says "shortlisted" about a bare document request would
+    # otherwise promote it on the strength of the model's wording alone.
+    haystack = " ".join(str(part or "").lower() for part in (
+        (message or {}).get("subject"), (message or {}).get("body"),
+    ))
+    stated = any(phrase in haystack for phrase in _SHORTLIST_EVIDENCE_PHRASES)
+    # Both the model's own label and the wording in the mail must agree, so a
+    # merely ambiguous recruitment update stays in manual review.
+    if label not in _SHORTLIST_CANDIDATE_STATUSES or not stated:
+        return False
+
+    value["status"] = "INTERVIEW_SHORTLISTED"
+    value["is_selection_or_offer_related"] = True
+    value["should_create_review_record"] = True
+    value["requires_manual_review"] = False
+    value["shortlist_normalised_from"] = status
+    return True
+
+
 def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | None = None) -> tuple[dict[str, Any], str, int]:
     payload = _analysis_payload(message, attachment_texts)
     routing_context = routing_decision(
@@ -1155,6 +1215,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
         except ValueError as exc:
             raise AIGatewayError(f"Ollama response failed schema validation: {exc}", code="OLLAMA_SCHEMA_VALIDATION_FAILED") from exc
         logger.info("Ollama recruitment response schema validated")
+        normalise_shortlist_status(result, message)
         result["primary_status"] = result["status"]
         result["classification_source"] = "OLLAMA"
         result["ai_validation_status"] = "VALIDATED"
