@@ -2307,9 +2307,22 @@ def _latest_slot_screenshot_proof(row: dict) -> dict | None:
             _, entry = hit
             return _slim_slot_screenshot_proof(cid, entry)
     hits = partition_candidate_attachments(row)["slot_screenshot_proofs"]
-    if len(hits) == 1:
-        return _slim_slot_screenshot_proof(cid, hits[0])
-    return None
+    if not hits:
+        return None
+    # More than one screenshot accumulates whenever a slot is re-uploaded, or
+    # when auto-booking evidence is later joined by a manual upload. Returning
+    # None for that case hid the screenshot completely and the roster read
+    # "Not available" for a booking that had two of them on disk. The roster
+    # shows one thumbnail, and the newest upload is the one that describes the
+    # current booking — which is what this function's name already promised.
+    latest = max(
+        hits,
+        key=lambda proof: (
+            _clean_str(proof.get("uploaded_at")),
+            _clean_str(proof.get("id")),
+        ),
+    )
+    return _slim_slot_screenshot_proof(cid, latest)
 
 
 def _resolve_slot_screenshot_proof(
