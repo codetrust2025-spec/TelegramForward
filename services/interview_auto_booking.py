@@ -9,7 +9,7 @@ from html import unescape
 from io import BytesIO
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Callable
 from threading import Lock
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -656,6 +656,55 @@ def execute_manual_approved_booking(
             )
 
 
+_PERSISTED_BOOKING_STATUSES = {"Auto Booked", "Approved & Booked", "Rescheduled"}
+
+
+def _booking_not_saved() -> BookingValidationError:
+    return BookingValidationError(
+        "BOOKING_NOT_PERSISTED",
+        "The interview slot was not saved, so nothing has been booked.",
+        payment_status="PASSED", duplicate_status="PASSED", conflict_status="PASSED",
+    )
+
+
+def _persisted(book: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """Run a store booking call, turning a write that did not stick into a block.
+
+    The store certifies its own writes. When that certification fails the
+    interview is simply not booked, and the outcome has to say so rather than
+    reporting the in-memory return value as a successful booking.
+    """
+    try:
+        return book()
+    except candidate_store.SlotNotPersistedError as exc:
+        logger.error("Booking write was not persisted detail=%s", exc)
+        raise _booking_not_saved() from exc
+
+
+def _confirm_slot_still_stored(
+    booking: dict[str, Any], schedule: dict[str, str] | None,
+) -> dict[str, Any]:
+    """Re-read the booked row and refuse to report a slot storage does not hold.
+
+    Runs after evidence attachment, which is the last thing to touch the row, so
+    "Auto Booked" can only be recorded against a row that still carries the
+    date, time, end time and confirmation that were booked. A booking that
+    silently lost its slot fields used to be indistinguishable from a good one:
+    the return value in memory looked right while the stored row was empty.
+    """
+    if not schedule:
+        return booking
+    booking_id = str(booking.get("id") or "")
+    try:
+        return candidate_store.assert_slot_persisted(
+            booking_id,
+            date=schedule["date"], time=schedule["time"], time_end=schedule["time_end"],
+        )
+    except candidate_store.SlotNotPersistedError as exc:
+        logger.error("Booking did not survive storage booking_id=%s detail=%s", booking_id, exc)
+        raise _booking_not_saved() from exc
+
+
 def _execute_auto_booking(
     *, mailbox: dict[str, Any], message: dict[str, Any], event: dict[str, Any],
     result: dict[str, Any], correlation_id: str | None = None,
@@ -744,7 +793,7 @@ def _execute_auto_booking(
             if conflicts:
                 raise BookingValidationError("SLOT_CONFLICT", "The interview overlaps an existing confirmed slot.", payment_status="PASSED", duplicate_status="PASSED", conflict_status="CONFLICT")
             conflict_status = "PASSED"
-            booking = candidate_store.assign_interview_slot(
+            booking = _persisted(lambda: candidate_store.assign_interview_slot(
                 candidate_id=str(candidate["id"]), date=schedule["date"], time=schedule["time"],
                 time_end=schedule["time_end"], interview_round=interview_round,
                 notes=(
@@ -754,7 +803,7 @@ def _execute_auto_booking(
                 ),
                 interview_booking_source="candidate_booked" if manual_reviewer else "ai_auto_booked",
                 **_booking_metadata(result, message, schedule),
-            )
+            ))
             booking_status, event_type = (
                 ("Approved & Booked", "slot_manually_booked")
                 if manual_reviewer else ("Auto Booked", "slot_auto_booked")
@@ -767,7 +816,7 @@ def _execute_auto_booking(
             if conflicts:
                 raise BookingValidationError("SLOT_CONFLICT", "The rescheduled interview overlaps an existing confirmed slot.", payment_status="PASSED", conflict_status="CONFLICT")
             previous = dict(target)
-            booking = candidate_store.update_interview_slot(
+            booking = _persisted(lambda: candidate_store.update_interview_slot(
                 candidate_id=str(target["id"]), date=schedule["date"], time=schedule["time"],
                 time_end=schedule["time_end"], interview_round=interview_round,
                 notes=(
@@ -777,7 +826,7 @@ def _execute_auto_booking(
                 ),
                 interview_booking_source="candidate_booked" if manual_reviewer else "ai_auto_booked",
                 **_booking_metadata(result, message, schedule),
-            )
+            ))
             duplicate_status, conflict_status = "PASSED", "PASSED"
             booking_status, event_type = "Rescheduled", "interview_rescheduled"
         else:
@@ -786,6 +835,16 @@ def _execute_auto_booking(
             booking = candidate_store.cancel_interview_slot(candidate_id=str(target["id"]))
             payment_status, duplicate_status, conflict_status = "NOT_REQUIRED", "PASSED", "NOT_REQUIRED"
             booking_status, event_type = "Cancelled", "interview_cancelled"
+        # Evidence is attached before the outcome is recorded, so the audit can
+        # be gated on the row as it stands after the last write touches it.
+        evidence_snapshot = None
+        if not manual_reviewer and booking_status in {"Auto Booked", "Rescheduled"}:
+            evidence_snapshot = _attach_automatic_booking_evidence(
+                candidate=candidate, message=message, result=result,
+                booking=booking, booking_status=booking_status,
+            )
+        if booking_status in _PERSISTED_BOOKING_STATUSES:
+            booking = _confirm_slot_still_stored(booking, schedule)
         audit = mail_store.record_booking_audit(
             analysis_id=analysis["id"], candidate_id=str(candidate["id"]),
             gmail_message_id=message["provider_message_id"], gmail_thread_id=message.get("provider_thread_id"),
@@ -806,12 +865,6 @@ def _execute_auto_booking(
                 if booking_status == "Auto Booked" else f"Interview {booking_status}"
             ),
         ) if notification.get("id") else {}
-        evidence_snapshot = None
-        if not manual_reviewer and booking_status in {"Auto Booked", "Rescheduled"}:
-            evidence_snapshot = _attach_automatic_booking_evidence(
-                candidate=candidate, message=message, result=result,
-                booking=booking, booking_status=booking_status,
-            )
         logger.info("Interview booking applied correlation_id=%s classification=%s booking_id=%s", correlation_id, classification, booking.get("id"))
         return {
             "status": booking_status, "event_type": event_type,
