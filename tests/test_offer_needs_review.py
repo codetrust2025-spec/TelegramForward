@@ -22,9 +22,15 @@ class TestDowngradeMapping:
                   "JOINING_DATE_UPDATED"):
             assert agent._needs_review_status(s) == "JOINING_NEEDS_REVIEW", s
 
-    def test_unrelated_statuses_are_not_downgraded_here(self):
-        for s in ("INTERVIEW_CONFIRMED", "CANDIDATE_REJECTED", "MANUAL_REVIEW_REQUIRED", ""):
-            assert agent._needs_review_status(s) is None, s
+    def test_other_families_route_to_their_own_review_state(self):
+        """Widened by the no-silent-delete audit: every tracked status lands
+        somewhere visible, but each family keeps its own review state."""
+        assert agent._needs_review_status("INTERVIEW_CONFIRMED") == "INTERVIEW_PROPOSED"
+        assert agent._needs_review_status("CANDIDATE_REJECTED") == "SELECTION_NEEDS_REVIEW"
+
+    def test_an_unknown_status_is_still_not_invented(self):
+        assert agent._needs_review_status("NOT_A_REAL_STATUS") is None
+        assert agent._needs_review_status("") is None
 
 
 class TestNoSideEffects:
