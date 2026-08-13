@@ -620,6 +620,14 @@ def claim_ai_messages(limit: int = 1, *, lease_seconds: int = 150) -> list[dict[
         cur.execute("""UPDATE mailbox_messages SET processing_status='AI_QUEUED',ai_lease_expires_at=NULL,
               updated_at=now(),ai_last_error_code='LEASE_EXPIRED'
             WHERE processing_status='AI_RUNNING' AND ai_lease_expires_at<now()""")
+        # Rows that exhausted their attempts before the cap existed are already
+        # excluded from the claim below, but would otherwise sit in the queue
+        # forever looking like a live backlog. Park them under the same
+        # terminal state so the queue reflects what is actually claimable.
+        cur.execute("""UPDATE mailbox_messages SET processing_status='AI_FAILED_TERMINAL',
+              ai_lease_expires_at=NULL,updated_at=now(),ai_last_error_code='MAX_ATTEMPTS_EXHAUSTED'
+            WHERE processing_status IN ('AI_QUEUED','AI_RETRY_PENDING')
+              AND COALESCE(ai_retry_count,0)>=%s""",(max_attempts,))
         cur.execute("""SELECT id FROM mailbox_messages
           WHERE processing_status IN ('AI_QUEUED','AI_RETRY_PENDING')
             AND COALESCE(ai_retry_after,now())<=now()

@@ -92,3 +92,10 @@ class TestClaimQuerySafety:
 
     def test_the_lease_is_still_applied_on_claim(self):
         assert "ai_lease_expires_at=now()+" in self._source()
+
+
+def test_already_exhausted_queued_rows_are_parked_not_left_pending():
+    """Rows that passed the cap before it existed must not linger as backlog."""
+    import inspect
+    src = inspect.getsource(store.claim_ai_messages)
+    assert "processing_status IN ('AI_QUEUED','AI_RETRY_PENDING')\n              AND COALESCE(ai_retry_count,0)>=%s" in src
