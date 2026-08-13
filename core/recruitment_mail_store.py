@@ -704,13 +704,23 @@ def content_hash_empty()->str:
     return hashlib.sha256(b'').hexdigest()
 
 
-def mark_message_status(message_id:str,status:str,*,reason:str|None=None,cleanup_version:str|None=None)->None:
+def mark_message_status(message_id:str,status:str,*,reason:str|None=None,cleanup_version:str|None=None,
+                        error_code:str|None=None)->None:
+    """Set the message's processing state.
+
+    ``error_code`` also writes ``ai_last_error_code``, which is the field the
+    queue is diagnosed from — ``ignore_reason`` keeps older text and has already
+    misled one investigation. A retry parked without a live code looks like an
+    unexplained backlog: 24 messages sat on OLLAMA_SCHEMA_VALIDATION_FAILED with
+    a null code and nothing said why.
+    """
     with get_connection() as conn,conn.cursor() as cur:
         cur.execute("""UPDATE mailbox_messages SET processing_status=%s,ignore_reason=%s,
           ignored_at=CASE WHEN %s LIKE 'IGNORED%%' THEN now() ELSE ignored_at END,
           cleanup_version=COALESCE(%s,cleanup_version),semantic_classifier_version='v3',
+          ai_last_error_code=COALESCE(%s,ai_last_error_code),
           ai_lease_expires_at=CASE WHEN %s='AI_RUNNING' THEN ai_lease_expires_at ELSE NULL END,updated_at=now() WHERE id=%s""",
-          (status,reason,status,cleanup_version,status,message_id))
+          (status,reason,status,cleanup_version,error_code,status,message_id))
 
 
 # Only genuine offer documents identify a duplicate OFFER. Recurring documents

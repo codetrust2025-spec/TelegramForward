@@ -944,9 +944,11 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         date_valid = True
         time_valid = True
         tz_valid = True
-        try:
-            date.fromisoformat(str(interview.get("date") or ""))
-        except ValueError:
+        normalised_date = _normalise_interview_date(interview.get("date"))
+        if normalised_date:
+            interview["date"] = normalised_date
+            value["interview"] = interview
+        else:
             date_valid = False
         normalised_time = _normalise_interview_time(interview.get("time"))
         if not normalised_time:
@@ -957,13 +959,25 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
             # check above already verified appear verbatim in the source.
             # Nothing is invented: a source with no AM/PM anywhere still fails,
             # so a bare 17:00 is rejected exactly as before.
-            for candidate_text in [str((message or {}).get("subject") or "")] + [
+            source_texts = [str((message or {}).get("subject") or "")] + [
                 str(item.get("text") or "") for item in value.get("evidence") or []
-            ]:
+            ]
+            for candidate_text in source_texts:
                 recovered = _normalise_interview_time(candidate_text)
                 if recovered:
                     normalised_time = recovered
                     break
+            if not normalised_time:
+                # Some recruiters simply write the schedule on a 24-hour clock:
+                # EY sent "Time: 16:30 to 17:30" and Accenture "Time: 12:00:00
+                # until 13:00:00 IST (24 Hours)". Requiring AM/PM used the
+                # meridiem as a proxy for "the source really stated a time",
+                # which is too strict for an hour that has only one possible
+                # reading, so both interviews looped until they were parked.
+                # Recovery still reads only source-verified text, so a source
+                # with no clock time at all recovers nothing, and an ambiguous
+                # bare 1-12 is still refused.
+                normalised_time = _recover_unambiguous_24_hour_time(source_texts)
         if normalised_time:
             interview["time"] = normalised_time
             value["interview"] = interview
@@ -978,6 +992,99 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
             if not tz_valid: missing.append("timezone")
             labels={"date":"ISO date","time":"12-hour time","timezone":"timezone"}
             raise ValueError("interview requires valid " + ", ".join(labels[item] for item in missing))
+
+
+_MONTH_NAMES = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
+    "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+# "20-Jul-2026" / "06th July 2026" / "20 July, 2026"
+_DAY_MONTH_YEAR = re.compile(
+    r"\b(\d{1,2})(?:ST|ND|RD|TH)?[\s\-/,]+([A-Z]{3,9})[\s\-/,]+(\d{4})\b", re.I,
+)
+# "Jul 20, 2026" / "July 20 2026"
+_MONTH_DAY_YEAR = re.compile(
+    r"\b([A-Z]{3,9})[\s\-/,]+(\d{1,2})(?:ST|ND|RD|TH)?[\s\-/,]+(\d{4})\b", re.I,
+)
+
+
+def _normalise_interview_date(raw):
+    """Canonicalise an interview date to ISO, or "" if it is not a real date.
+
+    `date.fromisoformat` alone rejected values that are unambiguous dates in
+    every other respect: ValueMomentum sent "20-Jul-2026" and Cangra sent the
+    full ISO timestamp "2026-07-30T12:00:00+05:30". Both looped on
+    OLLAMA_SCHEMA_VALIDATION_FAILED until they were parked, so the interviews
+    never surfaced.
+
+    Only spellings with a named month or an explicit ISO form are accepted.
+    All-numeric forms like "07/08/2026" stay rejected because day-first and
+    month-first cannot be told apart, and guessing one would book the wrong day.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        pass
+    # A full ISO timestamp carries the date unambiguously in its first token.
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        pass
+    for pattern, order in ((_DAY_MONTH_YEAR, "dmy"), (_MONTH_DAY_YEAR, "mdy")):
+        hit = pattern.search(text)
+        if not hit:
+            continue
+        first, second, year = hit.group(1), hit.group(2), hit.group(3)
+        day_part, month_name = (first, second) if order == "dmy" else (second, first)
+        month = _MONTH_NAMES.get(str(month_name).lower())
+        if not month:
+            continue
+        try:
+            return date(int(year), month, int(day_part)).isoformat()
+        except ValueError:
+            return ""
+    return ""
+
+
+# A 24-hour clock reading of 13:00 or later, or 00:xx, has exactly one meaning.
+# Only a colon separates the parts: "18.30" is far more often money or a version
+# than a time, and a false time is worse than an unread one.
+_TWENTY_FOUR_HOUR = re.compile(r"(?<![:.\d])([01]?\d|2[0-3]):([0-5]\d)(?!:?\d*\s*(?:AM|PM))", re.I)
+
+
+def _recover_unambiguous_24_hour_time(source_texts) -> str:
+    """The stated start time when a source writes it on a 24-hour clock.
+
+    Reads only text already verified to appear verbatim in the source, so this
+    can never invent a time the sender did not write. An hour of 13-23 (or 00)
+    has a single possible reading and is taken as stated. An hour of 1-12 is
+    ambiguous on its own and is only accepted when the same passage also states
+    an hour of 13 or more, which proves the passage is on a 24-hour clock --
+    Accenture's "12:00:00 until 13:00:00" is exactly that shape.
+    """
+    for text in source_texts:
+        found = [
+            (int(hit.group(1)), hit.group(2))
+            for hit in _TWENTY_FOUR_HOUR.finditer(str(text or ""))
+        ]
+        if not found:
+            continue
+        passage_is_24_hour = any(hour >= 13 for hour, _minute in found)
+        for hour, minute in found:
+            if hour >= 13:
+                return "%02d:%s PM" % (hour - 12, minute)
+            if hour == 0:
+                return "12:%s AM" % minute
+            if passage_is_24_hour:
+                # 1-11 are morning on a 24-hour clock; 12 is noon.
+                return "%02d:%s %s" % (hour, minute, "PM" if hour == 12 else "AM")
+    return ""
 
 
 def _normalise_interview_time(raw):
@@ -1513,7 +1620,9 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
             duration = 0
             logger.warning("Recruitment email queued for semantic retry code=%s", getattr(exc, 'code', type(exc).__name__))
             failure_code = getattr(exc, "code", None) or "OLLAMA_INTERNAL_ERROR"
-            store.mark_message_status(row["id"], "AI_RETRY_PENDING", reason=failure_code)
+            store.mark_message_status(
+                row["id"], "AI_RETRY_PENDING", reason=failure_code, error_code=failure_code,
+            )
             if (
                 result.get("primary_status") == "MANUAL_REVIEW_REQUIRED"
                 and not critical_attachment_failure
