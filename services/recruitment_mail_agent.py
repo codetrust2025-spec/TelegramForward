@@ -1535,6 +1535,18 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
         raise AIGatewayError("AI semantic analysis failed.", code="OLLAMA_INTERNAL_ERROR") from exc
 
 
+# A refusal by our own schema check is a statement about the model's answer, not
+# about the service being reachable, so it does not belong on the infrastructure
+# retry path. `VALIDATION_FAILED` is the status the outcome audit already reports
+# as a SCHEMA_VALIDATION_FAILED gap; nothing produced it until now.
+_DETERMINISTIC_AI_FAILURES = frozenset({"OLLAMA_SCHEMA_VALIDATION_FAILED"})
+
+# Sampling can turn a rejected answer into a valid one, so a couple of genuine
+# attempts run first. Beyond that the loop is only spending inference to be told
+# the same thing again.
+_VALIDATION_RETRY_ALLOWANCE = 2
+
+
 def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment_texts: list[dict[str, str]] | None = None, *, reprocess: bool = False, defer_ai: bool = False) -> dict[str, Any] | None:
     from services.mail_attachment_processor import extract_attachment
     decoded["body"] = clean_email(decoded.get("body") or "")
@@ -1618,8 +1630,36 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
             result = _failure_review_result(decoded, exc)
             model = f"unavailable:{getattr(exc, 'code', type(exc).__name__).lower()}"
             duration = 0
-            logger.warning("Recruitment email queued for semantic retry code=%s", getattr(exc, 'code', type(exc).__name__))
             failure_code = getattr(exc, "code", None) or "OLLAMA_INTERNAL_ERROR"
+            if (
+                failure_code in _DETERMINISTIC_AI_FAILURES
+                and int(row.get("ai_retry_count") or 0) >= _VALIDATION_RETRY_ALLOWANCE
+            ):
+                # The model answered; the answer did not validate. Re-running
+                # identical input mostly reproduces the identical refusal, and
+                # the queue proved it: two mails reached ten attempts on
+                # OLLAMA_SCHEMA_VALIDATION_FAILED and would have been parked as
+                # MAX_ATTEMPTS_EXHAUSTED, which names the wrong cause and hides
+                # a decision an operator can act on. A few attempts still run,
+                # because sampling occasionally produces a valid result; after
+                # that the mail is parked where the audit already looks for it.
+                logger.warning(
+                    "Recruitment email parked after repeated validation failure code=%s attempts=%s",
+                    failure_code, row.get("ai_retry_count"),
+                )
+                store.mark_message_status(
+                    row["id"], "VALIDATION_FAILED", reason=failure_code, error_code=failure_code,
+                )
+                try:
+                    store.record_analysis(
+                        row["id"], mailbox["candidate_id"], result,
+                        model=model, processing_status="VALIDATION_FAILED",
+                        error_code=failure_code, error_message=str(exc),
+                    )
+                except Exception:
+                    logger.debug("Unable to persist validation-failure analysis", exc_info=True)
+                return None
+            logger.warning("Recruitment email queued for semantic retry code=%s", failure_code)
             store.mark_message_status(
                 row["id"], "AI_RETRY_PENDING", reason=failure_code, error_code=failure_code,
             )
