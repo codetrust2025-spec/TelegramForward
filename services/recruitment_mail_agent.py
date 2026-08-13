@@ -949,6 +949,21 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         except ValueError:
             date_valid = False
         normalised_time = _normalise_interview_time(interview.get("time"))
+        if not normalised_time:
+            # The model sometimes reformats a clearly-stated AM/PM time into
+            # 24-hour ("14:00 - 15:00") while quoting the source's own
+            # "2:00 PM - 3:00 PM IST" verbatim in its evidence. Recover the
+            # stated time from the subject or from evidence quotes, which the
+            # check above already verified appear verbatim in the source.
+            # Nothing is invented: a source with no AM/PM anywhere still fails,
+            # so a bare 17:00 is rejected exactly as before.
+            for candidate_text in [str((message or {}).get("subject") or "")] + [
+                str(item.get("text") or "") for item in value.get("evidence") or []
+            ]:
+                recovered = _normalise_interview_time(candidate_text)
+                if recovered:
+                    normalised_time = recovered
+                    break
         if normalised_time:
             interview["time"] = normalised_time
             value["interview"] = interview
