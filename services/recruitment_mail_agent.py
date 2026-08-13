@@ -843,8 +843,17 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         for item in value.get("evidence") or []
     ]
     sources = _source_texts((message or {}).get("subject", ""), (message or {}).get("body", ""), attachments, (message or {}).get("thread_context"))
-    if not value["evidence"] or not all(_evidence_supported(item, sources) for item in value["evidence"]):
+    # Keep only evidence that is verbatim in the source, and require at least
+    # one such item — rather than discarding the whole classification because a
+    # single item was paraphrased. The verbatim test is what protects against
+    # invented evidence, and it still applies to everything that survives:
+    # unsupported items are dropped, never trusted. Rejecting outright threw
+    # away a correct OFFER_IN_PROGRESS at 95% whose body quote was verbatim,
+    # purely because a second item was a paraphrase.
+    supported = [item for item in value["evidence"] if _evidence_supported(item, sources)]
+    if not supported:
         raise ValueError("selection/offer evidence is missing or unsupported")
+    value["evidence"] = supported
     auto_threshold = max(0.8, min(0.99, float(os.getenv("AI_RECRUITMENT_AUTO_ACCEPT_THRESHOLD", "0.90"))))
     review_threshold = max(0.0, min(1.0, float(os.getenv("OLLAMA_CONFIDENCE_THRESHOLD", "0.75"))))
     if confidence < review_threshold:
