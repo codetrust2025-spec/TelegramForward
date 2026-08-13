@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from features import candidate_store
 from services import interview_auto_booking as booking
 
 
@@ -178,7 +179,58 @@ def test_trusted_structured_email_can_mutate_slots(monkeypatch):
     booking.validate_ai_for_booking(value,"interview_confirmed")
 
 
+class FakeSlotStore:
+    """A stand-in store that actually persists, the way the real one does.
+
+    A fake whose booking call only returns a dict cannot tell a booking that was
+    stored from one that was silently dropped — which is exactly the failure
+    these tests now have to be able to see.
+    """
+
+    def __init__(self):
+        self.rows: dict[str, dict] = {}
+
+    def writer(self, booking_id=None, *, capture=None, confirmed=True, **overrides):
+        """Build a fake assign/update_interview_slot that stores what it books."""
+        def _write(**kwargs):
+            if capture is not None:
+                capture.append(kwargs)
+            row_id = str(booking_id or kwargs.get("candidate_id") or "slot1")
+            row = {
+                "id": row_id,
+                **{key: value for key, value in kwargs.items() if key != "candidate_id"},
+                "slot_confirmed": confirmed,
+                **overrides,
+            }
+            row.setdefault("date", "")
+            row.setdefault("time", "")
+            row.setdefault("time_end", "")
+            self.rows[row_id] = dict(row)
+            return row
+        return _write
+
+    def assert_slot_persisted(self, candidate_id, *, date, time, time_end=""):
+        row = self.rows.get(str(candidate_id))
+        if not candidate_store.slot_row_matches(row, date=date, time=time, time_end=time_end):
+            raise candidate_store.SlotNotPersistedError(
+                candidate_id=str(candidate_id), date=date, time=time,
+                time_end=time_end, stored=row,
+            )
+        return dict(row)
+
+
+_SLOT_STORE: FakeSlotStore | None = None
+
+
+def slot_writer(booking_id=None, **kwargs):
+    """Fake booking call that persists, so the store invariant can verify it."""
+    assert _SLOT_STORE is not None, "install_store_fakes must run first"
+    return _SLOT_STORE.writer(booking_id, **kwargs)
+
+
 def install_store_fakes(monkeypatch, *, rows=None, payment_reason=None, conflicts=None):
+    global _SLOT_STORE
+    _SLOT_STORE = FakeSlotStore()
     candidate = {"id": "c1", "name": "Rahul", "reference": "Owner", "payment": 10000, "expected_payment": 20000, "service_type": "profile_service"}
     monkeypatch.setattr(booking.mail_store, "record_interview_analysis", lambda **kwargs: {"id": "ia1"})
     monkeypatch.setattr(booking.mail_store, "booking_audit_for_message", lambda *args, **kwargs: None)
@@ -192,6 +244,7 @@ def install_store_fakes(monkeypatch, *, rows=None, payment_reason=None, conflict
     monkeypatch.setattr(booking.candidate_store, "slot_confirm_block_reason", lambda _row: payment_reason)
     monkeypatch.setattr(booking.candidate_store, "find_interview_slot_conflicts", lambda *args, **kwargs: list(conflicts or []))
     monkeypatch.setattr(booking.candidate_store, "attach_public_slot_screenshot", lambda *args, **kwargs: {"id": "proof1"})
+    monkeypatch.setattr(booking.candidate_store, "assert_slot_persisted", _SLOT_STORE.assert_slot_persisted)
     return candidate, audits
 
 
@@ -216,7 +269,7 @@ def execute_manual(value):
 def test_valid_confirmed_interview_books_without_approval(monkeypatch):
     monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
     _candidate, audits = install_store_fakes(monkeypatch)
-    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", lambda **kwargs: {"id": "slot1", **kwargs})
+    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", slot_writer("slot1"))
     outcome = execute(result())
     assert outcome["status"] == "Auto Booked"
     assert outcome["booking"]["time"] == "15:00"
@@ -229,7 +282,7 @@ def test_valid_confirmed_interview_books_without_approval(monkeypatch):
 def test_invalid_round_text_is_not_saved_as_a_round(monkeypatch):
     monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
     install_store_fakes(monkeypatch)
-    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", lambda **kwargs: {"id": "slot1", **kwargs})
+    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", slot_writer("slot1"))
     value = result(round="Interview Invite: Candidate | Candidate ID: 123")
 
     outcome = execute(value)
@@ -241,7 +294,7 @@ def test_invalid_round_text_is_not_saved_as_a_round(monkeypatch):
 def test_auto_booking_attaches_generated_email_evidence_to_exact_slot(monkeypatch):
     monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
     install_store_fakes(monkeypatch)
-    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", lambda **kwargs: {"id": "slot1", **kwargs})
+    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", slot_writer("slot1"))
     attached = {}
 
     def capture(candidate_id, **kwargs):
@@ -261,7 +314,7 @@ def test_auto_booking_attaches_generated_email_evidence_to_exact_slot(monkeypatc
 def test_evidence_snapshot_failure_never_rolls_back_valid_booking(monkeypatch):
     monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
     _candidate, audits = install_store_fakes(monkeypatch)
-    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", lambda **kwargs: {"id": "slot1", **kwargs})
+    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", slot_writer("slot1"))
     monkeypatch.setattr(
         booking.candidate_store,
         "attach_public_slot_screenshot",
@@ -276,7 +329,7 @@ def test_evidence_snapshot_failure_never_rolls_back_valid_booking(monkeypatch):
 
 def test_manual_approval_books_fallback_interview_through_safety_checks(monkeypatch):
     _candidate, audits = install_store_fakes(monkeypatch)
-    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", lambda **kwargs: {"id": "slot1", **kwargs})
+    monkeypatch.setattr(booking.candidate_store, "assign_interview_slot", slot_writer("slot1"))
     value = result(date="2099-07-21", time="12:30 PM")
     value.update({"classification_source": "FALLBACK", "ai_validation_status": "UNAVAILABLE", "requires_manual_review": True})
     value["evidence"] = [{"meaning": "INTERVIEW_CONFIRMED", "text": "Join on 21 July at 12:30 PM"}]
@@ -425,7 +478,7 @@ def test_reschedule_updates_existing_booking_and_preserves_previous(monkeypatch)
     monkeypatch.setenv("AI_INTERVIEW_AUTO_BOOKING_ENABLED", "true")
     old = {"id": "slot1", "name": "Rahul", "slot_confirmed": True, "date": "2026-07-19", "time": "14:00"}
     _candidate, audits = install_store_fakes(monkeypatch, rows=[old])
-    monkeypatch.setattr(booking.candidate_store, "update_interview_slot", lambda **kwargs: {"id": "slot1", "date": kwargs["date"], "time": kwargs["time"]})
+    monkeypatch.setattr(booking.candidate_store, "update_interview_slot", slot_writer("slot1"))
     outcome = execute(result("interview_rescheduled"))
     assert outcome["status"] == "Rescheduled"
     assert audits[-1]["previous_booking"]["date"] == "2026-07-19"
@@ -446,7 +499,7 @@ def test_reschedule_resolves_correct_slot_from_thread_not_first_row(monkeypatch)
     wrong = {"id": "slot1", "name": "Rahul", "slot_confirmed": True, "date": "2026-07-19", "time": "14:00", "interview_source_thread_id": "other"}
     target = {"id": "slot2", "name": "Rahul", "slot_confirmed": True, "date": "2026-07-20", "time": "15:00", "interview_source_thread_id": "gt1"}
     _candidate, audits = install_store_fakes(monkeypatch, rows=[wrong, target])
-    monkeypatch.setattr(booking.candidate_store, "update_interview_slot", lambda **kwargs: {"id": kwargs["candidate_id"], "date": kwargs["date"], "time": kwargs["time"]})
+    monkeypatch.setattr(booking.candidate_store, "update_interview_slot", slot_writer())
     outcome = execute(result("interview_rescheduled", date="2099-07-21", time="11:00 AM"))
     assert outcome["status"] == "Rescheduled"
     assert outcome["booking"]["id"] == "slot2"
@@ -631,7 +684,7 @@ def test_a_successful_booking_carries_no_blocking_reason(monkeypatch):
     install_store_fakes(monkeypatch)
     monkeypatch.setattr(
         booking.candidate_store, "assign_interview_slot",
-        lambda **kwargs: {"id": "slot1", **kwargs},
+        slot_writer("slot1"),
     )
 
     outcome = execute(result())
@@ -673,7 +726,7 @@ def test_a_later_revision_moves_the_booking_instead_of_making_a_second_one(monke
     updates = []
     monkeypatch.setattr(
         booking.candidate_store, "update_interview_slot",
-        lambda **kwargs: updates.append(kwargs) or {"id": "c1", **kwargs},
+        slot_writer("c1", capture=updates),
     )
     monkeypatch.setattr(
         booking.candidate_store, "assign_interview_slot",
@@ -695,7 +748,7 @@ def test_the_calendar_identity_is_carried_onto_the_booking(monkeypatch):
     saved = []
     monkeypatch.setattr(
         booking.candidate_store, "assign_interview_slot",
-        lambda **kwargs: saved.append(kwargs) or {"id": "slot1", **kwargs},
+        slot_writer("slot1", capture=saved),
     )
 
     execute(revision(0, "03:30 PM"))
@@ -713,12 +766,12 @@ def test_each_revision_in_turn_lands_on_the_final_time(monkeypatch):
     def _assign(**kwargs):
         state.update(time=kwargs["time"], sequence=kwargs["interview_calendar_sequence"])
         rows.append(booked_slot(kwargs["time"], kwargs["interview_calendar_sequence"]))
-        return {"id": "c1", **kwargs}
+        return slot_writer("c1")(**kwargs)
 
     def _update(**kwargs):
         state.update(time=kwargs["time"], sequence=kwargs["interview_calendar_sequence"])
         rows[:] = [booked_slot(kwargs["time"], kwargs["interview_calendar_sequence"])]
-        return {"id": "c1", **kwargs}
+        return slot_writer("c1")(**kwargs)
 
     install_store_fakes(monkeypatch, rows=rows)
     monkeypatch.setattr(booking.candidate_store, "list_candidates", lambda **kw: list(rows))
@@ -760,7 +813,7 @@ def test_an_unrelated_calendar_event_is_still_a_new_booking(monkeypatch):
     saved = []
     monkeypatch.setattr(
         booking.candidate_store, "assign_interview_slot",
-        lambda **kwargs: saved.append(kwargs) or {"id": "slot2", **kwargs},
+        slot_writer("slot2", capture=saved),
     )
 
     assert execute(revision(1, "11:30 AM"))["status"] == "Auto Booked"
@@ -773,7 +826,7 @@ def test_an_invite_without_a_calendar_uid_behaves_exactly_as_before(monkeypatch)
     saved = []
     monkeypatch.setattr(
         booking.candidate_store, "assign_interview_slot",
-        lambda **kwargs: saved.append(kwargs) or {"id": "slot1", **kwargs},
+        slot_writer("slot1", capture=saved),
     )
 
     assert execute(result())["status"] == "Auto Booked"

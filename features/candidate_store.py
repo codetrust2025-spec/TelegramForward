@@ -978,6 +978,81 @@ def _save(data: dict) -> None:
         os.replace(tmp, _FILE)
 
 
+# The fields that *are* the booking. Nothing that merely annotates a row —
+# evidence pointers, provenance markers — may carry its own copy of these,
+# because an older copy written back over a confirmed slot silently un-books
+# the interview.
+BOOKING_SLOT_FIELDS = ("date", "time", "time_end", "slot_confirmed", "slot_confirmed_at")
+
+_ROW_PATCH_ATTEMPTS = 3
+
+
+def _patch_row_fields(cid: str, fields) -> dict | None:
+    """Persist a few keys on one row without rewriting the rest of the store.
+
+    `fields` is a dict, or a callable taking the freshly-read row and returning
+    one — use the callable form for read-modify-write changes such as appending
+    to a list, so a retry recomputes against the row as it now stands instead of
+    re-applying a change built from a row that has since moved on.
+
+    This replaces a whole-list `_load()` -> mutate -> `_save(data)` pattern. That
+    pattern wrote every row from one in-memory snapshot back to storage, so a
+    snapshot taken before a booking landed carried the pre-booking values of
+    `date`/`time`/`time_end`/`slot_confirmed` back over the row that had just
+    been booked — and for a row created *after* the snapshot, the whole-store
+    save took the insert branch and dropped the update entirely.
+
+    Reading fresh, writing a snapshot that contains only the target row, and
+    re-reading to confirm keeps the write to the one row and the few keys
+    actually being changed. A version clash means someone else committed in
+    between; retrying re-reads their result rather than overwriting it.
+    """
+    target = _clean_str(cid)
+    if not target or not fields:
+        return None
+    for _attempt in range(_ROW_PATCH_ATTEMPTS):
+        data = _load(force=True)
+        current = next(
+            (
+                r for r in (data.get("candidates") or [])
+                if isinstance(r, dict) and str(r.get("id") or "") == target
+            ),
+            None,
+        )
+        if current is None:
+            return None
+        resolved = fields(current) if callable(fields) else fields
+        banned = sorted(set(resolved) & set(BOOKING_SLOT_FIELDS))
+        if banned:
+            raise ValueError(
+                f"Booking fields {banned} cannot be changed through a targeted row patch."
+            )
+        updated = dict(current)
+        updated.update(resolved)
+        updated["updated_at"] = _now_iso()
+        # A single-row desired list with a single-row version map. The merge in
+        # `_save`/`pg_save` then has nothing else it *could* rewrite, and its
+        # deletion pass — which only visits ids in the version map — has nothing
+        # it could delete.
+        versions = dict(data.get("_snapshot_versions") or {})
+        _save({
+            "candidates": [updated],
+            "_snapshot_versions": {target: versions.get(target, "")},
+        })
+        stored = next(
+            (
+                r for r in (_load(force=True).get("candidates") or [])
+                if isinstance(r, dict) and str(r.get("id") or "") == target
+            ),
+            None,
+        )
+        if stored is None:
+            return None
+        if all(stored.get(key) == value for key, value in resolved.items()):
+            return _with_computed(stored)
+    return None
+
+
 def _coerce_payment(value) -> int:
     """Accept '5000', '₹5,000', '₹5,000.00', 5000, 5000.5 — normalise to int rupees."""
     if value is None or value == "":
@@ -1434,6 +1509,13 @@ def _normalise(record: dict, *, existing: dict | None = None) -> dict:
         "telegram_user_id": int(record.get("telegram_user_id") or base.get("telegram_user_id") or 0) or None,
         "payment_proofs":   list(record.get("payment_proofs", base.get("payment_proofs")) or []),
         "slot_screenshot_proofs": list(record.get("slot_screenshot_proofs", base.get("slot_screenshot_proofs")) or []),
+        # Pointer to the screenshot that evidences this booking. Deliberately
+        # absent from _ALLOWED_FIELDS — like `proofs`, it is only ever moved by
+        # the attachment path — but it must survive the rebuild here, or the
+        # next edit of any kind silently drops the evidence link.
+        "slot_screenshot_proof_id": _clean_str(
+            record.get("slot_screenshot_proof_id", base.get("slot_screenshot_proof_id"))
+        ),
         "profile_photo":    record.get("profile_photo", base.get("profile_photo")) if isinstance(record.get("profile_photo", base.get("profile_photo")), dict) else None,
         "attachment_review_queue": list(record.get("attachment_review_queue", base.get("attachment_review_queue")) or []),
         "attachment_schema_version": int(base.get("attachment_schema_version") or 2),
@@ -2647,6 +2729,64 @@ class SlotBookedError(ValueError):
             if len(conflicts) > 3:
                 names = f"{names} (+{len(conflicts) - 3} more)"
             super().__init__(f"This interview slot is already booked — overlaps with {names}.")
+
+
+class SlotNotPersistedError(ValueError):
+    """Raised when a booking call returned but storage does not hold the slot.
+
+    A booking that is not durably stored must never be reported as booked. The
+    corruption this guards against was silent precisely because the in-memory
+    return value looked correct while the stored row had been overwritten.
+    """
+
+    def __init__(self, *, candidate_id: str, date: str, time: str, time_end: str, stored: dict | None):
+        self.candidate_id = candidate_id
+        self.date = date
+        self.time = time
+        self.time_end = time_end
+        self.stored = stored
+        if stored is None:
+            detail = "the booking row is missing from storage"
+        else:
+            detail = (
+                "stored slot is "
+                f"{stored.get('date') or 'no date'} "
+                f"{stored.get('time') or 'no time'}-{stored.get('time_end') or 'no end'} "
+                f"confirmed={bool(stored.get('slot_confirmed'))}"
+            )
+        super().__init__(
+            f"Interview slot {date} {time}-{time_end} was not persisted for "
+            f"candidate {candidate_id} — {detail}."
+        )
+
+
+def slot_row_matches(row: dict | None, *, date: str, time: str, time_end: str) -> bool:
+    """True when a stored row really holds this confirmed slot."""
+    if not isinstance(row, dict):
+        return False
+    return (
+        _clean_str(row.get("date"))[:10] == _clean_str(date)[:10]
+        and _clean_str(row.get("time")) == _clean_str(time)
+        and _clean_str(row.get("time_end")) == _clean_str(time_end)
+        and _coerce_bool(row.get("slot_confirmed"))
+    )
+
+
+def assert_slot_persisted(candidate_id: str, *, date: str, time: str, time_end: str = "") -> dict:
+    """Re-read past every cache and prove the slot survived the write."""
+    cid = _clean_str(candidate_id)
+    stored = next(
+        (
+            r for r in (_load(force=True).get("candidates") or [])
+            if isinstance(r, dict) and str(r.get("id") or "") == cid
+        ),
+        None,
+    )
+    if not slot_row_matches(stored, date=date, time=time, time_end=time_end):
+        raise SlotNotPersistedError(
+            candidate_id=cid, date=date, time=time, time_end=time_end, stored=stored,
+        )
+    return _with_computed(stored)
 
 
 class PaymentDueError(ValueError):
@@ -4082,6 +4222,9 @@ def _duplicate_candidate_slot(
         "interview_attended": False,
         "payment_proofs": list(source.get("payment_proofs") or []),
         "slot_screenshot_proofs": [],
+        # A new interview starts with no evidence of its own; inheriting the
+        # source row's pointer would make this booking cite another one's proof.
+        "slot_screenshot_proof_id": "",
         "profile_photo": source.get("profile_photo"),
         "resumes": list(source.get("resumes") or []),
     }
@@ -4120,7 +4263,7 @@ def assign_interview_slot(
     _validate_interview_slot_times(slot_time, time_end)
 
     if _candidate_has_confirmed_slot(existing):
-        return _duplicate_candidate_slot(
+        clone = _duplicate_candidate_slot(
             existing,
             date=day,
             time=slot_time,
@@ -4139,6 +4282,11 @@ def assign_interview_slot(
             interview_calendar_sequence=interview_calendar_sequence,
             interview_booking_source=interview_booking_source,
         )
+        # Report the slot only once storage actually holds it.
+        assert_slot_persisted(
+            str(clone.get("id") or ""), date=day, time=slot_time, time_end=time_end,
+        )
+        return clone
 
     existing_service = _normalise_service_type(existing.get("service_type"), existing)
     patch: dict = {
@@ -4184,7 +4332,10 @@ def assign_interview_slot(
         "interview_source_timezone": _clean_str(interview_source_timezone),
         "interview_booking_source": _clean_str(interview_booking_source).lower() or "candidate_booked",
     })
-    return update_candidate(cid, patch, allow_slot_without_rules=True)
+    booked = update_candidate(cid, patch, allow_slot_without_rules=True)
+    # Report the slot only once storage actually holds it.
+    assert_slot_persisted(cid, date=day, time=slot_time, time_end=time_end)
+    return booked
 
 
 def update_interview_slot(
@@ -4253,7 +4404,10 @@ def update_interview_slot(
     ):
         if value is not None:
             patch[key] = _clean_str(value)
-    return update_candidate(cid, patch, allow_slot_without_rules=True)
+    rescheduled = update_candidate(cid, patch, allow_slot_without_rules=True)
+    # A reschedule that did not survive the write must not read as rescheduled.
+    assert_slot_persisted(cid, date=day, time=slot_time, time_end=time_end)
+    return rescheduled
 
 
 def cancel_confirmed_interview_slot_by_name(
@@ -4576,14 +4730,10 @@ def attach_public_slot_screenshot(
     )
     if not entry:
         return None
-    cdata = _load()
-    rows = cdata.get("candidates") or []
-    idx = next((i for i, r in enumerate(rows) if r.get("id") == cid), -1)
-    if idx >= 0:
-        rows[idx]["slot_screenshot_proof_id"] = entry["id"]
-        rows[idx]["updated_at"] = _now_iso()
-        cdata["candidates"] = rows
-        _save(cdata)
+    # Only the evidence pointer moves. The booking's own fields are not part of
+    # this write at all, so attaching a screenshot cannot regress a slot that
+    # was confirmed moments earlier.
+    _patch_row_fields(cid, {"slot_screenshot_proof_id": entry["id"]})
     return entry
 
 
@@ -4657,21 +4807,15 @@ def _mark_re_service_booking(cid: str, *, grant_row_id: str) -> dict | None:
     This deliberately bypasses update_candidate(): the normaliser there rebuilds
     rows from known columns, which would silently drop the marker and leave the
     one-time benefit unconsumable.
+
+    It runs immediately after a booking, so it uses the targeted row patch for
+    the same reason the evidence attachment does — a whole-store write here
+    would carry a pre-booking snapshot back over the slot it just stamped.
     """
-    data = _load()
-    rows = data.get("candidates") or []
-    for i, r in enumerate(rows):
-        if str(r.get("id") or "") != str(cid):
-            continue
-        r = dict(r)
-        r["re_service_booking"] = True
-        r["re_service_grant_row_id"] = grant_row_id
-        r["updated_at"] = _now_iso()
-        rows[i] = r
-        data["candidates"] = rows
-        _save(data)
-        return _with_computed(r)
-    return None
+    return _patch_row_fields(
+        cid,
+        {"re_service_booking": True, "re_service_grant_row_id": grant_row_id},
+    )
 
 
 def _import_confirmed_interview_slot(
@@ -6476,10 +6620,11 @@ def _store_typed_attachment(
     if not ext:
         raise ValueError("Only image files (jpg / png / webp / gif / heic) are allowed")
 
-    cdata = _load()
-    rows = cdata.get("candidates") or []
-    idx = next((i for i, r in enumerate(rows) if r.get("id") == cid), -1)
-    if idx < 0:
+    # Refuse an unknown candidate before writing a file that nothing would own.
+    # The row is read again at write time, so this is only an early exit.
+    if not any(
+        r.get("id") == cid for r in (_load().get("candidates") or [])
+    ):
         return None
 
     pid = uuid.uuid4().hex[:12]
@@ -6521,16 +6666,20 @@ def _store_typed_attachment(
             if key in metadata:
                 entry[key] = metadata[key]
     field = ATTACHMENT_FIELDS[kind]
-    if kind == AttachmentType.PROFILE_PHOTO:
-        rows[idx][field] = entry
-    else:
-        attachments = list(rows[idx].get(field) or [])
-        attachments.append(entry)
-        rows[idx][field] = attachments
-    rows[idx]["attachment_schema_version"] = 2
-    rows[idx]["updated_at"] = _now_iso()
-    cdata["candidates"] = rows
-    _save(cdata)
+
+    def _attach(row: dict) -> dict:
+        if kind == AttachmentType.PROFILE_PHOTO:
+            value = entry
+        else:
+            value = list(row.get(field) or []) + [entry]
+        return {field: value, "attachment_schema_version": 2}
+
+    # Storing an attachment used to rewrite every row in the store from one
+    # in-memory snapshot. On the booking path that snapshot could predate the
+    # slot being booked, so saving the evidence cleared the very booking it was
+    # evidence for. The write is now confined to this row and these keys.
+    if _patch_row_fields(cid, _attach) is None:
+        return None
     if kind == AttachmentType.PAYMENT_PROOF:
         # Mirror payment evidence into the managed store so both upload paths
         # share one durable, checksum-verified home for financial evidence.
