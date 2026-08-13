@@ -842,6 +842,27 @@ def attach_calendar_identity(event_id: str, uid: Any, sequence: Any) -> None:
           WHERE id=%s AND calendar_uid IS NULL""",(str(uid),sequence,event_id))
 
 
+def typed_or_null(value: Any) -> Any:
+    """Blank -> NULL for a column Postgres types as date, time or number.
+
+    The model expresses "no value" both ways: sometimes ``null``, sometimes an
+    empty string. An empty string reaching a typed column raises
+    InvalidDatetimeFormat and aborts the whole INSERT, so the event is never
+    created — and because the failure is a raw psycopg2 error rather than an
+    AIGatewayError, it lands on the generic retry path with no error code, and
+    the same mail crashes the same way on every attempt. One LinkedIn invitation
+    did exactly that.
+
+    Only blanks are converted. A malformed non-empty value is still rejected by
+    the database, because silently dropping it would lose a real answer.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
 def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, model: str, duration_ms: int) -> dict[str,Any]:
     # One interview, one event. The recruiter's covering note and the calendar
     # invitation arrive a minute apart describing the same meeting, and neither
@@ -868,7 +889,7 @@ def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, m
           ai_model,prompt_name,prompt_version,schema_version,processing_duration_ms,calendar_uid,calendar_sequence,created_at,updated_at)
           VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,
             CASE WHEN %s THEN NULL ELSE now() END,%s,'recruitment_email_status_extraction_v3','v3','selection_offer_event_v1',%s,%s,%s,now(),now()) RETURNING *""",
-          (event_id,candidate_id,message_id,status,result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),interview.get('date'),interview.get('time'),interview.get('mode'),offer.get('offered_ctc'),offer.get('currency'),offer.get('joining_date'),offer.get('offer_date'),offer.get('offer_expiry_date'),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')) if visible else False,review_status,visible,original_status if not visible else None,ignore_reason,visible,model,duration_ms,(str(result.get('calendar_uid')) if result.get('calendar_uid') else None),result.get('calendar_sequence')))
+          (event_id,candidate_id,message_id,status,result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),typed_or_null(interview.get('date')),typed_or_null(interview.get('time')),interview.get('mode'),typed_or_null(offer.get('offered_ctc')),offer.get('currency'),typed_or_null(offer.get('joining_date')),typed_or_null(offer.get('offer_date')),typed_or_null(offer.get('offer_expiry_date')),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')) if visible else False,review_status,visible,original_status if not visible else None,ignore_reason,visible,model,duration_ms,(str(result.get('calendar_uid')) if result.get('calendar_uid') else None),result.get('calendar_sequence')))
         event=_rows(cur)[0]
         canonical_id=canonical_candidate_id(candidate_id)
         cur.execute("""UPDATE ai_recruitment_events SET canonical_candidate_id=%s,validation_status=%s,
@@ -906,7 +927,7 @@ def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, m
                 joining_date=COALESCE(EXCLUDED.joining_date,offer_verification_cases.joining_date),
                 offer_expiry_date=COALESCE(EXCLUDED.offer_expiry_date,offer_verification_cases.offer_expiry_date),
                 confidence=GREATEST(offer_verification_cases.confidence,EXCLUDED.confidence),updated_at=now()""",
-              (_id(),candidate_id,event_id,offer_case_key,company.get('name'),job.get('title'),offer.get('offered_ctc'),offer.get('currency'),offer.get('offer_date'),offer.get('joining_date'),offer.get('offer_expiry_date'),result['confidence']))
+              (_id(),candidate_id,event_id,offer_case_key,company.get('name'),job.get('title'),typed_or_null(offer.get('offered_ctc')),offer.get('currency'),typed_or_null(offer.get('offer_date')),typed_or_null(offer.get('joining_date')),typed_or_null(offer.get('offer_expiry_date')),result['confidence']))
             cur.execute("""INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,new_value,created_at)
               VALUES(%s,'system','system','OFFER_CASE_CREATED',%s,%s,%s::jsonb,now())""",(_id(),candidate_id,event_id,json.dumps({'status':result['primary_status'],'confidence':result['confidence']})))
         cur.execute("SELECT confirmed_status FROM candidate_status_history WHERE candidate_id=%s AND confirmed_status IS NOT NULL ORDER BY reviewed_at DESC LIMIT 1",(candidate_id,));confirmed=cur.fetchone()
@@ -946,14 +967,14 @@ def create_or_reprocess_event(candidate_id: str, message_id: str, result: dict[s
           canonical_candidate_id=%s,validation_status=%s,ai_status=%s,email_intent=%s,document_type=%s,
           evidence_summary=%s,event_fingerprint=%s,updated_at=now()
           WHERE id=%s RETURNING *""",
-          (result['primary_status'],result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),offer.get('joining_date'),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')),review_state,model,duration_ms,canonical_candidate_id(candidate_id),validation_status,str(result.get('ai_status') or 'ANALYZED'),result.get('email_intent'),result.get('document_type'),result.get('evidence_summary') or result.get('summary'),message_id,previous['id']))
+          (result['primary_status'],result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),typed_or_null(offer.get('joining_date')),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')),review_state,model,duration_ms,canonical_candidate_id(candidate_id),validation_status,str(result.get('ai_status') or 'ANALYZED'),result.get('email_intent'),result.get('document_type'),result.get('evidence_summary') or result.get('summary'),message_id,previous['id']))
         event=_rows(cur)[0]
         if result['primary_status'] in __import__('services.recruitment_mail_agent',fromlist=['OFFER_CASE_STATUSES']).OFFER_CASE_STATUSES:
             cur.execute("""INSERT INTO offer_verification_cases(id,candidate_id,ai_recruitment_event_id,company_name,job_title,joining_date,verification_status,confidence,created_at,updated_at)
               VALUES(%s,%s,%s,%s,%s,%s,'PENDING_REVIEW',%s,now(),now())
               ON CONFLICT(ai_recruitment_event_id) DO UPDATE SET company_name=EXCLUDED.company_name,job_title=EXCLUDED.job_title,
                 joining_date=EXCLUDED.joining_date,verification_status='PENDING_REVIEW',confidence=EXCLUDED.confidence,updated_at=now()""",
-              (_id(),candidate_id,event['id'],company.get('name'),job.get('title'),offer.get('joining_date'),result['confidence']))
+              (_id(),candidate_id,event['id'],company.get('name'),job.get('title'),typed_or_null(offer.get('joining_date')),result['confidence']))
         cur.execute("""INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,previous_value,new_value,created_at)
           VALUES(%s,'system','system','HISTORICAL_EMAIL_RECLASSIFIED',%s,%s,%s::jsonb,%s::jsonb,now())""",
           (_id(),candidate_id,event['id'],json.dumps({'classification':previous.get('primary_status'),'prompt_version':previous.get('prompt_version')},default=str),json.dumps({'classification':result['primary_status'],'prompt_version':'v3','reason':reason},default=str)))
