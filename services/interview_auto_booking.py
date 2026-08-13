@@ -68,12 +68,30 @@ def parse_interview_time(value: str) -> str:
     return f"{hour:02d}:{minute:02d}"
 
 
+# Abbreviations the model uses that map to exactly one zone we serve. Kept
+# deliberately small: an ambiguous abbreviation must never be guessed.
+_TIMEZONE_ALIASES = {
+    "IST": "Asia/Kolkata",
+    "ASIA/CALCUTTA": "Asia/Kolkata",   # older IANA name for the same zone
+}
+
+
 def validate_timezone(value: str) -> ZoneInfo:
     name = str(value or "").strip()
-    if name.upper() == "IST":
-        name = "Asia/Kolkata"
     if not name:
         raise BookingValidationError("MISSING_TIMEZONE", "Interview timezone is required for automatic booking.")
+    # The model annotates the abbreviation with the zone — "IST (Asia/Kolkata)".
+    # The parenthetical is the IANA name, so prefer it. Booking was blocked as
+    # INVALID_TIMEZONE purely because of that decoration.
+    bracketed = re.search(r"\(\s*([A-Za-z]+/[A-Za-z0-9_+\-/]+)\s*\)", name)
+    if bracketed:
+        name = bracketed.group(1)
+    else:
+        # The annotation may be the abbreviation instead — "Asia/Kolkata (IST)".
+        # Drop it and keep the remainder; if that is not a real zone it still
+        # fails below, so nothing is guessed.
+        name = re.sub(r"\s*\([^)]*\)\s*", " ", name).strip()
+    name = _TIMEZONE_ALIASES.get(name.upper(), name)
     try:
         return ZoneInfo(name)
     except ZoneInfoNotFoundError as exc:
