@@ -194,6 +194,7 @@ VISIBLE_STATUSES = [
     "JOINED", "POST_SELECTION_ONBOARDING", "OFFER_DECLINED", "OFFER_REVOKED",
     "JOINING_DATE_UPDATED", "BACKGROUND_VERIFICATION", "DOCUMENT_VERIFICATION",
     "COMPENSATION_CONFIRMATION", "INTERVIEW_UPDATE", "INTERVIEW_SHORTLISTED",
+    "INTERVIEW_PROPOSED",
     "INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED",
     "CANDIDATE_REJECTED", "MANUAL_REVIEW_REQUIRED",
 ]
@@ -563,6 +564,10 @@ _ROLE_TITLE_CUES = (
     "sre", "tester", "designer", "administrator", "specialist", "lead",
     "scientist", "programmer", "full stack", "fullstack", "backend",
     "frontend", "qa",
+    # Stacks are named as the role in Indian recruiting subject lines:
+    # "Interview schedule for Charan - ReactJS" names no "developer".
+    "reactjs", "react", "angular", "node", "java", "python", ".net", "dotnet",
+    "spring", "django", "aws", "azure",
 )
 # Wording that frames the meeting as being *about a person for a role*. This is
 # the part an ordinary internal meeting does not have: "Discussion with Ramu
@@ -571,6 +576,9 @@ _MEETING_ABOUT_PERSON_CUES = (
     "discussion with", "discussion for", "discussion regarding",
     "technical discussion", "call with", "screening", "screening round",
     "round with", "meeting with", "conversation with", "profile discussion",
+    # "Interview schedule for <candidate>" frames the meeting around a person
+    # just as "discussion with" does.
+    "schedule for", "availability for", "interview for",
 )
 
 
@@ -780,10 +788,31 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         value["validation_status"] = "REJECTED"
         value["lifecycle_event"] = "NONE"
         return
+    proposed_status = str(value.get("status") or "").upper()
     if value["status"] in interview_statuses:
         safe_status, rejection_reason = validate_interview_event(value["status"], context)
     else:
         safe_status, rejection_reason = validate_lifecycle_event(value["status"], context)
+    if safe_status == "NONE" and proposed_status in interview_statuses:
+        # A backend semantic check may distrust the *booking detail* of an
+        # interview, but it must not delete a valid classification. Ollama is
+        # the authority on meaning; this layer is the authority on booking
+        # safety. Downgrading keeps the event, the evidence and the confidence
+        # visible for a human, while auto-booking stays gated downstream.
+        value.update(
+            status="INTERVIEW_PROPOSED",
+            classification="interview_proposed",
+            candidate_status="Interview Proposed",
+            is_selection_or_offer_related=True,
+            should_create_review_record=True,
+            requires_manual_review=True,
+            lifecycle_event="INTERVIEW_PROPOSED",
+            validation_status="NEEDS_REVIEW",
+            downgraded_from=proposed_status,
+            downgrade_reason=rejection_reason or "INTERVIEW_DETAIL_NOT_ASSERTIVE",
+        )
+        value.pop("ignore_reason", None)
+        return
     if safe_status == "NONE":
         value.update(
             status="IGNORED_NOT_OFFER_RELATED",

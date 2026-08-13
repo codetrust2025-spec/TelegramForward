@@ -63,6 +63,9 @@ _PIPELINE_TO_AUDIT = {
     "INTERVIEW_SHORTLISTED": engine.SHORTLISTED,
     "INTERVIEW_CONFIRMED": engine.INTERVIEW_INVITE,
     "INTERVIEW_UPDATE": engine.INTERVIEW_INVITE,
+    # A proposed interview is an invite whose booking detail the backend did not
+    # trust enough to confirm — informational, same audit family as an invite.
+    "INTERVIEW_PROPOSED": engine.INTERVIEW_INVITE,
     "INTERVIEW_RESCHEDULED": engine.INTERVIEW_RESCHEDULED,
     "INTERVIEW_CANCELLED": engine.INTERVIEW_CANCELLED,
     "CANDIDATE_REJECTED": engine.REJECTED,
