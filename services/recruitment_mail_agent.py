@@ -194,7 +194,7 @@ VISIBLE_STATUSES = [
     "JOINED", "POST_SELECTION_ONBOARDING", "OFFER_DECLINED", "OFFER_REVOKED",
     "JOINING_DATE_UPDATED", "BACKGROUND_VERIFICATION", "DOCUMENT_VERIFICATION",
     "COMPENSATION_CONFIRMATION", "INTERVIEW_UPDATE", "INTERVIEW_SHORTLISTED",
-    "INTERVIEW_PROPOSED", "OFFER_NEEDS_REVIEW", "JOINING_NEEDS_REVIEW",
+    "INTERVIEW_PROPOSED", "OFFER_NEEDS_REVIEW", "JOINING_NEEDS_REVIEW", "SELECTION_NEEDS_REVIEW",
     "INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED",
     "CANDIDATE_REJECTED", "MANUAL_REVIEW_REQUIRED",
 ]
@@ -705,6 +705,15 @@ def _needs_review_status(proposed: str) -> str | None:
         return "OFFER_NEEDS_REVIEW"
     if status in _JOINING_FAMILY:
         return "JOINING_NEEDS_REVIEW"
+    if status.startswith("INTERVIEW_"):
+        return "INTERVIEW_PROPOSED"
+    # Everything else the model may legitimately return — SELECTED,
+    # FINAL_SELECTION_CONFIRMED, BACKGROUND_VERIFICATION, DOCUMENT_VERIFICATION,
+    # CANDIDATE_REJECTED — was still collapsing to NONE and disappearing. A
+    # rejection in particular must never vanish: the candidate outcome is the
+    # whole point of the record.
+    if status in TRACKED_STATUSES:
+        return "SELECTION_NEEDS_REVIEW"
     return None
 
 
@@ -830,7 +839,11 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
             classification=review_status_for.lower(),
             candidate_status=("Offer — needs review"
                               if review_status_for == "OFFER_NEEDS_REVIEW"
-                              else "Joining — needs review"),
+                              else "Joining — needs review"
+                              if review_status_for == "JOINING_NEEDS_REVIEW"
+                              else "Interview — needs review"
+                              if review_status_for == "INTERVIEW_PROPOSED"
+                              else "Selection — needs review"),
             is_selection_or_offer_related=True,
             should_create_review_record=True,
             requires_manual_review=True,
