@@ -194,7 +194,7 @@ VISIBLE_STATUSES = [
     "JOINED", "POST_SELECTION_ONBOARDING", "OFFER_DECLINED", "OFFER_REVOKED",
     "JOINING_DATE_UPDATED", "BACKGROUND_VERIFICATION", "DOCUMENT_VERIFICATION",
     "COMPENSATION_CONFIRMATION", "INTERVIEW_UPDATE", "INTERVIEW_SHORTLISTED",
-    "INTERVIEW_PROPOSED",
+    "INTERVIEW_PROPOSED", "OFFER_NEEDS_REVIEW", "JOINING_NEEDS_REVIEW",
     "INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED",
     "CANDIDATE_REJECTED", "MANUAL_REVIEW_REQUIRED",
 ]
@@ -682,6 +682,32 @@ def _evidence_supported(item: dict[str, Any], sources: dict[str, list[str]]) -> 
     return bool(needle) and any(needle in value.casefold() for value in sources.get(str(item.get("source") or ""), []))
 
 
+_OFFER_FAMILY = {
+    "OFFER_INDICATION", "OFFER_IN_PROGRESS", "OFFER_APPROVED",
+    "OFFER_LETTER_RECEIVED", "APPOINTMENT_LETTER_RECEIVED", "OFFER_ACCEPTED",
+    "OFFER_DECLINED", "OFFER_REVOKED", "COMPENSATION_CONFIRMATION",
+}
+_JOINING_FAMILY = {
+    "JOINING_CONFIRMED", "JOINING_DATE_UPDATED", "JOINED",
+    "POST_SELECTION_ONBOARDING",
+}
+
+
+def _needs_review_status(proposed: str) -> str | None:
+    """The visible review status a distrusted offer/joining result becomes.
+
+    Deliberately NOT members of OFFER_CASE_STATUSES: a review status must never
+    feed offer-case, booking, acceptance or payment workflows. It exists only so
+    the record stays auditable instead of being deleted.
+    """
+    status = str(proposed or "").upper()
+    if status in _OFFER_FAMILY:
+        return "OFFER_NEEDS_REVIEW"
+    if status in _JOINING_FAMILY:
+        return "JOINING_NEEDS_REVIEW"
+    return None
+
+
 def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None, attachments: list[dict[str, Any]] | None = None) -> None:
     from jsonschema import Draft202012Validator
     # Backward-compatible normalization for v1 responses while the configured
@@ -793,6 +819,28 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         safe_status, rejection_reason = validate_interview_event(value["status"], context)
     else:
         safe_status, rejection_reason = validate_lifecycle_event(value["status"], context)
+    review_status_for = _needs_review_status(proposed_status)
+    if safe_status == "NONE" and review_status_for:
+        # Same rule as the interview downgrade: the backend may distrust an
+        # offer or joining claim and withhold every side effect, but it must not
+        # delete a valid classification. Confidence and verbatim evidence are
+        # untouched; requires_manual_review keeps it out of any automated path.
+        value.update(
+            status=review_status_for,
+            classification=review_status_for.lower(),
+            candidate_status=("Offer — needs review"
+                              if review_status_for == "OFFER_NEEDS_REVIEW"
+                              else "Joining — needs review"),
+            is_selection_or_offer_related=True,
+            should_create_review_record=True,
+            requires_manual_review=True,
+            lifecycle_event=review_status_for,
+            validation_status="NEEDS_REVIEW",
+            downgraded_from=proposed_status,
+            downgrade_reason=rejection_reason or "OUTCOME_NOT_ASSERTED",
+        )
+        value.pop("ignore_reason", None)
+        return
     if safe_status == "NONE" and proposed_status in interview_statuses:
         # A backend semantic check may distrust the *booking detail* of an
         # interview, but it must not delete a valid classification. Ollama is
