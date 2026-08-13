@@ -596,16 +596,35 @@ def stored_message(mailbox_id: str, provider_message_id: str) -> dict[str, Any] 
     return rows[0] if rows else None
 
 
+def _max_ai_attempts() -> int:
+    """Attempts before a message is parked terminally rather than requeued."""
+    try:
+        return max(3, min(50, int(os.getenv("AI_MAIL_MAX_AI_ATTEMPTS", "12"))))
+    except (TypeError, ValueError):
+        return 12
+
+
 def claim_ai_messages(limit: int = 1, *, lease_seconds: int = 150) -> list[dict[str, Any]]:
     """Lease queued semantic work so crashes/timeouts cannot lose or duplicate it."""
     with get_connection() as conn, conn.cursor() as cur:
+        # A row that has burned through its attempts is parked terminally
+        # rather than returned to the queue: without this a message can be
+        # reclaimed indefinitely (production reached 105 attempts). Terminal
+        # rows are excluded from the claim below, and no backoff can revive
+        # them, so they stop consuming Ollama capacity while staying visible.
+        max_attempts=_max_ai_attempts()
+        cur.execute("""UPDATE mailbox_messages SET processing_status='AI_FAILED_TERMINAL',
+              ai_lease_expires_at=NULL,updated_at=now(),ai_last_error_code='MAX_ATTEMPTS_EXHAUSTED'
+            WHERE processing_status='AI_RUNNING' AND ai_lease_expires_at<now()
+              AND COALESCE(ai_retry_count,0)>=%s""",(max_attempts,))
         cur.execute("""UPDATE mailbox_messages SET processing_status='AI_QUEUED',ai_lease_expires_at=NULL,
               updated_at=now(),ai_last_error_code='LEASE_EXPIRED'
             WHERE processing_status='AI_RUNNING' AND ai_lease_expires_at<now()""")
         cur.execute("""SELECT id FROM mailbox_messages
           WHERE processing_status IN ('AI_QUEUED','AI_RETRY_PENDING')
             AND COALESCE(ai_retry_after,now())<=now()
-          ORDER BY sent_at ASC,id FOR UPDATE SKIP LOCKED LIMIT %s""",(max(1,min(limit,20)),))
+            AND COALESCE(ai_retry_count,0)<%s
+          ORDER BY sent_at ASC,id FOR UPDATE SKIP LOCKED LIMIT %s""",(max_attempts,max(1,min(limit,20))))
         ids=[row[0] for row in cur.fetchall()]
         if not ids:return []
         cur.execute("""UPDATE mailbox_messages m SET processing_status='AI_RUNNING',
