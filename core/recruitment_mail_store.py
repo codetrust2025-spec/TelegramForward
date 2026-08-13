@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -842,25 +843,93 @@ def attach_calendar_identity(event_id: str, uid: Any, sequence: Any) -> None:
           WHERE id=%s AND calendar_uid IS NULL""",(str(uid),sequence,event_id))
 
 
+_CLOCK_IN_TEXT = re.compile(r"(\d{1,2}):([0-5]\d)(?::([0-5]\d))?\s*([AP]M)?", re.I)
+
+
 def typed_or_null(value: Any) -> Any:
     """Blank -> NULL for a column Postgres types as date, time or number.
 
     The model expresses "no value" both ways: sometimes ``null``, sometimes an
     empty string. An empty string reaching a typed column raises
-    InvalidDatetimeFormat and aborts the whole INSERT, so the event is never
-    created — and because the failure is a raw psycopg2 error rather than an
-    AIGatewayError, it lands on the generic retry path with no error code, and
-    the same mail crashes the same way on every attempt. One LinkedIn invitation
-    did exactly that.
-
-    Only blanks are converted. A malformed non-empty value is still rejected by
-    the database, because silently dropping it would lose a real answer.
+    InvalidDatetimeFormat and aborts the whole INSERT.
     """
     if value is None:
         return None
     if isinstance(value, str) and not value.strip():
         return None
     return value
+
+
+def storable_time(value: Any) -> Any:
+    """A value Postgres can store in a `time` column, or NULL.
+
+    Nothing is lost by nulling this: the model's exact answer is kept verbatim
+    in `structured_result`, and this column is only the projection the roster
+    and audit read. What *is* lost by passing a bad value through is the entire
+    event — the INSERT aborts, and because a raw psycopg2 error is not an
+    AIGatewayError it never reaches the semantic retry path, so no code is
+    recorded and the mail fails identically forever.
+
+    Two Production cancellation mails died on `"15:30 - 16:00 IST"`: a range
+    with a zone suffix, which Postgres reads as a timezone displacement. The
+    start of a stated range is the interview time, so it is taken; anything with
+    no readable clock at all becomes NULL.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    hit = _CLOCK_IN_TEXT.search(text)
+    if not hit:
+        return None
+    hour, minute = int(hit.group(1)), hit.group(2)
+    second = hit.group(3) or "00"
+    meridiem = (hit.group(4) or "").upper()
+    if meridiem == "AM" and hour == 12:
+        hour = 0
+    elif meridiem == "PM" and hour != 12:
+        hour += 12
+    if not 0 <= hour <= 23:
+        return None
+    return f"{hour:02d}:{minute}:{second}"
+
+
+def storable_date(value: Any) -> Any:
+    """A value Postgres can store in a `date` column, or NULL.
+
+    Same contract as `storable_time`: the raw answer survives in
+    `structured_result`, so a value this cannot represent is dropped from the
+    projection rather than allowed to abort the event.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10]).isoformat()
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return None
+
+
+def storable_number(value: Any) -> Any:
+    """A value Postgres can store in a `numeric` column, or NULL."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
 
 
 def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, model: str, duration_ms: int) -> dict[str,Any]:
@@ -889,7 +958,7 @@ def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, m
           ai_model,prompt_name,prompt_version,schema_version,processing_duration_ms,calendar_uid,calendar_sequence,created_at,updated_at)
           VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,
             CASE WHEN %s THEN NULL ELSE now() END,%s,'recruitment_email_status_extraction_v3','v3','selection_offer_event_v1',%s,%s,%s,now(),now()) RETURNING *""",
-          (event_id,candidate_id,message_id,status,result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),typed_or_null(interview.get('date')),typed_or_null(interview.get('time')),interview.get('mode'),typed_or_null(offer.get('offered_ctc')),offer.get('currency'),typed_or_null(offer.get('joining_date')),typed_or_null(offer.get('offer_date')),typed_or_null(offer.get('offer_expiry_date')),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')) if visible else False,review_status,visible,original_status if not visible else None,ignore_reason,visible,model,duration_ms,(str(result.get('calendar_uid')) if result.get('calendar_uid') else None),result.get('calendar_sequence')))
+          (event_id,candidate_id,message_id,status,result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),storable_date(interview.get('date')),storable_time(interview.get('time')),interview.get('mode'),storable_number(offer.get('offered_ctc')),offer.get('currency'),storable_date(offer.get('joining_date')),storable_date(offer.get('offer_date')),storable_date(offer.get('offer_expiry_date')),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')) if visible else False,review_status,visible,original_status if not visible else None,ignore_reason,visible,model,duration_ms,(str(result.get('calendar_uid')) if result.get('calendar_uid') else None),result.get('calendar_sequence')))
         event=_rows(cur)[0]
         canonical_id=canonical_candidate_id(candidate_id)
         cur.execute("""UPDATE ai_recruitment_events SET canonical_candidate_id=%s,validation_status=%s,
@@ -927,7 +996,7 @@ def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, m
                 joining_date=COALESCE(EXCLUDED.joining_date,offer_verification_cases.joining_date),
                 offer_expiry_date=COALESCE(EXCLUDED.offer_expiry_date,offer_verification_cases.offer_expiry_date),
                 confidence=GREATEST(offer_verification_cases.confidence,EXCLUDED.confidence),updated_at=now()""",
-              (_id(),candidate_id,event_id,offer_case_key,company.get('name'),job.get('title'),typed_or_null(offer.get('offered_ctc')),offer.get('currency'),typed_or_null(offer.get('offer_date')),typed_or_null(offer.get('joining_date')),typed_or_null(offer.get('offer_expiry_date')),result['confidence']))
+              (_id(),candidate_id,event_id,offer_case_key,company.get('name'),job.get('title'),storable_number(offer.get('offered_ctc')),offer.get('currency'),storable_date(offer.get('offer_date')),storable_date(offer.get('joining_date')),storable_date(offer.get('offer_expiry_date')),result['confidence']))
             cur.execute("""INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,new_value,created_at)
               VALUES(%s,'system','system','OFFER_CASE_CREATED',%s,%s,%s::jsonb,now())""",(_id(),candidate_id,event_id,json.dumps({'status':result['primary_status'],'confidence':result['confidence']})))
         cur.execute("SELECT confirmed_status FROM candidate_status_history WHERE candidate_id=%s AND confirmed_status IS NOT NULL ORDER BY reviewed_at DESC LIMIT 1",(candidate_id,));confirmed=cur.fetchone()
@@ -967,14 +1036,14 @@ def create_or_reprocess_event(candidate_id: str, message_id: str, result: dict[s
           canonical_candidate_id=%s,validation_status=%s,ai_status=%s,email_intent=%s,document_type=%s,
           evidence_summary=%s,event_fingerprint=%s,updated_at=now()
           WHERE id=%s RETURNING *""",
-          (result['primary_status'],result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),typed_or_null(offer.get('joining_date')),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')),review_state,model,duration_ms,canonical_candidate_id(candidate_id),validation_status,str(result.get('ai_status') or 'ANALYZED'),result.get('email_intent'),result.get('document_type'),result.get('evidence_summary') or result.get('summary'),message_id,previous['id']))
+          (result['primary_status'],result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),storable_date(offer.get('joining_date')),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')),review_state,model,duration_ms,canonical_candidate_id(candidate_id),validation_status,str(result.get('ai_status') or 'ANALYZED'),result.get('email_intent'),result.get('document_type'),result.get('evidence_summary') or result.get('summary'),message_id,previous['id']))
         event=_rows(cur)[0]
         if result['primary_status'] in __import__('services.recruitment_mail_agent',fromlist=['OFFER_CASE_STATUSES']).OFFER_CASE_STATUSES:
             cur.execute("""INSERT INTO offer_verification_cases(id,candidate_id,ai_recruitment_event_id,company_name,job_title,joining_date,verification_status,confidence,created_at,updated_at)
               VALUES(%s,%s,%s,%s,%s,%s,'PENDING_REVIEW',%s,now(),now())
               ON CONFLICT(ai_recruitment_event_id) DO UPDATE SET company_name=EXCLUDED.company_name,job_title=EXCLUDED.job_title,
                 joining_date=EXCLUDED.joining_date,verification_status='PENDING_REVIEW',confidence=EXCLUDED.confidence,updated_at=now()""",
-              (_id(),candidate_id,event['id'],company.get('name'),job.get('title'),typed_or_null(offer.get('joining_date')),result['confidence']))
+              (_id(),candidate_id,event['id'],company.get('name'),job.get('title'),storable_date(offer.get('joining_date')),result['confidence']))
         cur.execute("""INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,previous_value,new_value,created_at)
           VALUES(%s,'system','system','HISTORICAL_EMAIL_RECLASSIFIED',%s,%s,%s::jsonb,%s::jsonb,now())""",
           (_id(),candidate_id,event['id'],json.dumps({'classification':previous.get('primary_status'),'prompt_version':previous.get('prompt_version')},default=str),json.dumps({'classification':result['primary_status'],'prompt_version':'v3','reason':reason},default=str)))
