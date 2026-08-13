@@ -948,7 +948,11 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
             date.fromisoformat(str(interview.get("date") or ""))
         except ValueError:
             date_valid = False
-        if not re.fullmatch(r"(?:0?[1-9]|1[0-2]):[0-5]\d\s*(?:AM|PM)", str(interview.get("time") or ""), re.I):
+        normalised_time = _normalise_interview_time(interview.get("time"))
+        if normalised_time:
+            interview["time"] = normalised_time
+            value["interview"] = interview
+        else:
             time_valid = False
         if not str(interview.get("timezone") or "").strip():
             tz_valid = False
@@ -959,6 +963,32 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
             if not tz_valid: missing.append("timezone")
             labels={"date":"ISO date","time":"12-hour time","timezone":"timezone"}
             raise ValueError("interview requires valid " + ", ".join(labels[item] for item in missing))
+
+
+def _normalise_interview_time(raw):
+    """Canonicalise a 12-hour time's formatting, or "" if it is not one.
+
+    The validator demanded exactly "H:MM AM/PM", so a real invite reading
+    "2:00 PM - 3:00 PM IST" failed and raised OLLAMA_SCHEMA_VALIDATION_FAILED
+    on every retry - identical input, identical failure - so the interview
+    never surfaced. A range, an attached zone and spacing are formatting, not
+    evidence, so the first stated 12-hour time is taken as the start.
+
+    A 24-hour time is deliberately NOT accepted: the prompt requires an
+    explicit AM/PM as evidence the source stated the time unambiguously, and
+    an existing test pins that. Forgiving formatting must not forgive
+    missing evidence.
+    """
+    text = str(raw or "").upper()
+    hit = re.search(r"(\d{1,2})[:.]([0-5]\d)\s*(AM|PM)", text)
+    if hit:
+        hour = int(hit.group(1))
+        return "%02d:%s %s" % (hour, hit.group(2), hit.group(3)) if 1 <= hour <= 12 else ""
+    hit = re.search(r"(?<![:.\d])(\d{1,2})\s*(AM|PM)", text)
+    if hit:
+        hour = int(hit.group(1))
+        return "%02d:00 %s" % (hour, hit.group(2)) if 1 <= hour <= 12 else ""
+    return ""
 
 
 def parse_model_json(raw: str) -> dict[str, Any]:
