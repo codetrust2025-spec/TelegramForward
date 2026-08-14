@@ -275,6 +275,71 @@ NOISE_RULES = [
     ("REJECTION", ("not selected", "regret to inform", "not moving forward", "rejection")),
 ]
 
+# A job board links every advert it lists. Two or more distinct postings in one
+# mail is a catalogue, whoever sent it and however it is worded.
+_JOB_POSTING_LINK = re.compile(
+    r"(?:linkedin\.com/comm)?/jobs/view/(\d+)"          # LinkedIn
+    r"|naukri\.com/job-listings-[\w-]*?(\d{6,})"        # Naukri
+    r"|/job(?:s)?/(\d{6,})/(?:apply|view)",             # Indeed / Monster shapes
+    re.I,
+)
+
+# Wording a catalogue uses about itself. Kept as a secondary signal only: the
+# exact phrasing changes without notice — LinkedIn writes "Jobs that match your
+# profile" while NOISE_RULES only knew "jobs matching your profile", and that
+# one word is why a six-advert digest was sent to the model as though it might
+# be news about this candidate.
+_JOB_DIGEST_MARKERS = (
+    "jobs that match your profile", "jobs matching your profile",
+    "jobs picked for you", "jobs for you", "recommended jobs",
+    "based on your title and location", "view job:", "see all jobs",
+    "similar jobs", "job alert", "new jobs posted",
+)
+
+_JOB_BOARD_SENDERS = (
+    "jobs-noreply@linkedin.com", "jobalerts-noreply@linkedin.com",
+    "jobs-listings@linkedin.com", "info@naukri.com", "alerts@naukri.com",
+    "jobalerts@naukri.com", "noreply@indeed.com", "alert@indeed.com",
+    "no-reply@monsterindia.com", "jobs@shine.com",
+)
+
+
+def job_advertisement_digest(
+    subject: str, body: str, sender_email: str = "",
+    attachments: list[dict[str, Any]] | None = None,
+) -> bool:
+    """True when the mail is a list of vacancies, not news about this candidate.
+
+    A catalogue of adverts contains company names, role titles and locations, so
+    a model asked "what happened to this candidate?" can assemble a convincing
+    answer out of two unrelated listings. That is exactly what happened: a
+    LinkedIn digest of six vacancies produced INTERVIEW_SHORTLISTED at 95%
+    confidence, "Birlasoft and FactSet", and a summary saying the candidate had
+    been shortlisted and should prepare for an interview. Every quoted evidence
+    string was verbatim — they were the advert lines themselves — so the
+    verbatim check could not catch it. The claim was about *meaning*, and the
+    meaning was never in the mail.
+
+    The test is structural rather than phrase-based, because the phrasing is the
+    part that changes. Nothing here reads the model's answer.
+    """
+    text = " ".join(
+        [str(subject or ""), str(body or "")]
+        + [str(item.get("text") or "") for item in (attachments or [])]
+    )
+    postings = {
+        next(group for group in match.groups() if group)
+        for match in _JOB_POSTING_LINK.finditer(text)
+    }
+    if len(postings) >= 2:
+        return True
+    sender = str(sender_email or "").strip().casefold()
+    if sender in _JOB_BOARD_SENDERS:
+        haystack = text.casefold()
+        return any(marker in haystack for marker in _JOB_DIGEST_MARKERS)
+    return False
+
+
 SPECIAL_CONTEXT = {
     "BACKGROUND_VERIFICATION": ("background verification", "pre-employment verification", "document verification"),
     "SALARY": ("salary discussion", "compensation discussion", "ctc discussion"),
@@ -639,6 +704,13 @@ def routing_decision(
     )
     if context.get("qualified"):
         return {"send_to_ai": True, "score": context["score"], "reason": "POTENTIAL_OUTCOME", "context": context}
+    # A catalogue of vacancies carries no outcome for this candidate, so there
+    # is nothing for the model to decide. It reaches here because
+    # `is_promotional_or_job_ad` did not recognise the digest, which is what let
+    # a LinkedIn "Jobs that match your profile" mail through as
+    # AMBIGUOUS_RECRUITMENT on cues like "position" and "candidate".
+    if job_advertisement_digest(subject, body, sender_email, attachments):
+        return {"send_to_ai": False, "score": 0.0, "reason": "JOB_RECOMMENDATION", "context": context}
     reason = str(context.get("ignore_reason") or "")
     if reason in {
         "JOB_RECOMMENDATION", "JOB_ALERT", "JOB_PORTAL_MARKETING",
@@ -748,6 +820,23 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
     errors = list(Draft202012Validator(SCHEMA).iter_errors(value))
     if errors:
         raise ValueError("invalid selection/offer JSON: " + errors[0].message)
+    # Second layer, in case such a mail reaches the model by another route. The
+    # answer is left intact in the result so it stays auditable; it simply stops
+    # being something the system tracks, which is the disposition a catalogue of
+    # vacancies deserves however confidently it was read. Recorded the way every
+    # other downgrade here is, and after schema validation because the schema
+    # forbids the extra keys.
+    if message is not None and job_advertisement_digest(
+        str(message.get("subject") or ""), str(message.get("body") or ""),
+        str(message.get("sender_email") or ""), attachments,
+    ):
+        value["downgraded_from"] = str(value.get("status") or "")
+        value["downgrade_reason"] = "JOB_ADVERTISEMENT_DIGEST"
+        value["is_selection_or_offer_related"] = False
+        value["should_create_review_record"] = False
+        value["requires_manual_review"] = False
+        value["ignore_reason"] = "JOB_RECOMMENDATION"
+        value["reason"] = "Job advertisement listing; no outcome for this candidate."
     confidence = float(value["confidence"])
     interview_statuses = {"INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED"}
     proposed_status = str(value.get("status") or "").upper()
