@@ -71,8 +71,48 @@ isolated, and no broken references or duplicate source ids remain.
 - `web_push_subscriptions.json` is `AMBIGUOUS`: it serves both dashboards and
   needs a product decision before cutover rather than a silent guess.
 
-## Not yet rehearsed
+## Fuller rehearsal across the real schema
 
-The synthetic source exercised one PostgreSQL table. A full-scale rehearsal
-against a sanitized copy of the real 35-table monolith schema, with realistic
-row volumes, is still required before cutover.
+A second, substantially larger rehearsal ran against the **actual 39-table
+Operations schema** built by the real migration chain, seeded with synthetic
+rows through an introspecting seeder that honours nullability, check
+constraints and foreign keys: **255 rows across 38 of 39 tables**, with real
+parent/child relationships rather than isolated rows.
+
+| Gate | Result |
+|---|---|
+| Source seeded | 255 rows, 38/39 tables |
+| Execute, first run | marketing 4, operations 91 units |
+| Execute, second run | 0 and 0 |
+| Reconciliation | **PASS** |
+| Ownership isolation | PASS — Marketing has no `candidates_store` |
+| Destination rows | 362 across 37/40 Operations tables |
+| **Foreign keys validated in destination** | **32 of 32, zero violations** |
+| Telegram sessions reaching a destination | 0 (2 source decoys correctly refused) |
+
+### Defect this rehearsal exposed
+
+The first fuller run failed on `interview_mail_analyses` with a foreign key
+violation against `mailbox_messages`. The registry listed tables alphabetically,
+which is not a valid insertion order, and the small single-table rehearsal could
+never have revealed it.
+
+Insertion order is now derived from the live schema by topologically sorting the
+owned tables on their foreign keys, so a newly added constraint cannot silently
+reintroduce the problem. Every foreign key in the destination is now explicitly
+`VALIDATE CONSTRAINT`-checked after the run.
+
+### Web push ownership, resolved
+
+`web_push_subscriptions.json` is **Marketing-owned**, no longer ambiguous.
+Marketing holds the entire implementation (`core/web_push_api.py`, the VAPID key
+endpoint and both subscribe routes); Operations has no push implementation and
+no subscription UI, and already reaches users through Marketing's
+`POST /internal/v1/notifications` contract (`services/messaging_client.py`).
+Subscriptions are therefore assigned to one owner with an explicit cross-project
+notification API, rather than duplicated or split.
+
+## Still not rehearsed
+
+Realistic production row volumes, and the real distribution of legacy or
+malformed records. Row counts here are representative, not full scale.

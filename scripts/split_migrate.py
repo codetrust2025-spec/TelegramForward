@@ -91,9 +91,15 @@ JSON_STORES: tuple[JsonStore, ...] = (
               "Telegram group master list"),
     JsonStore("accounts_config.json", MARKETING, None, None, None,
               "messaging account configuration"),
-    JsonStore("web_push_subscriptions.json", AMBIGUOUS, "subscriptions", None, None,
-              "browser push endpoints serve both dashboards; owner needs a product "
-              "decision before cutover"),
+    # Ownership resolved 2026-08-15. Marketing owns web push outright: it holds
+    # the whole implementation (core/web_push_api.py, the VAPID key endpoint and
+    # both subscribe routes), while Operations has no push implementation and no
+    # subscription UI. Operations already reaches users through Marketing's
+    # POST /internal/v1/notifications contract (services/messaging_client.py),
+    # so subscriptions are not duplicated and no split of this file is needed.
+    JsonStore("web_push_subscriptions.json", MARKETING, "subscriptions", None, None,
+              "browser push endpoints; Operations notifies via the cross-project "
+              "notification contract rather than holding its own subscriptions"),
     JsonStore("postgres_backup_before_sync.json", EXCLUDED, None, None, None,
               "historical backup artefact, not live state"),
     JsonStore("vapid_keys.json", EXCLUDED, None, None, None,
@@ -356,6 +362,45 @@ def _ledger_put(cur, kind: str, sid: str, target: str, checksum: str) -> None:
     )
 
 
+def _fk_order(conn, tables: Iterable[str]) -> list[str]:
+    """Order tables so a foreign key is always inserted after its parent.
+
+    The declared registry order is alphabetical, which is not a valid insertion
+    order: interview_mail_analyses references mailbox_messages, so copying in
+    registry order fails the foreign key. Ordering is derived from the live
+    schema rather than maintained by hand, so a new constraint cannot silently
+    reintroduce the problem.
+    """
+    wanted = list(tables)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT tc.table_name, ccu.table_name "
+            "FROM information_schema.table_constraints tc "
+            "JOIN information_schema.constraint_column_usage ccu "
+            "  ON tc.constraint_name = ccu.constraint_name "
+            "WHERE tc.constraint_type='FOREIGN KEY' AND tc.table_schema='public'"
+        )
+        deps: dict[str, set[str]] = {t: set() for t in wanted}
+        for child, parent in cur.fetchall():
+            if child in deps and parent in deps and child != parent:
+                deps[child].add(parent)
+
+    ordered: list[str] = []
+    done: set[str] = set()
+
+    def visit(t: str, stack: tuple[str, ...] = ()) -> None:
+        if t in done or t in stack:      # cycles fall back to registry order
+            return
+        for parent in sorted(deps.get(t, ())):
+            visit(parent, stack + (t,))
+        done.add(t)
+        ordered.append(t)
+
+    for t in wanted:
+        visit(t)
+    return ordered
+
+
 def _copy_table(src_conn, dst_conn, table: str) -> tuple[int, str]:
     """Copy one table across on the intersection of both column sets.
 
@@ -406,7 +451,8 @@ def execute(data_dir: Path, targets: dict[str, dict[str, str]], plan: Plan,
         psycopg2.extras.register_default_jsonb(conn_or_curs=src, loads=lambda s: s)
         try:
             for owner, cfg in targets.items():
-                tables = OPERATIONS_TABLES if owner == OPERATIONS else MARKETING_TABLES
+                declared = OPERATIONS_TABLES if owner == OPERATIONS else MARKETING_TABLES
+                tables = _fk_order(src, declared)
                 with _connect(cfg["dsn"]) as dst:
                     with dst.cursor() as cur:
                         cur.execute(LEDGER_DDL)
