@@ -112,7 +112,45 @@ no subscription UI, and already reaches users through Marketing's
 Subscriptions are therefore assigned to one owner with an explicit cross-project
 notification API, rather than duplicated or split.
 
+## Production-scale execution
+
+The copy path was rewritten for volume and re-verified against the same real
+39-table schema seeded to **1,547 rows across 38 of 39 tables**.
+
+| Property | Before | Now |
+|---|---|---|
+| Read | `fetchall()` — whole table into memory | keyset pagination on the primary key, or a server-side cursor when the key is composite |
+| Insert | one round trip per row | `execute_values` in batches of 5,000 |
+| Resume | table restarts from row 0 | resumes after the last committed key |
+| Progress | silent | per-table counts, and every 50,000 rows within a table |
+
+A checkpoint is written **inside the same transaction as its batch**, so a
+recorded key can never be ahead of committed rows; an interruption loses at most
+one batch. Checkpoints live in the ledger under `source_kind='pg_checkpoint'`
+and are cleared when their table completes. Reconciliation excludes them, since
+they are bookkeeping rather than migrated units.
+
+### Verified
+
+| Gate | Result |
+|---|---|
+| Execute | marketing 4, operations 91 units; 1,518 destination rows across 37 tables |
+| Second run | 0 and 0 |
+| Reconciliation | **PASS** |
+| Foreign keys validated in destination | **32 of 32, zero violations** |
+| Stale checkpoints after success | 0 |
+
+### Resume, proven rather than asserted
+
+`recruitment_audit_log` was emptied in the destination, its completion marker
+removed, and a checkpoint planted at the midpoint key. The next run reported
+`resuming after key synthetic-recruitment_audit_log-id-27` and copied **20 rows,
+not 40** — it resumed instead of restarting — then cleared the checkpoint.
+
 ## Still not rehearsed
 
-Realistic production row volumes, and the real distribution of legacy or
-malformed records. Row counts here are representative, not full scale.
+True production row counts, and the real distribution of legacy or malformed
+records. The mechanics are now volume-appropriate, but the largest table
+rehearsed here is thousands of rows, not millions. A sanitized export of
+production-shaped data remains a pre-cutover gate, and no such export mechanism
+exists in the repository today.

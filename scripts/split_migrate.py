@@ -48,6 +48,14 @@ PRODUCTION_MARKERS = (
     "production",
 )
 
+# Rows read and inserted per round trip. Large enough that a production table
+# is not one round trip per row, small enough that a batch stays in memory and
+# an interruption loses little work.
+COPY_BATCH_ROWS = 5000
+
+# How often progress is reported for a long table.
+PROGRESS_EVERY_ROWS = 50_000
+
 LEDGER_DDL = """
 CREATE TABLE IF NOT EXISTS split_migration_ledger (
     source_kind TEXT NOT NULL,
@@ -362,6 +370,49 @@ def _ledger_put(cur, kind: str, sid: str, target: str, checksum: str) -> None:
     )
 
 
+# Resume checkpoints live in the ledger under their own source_kind, so a table
+# interrupted part-way records the last key it committed. The completed-table
+# marker stays "pg_table"; a checkpoint is cleared once its table finishes.
+_CHECKPOINT_KIND = "pg_checkpoint"
+
+
+def _checkpoint_get(cur, table: str) -> str | None:
+    cur.execute(
+        "SELECT checksum FROM split_migration_ledger WHERE source_kind=%s AND source_id=%s",
+        (_CHECKPOINT_KIND, table),
+    )
+    row = cur.fetchone()
+    return row[0] if row and row[0] else None
+
+
+def _checkpoint_put(cur, table: str, target: str, last_key: str) -> None:
+    cur.execute(
+        "INSERT INTO split_migration_ledger (source_kind, source_id, target, checksum) "
+        "VALUES (%s,%s,%s,%s) "
+        "ON CONFLICT (source_kind, source_id) DO UPDATE SET checksum = EXCLUDED.checksum",
+        (_CHECKPOINT_KIND, table, target, last_key),
+    )
+
+
+def _checkpoint_clear(cur, table: str) -> None:
+    cur.execute(
+        "DELETE FROM split_migration_ledger WHERE source_kind=%s AND source_id=%s",
+        (_CHECKPOINT_KIND, table),
+    )
+
+
+def _progress_reporter(dst_conn, table: str, owner: str):
+    """Report progress on long tables without spamming short ones."""
+    state = {"next": PROGRESS_EVERY_ROWS}
+
+    def report(_table: str, done: int) -> None:
+        if done >= state["next"]:
+            print(f"  {table}: {done:,} rows copied…", flush=True)
+            state["next"] += PROGRESS_EVERY_ROWS
+
+    return report
+
+
 def _fk_order(conn, tables: Iterable[str]) -> list[str]:
     """Order tables so a foreign key is always inserted after its parent.
 
@@ -401,13 +452,41 @@ def _fk_order(conn, tables: Iterable[str]) -> list[str]:
     return ordered
 
 
-def _copy_table(src_conn, dst_conn, table: str) -> tuple[int, str]:
+def _single_column_pk(conn, table: str) -> str | None:
+    """The primary key column, when it is a single column.
+
+    Keyset resumption needs one orderable column. Composite keys fall back to a
+    full re-stream, which stays correct because insertion is ON CONFLICT DO
+    NOTHING; it is only slower.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT a.attname FROM pg_index i "
+            "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) "
+            "WHERE i.indrelid = %s::regclass AND i.indisprimary",
+            (table,),
+        )
+        cols = [r[0] for r in cur.fetchall()]
+    return cols[0] if len(cols) == 1 else None
+
+
+def _copy_table(src_conn, dst_conn, table: str, *, batch: int = COPY_BATCH_ROWS,
+                resume_after: str | None = None, on_progress=None,
+                on_checkpoint=None) -> tuple[int, str, str | None]:
     """Copy one table across on the intersection of both column sets.
 
-    Returns (rows_seen, checksum). Insertion is ON CONFLICT DO NOTHING against
-    the primary key, so re-running never duplicates and a run interrupted
-    part-way through a table resumes cleanly.
+    Returns (rows_copied, checksum, last_key).
+
+    Rows are streamed and inserted in batches rather than materialised: a
+    production-sized table must not be pulled into memory by fetchall(), and one
+    round trip per row does not finish in a maintenance window. Where the table
+    has a single-column primary key the read is keyset-paginated, so an
+    interrupted run resumes from the last committed key instead of re-reading
+    from the start. Insertion is ON CONFLICT DO NOTHING throughout, so a resumed
+    or repeated run can never duplicate.
     """
+    from psycopg2.extras import execute_values
+
     with src_conn.cursor() as s, dst_conn.cursor() as d:
         s.execute(
             "SELECT column_name FROM information_schema.columns "
@@ -417,23 +496,76 @@ def _copy_table(src_conn, dst_conn, table: str) -> tuple[int, str]:
             "SELECT column_name FROM information_schema.columns "
             "WHERE table_schema='public' AND table_name=%s ORDER BY ordinal_position", (table,))
         dst_cols = {r[0] for r in d.fetchall()}
-        cols = [c for c in src_cols if c in dst_cols]
-        if not cols:
-            raise MigrationError(f"table {table}: source and destination share no columns")
+    cols = [c for c in src_cols if c in dst_cols]
+    if not cols:
+        raise MigrationError(f"table {table}: source and destination share no columns")
 
-        quoted = ", ".join(f'"{c}"' for c in cols)
-        s.execute(f'SELECT {quoted} FROM "{table}"')
-        rows = s.fetchall()
+    quoted = ", ".join(f'"{c}"' for c in cols)
+    insert = f'INSERT INTO "{table}" ({quoted}) VALUES %s ON CONFLICT DO NOTHING'
+    digest = hashlib.sha256()
+    total = 0
+    pk = _single_column_pk(src_conn, table)
+    last_key = resume_after
+
+    def flush(rows):
+        nonlocal total
         if not rows:
-            return 0, _sha256_bytes(b"")
+            return
+        with dst_conn.cursor() as d:
+            execute_values(d, insert, rows, page_size=len(rows))
+        total += len(rows)
+        if on_progress:
+            on_progress(table, total)
 
-        digest = hashlib.sha256()
-        placeholders = "(" + ", ".join(["%s"] * len(cols)) + ")"
-        sql = f'INSERT INTO "{table}" ({quoted}) VALUES {placeholders} ON CONFLICT DO NOTHING'
-        for row in rows:
-            digest.update(repr(row).encode())
-            d.execute(sql, row)
-        return len(rows), digest.hexdigest()
+    if pk:
+        key_index = cols.index(pk) if pk in cols else None
+        if key_index is None:
+            cols = cols + [pk]
+            quoted = ", ".join(f'"{c}"' for c in cols)
+            insert = f'INSERT INTO "{table}" ({quoted}) VALUES %s ON CONFLICT DO NOTHING'
+            key_index = len(cols) - 1
+        while True:
+            with src_conn.cursor() as s:
+                if last_key is None:
+                    s.execute(f'SELECT {quoted} FROM "{table}" ORDER BY "{pk}" LIMIT %s', (batch,))
+                else:
+                    s.execute(
+                        f'SELECT {quoted} FROM "{table}" WHERE "{pk}" > %s ORDER BY "{pk}" LIMIT %s',
+                        (last_key, batch))
+                rows = s.fetchall()
+            if not rows:
+                break
+            for row in rows:
+                digest.update(repr(row).encode())
+            flush(rows)
+            last_key = rows[-1][key_index]
+            # The checkpoint is written inside the same transaction as its batch
+            # and committed with it, so a recorded key can never be ahead of
+            # committed rows. An interruption loses at most one batch.
+            if on_checkpoint:
+                on_checkpoint(str(last_key))
+            dst_conn.commit()
+            if len(rows) < batch:
+                break
+    else:
+        # Server-side cursor: the result set stays on the server and arrives in
+        # itersize chunks instead of all at once.
+        name = f"split_migrate_{table}"
+        with src_conn.cursor(name=name) as s:
+            s.itersize = batch
+            s.execute(f'SELECT {quoted} FROM "{table}"')
+            buffer: list = []
+            for row in s:
+                digest.update(repr(row).encode())
+                buffer.append(row)
+                if len(buffer) >= batch:
+                    flush(buffer)
+                    dst_conn.commit()
+                    buffer = []
+            flush(buffer)
+            dst_conn.commit()
+
+    return total, digest.hexdigest(), (str(last_key) if last_key is not None else None)
 
 
 def execute(data_dir: Path, targets: dict[str, dict[str, str]], plan: Plan,
@@ -465,18 +597,36 @@ def execute(data_dir: Path, targets: dict[str, dict[str, str]], plan: Plan,
                         with dst.cursor() as cur:
                             if _ledger_has(cur, "pg_table", table):
                                 continue
+                            # A checkpoint from an interrupted run lets this
+                            # table resume after its last committed key instead
+                            # of re-reading from the start.
+                            resume_after = _checkpoint_get(cur, table)
+                        if resume_after:
+                            print(f"  {table}: resuming after key {resume_after}")
                         try:
-                            n, checksum = _copy_table(src, dst, table)
+                            def _checkpoint(key: str, _t=table, _o=owner, _d=dst) -> None:
+                                with _d.cursor() as c:
+                                    _checkpoint_put(c, _t, _o, key)
+
+                            n, checksum, last_key = _copy_table(
+                                src, dst, table,
+                                resume_after=resume_after,
+                                on_progress=_progress_reporter(dst, table, owner),
+                                on_checkpoint=_checkpoint,
+                            )
                         except Exception as exc:
                             dst.rollback()
                             raise MigrationError(
-                                f"table {table} failed to migrate: {exc}. The ledger and "
-                                f"already-migrated tables are left intact; re-run to resume."
+                                f"table {table} failed to migrate: {exc}. The ledger, the "
+                                f"resume checkpoint and already-migrated tables are left "
+                                f"intact; re-run to resume."
                             ) from exc
                         if n:
                             with dst.cursor() as cur:
                                 _ledger_put(cur, "pg_table", table, owner, checksum)
+                                _checkpoint_clear(cur, table)
                             written[owner] += 1
+                            print(f"  {table}: {n} rows")
                         dst.commit()
         finally:
             src.close()
@@ -561,11 +711,16 @@ def reconcile(data_dir: Path, targets: dict[str, dict[str, str]], plan: Plan) ->
         expected = plan.total_units(owner)
         with _connect(cfg["dsn"]) as conn, conn.cursor() as cur:
             cur.execute(LEDGER_DDL)
-            cur.execute("SELECT count(*) FROM split_migration_ledger WHERE target=%s", (owner,))
+            # Resume checkpoints share the ledger table but are bookkeeping, not
+            # migrated units, so they must not count toward the reconciliation.
+            cur.execute(
+                "SELECT count(*) FROM split_migration_ledger "
+                "WHERE target=%s AND source_kind <> %s", (owner, _CHECKPOINT_KIND))
             migrated = int(cur.fetchone()[0])
             cur.execute(
                 "SELECT count(*) FROM (SELECT source_kind, source_id FROM split_migration_ledger "
-                "WHERE target=%s GROUP BY 1,2 HAVING count(*) > 1) d", (owner,))
+                "WHERE target=%s AND source_kind <> %s GROUP BY 1,2 HAVING count(*) > 1) d",
+                (owner, _CHECKPOINT_KIND))
             dupes = int(cur.fetchone()[0])
 
         passed = migrated == expected and dupes == 0
