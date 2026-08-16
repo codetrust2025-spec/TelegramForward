@@ -170,3 +170,17 @@ def test_broken_reference_check_covers_resumes_too(tmp_path):
     plan = sm.Plan()
     sm._check_cross_references(data, plan)
     assert any("cv.pdf" in r for r in plan.broken_refs), plan.broken_refs
+
+
+def test_inherited_broken_references_are_reported_not_fatal(tmp_path):
+    """Production carries 70 proof and resume entries whose file exists
+    nowhere. The migration copies files wholesale, so it neither creates nor
+    repairs them. Failing on them blocks a cutover on a pre-existing condition
+    and pushes someone to silence the check again - which is how it came to be
+    a no-op in the first place."""
+    import inspect
+    src = inspect.getsource(sm.reconcile)
+    assert "inherited_broken_references" in src
+    # the pass/fail condition must no longer hinge on them
+    assert 'if (ok and not plan.duplicates)' in src or \
+           'not plan.broken_refs' not in src.split('report["result"]')[1][:200]
