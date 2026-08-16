@@ -520,3 +520,25 @@ def test_preserve_applies_to_jsonb_columns_too():
     scrubber = sz.Scrubber(b"salt")
     out = sz._scrub_json_text(json.dumps({"id": "0246769847"}), None, scrubber)
     assert json.loads(out)["id"] == "0246769847"
+
+
+def test_a_composite_id_does_not_smuggle_a_phone_through_the_safe_list():
+    """daily_briefings ids look like account7:9876543210 - an account name with
+    a real number built in. Preserving them as join keys put 2,816 real numbers
+    in the output while everything around them was being scrubbed."""
+    scrubber = sz.Scrubber(b"salt")
+    out = sz._walk_json({"id": "account7:9876543210"}, scrubber)
+    assert "9876543210" not in out["id"]
+    assert out["id"].startswith("account7:")
+
+
+def test_an_opaque_id_that_merely_looks_numeric_is_kept():
+    scrubber = sz.Scrubber(b"salt")
+    assert sz._walk_json({"id": "0246769847"}, scrubber)["id"] == "0246769847"
+    assert sz._walk_json({"id": "11bc8daf98"}, scrubber)["id"] == "11bc8daf98"
+
+
+def test_a_bare_mobile_number_under_an_id_key_is_still_scrubbed():
+    """At that point it is not an id that looks like a number, it is a number."""
+    scrubber = sz.Scrubber(b"salt")
+    assert sz._walk_json({"id": "9876543210"}, scrubber)["id"] != "9876543210"

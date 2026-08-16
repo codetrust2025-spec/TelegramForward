@@ -453,8 +453,10 @@ def _scrub_json_text(raw: Any, kind: str | None, scrub: "Scrubber") -> Any:
                 nk = (scrub.value("redact", k)
                       if isinstance(k, str) and looks_like_personal_data(k) else k)
                 field = _json_kind(k) if isinstance(k, str) else None
-                if field == PRESERVE:
+                if field == PRESERVE and _is_opaque_join_key(v):
                     out[nk] = v
+                elif field == PRESERVE and isinstance(v, str):
+                    out[nk] = scrub.value("redact", v)
                 elif field and not isinstance(v, (dict, list)):
                     out[nk] = scrub.value(field, v)
                 elif (_is_key_material(v)
@@ -705,6 +707,29 @@ def _scrub_number(value: int, scrub: Scrubber) -> int:
 PRESERVE = "__preserve__"
 
 
+def _is_opaque_join_key(value: Any) -> bool:
+    """Is this safe-listed value an identifier, or an identifier with someone's
+    data built into it?
+
+    Both exist under the same key names. A candidate id like 0246769847 is a
+    bare token that merely looks numeric, and it has to survive or the file and
+    the table stop joining. A daily_briefings id like account7:9876543210 is an
+    account name with a real phone number in it, and preserving it verbatim put
+    2,816 real numbers in the output while every value around them was scrubbed.
+
+    So: a bare token is kept, anything composite is redacted, and a bare token
+    that is itself mobile-shaped is redacted too, because at that point it is
+    not an id that looks like a number, it is a number.
+    """
+    if not isinstance(value, str):
+        return True
+    if not looks_like_personal_data(value):
+        return True
+    if not value.isdigit():
+        return False
+    return not (len(value) == 10 and value[0] in "6789")
+
+
 def _json_kind(key: str) -> str | None:
     """Kind for a JSON key, falling back to the column registry.
 
@@ -754,8 +779,10 @@ def _walk_json(node: Any, scrub: Scrubber) -> Any:
             if isinstance(key, str) and looks_like_personal_data(key):
                 new_key = scrub.value("redact", key)
             kind = _json_kind(key) if isinstance(key, str) else None
-            if kind == PRESERVE:
+            if kind == PRESERVE and _is_opaque_join_key(value):
                 out[new_key] = value
+            elif kind == PRESERVE and isinstance(value, str):
+                out[new_key] = scrub.value("redact", value)
             elif kind and not isinstance(value, (dict, list)):
                 out[new_key] = scrub.value(kind, value)
             elif (_is_key_material(value)
