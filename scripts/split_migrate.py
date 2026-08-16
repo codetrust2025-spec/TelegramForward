@@ -787,7 +787,8 @@ def _copy_table(src_conn, dst_conn, table: str, *, batch: int = COPY_BATCH_ROWS,
 
 
 def execute(data_dir: Path, targets: dict[str, dict[str, str]], plan: Plan,
-            source_dsn: str | None = None) -> dict[str, int]:
+            source_dsn: str | None = None,
+            resync_tables: bool = False) -> dict[str, int]:
     """Apply the plan. Idempotent: re-running migrates only what the ledger lacks."""
     written = {MARKETING: 0, OPERATIONS: 0}
 
@@ -813,7 +814,14 @@ def execute(data_dir: Path, targets: dict[str, dict[str, str]], plan: Plan,
                             if s.fetchone()[0] is None:
                                 continue
                         with dst.cursor() as cur:
-                            if _ledger_has(cur, "pg_table", table):
+                            # The ledger marks a finished table so a re-run does
+                            # not copy it again. In a phased cutover that is
+                            # exactly wrong: the second pass exists to collect
+                            # the rows written since the first, and skipping the
+                            # table silently leaves them behind. The copy is
+                            # ON CONFLICT DO NOTHING, so re-scanning only ever
+                            # inserts what is missing.
+                            if _ledger_has(cur, "pg_table", table) and not resync_tables:
                                 continue
                             # A checkpoint from an interrupted run lets this
                             # table resume after its last committed key instead
@@ -1074,6 +1082,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--report", type=Path, help="write the JSON report here")
     ap.add_argument("--confirm-non-production", action="store_true",
                     help="required for --execute; asserts targets are disposable")
+    ap.add_argument("--resync-tables", action="store_true",
+                    help="re-scan PostgreSQL tables a previous run already "
+                         "finished. Required for the second pass of a phased "
+                         "cutover, which exists to collect rows written since "
+                         "the first pass. Safe to repeat: inserts are ON "
+                         "CONFLICT DO NOTHING.")
     ap.add_argument("--authorized-production-cutover", metavar="REFERENCE",
                     help="run against PRODUCTION. Takes the operator authorisation "
                          "reference, which is recorded in the report. Mutually "
@@ -1133,7 +1147,8 @@ def main(argv: list[str] | None = None) -> int:
                     "or --authorized-production-cutover REFERENCE (a real cutover). "
                     "Refusing to write without one of them."
                 )
-            written = execute(args.data_dir, targets, plan, args.source_dsn)
+            written = execute(args.data_dir, targets, plan, args.source_dsn,
+                              resync_tables=args.resync_tables)
             print("\n=== EXECUTION ===")
             for owner, n in written.items():
                 print(f"  {owner}: {n} records written this run")

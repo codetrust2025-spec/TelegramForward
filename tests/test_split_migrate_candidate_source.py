@@ -291,3 +291,18 @@ def test_data_room_content_is_not_mistaken_for_a_system_secret():
     migrate. Excluding it on the name would silently drop Data Room content."""
     from pathlib import Path as P
     assert not sm._is_excluded_file(P("/data/data_room/credentials.json"))
+
+
+def test_a_second_pass_can_re_scan_finished_tables():
+    """The ledger marks a finished table so a re-run skips it. In a phased
+    cutover the second pass exists precisely to collect rows written since the
+    first, and skipping leaves them behind - six rows in each of the two
+    highest-churn tables, during the real cutover."""
+    import inspect
+    src = inspect.getsource(sm.execute)
+    assert 'resync_tables' in src
+    assert '_ledger_has(cur, "pg_table", table) and not resync_tables' in src
+    assert "resync_tables" in inspect.signature(sm.execute).parameters
+    main = inspect.getsource(sm.main)
+    assert "--resync-tables" in main
+    assert "resync_tables=args.resync_tables" in main
