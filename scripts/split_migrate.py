@@ -157,6 +157,23 @@ FILE_TREES: tuple[tuple[str, str, str], ...] = (
     ("data/payment_evidence", OPERATIONS, "payment proof images and metadata"),
     ("data/data_room", OPERATIONS, "Data Room documents"),
     ("data/accounts", MARKETING, "per-account messaging state"),
+    # Found by the rehearsal. payment_evidence holds 6 files; the evidence the
+    # product actually writes lives in these, 275 files of it. Migrating
+    # payment_evidence alone and calling it done would have left every
+    # candidate proof and resume behind.
+    ("data/candidates_proofs", OPERATIONS,
+     "payment proof images, one directory per candidate"),
+    ("data/candidates_resumes", OPERATIONS,
+     "candidate resumes, one directory per candidate"),
+    ("data/handler_expense_proofs", OPERATIONS, "handler expense evidence"),
+    ("data/pending_slot_payments", OPERATIONS, "slot payment screenshots"),
+    ("data/crm", MARKETING, "CRM stores: leads, calls, block list, voice calls"),
+    # Present and deliberately not migrated. Named rather than ignored, so they
+    # appear in the plan as a decision rather than as an oversight.
+    ("data/demo_tools", EXCLUDED,
+     "third-party installer binaries, 474 MB, not business data"),
+    ("data/migration_backups", EXCLUDED, "historical backup artefacts"),
+    ("data/backups", EXCLUDED, "historical backup artefacts"),
 )
 
 EXCLUDED_GLOBS: tuple[tuple[str, str], ...] = (
@@ -291,7 +308,9 @@ def build_plan(data_dir: Path, source_dsn: str | None) -> Plan:
         plan.items.append(item)
 
     for pattern, why in EXCLUDED_GLOBS:
-        hits = list(data_dir.parent.glob(pattern)) + list(data_dir.glob(pattern))
+        # Recursive: the session files are inside data/accounts/<name>/, not at
+        # the top level, so a non-recursive glob reported zero of them.
+        hits = list(data_dir.parent.rglob(pattern)) + list(data_dir.rglob(pattern))
         if hits:
             plan.items.append(Item("excluded", pattern, EXCLUDED, len(hits), note=why))
 
@@ -372,6 +391,11 @@ def _check_store_divergence(data_dir: Path, dsn: str | None, plan: Plan) -> None
 # JSON stores the monolith also keeps as a table. Kept explicit rather than
 # guessed, because being wrong here means migrating the stale copy.
 _MIRRORED_TABLES = {"candidates.json": "candidates_store"}
+
+
+def _is_excluded_file(path: Path) -> bool:
+    """Session and credential files are never copied, wherever they sit."""
+    return any(path.match(pattern) for pattern, _ in EXCLUDED_GLOBS)
 
 
 def _connect(dsn: str):
@@ -751,6 +775,13 @@ def execute(data_dir: Path, targets: dict[str, dict[str, str]], plan: Plan,
                 if not root.is_dir():
                     continue
                 for src in sorted(p for p in root.rglob("*") if p.is_file()):
+                    # Enforced here, not only reported in the plan. Production
+                    # keeps six .session files inside data/accounts, which is a
+                    # migrated tree, so without this the run copies live
+                    # Telegram session secrets into the destination - the exact
+                    # thing this module's docstring promises never happens.
+                    if _is_excluded_file(src):
+                        continue
                     relpath = src.relative_to(root).as_posix()
                     kind = f"tree:{rel}"
                     with conn.cursor() as cur:

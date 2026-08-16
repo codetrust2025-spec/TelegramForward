@@ -237,19 +237,25 @@ UNDECLARED_REFERENCES = [
     ("mail_outcome_audit_finding_history", "finding_id", "mail_outcome_audit_findings", "id"),
 ]
 
+# Keys that must be unique. provider_message_id is deliberately NOT here: the
+# rehearsal measured 1,066 repeats across 15,018 rows in the SOURCE and exactly
+# 1,066 in the destination, so the same provider message legitimately appears
+# more than once and the migration reproduced it faithfully. Asserting
+# uniqueness there tests an assumption about the data rather than the migration.
 NATURAL_KEYS = [
-    ("mailbox_messages", ["provider_message_id"]),
     ("mail_outcome_audit_findings", ["id"]),
     ("candidates_store", ["id"]),
     ("mail_ai_analyses", ["id"]),
-    ("gmail_message_ingestion_queue", ["provider_message_id"]),
     ("candidate_mailboxes", ["candidate_id", "email_address"]),
-    ("mailbox_attachments", ["mailbox_message_id", "filename"]),
     ("recruitment_audit_log", ["id"]),
 ]
 
+# mailbox_attachments.filename is deliberately absent. All 3,486 rows carry an
+# extracted_text_reference and none of the 537 distinct filenames exist on disk
+# anywhere in production: the monolith parsed these attachments and kept the
+# text, never the bytes. They are extraction records, not file references, and
+# checking them reports 3,486 missing files that were never there.
 FILE_REFERENCE_COLUMNS = [
-    ("mailbox_attachments", "filename"),
     ("candidates_store", "latest_resume"),
     ("payment_evidence", "filename"),
     ("payment_evidence", "original_name"),

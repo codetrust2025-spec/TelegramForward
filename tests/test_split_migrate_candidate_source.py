@@ -53,3 +53,41 @@ def test_no_mirrored_store_also_targets_its_table():
     for store in sm.JSON_STORES:
         if store.filename in sm._MIRRORED_TABLES:
             assert store.target_table is None, store.filename
+
+
+def test_the_trees_that_actually_hold_the_evidence_are_migrated():
+    """payment_evidence holds 6 files. The evidence the product writes lives in
+    candidates_proofs (211), candidates_resumes (37), handler_expense_proofs
+    (16) and pending_slot_payments (11). Migrating payment_evidence alone and
+    calling it done leaves 275 files behind."""
+    declared = {rel: owner for rel, owner, _ in sm.FILE_TREES}
+    for tree in ("data/candidates_proofs", "data/candidates_resumes",
+                 "data/handler_expense_proofs", "data/pending_slot_payments"):
+        assert declared.get(tree) == sm.OPERATIONS, tree
+    assert declared.get("data/crm") == sm.MARKETING
+
+
+def test_trees_left_behind_are_named_rather_than_forgotten():
+    """A tree nobody listed looks the same as a tree somebody decided against."""
+    declared = {rel: owner for rel, owner, _ in sm.FILE_TREES}
+    for tree in ("data/demo_tools", "data/migration_backups", "data/backups"):
+        assert declared.get(tree) == sm.EXCLUDED, tree
+
+
+def test_session_files_are_excluded_wherever_they_sit(tmp_path):
+    """Production keeps six .session files inside data/accounts, which is a
+    migrated tree. The exclusion list was only ever consulted when printing the
+    plan, so the copy would have carried live Telegram secrets across."""
+    account = tmp_path / "accounts" / "acct1"
+    account.mkdir(parents=True)
+    (account / "acct1.session").write_bytes(b"live secret")
+    (account / "acct1.session-journal").write_bytes(b"live secret")
+    (account / "state.json").write_bytes(b"{}")
+
+    assert sm._is_excluded_file(account / "acct1.session")
+    assert sm._is_excluded_file(account / "acct1.session-journal")
+    assert not sm._is_excluded_file(account / "state.json")
+
+
+def test_env_files_are_excluded():
+    assert sm._is_excluded_file(Path("/anywhere/data/accounts/x/.env"))
