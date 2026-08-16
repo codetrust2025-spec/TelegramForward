@@ -67,30 +67,49 @@ def test_unclassified_sensitive_column_is_reported():
     """The fail-closed check itself: a new sensitive-looking text column that
     nobody classified must be reported, not passed through."""
 
+    columns = [
+        ("new_table", "candidate_home_address", "text"),  # name looks sensitive
+        ("new_table", "status", "text"),                  # safe-listed
+        ("new_table", "phone_e164", "text"),              # scrubbed
+        ("new_table", "row_count", "integer"),            # not textual
+        ("new_table", "dispatch_v2", "text"),        # innocuous name, real data
+        ("new_table", "queue_label", "text"),             # innocuous name, clean
+    ]
+    # What each unrecognised column would return when sampled.
+    samples = {
+        "dispatch_v2": [("forwarded to recruiter@acme-hiring.com",)],
+        "queue_label": [("batch-7 evening",)],
+    }
+
     class _Cur:
+        def __init__(self):
+            self._rows = columns
+
         def __enter__(self):
             return self
 
         def __exit__(self, *exc):
             return False
 
-        def execute(self, _sql):
-            pass
+        def execute(self, sql, params=None):
+            if "information_schema" in sql:
+                self._rows = columns
+            else:
+                column = sql.split('"')[1]
+                self._rows = samples.get(column, [])
 
         def fetchall(self):
-            return [
-                ("new_table", "candidate_home_address", "text"),
-                ("new_table", "status", "text"),           # safe-listed
-                ("new_table", "phone_e164", "text"),       # now scrubbed
-                ("new_table", "row_count", "integer"),     # not textual
-            ]
+            return self._rows
 
     class _Conn:
         def cursor(self):
             return _Cur()
 
     unclassified = sz._assert_all_text_classified(_Conn())
-    assert unclassified == ["new_table.candidate_home_address"]
+    assert unclassified == [
+        "new_table.candidate_home_address (name looks sensitive)",
+        "new_table.dispatch_v2 (personal data in 1/1 sampled rows)",
+    ]
 
 
 def test_scrubbing_is_deterministic_and_irreversible():
@@ -126,6 +145,112 @@ def test_phone_scrub_keeps_length_and_validator_compatibility():
     out = scrubber.value("phone", "9876543210")
     assert out != "9876543210"
     assert len(out) == 10 and out.isdigit() and out.startswith("9")
+
+
+def test_content_check_catches_an_innocuous_name_holding_real_data():
+    """The reason the name test is not enough. `received_spf` looks like a
+    protocol field and holds the real sender's address."""
+    spf = "pass (google.com: domain of recruiter@acme-hiring.com designates ...)"
+    assert sz.looks_like_personal_data(spf)
+
+    msgid = "<CAF7x9y=abc@mail.acme-hiring.com>"
+    assert sz.looks_like_personal_data(msgid)
+
+    lead_key = "telegram:9876543210"
+    assert sz.looks_like_personal_data(lead_key)
+
+
+def test_content_check_does_not_fire_on_opaque_identifiers():
+    """A 32-character hex id contains a 10-digit run almost always. Treating
+    that as a phone number would make the check useless through noise."""
+    for opaque in (
+        "18f3a4b26123456789cdef0123456789",
+        "199a7c1234567890",
+        "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    ):
+        assert not sz.looks_like_personal_data(opaque), opaque
+
+
+def test_content_check_does_not_fire_on_our_own_output():
+    scrubber = sz.Scrubber(b"salt")
+    for kind, sample in (("email", "someone@real.com"),
+                         ("person_name", "Real Person"),
+                         ("free_text", "a real narrative about a real person"),
+                         ("ip", "203.0.113.9")):
+        assert not sz.looks_like_personal_data(str(scrubber.value(kind, sample)))
+
+
+def test_redact_keeps_structure_and_removes_the_personal_parts():
+    """redact exists for text something else parses. The surrounding structure
+    has to survive or the format-dependent code path stops being exercised."""
+    scrubber = sz.Scrubber(b"salt")
+    spf = "pass (google.com: domain of recruiter@acme-hiring.com designates 10.1.2.3)"
+    out = scrubber.value("redact", spf)
+
+    assert "recruiter@acme-hiring.com" not in out
+    assert out.startswith("pass (google.com: domain of ")
+    assert out.endswith("designates 10.1.2.3)")
+    assert "@sanitized.invalid" in out
+    assert sz.output_leak_label(out) is None
+
+
+def test_redact_is_deterministic_so_joins_still_work():
+    """A redacted message id has to keep joining to the same message id
+    wherever else it appears, or the migration's dedupe stops being tested."""
+    scrubber = sz.Scrubber(b"salt")
+    msgid = "<CAF7x9y=abc@mail.acme-hiring.com>"
+    assert scrubber.value("redact", msgid) == scrubber.value("redact", msgid)
+    # and a different original must not collide with it
+    other = "<CAF7x9y=xyz@mail.acme-hiring.com>"
+    assert scrubber.value("redact", msgid) != scrubber.value("redact", other)
+
+
+def test_redact_replaces_embedded_numbers_with_non_phone_shaped_ones():
+    scrubber = sz.Scrubber(b"salt")
+    out = scrubber.value("redact", "telegram:9876543210")
+    assert out.startswith("telegram:")
+    assert "9876543210" not in out
+    assert sz.output_leak_label(out) is None
+
+
+def test_the_two_detectors_are_not_interchangeable():
+    """A real Indian mobile usually starts with 9, and so does every number the
+    sanitiser emits. The source check must catch the first; the output check
+    must not report the second. Collapsing them breaks one or the other."""
+    real_nine = "call me on 9876543210"
+    assert sz.looks_like_personal_data(real_nine)      # source: catch it
+    assert sz.output_leak_label(real_nine) is None     # output: 9 means sanitised
+
+    real_eight = "call me on 8876543210"
+    assert sz.looks_like_personal_data(real_eight)
+    assert sz.output_leak_label(real_eight) == "10-digit phone not starting 9"
+
+
+def test_domain_kind_does_not_resolve_anywhere_real():
+    scrubber = sz.Scrubber(b"salt")
+    out = scrubber.value("domain", "acme-hiring.com")
+    assert "acme-hiring" not in out
+    assert out.endswith(".invalid")
+
+
+def test_columns_the_verifier_caught_are_now_classified():
+    """The second production-shaped run's findings, pinned the same way as the
+    first run's."""
+    expected = {
+        "received_spf": "redact",
+        "authentication_results": "redact",
+        "rfc_message_id": "redact",
+        "calendar_uid": "redact",
+        "error_message": "redact",
+        "quoted_evidence": "redact",
+        "lead_key": "redact",
+        "application_key": "redact",
+        "job_title": "redact",
+        "job_role": "redact",
+        "company_domain": "domain",
+    }
+    for column, kind in expected.items():
+        assert sz.SCRUB.get(column) == kind, f"{column} must be scrubbed as {kind}"
 
 
 def test_sensitive_looking_safe_columns_are_identifiers_or_enums():

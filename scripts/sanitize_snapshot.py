@@ -100,6 +100,17 @@ _register("free_text", [
     # real conversations with real people.
     "text", "message", "body", "caption", "last_message",
 ])
+_register("domain", ["company_domain", "sender_domain", "email_domain"])
+# Text that must keep its structure because something parses it, but which can
+# carry a real address or number inside. The value is preserved and only the
+# personal parts inside it are replaced. Found by the first production-shaped
+# run: SPF and authentication-results headers, RFC message ids and calendar
+# uids all embed real addresses, and none of their column names look sensitive.
+_register("redact", [
+    "received_spf", "authentication_results", "rfc_message_id", "calendar_uid",
+    "error_message", "quoted_evidence", "lead_key", "application_key",
+    "job_title", "job_role", "headers", "raw_headers", "snippet_text",
+])
 _register("filename", ["filename", "original_name", "latest_resume"])
 _register("credential", ["credential_ciphertext", "access_token", "refresh_token"])
 _register("ip", ["source_ip", "client_ip"])
@@ -140,6 +151,64 @@ LOOKS_SENSITIVE = re.compile(
 )
 
 TEXTUAL = {"text", "character varying", "character", "citext"}
+
+# Personal data as it appears INSIDE a value. The digit rule deliberately
+# refuses to match when the run is part of a longer alphanumeric token, because
+# a 32-character hex id contains a 10-digit run roughly always and is not a
+# phone number.
+EMAIL_IN_TEXT = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+UPI_IN_TEXT = re.compile(r"[A-Za-z0-9._-]+@(?:ok[a-z]+|paytm|ybl|upi|axl|ibl|apl)\b")
+DIGITS_IN_TEXT = re.compile(r"(?<![0-9A-Za-z])\d{7,}(?![0-9A-Za-z])")
+
+# Our own output. The verifier must not report the sanitiser's replacements as
+# leaks: a hex email local-part is all digits about one time in a hundred, and
+# that is not a phone number.
+SCRUBBER_OUTPUT = re.compile(
+    r"^[0-9a-f]{10}@sanitized\.invalid$|^[0-9a-f]{8}@sanitizedbank$|"
+    r"^SANITIZED-NOT-A-CREDENTIAL-[0-9a-f]+$|^sanitized-[0-9a-f]{8,10}[.]|"
+    r"^sanitized narrative |^198\.51\.100\.\d+$")
+
+
+def looks_like_personal_data(text: str) -> bool:
+    """Does this INPUT value contain personal data, whatever its column is
+    called? Used to classify the source before anything is copied.
+
+    Deliberately stricter than the output check below, and the two are not
+    interchangeable. Here a ten-digit run is suspicious whatever it starts with,
+    because a real Indian mobile very often starts with 9. On the output side a
+    9 is the marker of an already-sanitised number, so the same rule there would
+    report every replacement as a leak.
+    """
+    if SCRUBBER_OUTPUT.match(text):
+        return False
+    return bool(EMAIL_IN_TEXT.search(text) or UPI_IN_TEXT.search(text)
+                or DIGITS_IN_TEXT.search(text))
+
+
+# Output side. A value is a leak only if it still carries something the
+# sanitiser would never emit.
+OUTPUT_LEAK_PATTERNS = {
+    "email that is not sanitized.invalid":
+        re.compile(r"[A-Za-z0-9._%+-]+@(?!sanitized\.invalid|sanitizedbank)"
+                   r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
+    # The boundaries are alphanumeric, not just digits. Without that this fires
+    # inside every 32-character hex message id, because a long hex string
+    # contains a 10-digit run almost always. Sanitised numbers start with 9, so
+    # a run starting 6-8 is one the sanitiser did not produce.
+    "10-digit phone not starting 9":
+        re.compile(r"(?<![0-9A-Za-z])[6-8]\d{9}(?![0-9A-Za-z])"),
+}
+
+
+def output_leak_label(text: str) -> str | None:
+    """Name the reason this OUTPUT value still looks real, or None if clean."""
+    if SCRUBBER_OUTPUT.match(text):
+        return None
+    for label, rx in OUTPUT_LEAK_PATTERNS.items():
+        if rx.search(text):
+            return label
+    return None
+
 
 FIRST = ["Aarav", "Diya", "Vihaan", "Ananya", "Advait", "Ishita", "Kabir",
          "Meera", "Rohan", "Saanvi", "Arjun", "Nitya", "Dhruv", "Priya"]
@@ -213,6 +282,17 @@ class Scrubber:
             return f"SANITIZED-NOT-A-CREDENTIAL-{d.hex()[:12]}"
         if kind == "rehash":
             return hashlib.sha256(d).hexdigest()[:len(text)] if text else text
+        if kind == "domain":
+            return f"sanitized-{d.hex()[:8]}.invalid"
+        if kind == "redact":
+            # Keep the value; replace only the personal parts inside it, so
+            # anything that parses this text still parses it. Replacements go
+            # through the ordinary scrubbers, so they stay deterministic and a
+            # redacted number still joins to the same number elsewhere.
+            out = UPI_IN_TEXT.sub(lambda m: self.value("upi", m.group(0)), text)
+            out = EMAIL_IN_TEXT.sub(lambda m: self.value("email", m.group(0)), out)
+            out = DIGITS_IN_TEXT.sub(lambda m: self.value("phone", m.group(0)), out)
+            return out
         if kind == "filename":
             stem, ext = os.path.splitext(text)
             return f"sanitized-{d.hex()[:10]}{ext or '.bin'}"
@@ -276,18 +356,38 @@ def _scrub_json_text(raw: Any, kind: str, scrub: "Scrubber") -> Any:
     return json.dumps(walk(doc))
 
 
-def _assert_all_text_classified(conn) -> list[str]:
-    """Fail closed on any sensitive-looking text column nobody has classified."""
+def _assert_all_text_classified(conn, sample_rows: int = 400) -> list[str]:
+    """Fail closed on any text column nobody has classified that either looks
+    sensitive by name or turns out to hold personal data.
+
+    The name test alone is not enough, and the first production-shaped run
+    proved it: `received_spf`, `authentication_results`, `rfc_message_id` and
+    `lead_key` are innocuous names holding real addresses and real account ids.
+    So each unrecognised column is also asked what it actually contains.
+    """
     with conn.cursor() as cur:
         cur.execute(
             "SELECT table_name, column_name, data_type FROM information_schema.columns "
             "WHERE table_schema='public' ORDER BY table_name, ordinal_position")
         rows = cur.fetchall()
-    unclassified = [
-        f"{t}.{c}" for t, c, dt in rows
-        if dt in TEXTUAL and c not in SCRUB and c not in SAFE_TEXT_COLUMNS
-        and LOOKS_SENSITIVE.search(c)
-    ]
+
+    unclassified: list[str] = []
+    for table, col, dtype in rows:
+        if dtype not in TEXTUAL or col in SCRUB or col in SAFE_TEXT_COLUMNS:
+            continue
+        if LOOKS_SENSITIVE.search(col):
+            unclassified.append(f"{table}.{col} (name looks sensitive)")
+            continue
+        with conn.cursor() as cur:
+            cur.execute(
+                f'SELECT "{col}" FROM "{table}" '
+                f'WHERE "{col}" IS NOT NULL AND "{col}" <> %s LIMIT %s',
+                ("", sample_rows))
+            sampled = [str(r[0]) for r in cur.fetchall()]
+        hits = sum(1 for v in sampled if looks_like_personal_data(v))
+        if hits:
+            unclassified.append(
+                f"{table}.{col} (personal data in {hits}/{len(sampled)} sampled rows)")
     return unclassified
 
 
@@ -451,13 +551,6 @@ def sanitize_files(src_dir: Path, dst_dir: Path, scrub: Scrubber) -> dict[str, i
 def verify(dst_dsn: str, dst_dir: Path | None) -> list[str]:
     """Re-scan the OUTPUT for anything that still looks like real data."""
     problems: list[str] = []
-    patterns = {
-        "email that is not sanitized.invalid":
-            re.compile(r"[A-Za-z0-9._%+-]+@(?!sanitized\.invalid|sanitizedbank)"
-                       r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
-        "10-digit phone not starting 9":
-            re.compile(r"(?<!\d)[6-8]\d{9}(?!\d)"),
-    }
     conn = _connect(dst_dsn)
     try:
         with conn.cursor() as cur:
@@ -477,20 +570,17 @@ def verify(dst_dsn: str, dst_dir: Path | None) -> list[str]:
                     continue
                 cur.execute(f'SELECT "{col}" FROM "{table}" WHERE "{col}" IS NOT NULL LIMIT 2000')
                 for (val,) in cur.fetchall():
-                    text = str(val)
-                    for label, rx in patterns.items():
-                        if rx.search(text):
-                            problems.append(f"{table}.{col}: {label}")
-                            break
+                    label = output_leak_label(str(val))
+                    if label:
+                        problems.append(f"{table}.{col}: {label}")
+                        break
     finally:
         conn.close()
     if dst_dir and dst_dir.exists():
         for p in dst_dir.rglob("*.json"):
-            text = p.read_text(encoding="utf-8", errors="replace")
-            for label, rx in patterns.items():
-                if rx.search(text):
-                    problems.append(f"{p.name}: {label}")
-                    break
+            label = output_leak_label(p.read_text(encoding="utf-8", errors="replace"))
+            if label:
+                problems.append(f"{p.name}: {label}")
     return sorted(set(problems))
 
 
