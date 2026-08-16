@@ -10,6 +10,7 @@ caught, and nothing should be able to quietly reclassify them as safe.
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 from pathlib import Path
 
@@ -363,3 +364,58 @@ def test_json_leaves_non_personal_data_alone():
     scrubber = sz.Scrubber(b"salt")
     doc = {"status": "active", "count": 7, "enabled": True, "when": "2026-08-15"}
     assert sz._walk_json(doc, scrubber) == doc
+
+
+def test_json_numbers_that_identify_a_person_are_replaced():
+    """Telegram chat ids and phone numbers are plain JSON integers. The walker
+    stepped over every non-string, leaving 1,306 real chat ids in the output."""
+    scrubber = sz.Scrubber(b"salt")
+    out = sz._walk_json({"chat_id": 9803205077, "from_id": -1001234567890}, scrubber)
+
+    assert out["chat_id"] != 9803205077
+    assert len(str(out["chat_id"])) == len("9803205077")
+    # Telegram group ids are negative and the sign is load-bearing
+    assert out["from_id"] < 0
+    assert len(str(abs(out["from_id"]))) == len("1001234567890")
+
+
+def test_timestamps_are_not_mistaken_for_identities():
+    """Epoch seconds and millisecond timestamps sit in the same digit range as
+    a chat id. Replacing them corrupts ordering and protects nobody."""
+    scrubber = sz.Scrubber(b"salt")
+    doc = {"created_at": 1755261234, "updated_at_ms": 1755261234567,
+           "timestamp": 1755261234, "count": 42}
+    assert sz._walk_json(doc, scrubber) == doc
+
+
+def test_a_bare_ten_digit_mobile_is_caught_whatever_the_key_is_called():
+    scrubber = sz.Scrubber(b"salt")
+    out = sz._walk_json({"whatever": 9876543210}, scrubber)
+    assert out["whatever"] != 9876543210
+
+
+def test_json_keys_fall_back_to_the_column_registry():
+    """An AI response blob uses the same field names as the columns it feeds.
+    Classifying a column should classify it inside documents too."""
+    assert sz._json_kind("candidate_name") == "person_name"
+    assert sz._json_kind("recruiter_email") == "email"
+    assert sz._json_kind("job_title") == "redact"
+    # the JSON-specific registry still wins where it disagrees
+    assert sz._json_kind("utr") == "rehash"
+
+
+def test_unclassified_json_column_is_scrubbed_not_copied():
+    """41 of 42 json columns in the production schema had no declared kind and
+    were being copied through verbatim."""
+    scrubber = sz.Scrubber(b"salt")
+    raw = json.dumps({"candidate_name": "Lakshmi Narayanan",
+                      "recruiter_email": "recruiter@acme-hiring.com",
+                      "chat_id": 9803205077,
+                      "note": "call 9876543210"})
+    out = sz._scrub_json_text(raw, None, scrubber)
+
+    assert "Lakshmi Narayanan" not in out
+    assert "recruiter@acme-hiring.com" not in out
+    assert "9803205077" not in out
+    assert "9876543210" not in out
+    assert json.loads(out)["candidate_name"]        # still valid JSON

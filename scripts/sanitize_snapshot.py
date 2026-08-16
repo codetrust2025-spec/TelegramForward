@@ -393,8 +393,15 @@ def _connect(dsn: str):
     return psycopg2.connect(dsn)
 
 
-def _scrub_json_text(raw: Any, kind: str, scrub: "Scrubber") -> Any:
-    """Scrub the string leaves of a json/jsonb value, preserving its structure."""
+def _scrub_json_text(raw: Any, kind: str | None, scrub: "Scrubber") -> Any:
+    """Scrub a json/jsonb value, preserving its structure.
+
+    `kind` is the column's declared kind when it has one. An unclassified
+    json/jsonb column passes None and is handled on content instead of being
+    copied through, which is what used to happen to 41 of the 42 json columns
+    in the production schema - including candidates_store.payload and every
+    stored AI response.
+    """
     if raw is None:
         return None
     try:
@@ -402,7 +409,10 @@ def _scrub_json_text(raw: Any, kind: str, scrub: "Scrubber") -> Any:
     except (TypeError, ValueError):
         # Not parseable as JSON: treat as opaque text rather than risk emitting
         # something the column will reject.
-        return json.dumps(str(scrub.value(kind, raw)))
+        return json.dumps(str(scrub.value(kind or "redact", raw)))
+
+    if kind is None:
+        return json.dumps(_walk_json(doc, scrub))
 
     def walk(node: Any) -> Any:
         if isinstance(node, dict):
@@ -412,14 +422,20 @@ def _scrub_json_text(raw: Any, kind: str, scrub: "Scrubber") -> Any:
                 # number in the key, where scrubbing the values does not reach.
                 nk = (scrub.value("redact", k)
                       if isinstance(k, str) and looks_like_personal_data(k) else k)
-                out[nk] = (scrub.value(JSON_SCRUB_FIELDS[k], v)
-                           if k in JSON_SCRUB_FIELDS and not isinstance(v, (dict, list))
-                           else walk(v))
+                field = _json_kind(k) if isinstance(k, str) else None
+                if field and not isinstance(v, (dict, list)):
+                    out[nk] = scrub.value(field, v)
+                elif _is_numeric_identity(k if isinstance(k, str) else None, v):
+                    out[nk] = _scrub_number(v, scrub)
+                else:
+                    out[nk] = walk(v)
             return out
         if isinstance(node, list):
             return [walk(v) for v in node]
         if isinstance(node, str) and node.strip():
             return scrub.value(kind, node)
+        if _is_numeric_identity(None, node):
+            return _scrub_number(node, scrub)
         return node
 
     return json.dumps(walk(doc))
@@ -524,13 +540,22 @@ def sanitize_database(src_dsn: str, dst_dsn: str, scrub: Scrubber,
                         out = []
                         for (name, dt), val in zip(use, row):
                             kind = SCRUB.get(name)
-                            if not kind:
-                                out.append(val)
-                            elif dt in ("json", "jsonb"):
+                            if dt in ("json", "jsonb"):
                                 # Replacing a JSON column with prose produces
-                                # invalid JSON. Scrub the string leaves inside
-                                # it and keep the structure intact.
+                                # invalid JSON. Scrub the leaves inside it and
+                                # keep the structure intact.
+                                #
+                                # This comes BEFORE the unclassified check on
+                                # purpose. A json column with no declared kind
+                                # used to fall straight through to the copy, and
+                                # 41 of the 42 json columns in the production
+                                # schema had no declared kind - among them
+                                # candidates_store.payload and every stored AI
+                                # response, which carry names and addresses in
+                                # nearly every row.
                                 out.append(_scrub_json_text(val, kind, scrub))
+                            elif not kind:
+                                out.append(val)
                             else:
                                 out.append(scrub.value(kind, val))
                         buf.append(tuple(out))
@@ -587,6 +612,54 @@ JSON_SCRUB_FIELDS = {
 }
 
 
+# A JSON number can be an identity. Telegram chat ids and phone numbers are
+# both plain integers, and the walker used to step straight over them.
+_TIMESTAMPY = re.compile(
+    r"(^|_)(ts|time|timestamp|epoch|date|at|ms|millis|seconds|created|updated)($|_)",
+    re.I)
+_IDENTITY_KEY = re.compile(
+    r"chat|user|peer|from|to_id|sender|recipient|contact|lead|account|phone|"
+    r"mobile|msisdn|whatsapp|telegram", re.I)
+
+
+def _is_numeric_identity(key: str | None, value: Any) -> bool:
+    """Is this JSON number identifying a person rather than counting something?
+
+    Two ways to qualify. A ten-digit number starting 6-9 is an Indian mobile
+    whatever it is called. Otherwise the key has to say it is an identity, and
+    not say it is a time: epoch seconds and millisecond timestamps sit in the
+    same digit range as a Telegram chat id, and replacing those would corrupt
+    ordering for no privacy gain.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return False
+    digits = str(abs(value))
+    if key and _TIMESTAMPY.search(key):
+        return False
+    if len(digits) == 10 and digits[0] in "6789":
+        return True
+    return 9 <= len(digits) <= 15 and bool(key and _IDENTITY_KEY.search(key))
+
+
+def _scrub_number(value: int, scrub: Scrubber) -> int:
+    """Replace an identifying number, keeping its sign and its digit count.
+    Telegram group ids are negative and the length is what code branches on."""
+    digits = str(abs(value))
+    replaced = int(str(scrub.value("phone", digits))[:len(digits)] or "0")
+    return -replaced if value < 0 else replaced
+
+
+def _json_kind(key: str) -> str | None:
+    """Kind for a JSON key, falling back to the column registry.
+
+    The two registries describe the same data. An AI response blob uses the
+    same field names as the columns it was extracted into - candidate_name,
+    recruiter_email, job_title - so consulting SCRUB here means classifying a
+    column classifies it inside every document that carries it too.
+    """
+    return JSON_SCRUB_FIELDS.get(key) or SCRUB.get(key)
+
+
 def _walk_json(node: Any, scrub: Scrubber) -> Any:
     """Sanitise a decoded JSON document.
 
@@ -613,8 +686,11 @@ def _walk_json(node: Any, scrub: Scrubber) -> Any:
             new_key = key
             if isinstance(key, str) and looks_like_personal_data(key):
                 new_key = scrub.value("redact", key)
-            if key in JSON_SCRUB_FIELDS and not isinstance(value, (dict, list)):
-                out[new_key] = scrub.value(JSON_SCRUB_FIELDS[key], value)
+            kind = _json_kind(key) if isinstance(key, str) else None
+            if kind and not isinstance(value, (dict, list)):
+                out[new_key] = scrub.value(kind, value)
+            elif _is_numeric_identity(key if isinstance(key, str) else None, value):
+                out[new_key] = _scrub_number(value, scrub)
             elif isinstance(value, str) and looks_like_personal_data(value):
                 out[new_key] = scrub.value("redact", value)
             else:
@@ -625,6 +701,8 @@ def _walk_json(node: Any, scrub: Scrubber) -> Any:
                 if isinstance(v, str) and looks_like_personal_data(v)
                 else _walk_json(v, scrub)
                 for v in node]
+    if _is_numeric_identity(None, node):
+        return _scrub_number(node, scrub)
     return node
 
 
