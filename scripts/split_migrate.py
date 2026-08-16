@@ -295,7 +295,13 @@ def build_plan(data_dir: Path, source_dsn: str | None) -> Plan:
         root = data_dir.parent / rel if not (data_dir / Path(rel).name).exists() else data_dir / Path(rel).name
         item = Item("file_tree", rel, owner, note=note)
         if root.exists() and root.is_dir():
-            files = [p for p in root.rglob("*") if p.is_file()]
+            # The same exclusion the copy applies. Counting a session file here
+            # and refusing to copy it there makes expected and migrated differ
+            # by exactly the number of secrets present, so reconcile fails on
+            # the safety feature working. Production keeps six .session files
+            # inside data/accounts, which is a migrated tree.
+            files = [p for p in root.rglob("*")
+                     if p.is_file() and not _is_excluded_file(p)]
             item.count = len(files)
             item.units = len(files)
             digest = hashlib.sha256()
@@ -492,7 +498,10 @@ def _write_quarantine_manifest(out_dir: Path, store: JsonStore, doc: Any,
         if not _ledger_has(cur, kind, store.filename):
             dest.write_bytes(payload)
             _ledger_put(cur, kind, store.filename, owner, _sha256_bytes(payload))
-            written[owner] += 1
+            # Deliberately NOT counted in `written`. The manifest is an artefact
+            # describing the migration, not a record migrated by it, and
+            # counting it makes migrated exceed expected by one. It is still
+            # ledgered so a re-run does not rewrite it.
     conn.commit()
 
 

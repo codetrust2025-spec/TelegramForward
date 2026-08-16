@@ -184,3 +184,33 @@ def test_inherited_broken_references_are_reported_not_fatal(tmp_path):
     # the pass/fail condition must no longer hinge on them
     assert 'if (ok and not plan.duplicates)' in src or \
            'not plan.broken_refs' not in src.split('report["result"]')[1][:200]
+
+
+def test_the_plan_does_not_count_files_the_copy_refuses(tmp_path):
+    """Counting a session file in the plan and refusing to copy it in execute
+    makes expected and migrated differ by exactly the number of secrets present,
+    so reconcile fails on the safety feature working. Production keeps six
+    .session files inside data/accounts, a migrated tree."""
+    data = tmp_path / "data"
+    acct = data / "accounts" / "a1"
+    acct.mkdir(parents=True)
+    (acct / "a1.session").write_bytes(b"secret")
+    (acct / "a1.session-journal").write_bytes(b"secret")
+    (acct / "state.json").write_bytes(b"{}")
+    (data / "candidates.json").write_text('{"candidates": []}', encoding="utf-8")
+
+    plan = sm.build_plan(data, None)
+    tree = next(i for i in plan.items
+                if i.kind == "file_tree" and i.name == "data/accounts")
+    assert tree.count == 1, "only state.json should be planned"
+    assert tree.units == 1
+
+
+def test_the_quarantine_manifest_is_not_counted_as_a_migrated_record():
+    """It describes the migration; it is not a record the migration moved.
+    Counting it makes migrated exceed expected by one."""
+    import inspect
+    src = inspect.getsource(sm._write_quarantine_manifest)
+    body = src.split("_ledger_put")[1]
+    assert "written[owner] += 1" not in body, \
+        "the manifest must not be counted as a migrated record"
