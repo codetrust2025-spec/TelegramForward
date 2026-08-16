@@ -74,6 +74,10 @@ def _register(kind: str, columns: Iterable[str]) -> None:
 _register("person_name", [
     "candidate_name", "recruiter_name", "sender_name", "account_holder_name",
     "actor", "updated_by", "created_by", "reviewer", "approved_by",
+    # Marketing-side CRM and inbox tables. These live in the monolith schema and
+    # not in the Operations one the registry was first written against, so the
+    # first production-shaped run refused to proceed until they were classified.
+    "name", "username", "profile_name", "display_name", "first_name", "last_name",
 ])
 _register("email", [
     "recruiter_email", "email_address", "candidate_email", "sender_email",
@@ -81,6 +85,8 @@ _register("email", [
 ])
 _register("phone", [
     "payment_phone_number", "normalized_payment_phone_number", "phone",
+    # E.164 numbers and WhatsApp ids are phone numbers in a different dress.
+    "phone_e164", "whatsapp_wa_id", "wa_id", "mobile", "whatsapp",
 ])
 _register("upi", ["upi_id", "normalized_upi_id"])
 _register("bank_account", ["bank_account_identifier"])
@@ -90,6 +96,9 @@ _register("free_text", [
     "subject", "email_subject", "body_text", "html_body_text",
     "extracted_text", "attachment_evidence", "cited_attachment",
     "source_snippet", "remark", "interview_attendance_remark", "task",
+    # Message bodies. The single most sensitive free-text column in the product:
+    # real conversations with real people.
+    "text", "message", "body", "caption", "last_message",
 ])
 _register("filename", ["filename", "original_name", "latest_resume"])
 _register("credential", ["credential_ciphertext", "access_token", "refresh_token"])
