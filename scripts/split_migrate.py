@@ -182,6 +182,10 @@ EXCLUDED_GLOBS: tuple[tuple[str, str], ...] = (
     # is every bit as usable as the original and the narrower glob walked
     # straight past it. Found when a real one reached the Marketing volume.
     ("*.session*", "live Telegram session secret"),
+    # A Telethon StringSession is a session in text form - same authority over
+    # the account, none of the naming. Nine of these, 353 bytes each, reached
+    # the Marketing volume because every rule so far keyed on ".session".
+    ("*string_session*", "live Telegram session secret, StringSession form"),
     ("*.session", "live Telegram session secret"),
     ("*.session-journal", "live Telegram session secret"),
     (".env", "credential material"),

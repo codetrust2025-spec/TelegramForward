@@ -271,3 +271,23 @@ def test_ordinary_account_files_are_still_copied():
     for name in ("accounts/a1/state.json", "accounts/a1/posting_mode.json",
                  "accounts/a1/join_state.json"):
         assert not sm._is_excluded_file(P("/data") / name), name
+
+
+def test_string_sessions_are_excluded_too():
+    """A Telethon StringSession has the same authority over the account as a
+    .session file and none of the naming. Nine of these reached the Marketing
+    volume during the cutover because every rule keyed on the ".session"
+    substring."""
+    from pathlib import Path as P
+    for name in ("accounts/a1/inbox_string_session.txt",
+                 "accounts/a2/string_session.dat",
+                 "accounts/a3/my_string_session_backup"):
+        assert sm._is_excluded_file(P("/data") / name), name
+
+
+def test_data_room_content_is_not_mistaken_for_a_system_secret():
+    """data_room/credentials.json is the Data Room's own vault - admin,
+    handlers, service accounts - and is Operations business data that must
+    migrate. Excluding it on the name would silently drop Data Room content."""
+    from pathlib import Path as P
+    assert not sm._is_excluded_file(P("/data/data_room/credentials.json"))
