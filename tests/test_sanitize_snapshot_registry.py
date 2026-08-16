@@ -462,3 +462,39 @@ def test_access_hash_length_is_inside_the_identity_range():
     field in the store that matters most."""
     assert sz._is_numeric_identity("access_hash", 1234567890123456789)
     assert sz._is_numeric_identity("peer_access_hash", -987654321098765432)
+
+
+def test_telegram_call_key_material_is_not_copied():
+    """tg_call_p is the 2048-bit Diffie-Hellman prime for an encrypted call and
+    tg_call_a is the secret exponent beside it. 617 decimal digits, so both sat
+    outside the identity range and were being copied verbatim."""
+    scrubber = sz.Scrubber(b"salt")
+    prime = int("7" * 617)
+    secret = int("3" * 615)
+    out = sz._walk_json({"sessions": {"abc": {"tg_call_p": prime,
+                                              "tg_call_a": secret}}}, scrubber)
+    got = out["sessions"]["abc"]
+    assert got["tg_call_p"] != prime
+    assert got["tg_call_a"] != secret
+    # length is preserved so anything that checks the modulus size still works
+    assert len(str(got["tg_call_p"])) == 617
+    assert len(str(got["tg_call_a"])) == 615
+
+
+def test_key_material_is_caught_by_size_not_by_name():
+    """Naming the field would only cover the fields we happen to know about."""
+    assert sz._is_key_material(int("1" * 32))
+    assert sz._is_key_material(-int("9" * 200))
+    assert not sz._is_key_material(1755261234567)
+    assert not sz._is_key_material(True)
+
+
+def test_digit_string_is_deterministic_and_exact_length():
+    a, b = sz.Scrubber(b"s"), sz.Scrubber(b"s")
+    for length in (1, 9, 10, 32, 617):
+        first = a.digit_string("number", "seed", length)
+        assert len(first) == length
+        assert first.isdigit()
+        assert first == b.digit_string("number", "seed", length)
+    assert sz.Scrubber(b"other").digit_string("number", "seed", 40) != \
+        a.digit_string("number", "seed", 40)

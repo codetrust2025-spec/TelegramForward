@@ -306,6 +306,23 @@ class Scrubber:
         self._memo[key] = out
         return out
 
+    def digit_string(self, kind: str, text: str, length: int) -> str:
+        """A deterministic run of digits of exactly `length`.
+
+        Needed because the numbers here run from ten digits to six hundred, and
+        a single digest is 32 bytes. Blocks are chained so any length works.
+        Always starts with 9, which is the marker the output-side check uses to
+        tell a replacement from a real number.
+        """
+        out: list[str] = []
+        block = 0
+        while sum(len(chunk) for chunk in out) < length:
+            digest = self._digest(f"{kind}#{block}", text)
+            out.append("".join(str(byte % 10) for byte in digest))
+            block += 1
+        joined = "".join(out)[:length]
+        return "9" + joined[1:] if length > 1 else joined
+
     def _distinct_from(self, text: str, build) -> str:
         """Draw from a fixed pool until the draw differs from the original.
 
@@ -438,7 +455,8 @@ def _scrub_json_text(raw: Any, kind: str | None, scrub: "Scrubber") -> Any:
                 field = _json_kind(k) if isinstance(k, str) else None
                 if field and not isinstance(v, (dict, list)):
                     out[nk] = scrub.value(field, v)
-                elif _is_numeric_identity(k if isinstance(k, str) else None, v):
+                elif (_is_key_material(v)
+                      or _is_numeric_identity(k if isinstance(k, str) else None, v)):
                     out[nk] = _scrub_number(v, scrub)
                 else:
                     out[nk] = walk(v)
@@ -447,7 +465,7 @@ def _scrub_json_text(raw: Any, kind: str | None, scrub: "Scrubber") -> Any:
             return [walk(v) for v in node]
         if isinstance(node, str) and node.strip():
             return scrub.value(kind, node)
-        if _is_numeric_identity(None, node):
+        if _is_key_material(node) or _is_numeric_identity(None, node):
             return _scrub_number(node, scrub)
         return node
 
@@ -658,11 +676,25 @@ def _is_numeric_identity(key: str | None, value: Any) -> bool:
     return 9 <= len(digits) <= 20 and bool(key and _IDENTITY_KEY.search(key))
 
 
+# A JSON integer with dozens of digits is not counting anything. In this data
+# it is Diffie-Hellman material for encrypted Telegram calls: tg_call_p is the
+# 2048-bit prime, which is 617 decimal digits, and tg_call_a is the secret
+# exponent beside it. Key material, not an identifier, and copying it into a
+# rehearsal snapshot puts a live call secret in a second place.
+KEY_MATERIAL_DIGITS = 32
+
+
+def _is_key_material(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return False
+    return len(str(abs(value))) >= KEY_MATERIAL_DIGITS
+
+
 def _scrub_number(value: int, scrub: Scrubber) -> int:
     """Replace an identifying number, keeping its sign and its digit count.
     Telegram group ids are negative and the length is what code branches on."""
     digits = str(abs(value))
-    replaced = int(str(scrub.value("phone", digits))[:len(digits)] or "0")
+    replaced = int(scrub.digit_string("number", digits, len(digits)))
     return -replaced if value < 0 else replaced
 
 
@@ -706,7 +738,8 @@ def _walk_json(node: Any, scrub: Scrubber) -> Any:
             kind = _json_kind(key) if isinstance(key, str) else None
             if kind and not isinstance(value, (dict, list)):
                 out[new_key] = scrub.value(kind, value)
-            elif _is_numeric_identity(key if isinstance(key, str) else None, value):
+            elif (_is_key_material(value)
+                  or _is_numeric_identity(key if isinstance(key, str) else None, value)):
                 out[new_key] = _scrub_number(value, scrub)
             elif isinstance(value, str) and looks_like_personal_data(value):
                 out[new_key] = scrub.value("redact", value)
@@ -718,7 +751,7 @@ def _walk_json(node: Any, scrub: Scrubber) -> Any:
                 if isinstance(v, str) and looks_like_personal_data(v)
                 else _walk_json(v, scrub)
                 for v in node]
-    if _is_numeric_identity(None, node):
+    if _is_key_material(node) or _is_numeric_identity(None, node):
         return _scrub_number(node, scrub)
     return node
 
