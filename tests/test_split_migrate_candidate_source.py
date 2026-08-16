@@ -91,3 +91,48 @@ def test_session_files_are_excluded_wherever_they_sit(tmp_path):
 
 def test_env_files_are_excluded():
     assert sm._is_excluded_file(Path("/anywhere/data/accounts/x/.env"))
+
+
+def test_a_mirrored_store_declares_its_archive_only_records():
+    """The exclusion is otherwise invisible: the file is copied, the table is
+    migrated from PostgreSQL, both report success, and nothing says that some
+    records in the file were carried as archive only. An operator reading the
+    run cannot see the decision, and a change in the drift would go unnoticed."""
+    assert hasattr(sm, "_write_quarantine_manifest")
+
+    import inspect
+    src = inspect.getsource(sm._write_quarantine_manifest)
+    # the manifest has to carry the numbers a reviewer needs to re-check
+    for field in ("records_in_file", "records_in_table", "archive_only_count",
+                  "archive_only_ids", "treatment", "operator_action"):
+        assert field in src, field
+
+
+def test_the_quarantine_manifest_is_ledgered_so_a_rerun_does_not_duplicate():
+    import inspect
+    src = inspect.getsource(sm._write_quarantine_manifest)
+    assert "_ledger_has" in src and "_ledger_put" in src
+
+
+def test_the_broken_reference_check_reads_the_key_that_exists():
+    """It read proof["path"] or proof["file"]. Real entries carry url, id,
+    filename, mime_type, size, note, uploaded_at, original_name - neither key -
+    so the check returned clean on every run since it was written, and
+    reconcile() returns PASS partly on that emptiness."""
+    import inspect
+    src = inspect.getsource(sm._check_cross_references)
+    assert '"url"' in src, "the key real proof entries actually carry"
+    assert "candidates_proofs" in src, "the tree the evidence actually lives in"
+    assert "candidates_resumes" in src
+    assert "resumes" in src, "resumes are references too"
+
+
+def test_a_mirrored_store_is_archived_off_the_application_read_path():
+    """use_postgres() is a presence check on DATABASE_URL that fails open, and
+    the candidate store falls back to DATA_DIR/candidates.json. Writing the
+    superseded mirror to that path would let an unset variable promote 102
+    stale records over 195 live ones."""
+    import inspect
+    src = inspect.getsource(sm.execute)
+    assert "_archive" in src
+    assert "_MIRRORED_TABLES" in src

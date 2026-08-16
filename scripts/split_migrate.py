@@ -326,7 +326,19 @@ def build_plan(data_dir: Path, source_dsn: str | None) -> Plan:
 
 
 def _check_cross_references(data_dir: Path, plan: Plan) -> None:
-    """Candidate payment proofs must point at files that exist."""
+    """Candidate payment proofs and resumes must point at files that exist.
+
+    This check was a structural no-op until 2026-08-16 and reported clean on
+    every run. It read proof["path"] or proof["file"]; real proof entries carry
+    {id, url, note, size, filename, mime_type, uploaded_at, original_name} and
+    have neither key, so `ref` was always None and broken_refs was always empty.
+    It also resolved against data/payment_evidence, which holds six files, while
+    the evidence the product writes lives under candidates_proofs (211 files)
+    and candidates_resumes (37).
+
+    Both halves mattered: reconcile() returns PASS partly on broken_refs being
+    empty, so an always-empty list is a green light nobody earned.
+    """
     path = data_dir / "candidates.json"
     if not path.exists():
         return
@@ -334,15 +346,37 @@ def _check_cross_references(data_dir: Path, plan: Plan) -> None:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return
-    evidence_root = data_dir / "payment_evidence"
+
+    # A reference is resolved by basename against every tree that can hold one,
+    # because the stored value is a URL path rather than a path relative to any
+    # single root.
+    roots = [data_dir / name for name in
+             ("candidates_proofs", "candidates_resumes", "payment_evidence",
+              "data_room", "handler_expense_proofs", "pending_slot_payments")]
+    on_disk: set[str] = set()
+    for root in roots:
+        if root.is_dir():
+            on_disk |= {p.name for p in root.rglob("*") if p.is_file()}
+
+    def _ref(entry: Any) -> str | None:
+        if not isinstance(entry, dict):
+            return None
+        for key in ("url", "path", "file", "filename"):
+            value = entry.get(key)
+            if value:
+                return str(value)
+        return None
+
     for rec in doc.get("candidates", []) or []:
         if not isinstance(rec, dict):
             continue
         cid = rec.get("id", "?")
-        for proof in rec.get("proofs", []) or []:
-            ref = proof.get("path") or proof.get("file") if isinstance(proof, dict) else None
-            if ref and not (evidence_root / str(ref).lstrip("/\\")).exists():
-                plan.broken_refs.append(f"candidate {cid} -> missing proof {ref}")
+        for field in ("proofs", "resumes", "slot_screenshot_proofs"):
+            for entry in rec.get(field, []) or []:
+                ref = _ref(entry)
+                if ref and Path(ref).name not in on_disk:
+                    plan.broken_refs.append(
+                        f"candidate {cid} -> missing {field[:-1]} {Path(ref).name}")
 
 
 def _check_store_divergence(data_dir: Path, dsn: str | None, plan: Plan) -> None:
@@ -391,6 +425,75 @@ def _check_store_divergence(data_dir: Path, dsn: str | None, plan: Plan) -> None
 # JSON stores the monolith also keeps as a table. Kept explicit rather than
 # guessed, because being wrong here means migrating the stale copy.
 _MIRRORED_TABLES = {"candidates.json": "candidates_store"}
+
+
+def _write_quarantine_manifest(out_dir: Path, store: JsonStore, doc: Any,
+                               source_dsn: str | None, conn, owner: str,
+                               written: dict) -> None:
+    """Name the records a mirrored store holds that the live table does not.
+
+    The exclusion is otherwise invisible. The file is copied, the table is
+    migrated from PostgreSQL, both steps report success, and nothing says that
+    some records in the file were carried as archive only and deliberately not
+    activated. An operator reading the run has no way to see the decision, and
+    a change in the drift before the next run would go unnoticed.
+
+    Writing a manifest makes the decision inspectable and gives the count
+    something to be compared against next time.
+    """
+    if not source_dsn:
+        return
+    mirror = _MIRRORED_TABLES[store.filename]
+    file_ids = [str(_record_id(rec, store, i))
+                for i, rec in enumerate(_records(doc, store))
+                if isinstance(rec, dict)]
+    with _connect(source_dsn) as src, src.cursor() as cur:
+        cur.execute("SELECT to_regclass(%s)", (mirror,))
+        if cur.fetchone()[0] is None:
+            return
+        cur.execute(f'SELECT id FROM "{mirror}"')
+        table_ids = {str(r[0]) for r in cur.fetchall()}
+
+    archive_only = sorted(set(file_ids) - table_ids)
+    manifest = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "store": store.filename,
+        "authoritative_table": mirror,
+        "records_in_file": len(set(file_ids)),
+        "records_in_table": len(table_ids),
+        "records_in_both": len(set(file_ids) & table_ids),
+        "archive_only_count": len(archive_only),
+        "archive_only_ids": archive_only,
+        "treatment": (
+            f"{mirror} is migrated from PostgreSQL, which is the store the "
+            f"product writes to. These records exist only in {store.filename} "
+            f"and are NOT created in the destination table, so they cannot "
+            f"appear in the application as live candidates. They are preserved "
+            f"in the copied {store.filename} for archival reference."
+        ),
+        "operator_action": (
+            "If this count differs from the count reviewed at cutover, the "
+            "drift has changed and the decision needs revisiting before "
+            "migrating."
+        ),
+        "why_this_directory": (
+            "_archive/ is not read by the application. The store is NOT placed "
+            "at the path the service loads, because use_postgres() is a "
+            "presence check on DATABASE_URL that fails open, and an unset "
+            "variable would otherwise promote this superseded file to the live "
+            "candidate store and hide the real one."
+        ),
+    }
+    dest = out_dir / "_archive" / f"{Path(store.filename).stem}.quarantine.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    kind = f"quarantine:{store.filename}"
+    payload = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8")
+    with conn.cursor() as cur:
+        if not _ledger_has(cur, kind, store.filename):
+            dest.write_bytes(payload)
+            _ledger_put(cur, kind, store.filename, owner, _sha256_bytes(payload))
+            written[owner] += 1
+    conn.commit()
 
 
 def _is_excluded_file(path: Path) -> bool:
@@ -758,7 +861,21 @@ def execute(data_dir: Path, targets: dict[str, dict[str, str]], plan: Plan,
                     conn.commit()
                 else:
                     # Copied verbatim as a file the destination service reads.
-                    dest = out_dir / store.filename
+                    #
+                    # EXCEPT for a mirrored store, which goes to _archive/
+                    # instead. Placing it at the read path would be actively
+                    # dangerous: core/db/connection.py use_postgres() is a
+                    # presence check on DATABASE_URL that FAILS OPEN, and
+                    # features/candidate_store.py reads DATA_DIR/candidates.json
+                    # when it returns false. An unset variable would make this
+                    # superseded 102-record file the live store and hide all
+                    # 195 real candidates. An archive has to be somewhere the
+                    # application never looks.
+                    if store.filename in _MIRRORED_TABLES:
+                        dest = out_dir / "_archive" / store.filename
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                    else:
+                        dest = out_dir / store.filename
                     kind = f"file:{store.filename}"
                     checksum = _sha256_bytes(raw)
                     with conn.cursor() as cur:
@@ -767,6 +884,9 @@ def execute(data_dir: Path, targets: dict[str, dict[str, str]], plan: Plan,
                             _ledger_put(cur, kind, store.filename, owner, checksum)
                             written[owner] += 1
                     conn.commit()
+                    if store.filename in _MIRRORED_TABLES:
+                        _write_quarantine_manifest(
+                            out_dir, store, doc, source_dsn, conn, owner, written)
 
             for rel, tree_owner, _note in FILE_TREES:
                 if tree_owner != owner:
