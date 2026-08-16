@@ -301,3 +301,65 @@ def test_status_vocabularies_are_preserved_exactly():
                    "source_type", "previous_detected_status"):
         assert column in sz.SAFE_TEXT_COLUMNS, column
         assert column not in sz.SCRUB, column
+
+
+def test_json_keys_that_are_phone_numbers_are_scrubbed():
+    """leads, the DM inbox, the block list and voice calls are all keyed BY
+    phone number. Scrubbing only values leaves the numbers in the keys."""
+    scrubber = sz.Scrubber(b"salt")
+    doc = {"leads": {"9876543210": {"status": "new"},
+                     "918887776665": {"status": "old"}}}
+    out = sz._walk_json(doc, scrubber)
+
+    assert "9876543210" not in out["leads"]
+    assert "918887776665" not in out["leads"]
+    assert len(out["leads"]) == 2
+    # the value under each key is carried across intact
+    assert sorted(v["status"] for v in out["leads"].values()) == ["new", "old"]
+
+
+def test_json_key_scrubbing_is_stable_across_stores():
+    """contact_links and leads key the same person by the same number. If the
+    two stores scrub it differently the migration's cross-store join stops
+    being exercised."""
+    scrubber = sz.Scrubber(b"salt")
+    a = sz._walk_json({"leads": {"9876543210": 1}}, scrubber)
+    b = sz._walk_json({"links": {"9876543210": 2}}, scrubber)
+    assert list(a["leads"]) == list(b["links"])
+
+
+def test_payment_evidence_fields_are_registered():
+    """The ledger is the most sensitive store in the product and none of these
+    were in the registry."""
+    for field, kind in (("utr", "rehash"), ("utr_number", "rehash"),
+                        ("transaction_reference", "rehash"),
+                        ("receiver_upi_id", "upi"), ("sender_upi_id", "upi"),
+                        ("sender_account_identifier", "bank_account"),
+                        ("receiver_phone", "phone"),
+                        ("raw_detected_text", "free_text"),
+                        ("raw_ollama_response", "free_text")):
+        assert sz.JSON_SCRUB_FIELDS.get(field) == kind, field
+
+
+def test_json_values_under_unregistered_keys_are_redacted():
+    """A name-based registry cannot keep up with a growing store, so an
+    unknown key holding an address must still be handled."""
+    scrubber = sz.Scrubber(b"salt")
+    doc = {"some_new_field_nobody_registered": "ping recruiter@acme-hiring.com"}
+    out = sz._walk_json(doc, scrubber)
+    value = out["some_new_field_nobody_registered"]
+    assert "recruiter@acme-hiring.com" not in value
+    assert value.startswith("ping ")
+
+
+def test_json_strings_inside_lists_are_redacted():
+    scrubber = sz.Scrubber(b"salt")
+    out = sz._walk_json({"blocked": ["9876543210", "ok"]}, scrubber)
+    assert "9876543210" not in out["blocked"]
+    assert "ok" in out["blocked"]
+
+
+def test_json_leaves_non_personal_data_alone():
+    scrubber = sz.Scrubber(b"salt")
+    doc = {"status": "active", "count": 7, "enabled": True, "when": "2026-08-15"}
+    assert sz._walk_json(doc, scrubber) == doc

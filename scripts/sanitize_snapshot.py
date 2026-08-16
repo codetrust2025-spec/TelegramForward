@@ -406,10 +406,16 @@ def _scrub_json_text(raw: Any, kind: str, scrub: "Scrubber") -> Any:
 
     def walk(node: Any) -> Any:
         if isinstance(node, dict):
-            return {k: (scrub.value(JSON_SCRUB_FIELDS[k], v)
-                        if k in JSON_SCRUB_FIELDS and not isinstance(v, (dict, list))
-                        else walk(v))
-                    for k, v in node.items()}
+            out = {}
+            for k, v in node.items():
+                # Keys carry data too. A document keyed by phone number puts the
+                # number in the key, where scrubbing the values does not reach.
+                nk = (scrub.value("redact", k)
+                      if isinstance(k, str) and looks_like_personal_data(k) else k)
+                out[nk] = (scrub.value(JSON_SCRUB_FIELDS[k], v)
+                           if k in JSON_SCRUB_FIELDS and not isinstance(v, (dict, list))
+                           else walk(v))
+            return out
         if isinstance(node, list):
             return [walk(v) for v in node]
         if isinstance(node, str) and node.strip():
@@ -564,17 +570,61 @@ JSON_SCRUB_FIELDS = {
     "latest_resume": "filename", "original_name": "filename",
     "interview_attendance_remark": "free_text", "endpoint": "credential",
     "auth": "credential", "p256dh": "credential", "keys": "credential",
+    # Payment evidence. The ledger is the most sensitive store in the product
+    # and none of these were registered: a UTR identifies a real bank transfer,
+    # and the raw OCR and model responses are the screenshot's full text.
+    "utr": "rehash", "utr_number": "rehash",
+    "transaction_reference": "rehash", "transaction_id": "rehash",
+    "external_transaction_id": "rehash",
+    "receiver_upi_id": "upi", "sender_upi_id": "upi",
+    "sender_account_identifier": "bank_account",
+    "receiver_phone": "phone", "receiver_phone_number": "phone",
+    "candidate_phone": "phone", "phone_e164": "phone",
+    "whatsapp_wa_id": "phone", "profile_name": "person_name",
+    "raw_detected_text": "free_text", "raw_ollama_response": "free_text",
+    "text": "free_text", "last_message": "free_text",
+    "caption": "free_text", "message": "free_text",
 }
 
 
 def _walk_json(node: Any, scrub: Scrubber) -> Any:
+    """Sanitise a decoded JSON document.
+
+    Three things happen here, and only the first one used to.
+
+    A registered field name is replaced by its declared kind.
+
+    A dict KEY that is itself personal data is replaced. These stores are keyed
+    by phone number - leads, the DM inbox, the block list, voice calls - so the
+    keys alone were 412 real numbers sitting in the output while every value
+    under them was being carefully scrubbed. Keys go through the same
+    deterministic scrubber as values, so a number keyed in one store still
+    matches the same number keyed in another and the migration's cross-store
+    joins stay exercised.
+
+    A string under a key nobody registered is redacted if it contains personal
+    data. The registry had 19 field names against a store that had grown well
+    past them, which is the same failure the database side had: a name-based
+    list cannot keep up with a schema.
+    """
     if isinstance(node, dict):
-        return {k: (scrub.value(JSON_SCRUB_FIELDS[k], v)
-                    if k in JSON_SCRUB_FIELDS and not isinstance(v, (dict, list))
-                    else _walk_json(v, scrub))
-                for k, v in node.items()}
+        out = {}
+        for key, value in node.items():
+            new_key = key
+            if isinstance(key, str) and looks_like_personal_data(key):
+                new_key = scrub.value("redact", key)
+            if key in JSON_SCRUB_FIELDS and not isinstance(value, (dict, list)):
+                out[new_key] = scrub.value(JSON_SCRUB_FIELDS[key], value)
+            elif isinstance(value, str) and looks_like_personal_data(value):
+                out[new_key] = scrub.value("redact", value)
+            else:
+                out[new_key] = _walk_json(value, scrub)
+        return out
     if isinstance(node, list):
-        return [_walk_json(v, scrub) for v in node]
+        return [scrub.value("redact", v)
+                if isinstance(v, str) and looks_like_personal_data(v)
+                else _walk_json(v, scrub)
+                for v in node]
     return node
 
 
@@ -617,10 +667,13 @@ def verify(dst_dsn: str, dst_dir: Path | None) -> list[str]:
     conn = _connect(dst_dsn)
     try:
         with conn.cursor() as cur:
+            # json and jsonb are included. They were scrubbed but never
+            # verified, which meant the one place structure hides data was the
+            # one place nothing looked.
             cur.execute(
                 "SELECT table_name, column_name FROM information_schema.columns "
                 "WHERE table_schema='public' AND data_type IN "
-                "('text','character varying','character')")
+                "('text','character varying','character','json','jsonb')")
             targets = cur.fetchall()
             for table, col in targets:
                 if col in SAFE_TEXT_COLUMNS:
