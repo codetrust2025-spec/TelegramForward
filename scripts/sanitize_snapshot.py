@@ -99,6 +99,10 @@ _register("free_text", [
     # Message bodies. The single most sensitive free-text column in the product:
     # real conversations with real people.
     "text", "message", "body", "caption", "last_message",
+    # Prose columns the content check found. Replaced outright rather than
+    # redacted, because prose carries names, and no pattern finds a name the
+    # way one finds an address or a number.
+    "location", "detail", "verification_problems",
 ])
 _register("domain", ["company_domain", "sender_domain", "email_domain"])
 # Text that must keep its structure because something parses it, but which can
@@ -110,6 +114,10 @@ _register("redact", [
     "received_spf", "authentication_results", "rfc_message_id", "calendar_uid",
     "error_message", "quoted_evidence", "lead_key", "application_key",
     "job_title", "job_role", "headers", "raw_headers", "snippet_text",
+    # A meeting link is an access credential: the id in it joins a real call.
+    # Redacted rather than replaced so it stays a URL and anything that parses
+    # one still runs.
+    "meeting_link", "cited_message_id",
 ])
 _register("filename", ["filename", "original_name", "latest_resume"])
 _register("credential", ["credential_ciphertext", "access_token", "refresh_token"])
@@ -130,6 +138,17 @@ SAFE_TEXT_COLUMNS: frozenset[str] = frozenset({
     "idempotency_key", "extracted_text_reference", "slot", "candidate_key",
     "history_id", "entitlement_id", "evidence_id", "case_id", "queue_id",
     "job_id", "notification_id", "approval_id", "gap_id", "event_id",
+    # Opaque single-token identifiers. The content check flags these because a
+    # numeric id of seven digits or more is indistinguishable from a phone
+    # number by shape alone. Each was inspected on the production-shaped copy:
+    # every value is one token, no whitespace, no address anywhere in the
+    # column. They are preserved for the same reason candidate_id above is —
+    # they are the join keys, and reconciliation, orphan detection and
+    # duplicate detection are only meaningful if they survive intact.
+    "event_fingerprint", "alias_candidate_id", "canonical_candidate_id",
+    "sync_cursor", "provider_history_id", "source_history_id", "booking_id",
+    "correlation_id", "gmail_account_id", "ai_recruitment_event_id",
+    "booking_audit_id", "pipeline_event_id",
     # enums, states and machine labels
     "status", "state", "stage", "contract_name", "model_name", "prompt_name",
     "attachment_type", "email_intent", "outcome", "decision", "role",
