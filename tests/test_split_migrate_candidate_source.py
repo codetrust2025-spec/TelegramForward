@@ -12,6 +12,7 @@ plausible either way, which is what makes it worth a test.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -136,3 +137,36 @@ def test_a_mirrored_store_is_archived_off_the_application_read_path():
     src = inspect.getsource(sm.execute)
     assert "_archive" in src
     assert "_MIRRORED_TABLES" in src
+
+
+def test_broken_reference_check_actually_fires_now(tmp_path):
+    """Proof that the fix works rather than that the source string changed:
+    build a data dir whose proof url points at nothing, and require the check
+    to report it. Under the old key names this returned clean."""
+    data = tmp_path / "data"
+    (data / "candidates_proofs" / "cand1").mkdir(parents=True)
+    (data / "candidates_proofs" / "cand1" / "present.jpg").write_bytes(b"x")
+    (data / "candidates.json").write_text(json.dumps({"candidates": [
+        {"id": "cand1", "proofs": [
+            {"id": "p1", "url": "/candidates_proofs/cand1/present.jpg"},
+            {"id": "p2", "url": "/candidates_proofs/cand1/vanished.jpg"},
+        ]},
+    ]}), encoding="utf-8")
+
+    plan = sm.Plan()
+    sm._check_cross_references(data, plan)
+
+    assert len(plan.broken_refs) == 1, plan.broken_refs
+    assert "vanished.jpg" in plan.broken_refs[0]
+    assert "present.jpg" not in plan.broken_refs[0]
+
+
+def test_broken_reference_check_covers_resumes_too(tmp_path):
+    data = tmp_path / "data"
+    (data / "candidates_resumes").mkdir(parents=True)
+    (data / "candidates.json").write_text(json.dumps({"candidates": [
+        {"id": "cand1", "resumes": [{"id": "r1", "url": "/x/cand1/cv.pdf"}]},
+    ]}), encoding="utf-8")
+    plan = sm.Plan()
+    sm._check_cross_references(data, plan)
+    assert any("cv.pdf" in r for r in plan.broken_refs), plan.broken_refs
