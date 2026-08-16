@@ -419,3 +419,28 @@ def test_unclassified_json_column_is_scrubbed_not_copied():
     assert "9803205077" not in out
     assert "9876543210" not in out
     assert json.loads(out)["candidate_name"]        # still valid JSON
+
+
+def test_sanitised_output_inside_a_document_is_not_read_as_a_leak():
+    """A hex email local-part comes out all digits about one in a hundred
+    times. Whole-value matching misses it once the value is a serialised
+    document, and then the digits read as a phone sitting next to an @.
+    Every jsonb column in the production schema reported exactly that."""
+    doc = ("{'candidate': {'name': 'Diya Iyer', "
+           "'email': '6123456789@sanitized.invalid'}}")
+    assert sz.output_leak_label(doc) is None
+
+
+def test_a_real_number_beside_sanitised_output_is_still_caught():
+    """Stripping our own replacements must not blind the scan to what is left."""
+    doc = ("{'email': '6123456789@sanitized.invalid', "
+           "'note': 'call 8876543210'}")
+    assert sz.output_leak_label(doc) == "10-digit phone not starting 9"
+
+
+def test_other_replacement_shapes_are_stripped_inside_documents():
+    scrubber = sz.Scrubber(b"salt")
+    parts = [str(scrubber.value(kind, sample)) for kind, sample in (
+        ("email", "a@b.com"), ("upi", "x@okaxis"), ("ip", "203.0.113.9"),
+        ("credential", "tok"), ("filename", "cv.pdf"), ("free_text", "x" * 40))]
+    assert sz.output_leak_label("{'v': [" + ", ".join(parts) + "]}") is None

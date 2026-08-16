@@ -209,6 +209,13 @@ SCRUBBER_OUTPUT = re.compile(
     r"^SANITIZED-NOT-A-CREDENTIAL-[0-9a-f]+$|^sanitized-[0-9a-f]{8,10}[.]|"
     r"^sanitized narrative |^198\.51\.100\.\d+$")
 
+# The same replacements, matched anywhere rather than as a whole value, so they
+# can be removed from a serialised document before it is scanned.
+SCRUBBER_OUTPUT_ANYWHERE = re.compile(
+    r"[0-9a-f]{10}@sanitized\.invalid|[0-9a-f]{8}@sanitizedbank|"
+    r"SANITIZED-NOT-A-CREDENTIAL-[0-9a-f]+|sanitized-[0-9a-f]{8,10}\.[A-Za-z0-9]+|"
+    r"sanitized narrative [0-9a-f]{6}\.|198\.51\.100\.\d{1,3}")
+
 
 def looks_like_personal_data(text: str) -> bool:
     """Does this INPUT value contain personal data, whatever its column is
@@ -245,6 +252,12 @@ def output_leak_label(text: str) -> str | None:
     """Name the reason this OUTPUT value still looks real, or None if clean."""
     if SCRUBBER_OUTPUT.match(text):
         return None
+    # Remove our own replacements before scanning what is left. Matching the
+    # whole value is not enough once the value is a serialised document: the
+    # sanitised address sits INSIDE it, and a hex local-part comes out all
+    # digits about one time in a hundred, which then reads as a phone number
+    # sitting next to an @. Every jsonb column in the schema reported that.
+    text = SCRUBBER_OUTPUT_ANYWHERE.sub(" ", text)
     for label, rx in OUTPUT_LEAK_PATTERNS.items():
         if rx.search(text):
             return label
