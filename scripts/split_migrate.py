@@ -89,7 +89,20 @@ class JsonStore:
 
 
 JSON_STORES: tuple[JsonStore, ...] = (
-    JsonStore("candidates.json", OPERATIONS, "candidates", "id", "candidates_store"),
+    # Legacy mirror, deliberately NOT the source for candidates_store.
+    #
+    # Measured on production: this file holds 102 candidates and the
+    # candidates_store table holds 195, with only 66 in common. Of the 26
+    # candidates that live recruitment mail actually references, all 26 are in
+    # PostgreSQL and 7 are in this file. PostgreSQL is what the product writes
+    # to; this file has fallen behind.
+    #
+    # Building the destination table from it would have dropped 129 live
+    # candidates and resurrected 36 the product no longer has, with row counts
+    # that look plausible either way. Copied verbatim so nothing is destroyed,
+    # but the table is built from PostgreSQL.
+    JsonStore("candidates.json", OPERATIONS, "candidates", "id", None,
+              "legacy mirror; candidates_store is migrated from PostgreSQL"),
     JsonStore("payment_receiver_accounts.json", OPERATIONS, "accounts", "id", None,
               "receiver registry; typed columns are rebuilt by Operations on import"),
     JsonStore("referrers.json", OPERATIONS, "referrers", "id", None),
@@ -117,6 +130,10 @@ JSON_STORES: tuple[JsonStore, ...] = (
 # PostgreSQL tables. Everything in the monolith schema is Operations-owned;
 # Marketing's only table is created by its own baseline, not migrated.
 OPERATIONS_TABLES: tuple[str, ...] = (
+    # candidates_store is sourced from PostgreSQL, NOT from candidates.json.
+    # The two have diverged in production - see the JsonStore entry below - and
+    # PostgreSQL is the live one.
+    "candidates_store",
     "candidate_identity_links", "candidate_job_status", "candidate_mailboxes",
     "candidate_status_history", "ai_recruitment_events",
     "gmail_message_ingestion_queue", "gmail_pubsub_deliveries",
@@ -170,6 +187,7 @@ class Plan:
     items: list[Item] = field(default_factory=list)
     broken_refs: list[str] = field(default_factory=list)
     duplicates: list[str] = field(default_factory=list)
+    divergences: list[str] = field(default_factory=list)
 
     def owned(self, owner: str) -> list[Item]:
         return [i for i in self.items if i.owner == owner]
@@ -254,6 +272,7 @@ def build_plan(data_dir: Path, source_dsn: str | None) -> Plan:
         plan.items.append(item)
 
     _check_cross_references(data_dir, plan)
+    _check_store_divergence(data_dir, source_dsn, plan)
 
     for rel, owner, note in FILE_TREES:
         root = data_dir.parent / rel if not (data_dir / Path(rel).name).exists() else data_dir / Path(rel).name
@@ -305,6 +324,54 @@ def _check_cross_references(data_dir: Path, plan: Plan) -> None:
             ref = proof.get("path") or proof.get("file") if isinstance(proof, dict) else None
             if ref and not (evidence_root / str(ref).lstrip("/\\")).exists():
                 plan.broken_refs.append(f"candidate {cid} -> missing proof {ref}")
+
+
+def _check_store_divergence(data_dir: Path, dsn: str | None, plan: Plan) -> None:
+    """Compare a JSON store against the table that holds the same records.
+
+    The monolith keeps some stores twice, as a file and as a table, and they
+    drift. Whichever one a migration reads becomes the truth, and the row count
+    looks reasonable either way, so the drift is invisible unless it is measured.
+    This measures it and reports it instead of picking a winner quietly.
+    """
+    if not dsn:
+        return
+    for store in JSON_STORES:
+        mirror = _MIRRORED_TABLES.get(store.filename)
+        if not mirror:
+            continue
+        path = data_dir / store.filename
+        if not path.exists():
+            continue
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        file_ids = {str(_record_id(rec, store, i))
+                    for i, rec in enumerate(_records(doc, store))
+                    if isinstance(rec, dict)}
+        with _connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("SELECT to_regclass(%s)", (mirror,))
+            if cur.fetchone()[0] is None:
+                continue
+            cur.execute(f'SELECT id FROM "{mirror}"')
+            table_ids = {str(r[0]) for r in cur.fetchall()}
+        only_file = file_ids - table_ids
+        only_table = table_ids - file_ids
+        if not (only_file or only_table):
+            continue
+        plan.divergences.append(
+            f"{store.filename} and {mirror} disagree: "
+            f"{len(file_ids)} in the file, {len(table_ids)} in the table, "
+            f"{len(file_ids & table_ids)} in both, "
+            f"{len(only_table)} only in the table, {len(only_file)} only in the file. "
+            f"{mirror} is migrated from PostgreSQL; the {len(only_file)} "
+            f"file-only record(s) are NOT migrated and need an owner decision")
+
+
+# JSON stores the monolith also keeps as a table. Kept explicit rather than
+# guessed, because being wrong here means migrating the stale copy.
+_MIRRORED_TABLES = {"candidates.json": "candidates_store"}
 
 
 def _connect(dsn: str):
@@ -753,6 +820,7 @@ def reconcile(data_dir: Path, targets: dict[str, dict[str, str]], plan: Plan) ->
         })
 
     report["broken_references"] = plan.broken_refs
+    report["store_divergences"] = plan.divergences
     report["duplicate_source_ids"] = plan.duplicates
     report["result"] = "PASS" if (ok and not plan.broken_refs and not plan.duplicates) else "FAIL"
     return report
@@ -877,6 +945,7 @@ def main(argv: list[str] | None = None) -> int:
                 "ambiguous_records": plan.total(AMBIGUOUS),
                 "excluded_records": plan.total(EXCLUDED),
                 "broken_references": plan.broken_refs,
+                "store_divergences": plan.divergences,
                 "duplicate_source_ids": plan.duplicates,
                 "items": [vars(i) for i in plan.items],
             }, indent=2), encoding="utf-8")
