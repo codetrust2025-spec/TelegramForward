@@ -267,3 +267,37 @@ def test_sensitive_looking_safe_columns_are_identifiers_or_enums():
         "these were added to the safe list without review, and each one "
         f"disables the fail-closed check for that column: {sorted(unreviewed)}"
     )
+
+
+def test_a_pooled_name_is_never_handed_back_unchanged():
+    """The name pool is 14 x 12. About one name in 168 hashes onto itself, and
+    a real person seeing their own name in the output cannot tell that from a
+    leak. Every name in the pool must map to something else."""
+    scrubber = sz.Scrubber(b"salt")
+    for first in sz.FIRST:
+        for last in sz.LAST:
+            original = f"{first} {last}"
+            assert scrubber.value("person_name", original).casefold() != original.casefold()
+    for company in sz.COMPANIES:
+        assert scrubber.value("company_name", company).casefold() != company.casefold()
+
+
+def test_avoiding_self_collision_stays_deterministic():
+    a, b = sz.Scrubber(b"same-salt"), sz.Scrubber(b"same-salt")
+    for name in ("Aarav Sharma", "Someone Else", sz.FIRST[0] + " " + sz.LAST[0]):
+        assert a.value("person_name", name) == b.value("person_name", name)
+
+
+def test_ai_prose_columns_are_replaced_not_redacted():
+    """Redaction finds addresses and numbers. It cannot find a name, and these
+    columns are AI text about a named candidate at a named company."""
+    for column in ("ai_reason", "recommended_action", "reasoning", "rationale",
+                   "mismatch_detail", "booking_block_reason"):
+        assert sz.SCRUB.get(column) == "free_text", column
+
+
+def test_status_vocabularies_are_preserved_exactly():
+    for column in ("candidate_status", "booking_status", "system_status",
+                   "source_type", "previous_detected_status"):
+        assert column in sz.SAFE_TEXT_COLUMNS, column
+        assert column not in sz.SCRUB, column

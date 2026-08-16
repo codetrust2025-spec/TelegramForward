@@ -90,7 +90,7 @@ _register("phone", [
 ])
 _register("upi", ["upi_id", "normalized_upi_id"])
 _register("bank_account", ["bank_account_identifier"])
-_register("company_name", ["company_name", "provider_name"])
+_register("company_name", ["company_name", "provider_name", "cited_company"])
 _register("free_text", [
     "summary", "ai_summary", "evidence_summary", "review_notes", "notes",
     "subject", "email_subject", "body_text", "html_body_text",
@@ -103,6 +103,12 @@ _register("free_text", [
     # redacted, because prose carries names, and no pattern finds a name the
     # way one finds an address or a number.
     "location", "detail", "verification_problems",
+    # AI-written prose about a named candidate for a named company. Measured on
+    # the production-shaped copy: ai_reason 340 distinct values in 629 rows,
+    # recommended_action 1489 in 2178, reasoning unique in every row. That is
+    # per-candidate text, so it is replaced rather than redacted.
+    "ai_reason", "recommended_action", "reasoning", "rationale",
+    "mismatch_detail", "booking_block_reason",
 ])
 _register("domain", ["company_domain", "sender_domain", "email_domain"])
 # Text that must keep its structure because something parses it, but which can
@@ -118,6 +124,13 @@ _register("redact", [
     # Redacted rather than replaced so it stays a URL and anything that parses
     # one still runs.
     "meeting_link", "cited_message_id",
+    # Fixed-template diagnostics: 27 distinct suppression_detail values across
+    # 12,411 rows, 12 failure_message values across 112, one last_error_message
+    # across 1,543. Too few distinct values to be carrying a per-person name,
+    # so the template is kept and only an embedded address or number is
+    # replaced. Keeping them intact is what makes the rehearsal's error-path
+    # distribution real.
+    "suppression_detail", "failure_message", "last_error_message",
 ])
 _register("filename", ["filename", "original_name", "latest_resume"])
 _register("credential", ["credential_ciphertext", "access_token", "refresh_token"])
@@ -159,6 +172,15 @@ SAFE_TEXT_COLUMNS: frozenset[str] = frozenset({
     "service_type", "opportunity_type", "purpose", "mode", "source",
     "last_error", "migration_name", "checksum", "kind", "target",
     "processing_mode", "confidence_band", "review_kind", "category",
+    # Status vocabularies. They contain a space, which is why the prose sweep
+    # surfaced them, but each is a closed set measured on the production-shaped
+    # copy: candidate_status 16 distinct values in 667 rows, source_type 3 in
+    # 94, system_status_source 1 in 16. Behaviour keys off these exact strings.
+    "candidate_status", "confirmed_status", "new_detected_status",
+    "previous_detected_status", "source_type", "booking_status",
+    "system_status", "system_status_source", "applied_system_status",
+    "previous_system_status", "corrected_candidate_status",
+    "original_candidate_status",
 })
 
 # A text column matching this and absent from both lists aborts the run.
@@ -271,13 +293,35 @@ class Scrubber:
         self._memo[key] = out
         return out
 
+    def _distinct_from(self, text: str, build) -> str:
+        """Draw from a fixed pool until the draw differs from the original.
+
+        Needed only for the pooled kinds. A pool small enough to look real is
+        small enough to hand someone their own name back.
+        """
+        out = build("person_pool")
+        for attempt in range(1, 12):
+            if out.casefold() != text.casefold():
+                return out
+            out = build(f"person_pool#{attempt}")
+        return out
+
     def _make(self, kind: str, text: str) -> str:
         d = self._digest(kind, text)
         if kind == "person_name":
-            return (f"{FIRST[self._int(kind, text, len(FIRST))]} "
-                    f"{LAST[self._int(kind + 'l', text, len(LAST))]}")
+            # The pool is 14 first names by 12 last names, drawn from common
+            # Indian names so the output stays realistic. That realism costs
+            # something: about one name in 168 hashes back onto itself, and a
+            # real person's own name reappearing in the output is
+            # indistinguishable from a leak even though nothing leaked. Rehash
+            # under a varied kind until the output differs from the input. Still
+            # deterministic, because it depends only on the input.
+            return self._distinct_from(text, lambda k: (
+                f"{FIRST[self._int(k, text, len(FIRST))]} "
+                f"{LAST[self._int(k + 'l', text, len(LAST))]}"))
         if kind == "company_name":
-            return COMPANIES[self._int(kind, text, len(COMPANIES))]
+            return self._distinct_from(
+                text, lambda k: COMPANIES[self._int(k, text, len(COMPANIES))])
         if kind == "email":
             local = d.hex()[:10]
             return f"{local}@sanitized.invalid"
