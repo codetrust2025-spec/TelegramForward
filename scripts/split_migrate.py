@@ -432,6 +432,11 @@ def _check_store_divergence(data_dir: Path, dsn: str | None, plan: Plan) -> None
 # guessed, because being wrong here means migrating the stale copy.
 _MIRRORED_TABLES = {"candidates.json": "candidates_store"}
 
+# Ledger rows that describe the migration rather than record something it
+# moved. Excluded from the reconciliation counts for the same reason resume
+# checkpoints are.
+_ARTEFACT_KIND_PREFIX = "quarantine:"
+
 
 def _write_quarantine_manifest(out_dir: Path, store: JsonStore, doc: Any,
                                source_dsn: str | None, conn, owner: str,
@@ -940,14 +945,21 @@ def reconcile(data_dir: Path, targets: dict[str, dict[str, str]], plan: Plan) ->
             cur.execute(LEDGER_DDL)
             # Resume checkpoints share the ledger table but are bookkeeping, not
             # migrated units, so they must not count toward the reconciliation.
+            # The quarantine manifest is the same class: an artefact describing
+            # the migration rather than a record it moved. Ledgered so a re-run
+            # does not rewrite it, and excluded here so it does not make
+            # migrated exceed expected by one.
             cur.execute(
                 "SELECT count(*) FROM split_migration_ledger "
-                "WHERE target=%s AND source_kind <> %s", (owner, _CHECKPOINT_KIND))
+                "WHERE target=%s AND source_kind <> %s "
+                "AND source_kind NOT LIKE %s",
+                (owner, _CHECKPOINT_KIND, _ARTEFACT_KIND_PREFIX + "%"))
             migrated = int(cur.fetchone()[0])
             cur.execute(
                 "SELECT count(*) FROM (SELECT source_kind, source_id FROM split_migration_ledger "
-                "WHERE target=%s AND source_kind <> %s GROUP BY 1,2 HAVING count(*) > 1) d",
-                (owner, _CHECKPOINT_KIND))
+                "WHERE target=%s AND source_kind <> %s AND source_kind NOT LIKE %s "
+                "GROUP BY 1,2 HAVING count(*) > 1) d",
+                (owner, _CHECKPOINT_KIND, _ARTEFACT_KIND_PREFIX + "%"))
             dupes = int(cur.fetchone()[0])
 
         passed = migrated == expected and dupes == 0

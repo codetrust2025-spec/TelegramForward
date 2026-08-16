@@ -214,3 +214,16 @@ def test_the_quarantine_manifest_is_not_counted_as_a_migrated_record():
     body = src.split("_ledger_put")[1]
     assert "written[owner] += 1" not in body, \
         "the manifest must not be counted as a migrated record"
+
+
+def test_artefact_ledger_rows_do_not_count_as_migrated_units():
+    """The manifest is ledgered so a re-run does not rewrite it, which puts a
+    row in the same table the reconciliation counts. Resume checkpoints already
+    had this problem and the same exclusion applies."""
+    import inspect
+    src = inspect.getsource(sm.reconcile)
+    assert "_ARTEFACT_KIND_PREFIX" in src
+    assert sm._ARTEFACT_KIND_PREFIX == "quarantine:"
+    # the manifest's ledger kind must carry that prefix
+    manifest = inspect.getsource(sm._write_quarantine_manifest)
+    assert 'kind = f"quarantine:{store.filename}"' in manifest
