@@ -1064,15 +1064,38 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--report", type=Path, help="write the JSON report here")
     ap.add_argument("--confirm-non-production", action="store_true",
                     help="required for --execute; asserts targets are disposable")
+    ap.add_argument("--authorized-production-cutover", metavar="REFERENCE",
+                    help="run against PRODUCTION. Takes the operator authorisation "
+                         "reference, which is recorded in the report. Mutually "
+                         "exclusive with --confirm-non-production: a cutover must "
+                         "not be run by asserting that production is disposable.")
     args = ap.parse_args(argv)
 
     try:
-        for label, value in (("--source-dsn", args.source_dsn),
-                             ("--marketing-dsn", args.marketing_dsn),
-                             ("--operations-dsn", args.operations_dsn),
-                             ("--marketing-data-dir", args.marketing_data_dir),
-                             ("--operations-data-dir", args.operations_data_dir)):
-            assert_not_production(label, value)
+        if args.authorized_production_cutover and args.confirm_non_production:
+            raise MigrationError(
+                "--authorized-production-cutover and --confirm-non-production are "
+                "mutually exclusive. One says this IS production, the other says it "
+                "is not."
+            )
+
+        if args.authorized_production_cutover:
+            # The marker guard exists so nobody reaches production by accident.
+            # Reaching it on purpose needs its own flag rather than a false
+            # assertion that production is disposable - otherwise the only way to
+            # do an authorised cutover is to lie to the safety check, and then the
+            # safety check protects nothing.
+            print("=" * 70)
+            print("PRODUCTION CUTOVER - the marker guard is being bypassed on purpose")
+            print(f"authorisation: {args.authorized_production_cutover}")
+            print("=" * 70)
+        else:
+            for label, value in (("--source-dsn", args.source_dsn),
+                                 ("--marketing-dsn", args.marketing_dsn),
+                                 ("--operations-dsn", args.operations_dsn),
+                                 ("--marketing-data-dir", args.marketing_data_dir),
+                                 ("--operations-data-dir", args.operations_data_dir)):
+                assert_not_production(label, value)
 
         if not args.data_dir.is_dir():
             raise MigrationError(f"--data-dir does not exist: {args.data_dir}")
@@ -1094,10 +1117,11 @@ def main(argv: list[str] | None = None) -> int:
             }
 
         if args.execute:
-            if not args.confirm_non_production:
+            if not (args.confirm_non_production or args.authorized_production_cutover):
                 raise MigrationError(
-                    "--execute requires --confirm-non-production. Refusing to write "
-                    "without an explicit assertion that the targets are disposable."
+                    "--execute requires --confirm-non-production (disposable targets) "
+                    "or --authorized-production-cutover REFERENCE (a real cutover). "
+                    "Refusing to write without one of them."
                 )
             written = execute(args.data_dir, targets, plan, args.source_dsn)
             print("\n=== EXECUTION ===")

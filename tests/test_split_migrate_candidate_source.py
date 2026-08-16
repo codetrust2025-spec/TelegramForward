@@ -227,3 +227,25 @@ def test_artefact_ledger_rows_do_not_count_as_migrated_units():
     # the manifest's ledger kind must carry that prefix
     manifest = inspect.getsource(sm._write_quarantine_manifest)
     assert 'kind = f"quarantine:{store.filename}"' in manifest
+
+
+def test_a_production_cutover_needs_its_own_flag_not_a_false_assertion():
+    """The marker guard stops accidental production targets. Reaching production
+    on purpose must not require asserting that production is disposable - if the
+    only way to do an authorised cutover is to lie to the safety check, the
+    safety check protects nothing."""
+    import inspect
+    src = inspect.getsource(sm.main)
+    assert "--authorized-production-cutover" in src
+    assert "mutually exclusive" in src.lower()
+    # execute must accept either, and refuse with neither
+    assert "args.confirm_non_production or args.authorized_production_cutover" in src
+
+
+def test_the_marker_guard_still_fires_without_the_cutover_flag():
+    import pytest
+    with pytest.raises(sm.MigrationError):
+        sm.assert_not_production("--marketing-dsn",
+                                 "postgresql://u:p@h/marketing_prod")
+    # and an ordinary disposable target passes
+    sm.assert_not_production("--marketing-dsn", "postgresql://u:p@h/mkt_dest")
