@@ -99,11 +99,70 @@ def schema(conn):
     return text_cols, pks
 
 
+def personal_atoms(node, out: set[str]) -> None:
+    """Every key and scalar in a document that is personal data in the SOURCE.
+
+    Keys are collected as well as values. These stores are keyed by phone
+    number, so the keys alone are personal data.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str) and sz.looks_like_personal_data(key):
+                out.add(key)
+            personal_atoms(value, out)
+    elif isinstance(node, list):
+        for item in node:
+            personal_atoms(item, out)
+    elif node is not None and not isinstance(node, bool):
+        text = str(node)
+        if len(text) >= 7 and sz.looks_like_personal_data(text):
+            out.add(text)
+
+
+def audit_json_stores(src_dir: Path, dst_dir: Path, failures: list[str]) -> None:
+    import json
+
+    files = sorted(p for p in dst_dir.rglob("*.json"))
+    print(f"   sanitised JSON stores: {len(files)}")
+    atoms_total, leaked_files, residual_files = 0, [], []
+    for target in files:
+        source = src_dir / target.relative_to(dst_dir)
+        if not source.exists():
+            continue
+        try:
+            src_doc = json.loads(source.read_text(encoding="utf-8"))
+            out_text = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        atoms: set[str] = set()
+        personal_atoms(src_doc, atoms)
+        atoms_total += len(atoms)
+        survived = [a for a in atoms if bounded(a, out_text)]
+        if survived:
+            leaked_files.append((target.name, len(survived), len(atoms)))
+        if sz.output_leak_label(out_text):
+            residual_files.append(target.name)
+
+    print(f"   personal keys and values taken from the source: {atoms_total}")
+    print(f"   files where one survived: {len(leaked_files)}")
+    for name, n, total in leaked_files:
+        print(f"     LEAK {name}: {n} of {total}")
+        failures.append(f"surviving values in {name}")
+    print(f"   files still scanning as real: {len(residual_files)}")
+    for name in residual_files:
+        print(f"     LEAK {name}")
+        failures.append(f"residual real-looking data in {name}")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source-dsn", required=True)
     ap.add_argument("--target-dsn", required=True)
+    ap.add_argument("--source-data-dir", type=Path,
+                    help="monolith data/ directory the snapshot was taken from")
+    ap.add_argument("--target-data-dir", type=Path,
+                    help="sanitised data/ directory to audit")
     ap.add_argument("--sample", type=int, default=300,
                     help="distinct values per column used to harvest probes")
     args = ap.parse_args(argv)
@@ -245,6 +304,14 @@ def main(argv: list[str] | None = None) -> int:
         failures.append(f"surviving numbers in {name}")
 
     src.close(); dst.close()
+
+    if args.source_data_dir and args.target_data_dir:
+        print()
+        print("=" * 78)
+        print("5. JSON stores: keys and leaves from the source, in the output")
+        print("=" * 78)
+        audit_json_stores(args.source_data_dir, args.target_data_dir, failures)
+
     print()
     if failures:
         print(f"RESULT: FAIL - {len(failures)} finding(s)")
