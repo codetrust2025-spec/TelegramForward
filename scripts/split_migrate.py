@@ -177,9 +177,15 @@ FILE_TREES: tuple[tuple[str, str, str], ...] = (
 )
 
 EXCLUDED_GLOBS: tuple[tuple[str, str], ...] = (
+    # *.session* rather than *.session, because production keeps timestamped
+    # backups beside the live files - session_accountN.session.pre_migrate_<ts>
+    # is every bit as usable as the original and the narrower glob walked
+    # straight past it. Found when a real one reached the Marketing volume.
+    ("*.session*", "live Telegram session secret"),
     ("*.session", "live Telegram session secret"),
     ("*.session-journal", "live Telegram session secret"),
     (".env", "credential material"),
+    ("*.env", "credential material"),
 )
 
 

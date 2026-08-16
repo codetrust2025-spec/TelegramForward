@@ -249,3 +249,25 @@ def test_the_marker_guard_still_fires_without_the_cutover_flag():
                                  "postgresql://u:p@h/marketing_prod")
     # and an ordinary disposable target passes
     sm.assert_not_production("--marketing-dsn", "postgresql://u:p@h/mkt_dest")
+
+
+def test_suffixed_session_backups_are_excluded():
+    """Production keeps timestamped backups beside the live session files.
+    session_accountN.session.pre_migrate_<ts> is every bit as usable as the
+    original, and *.session walked straight past it - one reached the Marketing
+    volume during the cutover before this was caught."""
+    from pathlib import Path as P
+    for name in ("accounts/a3/corrupt_session_backup/"
+                 "session_account3.session.pre_migrate_20260613_095312",
+                 "accounts/a1/a1.session",
+                 "accounts/a1/a1.session-journal",
+                 "accounts/a1/inbox_snapshot.session",
+                 "accounts/a1/a1.session.bak"):
+        assert sm._is_excluded_file(P("/data") / name), name
+
+
+def test_ordinary_account_files_are_still_copied():
+    from pathlib import Path as P
+    for name in ("accounts/a1/state.json", "accounts/a1/posting_mode.json",
+                 "accounts/a1/join_state.json"):
+        assert not sm._is_excluded_file(P("/data") / name), name
