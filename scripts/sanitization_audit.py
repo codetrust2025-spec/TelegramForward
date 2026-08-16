@@ -99,20 +99,51 @@ def schema(conn):
     return text_cols, pks
 
 
-def personal_atoms(node, out: set[str]) -> None:
+def atom_shape(value: str) -> str:
+    """What kind of thing is this, so the audit can fail on the right ones.
+
+    A store full of epoch timestamps and money amounts will trip any rule that
+    says "a long run of digits is a phone number". Those have to be told apart
+    from the things that identify a person, or the audit reports hundreds of
+    findings and stops being read.
+    """
+    if sz.EMAIL_IN_TEXT.search(value):
+        return "address"
+    if sz.UPI_IN_TEXT.search(value):
+        return "upi id"
+    core = value.lstrip("-")
+    if not core.isdigit():
+        return "text" if sz.DIGITS_IN_TEXT.search(value) else "other"
+    if "." in value:
+        return "timestamp"
+    if len(core) == 10 and core[0] in "6789":
+        return "mobile number"
+    if len(core) >= 16:
+        # Telegram access_hash territory. Nothing benign in these stores is
+        # this long.
+        return "long identity"
+    if len(core) in (10, 13) and core[0] == "1":
+        return "timestamp"
+    return "number"
+
+
+PERSONAL_SHAPES = {"address", "upi id", "mobile number", "long identity"}
+
+
+def personal_atoms(node, out: set[str], key: str | None = None) -> None:
     """Every key and scalar in a document that is personal data in the SOURCE.
 
     Keys are collected as well as values. These stores are keyed by phone
     number, so the keys alone are personal data.
     """
     if isinstance(node, dict):
-        for key, value in node.items():
-            if isinstance(key, str) and sz.looks_like_personal_data(key):
-                out.add(key)
-            personal_atoms(value, out)
+        for k, value in node.items():
+            if isinstance(k, str) and sz.looks_like_personal_data(k):
+                out.add(k)
+            personal_atoms(value, out, k if isinstance(k, str) else None)
     elif isinstance(node, list):
         for item in node:
-            personal_atoms(item, out)
+            personal_atoms(item, out, key)
     elif node is not None and not isinstance(node, bool):
         text = str(node)
         if len(text) >= 7 and sz.looks_like_personal_data(text):
@@ -125,6 +156,7 @@ def audit_json_stores(src_dir: Path, dst_dir: Path, failures: list[str]) -> None
     files = sorted(p for p in dst_dir.rglob("*.json"))
     print(f"   sanitised JSON stores: {len(files)}")
     atoms_total, leaked_files, residual_files = 0, [], []
+    benign: Counter = Counter()
     for target in files:
         source = src_dir / target.relative_to(dst_dir)
         if not source.exists():
@@ -138,20 +170,31 @@ def audit_json_stores(src_dir: Path, dst_dir: Path, failures: list[str]) -> None
         personal_atoms(src_doc, atoms)
         atoms_total += len(atoms)
         survived = [a for a in atoms if bounded(a, out_text)]
-        if survived:
-            leaked_files.append((target.name, len(survived), len(atoms)))
+        personal = [a for a in survived if atom_shape(a) in PERSONAL_SHAPES]
+        for a in survived:
+            benign[atom_shape(a)] += 0 if a in personal else 1
+        if personal:
+            shapes = sorted({atom_shape(a) for a in personal})
+            leaked_files.append((target.name, len(personal), len(atoms), shapes))
         if sz.output_leak_label(out_text):
             residual_files.append(target.name)
 
     print(f"   personal keys and values taken from the source: {atoms_total}")
     print(f"   files where one survived: {len(leaked_files)}")
-    for name, n, total in leaked_files:
-        print(f"     LEAK {name}: {n} of {total}")
-        failures.append(f"surviving values in {name}")
+    for name, n, total, shapes in leaked_files:
+        print(f"     LEAK {name}: {n} of {total} - {', '.join(shapes)}")
+        failures.append(f"surviving personal values in {name}")
+    if not leaked_files:
+        print("     none")
     print(f"   files still scanning as real: {len(residual_files)}")
     for name in residual_files:
         print(f"     LEAK {name}")
         failures.append(f"residual real-looking data in {name}")
+    print("   preserved on purpose, reported so the number is not mistaken "
+          "for a clean sweep:")
+    for shape, n in sorted(benign.items()):
+        if n:
+            print(f"     {n:>6}  {shape}")
 
 
 def main(argv: list[str] | None = None) -> int:

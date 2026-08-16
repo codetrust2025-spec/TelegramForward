@@ -444,3 +444,21 @@ def test_other_replacement_shapes_are_stripped_inside_documents():
         ("email", "a@b.com"), ("upi", "x@okaxis"), ("ip", "203.0.113.9"),
         ("credential", "tok"), ("filename", "cv.pdf"), ("free_text", "x" * 40))]
     assert sz.output_leak_label("{'v': [" + ", ".join(parts) + "]}") is None
+
+
+def test_telegram_access_hash_is_scrubbed():
+    """access_hash is not a hash of anything public. Paired with a user id it
+    is what lets you contact that person, so it is closer to a credential."""
+    scrubber = sz.Scrubber(b"salt")
+    doc = {"conversations": {"7959168911": {"access_hash": 1234567890123456789}}}
+    out = sz._walk_json(doc, scrubber)
+    hashes = [v["access_hash"] for v in out["conversations"].values()]
+    assert hashes[0] != 1234567890123456789
+    assert len(str(abs(hashes[0]))) == 19
+
+
+def test_access_hash_length_is_inside_the_identity_range():
+    """A 19-digit value has to be reachable, or the rule silently skips the one
+    field in the store that matters most."""
+    assert sz._is_numeric_identity("access_hash", 1234567890123456789)
+    assert sz._is_numeric_identity("peer_access_hash", -987654321098765432)

@@ -632,7 +632,11 @@ _TIMESTAMPY = re.compile(
     re.I)
 _IDENTITY_KEY = re.compile(
     r"chat|user|peer|from|to_id|sender|recipient|contact|lead|account|phone|"
-    r"mobile|msisdn|whatsapp|telegram", re.I)
+    # access_hash is not a hash of anything public. Paired with a user id it is
+    # what lets you contact that person on Telegram, which makes it closer to a
+    # credential than to an identifier. 19 digits, so the range below has to
+    # reach further than a phone number does.
+    r"mobile|msisdn|whatsapp|telegram|access_hash|hash", re.I)
 
 
 def _is_numeric_identity(key: str | None, value: Any) -> bool:
@@ -651,7 +655,7 @@ def _is_numeric_identity(key: str | None, value: Any) -> bool:
         return False
     if len(digits) == 10 and digits[0] in "6789":
         return True
-    return 9 <= len(digits) <= 15 and bool(key and _IDENTITY_KEY.search(key))
+    return 9 <= len(digits) <= 20 and bool(key and _IDENTITY_KEY.search(key))
 
 
 def _scrub_number(value: int, scrub: Scrubber) -> int:
