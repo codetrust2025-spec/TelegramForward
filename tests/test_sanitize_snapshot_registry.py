@@ -498,3 +498,25 @@ def test_digit_string_is_deterministic_and_exact_length():
         assert first == b.digit_string("number", "seed", length)
     assert sz.Scrubber(b"other").digit_string("number", "seed", 40) != \
         a.digit_string("number", "seed", 40)
+
+
+def test_join_keys_are_preserved_the_same_way_on_both_sides():
+    """The database preserves id as a join key. The file side has to agree, or
+    the same candidate stops matching itself across the two stores. Candidate
+    ids are the case that bites: some are ten digits, which reads as a phone
+    number by shape alone."""
+    scrubber = sz.Scrubber(b"salt")
+    doc = {"candidates": [{"id": "0246769847", "candidate_id": "11bc8daf98",
+                           "phone": "9876543210"}]}
+    out = sz._walk_json(doc, scrubber)
+    record = out["candidates"][0]
+
+    assert record["id"] == "0246769847"
+    assert record["candidate_id"] == "11bc8daf98"
+    assert record["phone"] != "9876543210"
+
+
+def test_preserve_applies_to_jsonb_columns_too():
+    scrubber = sz.Scrubber(b"salt")
+    out = sz._scrub_json_text(json.dumps({"id": "0246769847"}), None, scrubber)
+    assert json.loads(out)["id"] == "0246769847"

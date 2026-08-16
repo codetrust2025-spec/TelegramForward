@@ -453,7 +453,9 @@ def _scrub_json_text(raw: Any, kind: str | None, scrub: "Scrubber") -> Any:
                 nk = (scrub.value("redact", k)
                       if isinstance(k, str) and looks_like_personal_data(k) else k)
                 field = _json_kind(k) if isinstance(k, str) else None
-                if field and not isinstance(v, (dict, list)):
+                if field == PRESERVE:
+                    out[nk] = v
+                elif field and not isinstance(v, (dict, list)):
                     out[nk] = scrub.value(field, v)
                 elif (_is_key_material(v)
                       or _is_numeric_identity(k if isinstance(k, str) else None, v)):
@@ -698,6 +700,11 @@ def _scrub_number(value: int, scrub: Scrubber) -> int:
     return -replaced if value < 0 else replaced
 
 
+# Returned for keys the column registry preserves verbatim, so the JSON walker
+# leaves them exactly as the database side leaves them.
+PRESERVE = "__preserve__"
+
+
 def _json_kind(key: str) -> str | None:
     """Kind for a JSON key, falling back to the column registry.
 
@@ -706,7 +713,18 @@ def _json_kind(key: str) -> str | None:
     recruiter_email, job_title - so consulting SCRUB here means classifying a
     column classifies it inside every document that carries it too.
     """
-    return JSON_SCRUB_FIELDS.get(key) or SCRUB.get(key)
+    if key in JSON_SCRUB_FIELDS:
+        return JSON_SCRUB_FIELDS[key]
+    if key in SCRUB:
+        return SCRUB[key]
+    # Join keys. The database side preserves these, and the file side has to
+    # agree or the two stop joining. Candidate ids are the case that bites:
+    # some are ten digits, which reads as a phone number by shape, so the file
+    # got a scrubbed id while the table kept the real one and the same
+    # candidate stopped matching itself across the two stores.
+    if key in SAFE_TEXT_COLUMNS:
+        return PRESERVE
+    return None
 
 
 def _walk_json(node: Any, scrub: Scrubber) -> Any:
@@ -736,7 +754,9 @@ def _walk_json(node: Any, scrub: Scrubber) -> Any:
             if isinstance(key, str) and looks_like_personal_data(key):
                 new_key = scrub.value("redact", key)
             kind = _json_kind(key) if isinstance(key, str) else None
-            if kind and not isinstance(value, (dict, list)):
+            if kind == PRESERVE:
+                out[new_key] = value
+            elif kind and not isinstance(value, (dict, list)):
                 out[new_key] = scrub.value(kind, value)
             elif (_is_key_material(value)
                   or _is_numeric_identity(key if isinstance(key, str) else None, value)):
