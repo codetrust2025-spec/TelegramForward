@@ -4,6 +4,25 @@ Date: 2026-08-17
 Scope: read-only. No production data, code, config or deployment was changed.
 Result: **root cause proven — missing payout/salary/recovery stores, not duplication**
 
+> **Superseded figures — read [`handler-opening-balance-correction-plan.md`](handler-opening-balance-correction-plan.md) first.**
+>
+> The root cause below is confirmed. Three of the corrected *amounts* in §5 and
+> §8 are wrong, because they were computed by summing the monolith JSON by hand
+> rather than through the backend. Running the real calculation proved:
+>
+> | | this document | actually |
+> |---|---:|---:|
+> | Pavan Kalyan opening | −1,500 | **+3,500** |
+> | total opening | 17,000 | **22,000** |
+> | total closing | 22,500 | **32,500** |
+>
+> A ₹5,000 payout to Pavan Kalyan is **voided** — an administrator reversed it
+> on 2026-08-03 because it duplicates recovery `le_200d03469da441e0`. The hand
+> arithmetic below counted it, deducting one transfer twice. Separately,
+> restoring the salary store also accrues Thrilok's August salary, which the
+> `opening + 5,500` shortcut omitted. Thrilok ₹15,000 and Venugopal ₹3,500 are
+> unchanged; the overstatement is **₹1,32,000**, not ₹1,37,000.
+
 ---
 
 ## 1. The formula, exactly as it runs

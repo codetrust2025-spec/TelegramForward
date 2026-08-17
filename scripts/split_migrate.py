@@ -40,6 +40,9 @@ MARKETING = "marketing"
 OPERATIONS = "operations"
 AMBIGUOUS = "ambiguous"
 EXCLUDED = "excluded"
+# Found on disk but claimed by no registry entry. Never migrated, always
+# reported, and fatal to validation so the omission cannot pass a cutover gate.
+UNCLASSIFIED = "unclassified"
 
 # Any of these appearing in a target DSN or data directory aborts the run.
 PRODUCTION_MARKERS = (
@@ -125,7 +128,29 @@ JSON_STORES: tuple[JsonStore, ...] = (
               "historical backup artefact, not live state"),
     JsonStore("vapid_keys.json", EXCLUDED, None, None, None,
               "push signing keys; regenerate per environment, never copy"),
+    # Accounting stores. These were absent from this registry at the 2026-08-16
+    # cutover and so were never carried across. Nothing failed: the Operations
+    # balance formula subtracts payouts, salary and recoveries inside
+    # try/except blocks, so three missing sources became three silent zeros and
+    # the August opening balances were published overstated by Rs 1,32,000.
+    # They are financial records — copied verbatim, never rebuilt.
+    JsonStore("handler_expenses.json", OPERATIONS, "expenses", "id", None,
+              "handler payouts; subtracted from the payable balance"),
+    JsonStore("handler_salaries.json", OPERATIONS, "salaries", None, None,
+              "fixed monthly salary configuration; added to the payable balance"),
+    JsonStore("company_expenses.json", OPERATIONS, "expenses", "id", None,
+              "company-side expense ledger"),
+    JsonStore("historical_booking_records.json", OPERATIONS, None, None, None,
+              "pre-split booking history; copied verbatim"),
+    JsonStore("bgv_register.json", OPERATIONS, None, None, None,
+              "background-verification register"),
+    JsonStore("operator_tasks.json", OPERATIONS, None, None, None,
+              "operator task queue"),
 )
+
+# Runtime state that is deliberately not migrated: it is rebuilt by the service
+# on start, so copying it would carry stale infrastructure state across.
+UNMIGRATED_RUNTIME_FILES = frozenset({"ollama_nodes_state.json"})
 
 # PostgreSQL tables. Everything in the monolith schema is Operations-owned;
 # Marketing's only table is created by its own baseline, not migrated.
@@ -263,8 +288,38 @@ def _record_id(rec: Any, store: JsonStore, index: int) -> str:
 # Source inspection
 # ---------------------------------------------------------------------------
 
+def _sweep_unregistered_stores(data_dir: Path, plan: Plan) -> None:
+    """Surface top-level JSON stores that nothing in the registry claims.
+
+    The registry's promise was that an unlisted source shows up as
+    UNCLASSIFIED instead of being dropped, but nothing ever enumerated the
+    directory — the plan only walked the registry, so a store no entry
+    mentioned was invisible rather than unclassified. That is precisely how six
+    stores, three of them financial, were left behind at the cutover. Read the
+    directory and make the omission loud.
+    """
+    registered = {store.filename for store in JSON_STORES}
+    for path in sorted(data_dir.glob("*.json")):
+        if path.name in registered or path.name in UNMIGRATED_RUNTIME_FILES:
+            continue
+        item = Item("json_store", path.name, UNCLASSIFIED)
+        try:
+            raw = path.read_bytes()
+            item.checksum = _sha256_bytes(raw)
+            doc = json.loads(raw.decode("utf-8"))
+            item.count = len(doc) if isinstance(doc, (list, dict)) else 0
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            item.problems.append(f"unreadable JSON: {exc}")
+        item.problems.append(
+            "not in JSON_STORES: no owner declared, so this file would not be "
+            "migrated. Add a registry entry before cutover."
+        )
+        plan.items.append(item)
+
+
 def build_plan(data_dir: Path, source_dsn: str | None) -> Plan:
     plan = Plan()
+    _sweep_unregistered_stores(data_dir, plan)
 
     for store in JSON_STORES:
         path = data_dir / store.filename
@@ -1047,7 +1102,8 @@ def print_plan(plan: Plan) -> None:
     if unclassified:
         print("\n-- UNCLASSIFIED --")
         for i in unclassified:
-            print(f"  {i.kind:<10} {i.name}")
+            flag = "  !! " + "; ".join(i.problems) if i.problems else ""
+            print(f"  {i.kind:<10} {i.name:<42} {i.count:>7}{flag}")
 
     print("\n=== DESTINATION TOTALS ===")
     print(f"  Marketing records:  {plan.total(MARKETING):>6}   (ledger units {plan.total_units(MARKETING)})")
@@ -1126,6 +1182,19 @@ def main(argv: list[str] | None = None) -> int:
 
         plan = build_plan(args.data_dir, args.source_dsn)
         print_plan(plan)
+
+        # A store nobody owns is a store nobody migrates. Refusing to write is
+        # the whole point of the registry: the alternative is a cutover that
+        # reports success while leaving data behind, which is what happened on
+        # 2026-08-16 to six stores including three financial ones.
+        orphans = [i.name for i in plan.items if i.owner == UNCLASSIFIED]
+        if orphans and (args.execute or args.reconcile):
+            raise MigrationError(
+                "unregistered JSON stores found in --data-dir: "
+                + ", ".join(sorted(orphans))
+                + ". Add each to JSON_STORES with an explicit owner (use "
+                  "EXCLUDED to withhold one deliberately) before migrating."
+            )
 
         if args.execute or args.reconcile:
             missing = [n for n, v in (("--marketing-dsn", args.marketing_dsn),
