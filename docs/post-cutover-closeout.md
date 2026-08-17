@@ -1,3 +1,33 @@
+> **HISTORICAL — SUPERSEDED. Do not use this as current state.**
+>
+> This document records the state of production on **2026-08-17, immediately
+> after the 2026-08-16 cutover**. It was accurate then. It is stale now.
+>
+> For current state see **[`current-production-closeout.md`](current-production-closeout.md)**.
+>
+> Known to be out of date here:
+>
+> - **Operations release.** This document records `0207819…`. Operations has since
+>   shipped six releases and now runs `ad5e0e6…`.
+> - **Feature set.** Six features were decommissioned afterwards — Daily Briefing,
+>   Mail Audit, Payment Reconciliation, BGV Register, Handler Kit and Settings.
+>   Sections below that describe BGV, reconciliation, handler expenses and
+>   salaries as live surfaces describe a product that no longer ships them. Their
+>   historical data was deliberately retained and is not an active feature.
+> - **Slot Booking parity.** `AiProcessingStatus.jsx` was missing and is now
+>   present; booking-source badges are now implemented.
+> - **AI inference.** The Ollama pool, the three-node health surface and the
+>   dynamic fail-closed firewall guard did not exist when this was written.
+> - **Logout.** This document states that logout invalidates the session. Later
+>   testing that replayed the raw token rather than the cookie jar showed the
+>   token remains valid until expiry. The current document records that
+>   correctly, as an open security issue.
+>
+> The body below is left exactly as written, as a record of what was true at the
+> time.
+
+---
+
 # Post-cutover verification and closeout
 
 Date: 2026-08-17
