@@ -264,8 +264,11 @@ Nothing below has been run.
 4. `merge_payment_ledger.py --source … --target … --report …` **dry run first**;
    confirm 88 imported / 0 collisions; then `--apply --backup-dir …`.
 5. Verify SHA-256, byte size, owner and mode of all three files.
-6. **No restart needed** — all three are read per request; the release is
-   unchanged. (The Phase 5 code fix is a *separate* PR-and-deploy, not part of
+6. **A restart should not be needed**: none of the three loaders caches, so each
+   is read per request, and the release is unchanged. This rests on reading the
+   loaders, not on an observed long-running process — so if step 7 still shows
+   the old figures, restart `operations-api` and re-check before concluding the
+   copy failed. (The Phase 5 code fix is a *separate* PR-and-deploy, not part of
    this data correction.)
 7. Load Earnings Breakdown for August 2026; expect opening **₹22,000**, closing
    **₹32,500**.
