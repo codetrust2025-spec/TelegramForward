@@ -1,8 +1,21 @@
-# Handler opening-balance correction — rehearsed, awaiting approval
+# Handler opening-balance correction — DEPLOYED AND VERIFIED
 
 Date: 2026-08-17
-Status: **prepared and rehearsed in isolation. Not executed. Production unchanged.**
+Status: **executed in production 2026-08-17T20:56Z, verified through the live backend.**
 Supersedes the figures in [`handler-opening-balance-audit.md`](handler-opening-balance-audit.md) §5 and §8.
+
+> **Outcome.** August opening **₹1,54,000 → ₹22,000**, closing **₹1,59,500 →
+> ₹32,500**, matching the rehearsal exactly. Operations release
+> `ad5e0e6` → `e74b8a0`. Marketing untouched. No database row was edited and no
+> balance was set by hand — every figure is derived, and changed only because
+> its missing inputs came back.
+>
+> Backups, both state snapshots and an exact `ROLLBACK.sh` are retained in
+> `/opt/teleautomation-backups/pre-openingbalance-20260817T171800Z/`.
+> Rollback was not needed and was not used.
+>
+> Sections 1–9 below are the pre-execution record and are left as written.
+> Section 11 records what actually happened.
 
 ---
 
@@ -295,3 +308,105 @@ never stored. No database change is involved, so no database rollback is needed.
 - **Not tested**: the production correction itself, which needs approval; and
   the Phase 5 code fix under real HTTP traffic (it was exercised by direct
   backend calls with the patched modules mounted, not through a deployed build).
+
+---
+
+## 11. Execution record — 2026-08-17
+
+Run in the approved order: code first, so the fail-visible behaviour was proven
+on the live service *before* the data that would hide it was restored.
+
+### Backups (all verified before anything changed)
+
+`/opt/teleautomation-backups/pre-openingbalance-20260817T171800Z/`
+
+| artefact | bytes | verification |
+|---|---:|---|
+| `operations_prod.dump` | 117,838,634 | `pg_restore --list` readable |
+| `operations_data_volume.tar.gz` | 47,046,700 | `gzip -t` OK, 595 members |
+| `payment_verification_ledger.json.pre-correction` | 22,066 | sha `602fc707…` matched live |
+| `env.production.pre-correction` | — | mode 600 preserved |
+
+`ABSENT_BEFORE_CORRECTION.txt` records that both handler stores were absent, so
+the pre-state is unambiguous. `SHA256SUMS` covers the directory.
+
+### Release
+
+`ad5e0e6` → **`e74b8a0`** (PR #11, CI green). The previous image was tagged
+`rollback-ad5e0e61…` *before* the build, and the previous source tree kept at
+`/opt/teleautomation-business.prev-20260817T172032Z`. Marketing stayed on
+`2f6fe88` and was never rebuilt.
+
+Two things worth recording. The staged source tree differed from the live one by
+exactly one file each way — host-only `RELEASE_SHA` and the new test — so the
+deployed tree was provably the merged commit. And `RELEASE_SHA_OPERATIONS` in
+`.env.production` was **stale** (`0207819…`) while the running image had been
+built with `ad5e0e6`: past builds passed the value inline instead of through the
+file. Writing it into the file fixed that drift as a side effect.
+
+### Fail-visible behaviour, proven on production
+
+With the new code live and the stores still missing:
+
+```
+unavailable_accounting_sources : ['handler_expenses', 'handler_salaries']
+stats.earnings_unreconciled    : True
+```
+
+The old ₹1,54,000 / ₹1,59,500 were still computed — but no longer presented as
+settled. After the restore the flag cleared to `False` with an empty source list.
+
+### Data restored
+
+| file | bytes | mode | sha256 (destination == authoritative source) |
+|---|---:|---|---|
+| `handler_expenses.json` | 14,277 | 644 | `4b7806a9782d44cf8aa64e328453d30c…` ✔ |
+| `handler_salaries.json` | 330 | 644 | `125421c5f7e109af3c6a7335165705c4…` ✔ |
+| `payment_verification_ledger.json` | 315,332 | 644 | `4a3923243bad2ef1ade5668a2979de5e…` |
+
+### Ledger merge
+
+Dry run first, and it reproduced the rehearsal byte for byte — same before hash
+`e1eecb3f…`, same after hash `4a392324…`.
+
+| collection | before | imported | collided | after |
+|---|---:|---:|---:|---:|
+| entries | 0 | 16 | 0 | 16 |
+| payments | 2 | 28 | 0 | 30 |
+| evidence | 3 | 33 | 0 | 36 |
+| entitlements | 0 | 11 | 0 | 11 |
+
+**88 imported, 0 collisions.** The second run imported **0** and left the file
+byte-identical — idempotency demonstrated in production, not just rehearsal.
+All 5 post-cutover Operations rows survived and remain first in file order.
+
+### Result
+
+| month | | opening before | opening after | closing before | closing after |
+|---|---|---:|---:|---:|---:|
+| Jun | total | 0 | 0 | 98,500 | **24,500** |
+| Jul | total | 98,500 | **24,500** | 154,000 | **22,000** |
+| Aug | Thrilok | 72,000 | **15,000** | 72,000 | **30,000** |
+| | Pavan Kalyan | 48,500 | **3,500** | 54,000 | **−1,000** |
+| | Venugopal | 33,500 | **3,500** | 33,500 | **3,500** |
+| | **total** | **154,000** | **22,000** | **159,500** | **32,500** |
+
+Confirmed over authenticated HTTP, not only in-process: `/candidates/stats`
+returns opening 22,000, closing 32,500, `earnings_unreconciled: false`.
+
+Every carry-forward tie holds (Jun→Jul→Aug, 0 mismatches), the ₹5,000 Pavan
+payout remains `RECLASSIFIED_TO_RECOVERY` and excluded, the ₹10,000 recovery
+applies once in July's own column and once into August's opening, and the
+ledger's ₹83,000 of `approved_expense` rows are still not counted as payouts.
+`LUKKA PAVAN KALYAN` resolves to `pavan kalyan`.
+
+### Two observations, neither caused by this change
+
+- **`candidates_store` moved 198 → 199.** A candidate was logged by an operator
+  at 18:56Z, after the backup. Nothing here writes to the database. It is dated
+  2026-08-18 and references Ravinder, who is payout-excluded, so it is immaterial
+  to handler balances — the figures re-verified identically afterwards.
+- **Ollama node `jagadeesh` is offline**, its reverse tunnel absent from
+  `127.0.0.1:11435`. The container recreate did *not* break the firewall guard:
+  `ops-ollama-watch` re-applied it automatically and the other two nodes reach
+  Ollama through the same path. The tunnel is a remote-laptop condition.
