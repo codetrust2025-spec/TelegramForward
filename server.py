@@ -1278,6 +1278,8 @@ from api.routers.accounts import router as accounts_router
 app.include_router(accounts_router)
 from api.routers.ai import router as ai_router
 app.include_router(ai_router)
+from api.routers.attendance import router as attendance_router
+app.include_router(attendance_router)
 from api.routers.auth import router as auth_router
 app.include_router(auth_router)
 from api.routers.candidates import router as candidates_router

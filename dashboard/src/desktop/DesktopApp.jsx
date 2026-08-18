@@ -11,6 +11,7 @@ import { KnowledgeAssistantPanel } from "../components/KnowledgeAssistantPanel.j
 import { DailyBriefingCard } from "../components/DailyBriefingCard.jsx";
 import { RecruitmentMailPanel } from "../components/RecruitmentMailPanel.jsx";
 import { MailMonitoringNotifications } from "../components/MailMonitoringNotifications.jsx";
+import AttendanceAdminPanel from "../attendance/AttendanceAdminPanel.jsx";
 import { OutcomeAuditPanel } from "../components/OutcomeAuditPanel.jsx";
 import PaymentReconciliationPanel from "../components/PaymentReconciliationPanel.jsx";
 import BgvRegisterPanel from "../components/BgvRegisterPanel.jsx";
@@ -60,6 +61,7 @@ function sidebarActiveId(mainView, desktopPage, workspaceMode) {
   if (mainView === "outcome-audit") return "outcome-audit";
   if (mainView === "payment-reconciliation") return "payment-reconciliation";
   if (mainView === "bgv-register") return "bgv-register";
+  if (mainView === "attendance") return "attendance";
   if (mainView === "daily-ops") return "daily-ops";
   if (mainView === "data-room") return "data";
   if (desktopPage === "setup" || desktopPage === "login") return "accounts";
@@ -199,6 +201,9 @@ export function DesktopApp({
         case "bgv-register":
           setMainView("bgv-register");
           break;
+        case "attendance":
+          setMainView("attendance");
+          break;
         case "daily-ops":
           setMainView("daily-ops");
           break;
@@ -304,6 +309,8 @@ export function DesktopApp({
     content = <PaymentReconciliationPanel />;
   } else if (mainView === "bgv-register") {
     content = <BgvRegisterPanel />;
+  } else if (mainView === "attendance") {
+    content = <AttendanceAdminPanel />;
   } else if (mainView === "daily-ops") {
     bodyClass += " desktop-body--daily-ops";
     content = (
