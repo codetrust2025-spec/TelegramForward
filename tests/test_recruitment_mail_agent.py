@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from core.ai_gateway import AIGatewayError
+from core.recruitment_mail_store import should_route_to_mail_alert
 from services.recruitment_mail_agent import (
     _prompt_json, _manual_review_from_strong_context, clean_email, relevance_score, content_hash, validate_result, parse_model_json,
     routing_decision, _failure_review_result,
@@ -93,6 +94,61 @@ def test_non_iso_offer_dates_are_rejected():
     row=valid_result();row['offer']['joining_date']='12/07/2026'
     with pytest.raises(ValueError,match='invalid ISO date'):
         validate_result(row,{'subject':'Selection update','body':'You have been selected for the role.'})
+
+
+def test_unsupported_joining_prediction_recovers_source_proven_offer_letter():
+    row = valid_result()
+    row.update(
+        status='JOINING_CONFIRMED', classification='joining_confirmed',
+        candidate_status='Joining Confirmed', requires_manual_review=True,
+        risk_flags=['MODEL_DISAGREEMENT'],
+        model_validation={
+            'agreed': False, 'primary_status': 'OFFER_APPROVED',
+            'validator_status': 'JOINING_CONFIRMED',
+        },
+    )
+    row['offer'].update(
+        offer_detected=True, offer_letter_detected=True,
+        offer_date='2026-08-24', joining_date='2026-09-14',
+    )
+    # Reproduce the model's valid-but-untyped evidence meaning. The source
+    # quote is genuine, but this wording alone did not pass the Mail Alerts
+    # typed-evidence visibility gate after the joining downgrade.
+    row['evidence'] = [{
+        'source': 'EMAIL_BODY',
+        'meaning': 'The offer has been successfully released to the candidate.',
+        'text': 'The offer has been successfully released to the candidate.',
+    }]
+    message = {
+        'subject': 'Offer has been released',
+        'body': (
+            'The offer has been successfully released to the candidate. '
+            'The candidate is expected to join on 14 September 2026.'
+        ),
+    }
+    attachments = [{
+        'filename': 'Offer_Letter.pdf', 'mime_type': 'application/pdf',
+        'attachment_type': 'OFFER_LETTER', 'extraction_status': 'FAILED',
+        'text': '',
+    }]
+
+    validate_result(row, message, attachments)
+
+    assert row['status'] == 'OFFER_LETTER_RECEIVED'
+    assert row['classification'] == 'offer_received'
+    assert row['candidate_status'] == 'Offer Received'
+    assert row['normalised_from'] == 'JOINING_CONFIRMED'
+    assert row['requires_manual_review'] is True
+    assert any(item['meaning'] == 'OFFER_LETTER_RECEIVED' for item in row['evidence'])
+    assert should_route_to_mail_alert(
+        {
+            'primary_status': row['status'], 'structured_result': row,
+            'requires_manual_review': row['requires_manual_review'],
+            'validation_status': row['validation_status'],
+        },
+        {'classification': row['classification']},
+        source={'subject': message['subject']},
+    ) is True
 
 def test_central_recruitment_model_routes_use_required_defaults(monkeypatch):
     from core.ai_model_routing import configured_model_routes

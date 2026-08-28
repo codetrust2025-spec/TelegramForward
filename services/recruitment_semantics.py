@@ -402,6 +402,8 @@ def classify_context(
     offer_received = any(phrase in lowered for phrase in (
         "we are pleased to offer you", "we are delighted to offer you",
         "offer letter attached", "offer of employment",
+        "offer has been released", "offer has been successfully released",
+        "offer letter has been released",
     ))
     offer_accepted = any(phrase in lowered for phrase in (
         "we have received your acceptance", "your offer acceptance is confirmed",
