@@ -344,6 +344,7 @@ def test_high_impact_joining_result_uses_independent_validator(monkeypatch):
     outcome["offer"]["joining_date"]="2026-07-15"
     calls=[]
     class Response:
+        node_id="";node_label=""
         def __init__(self,model):
             self.content=__import__("json").dumps(outcome);self.model=model;self.duration_ms=7
     monkeypatch.setattr(agent,"configured_models",lambda:{"primary":"qwen3.6","validator":"gemma4"})
@@ -362,6 +363,7 @@ def test_critical_validator_never_falls_back_to_lightweight_model(monkeypatch):
     outcome["evidence"]=[{"source":"EMAIL_BODY","meaning":"SELECTED","text":"You have been selected"}]
     calls=[]
     class Response:
+        node_id="";node_label=""
         content=__import__("json").dumps(outcome);model="qwen2.5:7b";duration_ms=7
     monkeypatch.setattr(agent,"configured_models",lambda:{"primary":"qwen2.5:7b","validator":"validator-model","fallback":"gemma2:2b"})
     def fake_chat(**kwargs):
@@ -388,6 +390,7 @@ def test_validator_recovers_primary_false_negative_for_joining_confirmation(monk
     joining["offer"]["joining_date"]="2026-07-15"
     outputs=iter([ignored,joining])
     class Response:
+        node_id="";node_label=""
         def __init__(self,value,model):
             self.content=__import__("json").dumps(value);self.model=model;self.duration_ms=3
     monkeypatch.setattr(agent,"configured_models",lambda:{"primary":"qwen3.6","validator":"gemma4"})

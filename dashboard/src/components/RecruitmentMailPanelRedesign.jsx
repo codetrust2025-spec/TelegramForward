@@ -3,6 +3,7 @@ import { API } from "../config.js";
 import { useConfirm } from "../context/ConfirmContext.jsx";
 import { needsReconnect } from "../utils/mailboxStatus.js";
 import { ButtonContent, InlineLoader, OverlayLoader } from "../Loader.jsx";
+import AiMailModelSelector from "./AiMailModelSelector.jsx";
 
 const request = async (path, options = {}) => {
   const isGet = !options.method || options.method === "GET";
@@ -2583,6 +2584,7 @@ export default function RecruitmentMailPanelRedesign() {
           </button>
         </div>
       </header>
+      <AiMailModelSelector request={request} />
       <AiNodeManager
         nodes={aiNodes}
         busy={busy}

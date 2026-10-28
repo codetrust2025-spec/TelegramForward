@@ -7,6 +7,7 @@ is not a real calendar day cannot contribute one.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -79,14 +80,17 @@ def test_malformed_dates_are_ignored_entirely(store, bad):
 
 
 def test_cancelled_and_failed_records_do_not_open_a_month(store):
+    # Current/previous months are deliberately always offered, even empty.
+    # Exercise cancelled-row filtering in months outside those reserved slots.
+    year = datetime.now(timezone.utc).year - 2
     seed(store, [
-        {"date": "2026-09-09", "time": "10:00", "stage": "dropped"},
-        {"date": "2026-10-10", "time": "10:00", "stage": "fail"},
+        {"date": f"{year}-09-09", "time": "10:00", "stage": "dropped"},
+        {"date": f"{year}-10-10", "time": "10:00", "stage": "fail"},
         {"date": "2026-08-04", "time": "11:30"},
     ])
     offered = months(store)
-    assert "2026-09" not in offered
-    assert "2026-10" not in offered
+    assert f"{year}-09" not in offered
+    assert f"{year}-10" not in offered
 
 
 def test_an_unconfirmed_slot_does_not_open_a_month(store):

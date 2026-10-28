@@ -307,6 +307,14 @@ def _request(
         connection.close()
 
 
+def installed_model_inventory(node_id: str, *, timeout: float = 5) -> list[dict[str, Any]]:
+    """Admin inventory including on-disk model size; never pulls models."""
+    tags = _request(node_id, "/api/tags", timeout=timeout)
+    return [{"name": str(entry.get("name") or entry.get("model") or ""),
+             "size_bytes": int(entry.get("size") or 0)}
+            for entry in tags.get("models", []) if entry.get("name") or entry.get("model")]
+
+
 def node_health(
     node_id: str, *, model: str, timeout: float = 5, deep: bool = True
 ) -> dict[str, Any]:
