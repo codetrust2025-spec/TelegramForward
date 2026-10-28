@@ -10,13 +10,16 @@ impossible bar and a message about a component that was not even allowed to run.
 from __future__ import annotations
 
 import pytest
+from datetime import date, timedelta
 
 from features import ollama_invite_extract as oie
 
 
 VISION_JSON = {
     "candidate_name": "Abilash Perla",
-    "interview_date": "2026-08-10",
+    # This suite tests OCR gating, not past-year correction. Keep its invite
+    # unambiguously in the future so it cannot drift into that separate path.
+    "interview_date": (date.today() + timedelta(days=14)).isoformat(),
     "start_time": "02:30 PM",
     "end_time": "03:30 PM",
     "interview_round": "L2",
@@ -59,7 +62,7 @@ def test_ai_only_success_is_not_blocked_by_missing_ocr(ai_only, ocr_forbidden):
 
     assert result["auto_booking_safe"] is True
     assert result["manual_fields_required"] is False
-    assert result["interview_date"] == "2026-08-10"
+    assert result["interview_date"] == VISION_JSON["interview_date"]
     assert result["start_time"] == "02:30 PM"
     assert not result.get("failure_reason")
 
@@ -148,7 +151,7 @@ def test_ai_only_incomplete_data_allows_manual_confirmation(ai_only, ocr_forbidd
     assert "start time" in result["failure_reason"]
     assert "OCR" not in result["failure_reason"]
     # The date the AI did read is still offered, so the operator only fills the gap.
-    assert result["interview_date"] == "2026-08-10"
+    assert result["interview_date"] == VISION_JSON["interview_date"]
 
 
 def test_ai_only_handles_an_unreachable_model_without_mentioning_ocr(
