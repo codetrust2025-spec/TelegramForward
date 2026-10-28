@@ -2927,3 +2927,15 @@
     align-self: stretch;
   }
 }
+
+/* AI Mail only: long installed model/node labels must fit narrow screens. */
+.sot-mail-model-selector { overflow-wrap: anywhere; min-width: 0; }
+.sot-mail-model-selector select { max-width: 100%; min-width: 0; width: min(100%, 44rem); }
+.sot-mail-model-selector button { margin-top: .5rem; }
+.sot-mail-model-selector label { display: grid; gap: .4rem; font-weight: 600; }
+.sot-mail-model-selector select,
+.sot-mail-model-selector button { border: 1px solid var(--sot-border, #21344d); border-radius: 8px; padding: .6rem .8rem; color: var(--sot-text, #f3f7ff); background: var(--sot-card-soft, #111e30); }
+.sot-mail-model-selector button { margin-right: .4rem; }
+.sot-mail-model-selector button:disabled { opacity: .5; cursor: not-allowed; }
+.sot-mail-model-selector p { margin-top: .6rem; line-height: 1.5; }
+.sot-mail-model-selector small { display: block; margin-top: .6rem; color: var(--sot-muted, #8da0bd); }

@@ -12,6 +12,7 @@ from datetime import date, datetime
 from typing import Any
 
 from core import recruitment_mail_store as store
+from core import ai_mail_model
 from core.ai_gateway import AIGatewayError, chat_structured, configured_models
 from services.recruitment_semantics import (
     DOCUMENT_TYPES,
@@ -1510,6 +1511,9 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
         attachment_texts, message.get("thread_context"),
     ).get("context") or {}
     models = configured_models()
+    mail_selection = ai_mail_model.selection()
+    if mail_selection["custom"]:
+        models["primary"] = mail_selection["model"]
     deadline = time.monotonic() + max(
         20.0,
         float(os.getenv("AI_JOB_TIMEOUT", os.getenv("AI_RECRUITMENT_JOB_TIMEOUT_SECONDS", "660"))),
@@ -1531,8 +1535,13 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
         workload: str = "recruitment_mail_classification",
     ):
         """Use the lightweight fallback when the configured runner cannot serve."""
+        def send(**kwargs):
+            if mail_selection["custom"] and kwargs["model"] == mail_selection["model"]:
+                return ai_mail_model.request(selected=mail_selection, **kwargs)
+            return chat_structured(**kwargs)
+
         try:
-            return chat_structured(
+            return send(
                 messages=messages, schema=SCHEMA, model=model, max_retries=max_retries,
                 timeout=remaining_timeout(),
                 deadline_monotonic=deadline,
@@ -1550,7 +1559,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
                 "Recruitment model failed; retrying fallback primary=%s fallback=%s code=%s",
                 model, fallback, exc.code,
             )
-            return chat_structured(
+            return send(
                 messages=messages, schema=SCHEMA, model=fallback, max_retries=0,
                 timeout=remaining_timeout(),
                 deadline_monotonic=deadline,
@@ -1582,6 +1591,9 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
         logger.info("Ollama response JSON extracted for recruitment classification")
         result = primary
         model_label = primary_response.model
+        ai_mail_model.remember(primary_response)
+        if primary_response.node_id:
+            model_label += f"@{primary_response.node_id}"
         duration = primary_response.duration_ms
         if _requires_independent_validation(primary, routing_context):
             validator_response = request_model(
@@ -1605,7 +1617,9 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
                 except (ValueError, json.JSONDecodeError) as exc:
                     raise AIGatewayError("Ollama validator returned malformed JSON after one repair retry.", code="OLLAMA_INVALID_JSON") from exc
             result = _reconcile_model_results(primary, validator)
-            model_label = f"{primary_response.model}|validator:{validator_response.model}"
+            model_label += f"|validator:{validator_response.model}"
+            if validator_response.node_id:
+                model_label += f"@{validator_response.node_id}"
             duration += validator_response.duration_ms
         try:
             validate_result(result, message, attachment_texts)
