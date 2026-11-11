@@ -87,11 +87,48 @@ def test_the_vps_node_is_absent_unless_explicitly_enabled(monkeypatch):
     assert ollama_nodes.base_url_for("vps_local") == "http://127.0.0.1:11434"
 
 
-def test_an_existing_jagadeesh_override_still_wins(monkeypatch):
+def test_a_node_is_addressed_by_its_own_variable_not_a_generic_one(monkeypatch):
+    """OLLAMA_BASE_URL names "some Ollama"; it must not name a specific node.
+
+    This replaces an earlier test that asserted the opposite. The old contract
+    let OLLAMA_BASE_URL stand in for the Jagadeesh node, and production drifted
+    exactly there: a stale value of 11434 pointed `jagadeesh` at the VPS's own
+    CPU Ollama for as long as nobody looked, because 11434 also has
+    qwen2.5:7b so every model check passed and no request ever failed.
+    """
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:19999")
-    assert ollama_nodes.base_url_for("jagadeesh") == "http://127.0.0.1:19999"
-    # ...and must not leak into the new node.
+    assert ollama_nodes.base_url_for("jagadeesh") == "http://127.0.0.1:11435"
     assert ollama_nodes.base_url_for("rtx4060") == "http://127.0.0.1:11437"
+    assert ollama_nodes.base_url_for("our_machine") == "http://127.0.0.1:11436"
+
+
+def test_the_exact_production_regression_cannot_recur(monkeypatch):
+    """A stale OLLAMA_BASE_URL of 11434 must not silently capture text routing.
+
+    11434 is the VPS's own Ollama — no GPU, four cores shared with the web app.
+    It is reachable and it does have the text model, so nothing about this
+    failure is loud: the only symptom is that inference is slow and the GPU
+    laptop is idle. Pinning the behaviour here so the silence cannot return.
+    """
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    assert ollama_nodes.base_url_for("jagadeesh") == "http://127.0.0.1:11435"
+    urls = {n["id"]: n["base_url"] for n in ollama_nodes.configured_nodes()}
+    assert "http://127.0.0.1:11434" not in urls.values()
+
+
+def test_the_jagadeesh_node_still_honours_its_own_override(monkeypatch):
+    monkeypatch.setenv("OLLAMA_NODE_JAGADEESH_URL", "http://127.0.0.1:19999")
+    assert ollama_nodes.base_url_for("jagadeesh") == "http://127.0.0.1:19999"
+    # ...and must not leak into its neighbours.
+    assert ollama_nodes.base_url_for("rtx4060") == "http://127.0.0.1:11437"
+    assert ollama_nodes.base_url_for("our_machine") == "http://127.0.0.1:11436"
+
+
+def test_the_vps_node_is_the_only_way_to_reach_11434(monkeypatch):
+    """11434 stays reachable, but only by asking for it deliberately."""
+    monkeypatch.setenv("OLLAMA_ENABLE_VPS_LOCAL", "true")
+    assert ollama_nodes.base_url_for("vps_local") == "http://127.0.0.1:11434"
+    assert ollama_nodes.base_url_for("jagadeesh") == "http://127.0.0.1:11435"
 
 
 # ── persistence ─────────────────────────────────────────────────────────────

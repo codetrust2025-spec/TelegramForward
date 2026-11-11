@@ -50,11 +50,26 @@ def test_health_separates_missing_primary_from_reachable_service(monkeypatch):
     assert result["diagnostic_status"] == "PRIMARY_MODEL_MISSING"
 
 
-def test_invalid_base_url_is_configuration_error(monkeypatch):
-    monkeypatch.setenv("OLLAMA_BASE_URL", "not-a-url")
+def test_invalid_node_url_is_configuration_error(monkeypatch):
+    """A malformed endpoint is a configuration fault, not a service outage.
+
+    The variable moved: node URLs now come from each node's own
+    OLLAMA_NODE_*_URL, never from the generic OLLAMA_BASE_URL, so the fault is
+    injected where the node is actually addressed. The distinction under test is
+    unchanged — an operator must not go hunting for a dead laptop when the real
+    problem is a typo in configuration.
+    """
+    monkeypatch.setenv("OLLAMA_NODE_JAGADEESH_URL", "not-a-url")
     result = ai_gateway.health(model="gemma4:12b")
     assert result["diagnostic_status"] == "CONFIGURATION_ERROR"
     assert result["serviceReachable"] is False
+
+
+def test_a_generic_base_url_can_no_longer_misconfigure_a_node(monkeypatch):
+    """OLLAMA_BASE_URL is inert for node addressing — the production defect."""
+    monkeypatch.setenv("OLLAMA_BASE_URL", "not-a-url")
+    result = ai_gateway.health(model="gemma4:12b")
+    assert result["diagnostic_status"] != "CONFIGURATION_ERROR"
 
 
 def test_missing_model_stops_before_chat(monkeypatch):
@@ -183,6 +198,36 @@ def test_chat_sends_explicit_think_setting(monkeypatch):
     )
 
     assert captured["think"] is False
+
+
+def test_chat_reports_the_node_that_served_the_request(monkeypatch):
+    monkeypatch.setattr(
+        ai_gateway.ollama_nodes,
+        "select_available_node",
+        lambda **_kwargs: {
+            "node_id": "rtx4060",
+            "base_url": "http://127.0.0.1:11437",
+            "was_primary": True,
+            "attempts": [],
+        },
+    )
+    monkeypatch.setattr(ai_gateway, "health", lambda **kwargs: {
+        "endpoint_reachable": True, "model_available": True,
+        "error_message": None, "error_code": None,
+    })
+    monkeypatch.setattr(
+        ai_gateway,
+        "_request_json",
+        lambda *args, **kwargs: {"message": {"content": '{"ok": true}'}},
+    )
+
+    result = ai_gateway.chat(
+        messages=[{"role": "user", "content": "test"}],
+        model="qwen3-vl:8b-instruct",
+    )
+
+    assert result.node_id == "rtx4060"
+    assert result.node_label == "RTX 4060"
 
 
 def test_structured_chat_rejects_schema_mismatch(monkeypatch):

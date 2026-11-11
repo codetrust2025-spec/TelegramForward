@@ -455,6 +455,12 @@ _SHORTLIST_PHRASES = (
     "you have been shortlisted", "your profile has been shortlisted",
     "shortlisted for the role", "shortlisted for the position",
     "profile is shortlisted", "we have shortlisted your",
+    # "provisionally" sits between "profile is" and "shortlisted", so the
+    # phrases above miss the wording agencies actually send. Kept here as well
+    # as in the agent's signals so the audit engine and the notification path
+    # agree on what counts as a shortlist.
+    "provisionally shortlisted", "candidature has been shortlisted",
+    "you are shortlisted", "shortlisted for further discussion",
 )
 _NEXT_ROUND_PHRASES = (
     "next round", "next stage", "subsequent round", "following round",

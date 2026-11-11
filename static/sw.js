@@ -24,6 +24,13 @@ self.addEventListener('push', (event) => {
   const userId = payload.user_id != null ? String(payload.user_id) : null
 
   event.waitUntil(
+    // Deliberately NOT silent, unlike every in-page notification.
+    //
+    // A push can arrive when no tab is running — that is the whole point of it
+    // on iOS/PWA. There is no Web Audio context alive to play the
+    // TeleAutomation sound, so the operating system chime is the only audible
+    // signal there is. Silencing it would trade a doubled sound in the rare
+    // foreground case for total silence in the common background one.
     self.registration.showNotification(title, {
       body,
       tag,

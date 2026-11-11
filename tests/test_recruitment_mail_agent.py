@@ -192,7 +192,12 @@ def test_assertive_interview_overrides_speculative_joining_classification():
     assert row['interview']['timezone']=='Asia/Kolkata'
 
 
-@pytest.mark.parametrize(("field","value","match"),[("date",None,"ISO date"),("time","17:00","12-hour time"),("timezone",None,"timezone")])
+# The "time" case moved out of this parametrize: a 24-hour model value is now
+# recovered from a verbatim AM/PM time in the subject/evidence, and this
+# fixture's body states "02:00 PM IST", so it is no longer a rejection case.
+# The rejection is pinned instead by test_a_24h_time_with_no_am_pm_in_source_fails
+# below, which strips the AM/PM from the source.
+@pytest.mark.parametrize(("field","value","match"),[("date",None,"ISO date"),("timezone",None,"timezone")])
 def test_confirmed_interview_requires_explicit_schedule(field,value,match):
     row=interview_result();row['interview'][field]=value
     message={'subject':'Technical interview','body':'Your interview is scheduled for July 20, 2026 at 03:00 PM IST.'}
@@ -348,3 +353,29 @@ def test_known_profile_network_and_application_noise_skips_ai(subject):
         sender_email="messages-noreply@linkedin.com",
     )
     assert route["send_to_ai"] is False
+
+
+def test_a_24h_time_with_no_recoverable_source_time_fails():
+    """Recovery must never invent a time.
+
+    The source carries no clock time at all, so neither the deterministic
+    context (which otherwise converts a bare 24-hour source time to 12-hour,
+    recruitment_semantics ~l.320) nor the subject/evidence recovery can supply
+    one. The model's bare 17:00 must then be rejected exactly as before.
+    """
+    row=interview_result();row['interview']['time']='17:00'
+    row['evidence']=[{'source':'EMAIL_SUBJECT','meaning':'interview','text':'Technical interview'}]
+    message={'subject':'Technical interview',
+             'body':'Your interview is scheduled for July 20, 2026. We will share the timing separately.'}
+    with pytest.raises(ValueError,match="12-hour time"):validate_result(row,message)
+
+
+def test_a_source_stated_am_pm_time_is_recovered_from_a_24h_model_value():
+    """The Altimetrik case: model reformatted to 24-hour, source stated AM/PM."""
+    row=interview_result();row['interview']['time']='14:00 - 15:00'
+    row['evidence']=[{'source':'EMAIL_SUBJECT','meaning':'interview',
+                      'text':'Interview scheduled on Fri, July 20, 2:00 PM - 3:00 PM IST'}]
+    message={'subject':'Interview scheduled on Fri, July 20, 2:00 PM - 3:00 PM IST',
+             'body':'Your interview is scheduled for July 20, 2026 at 02:00 PM IST.'}
+    validate_result(row,message)
+    assert row['interview']['time']=='02:00 PM'

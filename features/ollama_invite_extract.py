@@ -61,6 +61,41 @@ OLLAMA_TIMEOUT = _invite_model_timeout()
 OLLAMA_TEXT_TIMEOUT = min(int(os.environ.get("OLLAMA_TEXT_TIMEOUT", "60")), OLLAMA_TIMEOUT)
 
 
+class InferenceResponse(str):
+    """Model text plus the node that actually produced it.
+
+    Keeping this string-compatible preserves the parser and its test seams while
+    carrying the gateway metadata needed by the public invite UI.
+    """
+
+    def __new__(
+        cls,
+        content: str,
+        *,
+        node_id: str = "",
+        node_label: str = "",
+    ):
+        value = super().__new__(cls, content)
+        value.node_id = node_id
+        value.node_label = node_label
+        return value
+
+
+def _attach_inference_node(
+    extracted: dict[str, Any] | None,
+    response: str | None,
+) -> dict[str, Any] | None:
+    if not extracted or response is None:
+        return extracted
+    node_id = str(getattr(response, "node_id", "") or "").strip()
+    node_label = str(getattr(response, "node_label", "") or "").strip()
+    if node_id:
+        extracted["inference_node_id"] = node_id
+    if node_label:
+        extracted["inference_node_label"] = node_label
+    return extracted
+
+
 def _ollama_only_test_mode() -> bool:
     """Return True only for the explicit diagnostic mode."""
     return os.environ.get("INVITE_EXTRACTION_MODE", "").strip().lower() == "ollama_only"
@@ -219,6 +254,23 @@ def validate_12h_time_format(time_value: str) -> bool:
     return bool(re.match(r'^(0[1-9]|1[0-2]):[0-5]\d\s(AM|PM)$', time_value))
 
 
+def normalize_model_time_to_12h(time_value: str) -> str:
+    """Normalize a vision-model time without inventing a missing meridiem.
+
+    A bare hour from 01 through 12 is ambiguous: ``04:00`` may mean either
+    4 AM or 4 PM. Twenty-four-hour values outside that range remain
+    unambiguous, and explicit AM/PM values keep their existing behavior.
+    """
+    raw = str(time_value or "").strip()
+    bare = re.fullmatch(r"(\d{1,2}):(\d{2})", raw)
+    if bare:
+        hour, minute = int(bare.group(1)), int(bare.group(2))
+        if 1 <= hour <= 12 and 0 <= minute <= 59:
+            return ""
+    normalized = normalize_time_to_12h(raw)
+    return normalized if validate_12h_time_format(normalized) else ""
+
+
 def normalize_time_to_24h(time_value: str) -> str:
     normalized = normalize_time_to_12h(time_value)
     match = re.match(r"^(\d{2}):(\d{2})\s+(AM|PM)$", normalized)
@@ -299,7 +351,13 @@ def call_ollama_vision_model(
             think=False,
             workload="interview_screenshot_vision",
         )
-        return result.content or None
+        if not result.content:
+            return None
+        return InferenceResponse(
+            result.content,
+            node_id=result.node_id,
+            node_label=result.node_label,
+        )
     except AIGatewayError as exc:
         logger.warning("Ollama interview vision failed model=%s code=%s", model_name, exc.code)
         return None
@@ -380,7 +438,7 @@ def retry_invalid_json_once(
         RETRY_PROMPT,
     )
     if response:
-        return parse_strict_json_response(response)
+        return _attach_inference_node(parse_strict_json_response(response), response)
     return None
 
 
@@ -737,7 +795,9 @@ def _extract_with_ocr_and_ai(
     used_model = OLLAMA_VISION_MODEL
     
     if response:
-        extracted = parse_strict_json_response(response)
+        extracted = _attach_inference_node(
+            parse_strict_json_response(response), response
+        )
         if not extracted:
             logger.info("Invalid JSON from vision, retrying...")
             extracted = retry_invalid_json_once(OLLAMA_VISION_MODEL, img_b64, response)
@@ -754,7 +814,9 @@ def _extract_with_ocr_and_ai(
             OLLAMA_BACKUP_VISION_MODEL, img_b64, _get_invite_prompt(), timeout=OLLAMA_TIMEOUT
         )
         if backup_response:
-            extracted = parse_strict_json_response(backup_response)
+            extracted = _attach_inference_node(
+                parse_strict_json_response(backup_response), backup_response
+            )
             if extracted:
                 used_model = OLLAMA_BACKUP_VISION_MODEL
     
@@ -918,7 +980,11 @@ def _ai_only_vision_extraction(image_data: bytes) -> tuple[dict[str, Any] | None
     response = call_ollama_vision_model(
         OLLAMA_VISION_MODEL, img_b64, _get_invite_prompt(), timeout=OLLAMA_TIMEOUT
     )
-    extracted = parse_strict_json_response(response) if response else None
+    extracted = (
+        _attach_inference_node(parse_strict_json_response(response), response)
+        if response
+        else None
+    )
     if response and not extracted:
         extracted = retry_invalid_json_once(OLLAMA_VISION_MODEL, img_b64, response)
     if (
@@ -930,9 +996,24 @@ def _ai_only_vision_extraction(image_data: bytes) -> tuple[dict[str, Any] | None
             OLLAMA_BACKUP_VISION_MODEL, img_b64, _get_invite_prompt(), timeout=OLLAMA_TIMEOUT
         )
         if backup:
-            extracted = parse_strict_json_response(backup)
+            extracted = _attach_inference_node(
+                parse_strict_json_response(backup), backup
+            )
             if extracted:
                 used_model = OLLAMA_BACKUP_VISION_MODEL
+    if extracted:
+        # Preserve exactly what the vision model supplied before normalization.
+        # The public API removes these private fields from its response after
+        # writing the correlated, non-image diagnostic trace.
+        extracted.setdefault(
+            "_model_raw_interview_date", str(extracted.get("interview_date") or "")
+        )
+        extracted.setdefault(
+            "_model_raw_start_time", str(extracted.get("start_time") or "")
+        )
+        extracted.setdefault(
+            "_model_raw_end_time", str(extracted.get("end_time") or "")
+        )
     return extracted, used_model
 
 
@@ -989,7 +1070,23 @@ def _extract_with_ai_only(
         ]
         return _finish(result)
 
+    raw_start = str(
+        extracted.get("_model_raw_start_time", extracted.get("start_time")) or ""
+    )
+    raw_end = str(
+        extracted.get("_model_raw_end_time", extracted.get("end_time")) or ""
+    )
+    normalized_start = normalize_model_time_to_12h(raw_start)
+    normalized_end = normalize_model_time_to_12h(raw_end) if raw_end else ""
+    ambiguous_start = bool(raw_start and not normalized_start)
+    extracted["start_time"] = normalized_start
+    extracted["end_time"] = normalized_end
     extracted = validate_invite_extraction(extracted)
+    if ambiguous_start:
+        extracted.setdefault("warnings", []).append(
+            "The AI returned a start time without a reliable AM or PM. "
+            "Choose AM or PM manually before confirming."
+        )
     extracted["extraction_source"] = "ollama"
     extracted["primary_model"] = used_model
     extracted["backup_model"] = "" if ollama_only else OLLAMA_BACKUP_VISION_MODEL
@@ -999,7 +1096,7 @@ def _extract_with_ai_only(
         extracted["ollama_only_test"] = True
 
     has_date = bool(str(extracted.get("interview_date") or "").strip())
-    has_start = bool(normalize_time_to_12h(str(extracted.get("start_time") or "")))
+    has_start = validate_12h_time_format(str(extracted.get("start_time") or ""))
     if has_date and has_start and not ollama_only:
         extracted["auto_booking_safe"] = True
         extracted["manual_fields_required"] = False

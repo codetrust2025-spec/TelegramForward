@@ -12,6 +12,7 @@ from datetime import date, datetime
 from typing import Any
 
 from core import recruitment_mail_store as store
+from core import ai_mail_model
 from core.ai_gateway import AIGatewayError, chat_structured, configured_models
 from services.recruitment_semantics import (
     DOCUMENT_TYPES,
@@ -34,6 +35,54 @@ def _publish(event_type: str, **payload: Any) -> None:
         # Persistence remains the source of truth; real-time delivery is best
         # effort and API recovery will return missed notifications.
         logger.debug("Mail real-time event unavailable type=%s", event_type, exc_info=True)
+
+
+def _publish_ignored_interview(
+    mailbox: dict[str, Any],
+    decoded: dict[str, Any],
+    attachments: list[dict[str, Any]] | None,
+    status: str,
+    reason: str,
+) -> dict[str, Any] | None:
+    """Surface a mail that was dropped while carrying an interview.
+
+    Both the duplicate check and the routing filter drop a message by returning
+    early, which wrote a processing_status on the row and nothing else — no
+    notification, nothing on any screen. An invite could therefore disappear
+    with no trace an operator would ever see, which is exactly how a Sourcebae
+    invite for a 4:15pm interview went missing.
+
+    Only messages that still parse as an interview are surfaced, so ordinary
+    marketing noise being filtered does not become operator work. Returns the
+    interview signal it found, for callers that want to log it.
+    """
+    try:
+        from services.calendar_invite_parser import trusted_interview_result
+
+        signal = trusted_interview_result(decoded, list(attachments or []))
+    except Exception:  # a broken parser must not break ingestion
+        logger.debug("Interview signal check failed", exc_info=True)
+        return None
+    if not signal:
+        return None
+
+    logger.warning(
+        "Interview-bearing mail dropped candidate=%s status=%s reason=%s subject=%r date=%s time=%s",
+        mailbox.get("candidate_id"), status, reason,
+        str(decoded.get("subject") or "")[:120],
+        signal.get("interview_date"), signal.get("interview_time"),
+    )
+    _publish(
+        "interview_mail_ignored",
+        candidate_id=mailbox.get("candidate_id"),
+        gmail_message_id=decoded.get("provider_message_id"),
+        subject=decoded.get("subject"),
+        processing_status=status,
+        reason=reason,
+        interview_date=signal.get("interview_date"),
+        interview_time=signal.get("interview_time"),
+    )
+    return signal
 
 
 def _failure_review_result(message: dict[str, Any], exc: Exception) -> dict[str, Any]:
@@ -146,6 +195,7 @@ VISIBLE_STATUSES = [
     "JOINED", "POST_SELECTION_ONBOARDING", "OFFER_DECLINED", "OFFER_REVOKED",
     "JOINING_DATE_UPDATED", "BACKGROUND_VERIFICATION", "DOCUMENT_VERIFICATION",
     "COMPENSATION_CONFIRMATION", "INTERVIEW_UPDATE", "INTERVIEW_SHORTLISTED",
+    "INTERVIEW_PROPOSED", "OFFER_NEEDS_REVIEW", "JOINING_NEEDS_REVIEW", "SELECTION_NEEDS_REVIEW",
     "INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED",
     "CANDIDATE_REJECTED", "MANUAL_REVIEW_REQUIRED",
 ]
@@ -180,7 +230,26 @@ STATUS_SIGNALS = [
     ("BACKGROUND_VERIFICATION", ("background verification", "pre-employment verification", "background check")),
     ("DOCUMENT_VERIFICATION", ("document verification", "submit employment documents", "documents for verification")),
     ("COMPENSATION_CONFIRMATION", ("compensation confirmation", "confirmed compensation", "annual ctc is", "salary package is")),
-    ("INTERVIEW_SHORTLISTED", ("shortlisted for the next interview", "shortlisted for the technical interview", "shortlisted for hr interview")),
+    # Shortlisting is an outcome in its own right, not only a preamble to an
+    # interview. These phrases used to require the word "interview" right after
+    # "shortlisted for", so a plain selection mail — "your profile is
+    # provisionally shortlisted for Python Django with <company>" — matched
+    # nothing here, fell through to the model, and was ignored for carrying no
+    # interview date or time. Every phrase below states the selection outcome
+    # explicitly, so a bare document request with no such wording still cannot
+    # reach this status.
+    ("INTERVIEW_SHORTLISTED", (
+        "shortlisted for the next interview", "shortlisted for the technical interview",
+        "shortlisted for hr interview",
+        "provisionally shortlisted", "profile is shortlisted",
+        "profile has been shortlisted", "profile is provisionally shortlisted",
+        "you have been shortlisted", "you are shortlisted",
+        "we have shortlisted your", "shortlisted for the role",
+        "shortlisted for the position", "candidature has been shortlisted",
+        "candidature has been provisionally shortlisted",
+        "shortlisted for further discussion", "shortlisted for hr discussion",
+        "moved forward to the next stage", "moving forward to the hr round",
+    )),
     # These phrases route interview mail to Ollama but never determine the
     # actionable outcome. Only the validated contextual model may upgrade an
     # update to confirmed/rescheduled/cancelled.
@@ -206,6 +275,71 @@ NOISE_RULES = [
     ("INTERVIEW", ("interview invitation", "interview scheduled", "interview has been scheduled", "interview rescheduled", "interview reminder", "interview cancelled", "technical round", "hr round")),
     ("REJECTION", ("not selected", "regret to inform", "not moving forward", "rejection")),
 ]
+
+# A job board links every advert it lists. Two or more distinct postings in one
+# mail is a catalogue, whoever sent it and however it is worded.
+_JOB_POSTING_LINK = re.compile(
+    r"(?:linkedin\.com/comm)?/jobs/view/(\d+)"          # LinkedIn
+    r"|naukri\.com/job-listings-[\w-]*?(\d{6,})"        # Naukri
+    r"|/job(?:s)?/(\d{6,})/(?:apply|view)",             # Indeed / Monster shapes
+    re.I,
+)
+
+# Wording a catalogue uses about itself. Kept as a secondary signal only: the
+# exact phrasing changes without notice — LinkedIn writes "Jobs that match your
+# profile" while NOISE_RULES only knew "jobs matching your profile", and that
+# one word is why a six-advert digest was sent to the model as though it might
+# be news about this candidate.
+_JOB_DIGEST_MARKERS = (
+    "jobs that match your profile", "jobs matching your profile",
+    "jobs picked for you", "jobs for you", "recommended jobs",
+    "based on your title and location", "view job:", "see all jobs",
+    "similar jobs", "job alert", "new jobs posted",
+)
+
+_JOB_BOARD_SENDERS = (
+    "jobs-noreply@linkedin.com", "jobalerts-noreply@linkedin.com",
+    "jobs-listings@linkedin.com", "info@naukri.com", "alerts@naukri.com",
+    "jobalerts@naukri.com", "noreply@indeed.com", "alert@indeed.com",
+    "no-reply@monsterindia.com", "jobs@shine.com",
+)
+
+
+def job_advertisement_digest(
+    subject: str, body: str, sender_email: str = "",
+    attachments: list[dict[str, Any]] | None = None,
+) -> bool:
+    """True when the mail is a list of vacancies, not news about this candidate.
+
+    A catalogue of adverts contains company names, role titles and locations, so
+    a model asked "what happened to this candidate?" can assemble a convincing
+    answer out of two unrelated listings. That is exactly what happened: a
+    LinkedIn digest of six vacancies produced INTERVIEW_SHORTLISTED at 95%
+    confidence, "Birlasoft and FactSet", and a summary saying the candidate had
+    been shortlisted and should prepare for an interview. Every quoted evidence
+    string was verbatim — they were the advert lines themselves — so the
+    verbatim check could not catch it. The claim was about *meaning*, and the
+    meaning was never in the mail.
+
+    The test is structural rather than phrase-based, because the phrasing is the
+    part that changes. Nothing here reads the model's answer.
+    """
+    text = " ".join(
+        [str(subject or ""), str(body or "")]
+        + [str(item.get("text") or "") for item in (attachments or [])]
+    )
+    postings = {
+        next(group for group in match.groups() if group)
+        for match in _JOB_POSTING_LINK.finditer(text)
+    }
+    if len(postings) >= 2:
+        return True
+    sender = str(sender_email or "").strip().casefold()
+    if sender in _JOB_BOARD_SENDERS:
+        haystack = text.casefold()
+        return any(marker in haystack for marker in _JOB_DIGEST_MARKERS)
+    return False
+
 
 SPECIAL_CONTEXT = {
     "BACKGROUND_VERIFICATION": ("background verification", "pre-employment verification", "document verification"),
@@ -485,6 +619,68 @@ def prefilter_decision(subject: str, body: str, sender_name: str = "", sender_em
     return {"qualified": False, "score": 0.0, "status": "IGNORED_NOT_OFFER_RELATED", "evidence": [], "ignore_reason": "NO_SELECTION_OR_OFFER_SIGNAL"}
 
 
+_INVITE_STRUCTURE_CUES = (
+    "microsoft teams meeting", "teams.microsoft.com", "meet.google.com",
+    "zoom.us", "webex.com", "calendar invitation", "when:", "dtstart",
+    "begin:vevent", "organiser:", "organizer:", "join the meeting",
+    "join microsoft teams", "meeting id:", "add to calendar",
+)
+_ROLE_TITLE_CUES = (
+    "engineer", "developer", "analyst", "architect", "consultant", "devops",
+    "sre", "tester", "designer", "administrator", "specialist", "lead",
+    "scientist", "programmer", "full stack", "fullstack", "backend",
+    "frontend", "qa",
+    # Stacks are named as the role in Indian recruiting subject lines:
+    # "Interview schedule for Charan - ReactJS" names no "developer".
+    "reactjs", "react", "angular", "node", "java", "python", ".net", "dotnet",
+    "spring", "django", "aws", "azure",
+)
+# Wording that frames the meeting as being *about a person for a role*. This is
+# the part an ordinary internal meeting does not have: "Discussion with Ramu
+# about the budget" carries no role title, and a sprint invite carries neither.
+_MEETING_ABOUT_PERSON_CUES = (
+    "discussion with", "discussion for", "discussion regarding",
+    "technical discussion", "call with", "screening", "screening round",
+    "round with", "meeting with", "conversation with", "profile discussion",
+    # "Interview schedule for <candidate>" frames the meeting around a person
+    # just as "discussion with" does.
+    "schedule for", "availability for", "interview for",
+)
+
+
+def recruiting_invite_signal(
+    subject: str, body: str, sender_email: str = "",
+    attachments: list[dict[str, Any]] | None = None,
+) -> bool:
+    """Does this look like a recruiting calendar invite that never says "interview"?
+
+    Real invites arrive titled "Discussion with <candidate> for <role>" on a
+    Teams/Meet link, and were dropped as NO_RECRUITMENT_ROUTING_SIGNAL because
+    no keyword matched. Routing on "discussion" alone would pull in every
+    internal meeting, so three independent structured signals are required
+    together: a calendar/meeting invite structure, a job-role-like title, and
+    wording framing the meeting around a person. Any one or two of those is not
+    enough, so an ordinary business discussion still fails closed.
+    """
+    subject_text = str(subject or "").casefold()
+    body_text = str(body or "").casefold()
+    attachment_text = " ".join(
+        str(item.get("text") or "") + " " + str(item.get("filename") or "")
+        for item in (attachments or [])
+    ).casefold()
+    everything = " ".join((subject_text, body_text, attachment_text))
+
+    has_invite_structure = (
+        any(cue in everything for cue in _INVITE_STRUCTURE_CUES)
+        or ".ics" in attachment_text
+    )
+    # The role must be named in the subject line: a signature block or a
+    # footer mentioning "engineer" elsewhere is not what this is about.
+    has_role_title = any(cue in subject_text for cue in _ROLE_TITLE_CUES)
+    is_about_a_person = any(cue in subject_text for cue in _MEETING_ABOUT_PERSON_CUES)
+    return bool(has_invite_structure and has_role_title and is_about_a_person)
+
+
 def relevance_score(subject: str, body: str, filenames: list[str] | None = None, thread_context: list[dict[str, Any]] | None = None) -> float:
     # Filenames alone are intentionally excluded from qualification.
     return float(prefilter_decision(subject, body, thread_context=thread_context)["score"])
@@ -509,6 +705,13 @@ def routing_decision(
     )
     if context.get("qualified"):
         return {"send_to_ai": True, "score": context["score"], "reason": "POTENTIAL_OUTCOME", "context": context}
+    # A catalogue of vacancies carries no outcome for this candidate, so there
+    # is nothing for the model to decide. It reaches here because
+    # `is_promotional_or_job_ad` did not recognise the digest, which is what let
+    # a LinkedIn "Jobs that match your profile" mail through as
+    # AMBIGUOUS_RECRUITMENT on cues like "position" and "candidate".
+    if job_advertisement_digest(subject, body, sender_email, attachments):
+        return {"send_to_ai": False, "score": 0.0, "reason": "JOB_RECOMMENDATION", "context": context}
     reason = str(context.get("ignore_reason") or "")
     if reason in {
         "JOB_RECOMMENDATION", "JOB_ALERT", "JOB_PORTAL_MARKETING",
@@ -538,6 +741,8 @@ def routing_decision(
     # marketing noise through the model.
     if any(re.search(rf"\b{re.escape(cue)}\b", combined) for cue in ambiguous_recruitment_cues):
         return {"send_to_ai": True, "score": max(0.25, float(context.get("score") or 0)), "reason": "AMBIGUOUS_RECRUITMENT", "context": context}
+    if recruiting_invite_signal(subject, body, sender_email, attachments):
+        return {"send_to_ai": True, "score": max(0.3, float(context.get("score") or 0)), "reason": "RECRUITING_CALENDAR_INVITE", "context": context}
     return {"send_to_ai": False, "score": 0.0, "reason": "NO_RECRUITMENT_ROUTING_SIGNAL", "context": context}
 
 
@@ -548,6 +753,41 @@ def content_hash(value: str) -> str:
 def _evidence_supported(item: dict[str, Any], sources: dict[str, list[str]]) -> bool:
     needle = clean_email(str(item.get("text") or "")).casefold()
     return bool(needle) and any(needle in value.casefold() for value in sources.get(str(item.get("source") or ""), []))
+
+
+_OFFER_FAMILY = {
+    "OFFER_INDICATION", "OFFER_IN_PROGRESS", "OFFER_APPROVED",
+    "OFFER_LETTER_RECEIVED", "APPOINTMENT_LETTER_RECEIVED", "OFFER_ACCEPTED",
+    "OFFER_DECLINED", "OFFER_REVOKED", "COMPENSATION_CONFIRMATION",
+}
+_JOINING_FAMILY = {
+    "JOINING_CONFIRMED", "JOINING_DATE_UPDATED", "JOINED",
+    "POST_SELECTION_ONBOARDING",
+}
+
+
+def _needs_review_status(proposed: str) -> str | None:
+    """The visible review status a distrusted offer/joining result becomes.
+
+    Deliberately NOT members of OFFER_CASE_STATUSES: a review status must never
+    feed offer-case, booking, acceptance or payment workflows. It exists only so
+    the record stays auditable instead of being deleted.
+    """
+    status = str(proposed or "").upper()
+    if status in _OFFER_FAMILY:
+        return "OFFER_NEEDS_REVIEW"
+    if status in _JOINING_FAMILY:
+        return "JOINING_NEEDS_REVIEW"
+    if status.startswith("INTERVIEW_"):
+        return "INTERVIEW_PROPOSED"
+    # Everything else the model may legitimately return — SELECTED,
+    # FINAL_SELECTION_CONFIRMED, BACKGROUND_VERIFICATION, DOCUMENT_VERIFICATION,
+    # CANDIDATE_REJECTED — was still collapsing to NONE and disappearing. A
+    # rejection in particular must never vanish: the candidate outcome is the
+    # whole point of the record.
+    if status in TRACKED_STATUSES:
+        return "SELECTION_NEEDS_REVIEW"
+    return None
 
 
 def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None, attachments: list[dict[str, Any]] | None = None) -> None:
@@ -581,6 +821,23 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
     errors = list(Draft202012Validator(SCHEMA).iter_errors(value))
     if errors:
         raise ValueError("invalid selection/offer JSON: " + errors[0].message)
+    # Second layer, in case such a mail reaches the model by another route. The
+    # answer is left intact in the result so it stays auditable; it simply stops
+    # being something the system tracks, which is the disposition a catalogue of
+    # vacancies deserves however confidently it was read. Recorded the way every
+    # other downgrade here is, and after schema validation because the schema
+    # forbids the extra keys.
+    if message is not None and job_advertisement_digest(
+        str(message.get("subject") or ""), str(message.get("body") or ""),
+        str(message.get("sender_email") or ""), attachments,
+    ):
+        value["downgraded_from"] = str(value.get("status") or "")
+        value["downgrade_reason"] = "JOB_ADVERTISEMENT_DIGEST"
+        value["is_selection_or_offer_related"] = False
+        value["should_create_review_record"] = False
+        value["requires_manual_review"] = False
+        value["ignore_reason"] = "JOB_RECOMMENDATION"
+        value["reason"] = "Job advertisement listing; no outcome for this candidate."
     confidence = float(value["confidence"])
     interview_statuses = {"INTERVIEW_CONFIRMED", "INTERVIEW_RESCHEDULED", "INTERVIEW_CANCELLED"}
     proposed_status = str(value.get("status") or "").upper()
@@ -656,10 +913,57 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         value["validation_status"] = "REJECTED"
         value["lifecycle_event"] = "NONE"
         return
+    proposed_status = str(value.get("status") or "").upper()
     if value["status"] in interview_statuses:
         safe_status, rejection_reason = validate_interview_event(value["status"], context)
     else:
         safe_status, rejection_reason = validate_lifecycle_event(value["status"], context)
+    review_status_for = _needs_review_status(proposed_status)
+    if safe_status == "NONE" and review_status_for:
+        # Same rule as the interview downgrade: the backend may distrust an
+        # offer or joining claim and withhold every side effect, but it must not
+        # delete a valid classification. Confidence and verbatim evidence are
+        # untouched; requires_manual_review keeps it out of any automated path.
+        value.update(
+            status=review_status_for,
+            classification=review_status_for.lower(),
+            candidate_status=("Offer — needs review"
+                              if review_status_for == "OFFER_NEEDS_REVIEW"
+                              else "Joining — needs review"
+                              if review_status_for == "JOINING_NEEDS_REVIEW"
+                              else "Interview — needs review"
+                              if review_status_for == "INTERVIEW_PROPOSED"
+                              else "Selection — needs review"),
+            is_selection_or_offer_related=True,
+            should_create_review_record=True,
+            requires_manual_review=True,
+            lifecycle_event=review_status_for,
+            validation_status="NEEDS_REVIEW",
+            downgraded_from=proposed_status,
+            downgrade_reason=rejection_reason or "OUTCOME_NOT_ASSERTED",
+        )
+        value.pop("ignore_reason", None)
+        return
+    if safe_status == "NONE" and proposed_status in interview_statuses:
+        # A backend semantic check may distrust the *booking detail* of an
+        # interview, but it must not delete a valid classification. Ollama is
+        # the authority on meaning; this layer is the authority on booking
+        # safety. Downgrading keeps the event, the evidence and the confidence
+        # visible for a human, while auto-booking stays gated downstream.
+        value.update(
+            status="INTERVIEW_PROPOSED",
+            classification="interview_proposed",
+            candidate_status="Interview Proposed",
+            is_selection_or_offer_related=True,
+            should_create_review_record=True,
+            requires_manual_review=True,
+            lifecycle_event="INTERVIEW_PROPOSED",
+            validation_status="NEEDS_REVIEW",
+            downgraded_from=proposed_status,
+            downgrade_reason=rejection_reason or "INTERVIEW_DETAIL_NOT_ASSERTIVE",
+        )
+        value.pop("ignore_reason", None)
+        return
     if safe_status == "NONE":
         value.update(
             status="IGNORED_NOT_OFFER_RELATED",
@@ -690,8 +994,17 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         for item in value.get("evidence") or []
     ]
     sources = _source_texts((message or {}).get("subject", ""), (message or {}).get("body", ""), attachments, (message or {}).get("thread_context"))
-    if not value["evidence"] or not all(_evidence_supported(item, sources) for item in value["evidence"]):
+    # Keep only evidence that is verbatim in the source, and require at least
+    # one such item — rather than discarding the whole classification because a
+    # single item was paraphrased. The verbatim test is what protects against
+    # invented evidence, and it still applies to everything that survives:
+    # unsupported items are dropped, never trusted. Rejecting outright threw
+    # away a correct OFFER_IN_PROGRESS at 95% whose body quote was verbatim,
+    # purely because a second item was a paraphrase.
+    supported = [item for item in value["evidence"] if _evidence_supported(item, sources)]
+    if not supported:
         raise ValueError("selection/offer evidence is missing or unsupported")
+    value["evidence"] = supported
     auto_threshold = max(0.8, min(0.99, float(os.getenv("AI_RECRUITMENT_AUTO_ACCEPT_THRESHOLD", "0.90"))))
     review_threshold = max(0.0, min(1.0, float(os.getenv("OLLAMA_CONFIDENCE_THRESHOLD", "0.75"))))
     if confidence < review_threshold:
@@ -721,11 +1034,44 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
         date_valid = True
         time_valid = True
         tz_valid = True
-        try:
-            date.fromisoformat(str(interview.get("date") or ""))
-        except ValueError:
+        normalised_date = _normalise_interview_date(interview.get("date"))
+        if normalised_date:
+            interview["date"] = normalised_date
+            value["interview"] = interview
+        else:
             date_valid = False
-        if not re.fullmatch(r"(?:0?[1-9]|1[0-2]):[0-5]\d\s*(?:AM|PM)", str(interview.get("time") or ""), re.I):
+        normalised_time = _normalise_interview_time(interview.get("time"))
+        if not normalised_time:
+            # The model sometimes reformats a clearly-stated AM/PM time into
+            # 24-hour ("14:00 - 15:00") while quoting the source's own
+            # "2:00 PM - 3:00 PM IST" verbatim in its evidence. Recover the
+            # stated time from the subject or from evidence quotes, which the
+            # check above already verified appear verbatim in the source.
+            # Nothing is invented: a source with no AM/PM anywhere still fails,
+            # so a bare 17:00 is rejected exactly as before.
+            source_texts = [str((message or {}).get("subject") or "")] + [
+                str(item.get("text") or "") for item in value.get("evidence") or []
+            ]
+            for candidate_text in source_texts:
+                recovered = _normalise_interview_time(candidate_text)
+                if recovered:
+                    normalised_time = recovered
+                    break
+            if not normalised_time:
+                # Some recruiters simply write the schedule on a 24-hour clock:
+                # EY sent "Time: 16:30 to 17:30" and Accenture "Time: 12:00:00
+                # until 13:00:00 IST (24 Hours)". Requiring AM/PM used the
+                # meridiem as a proxy for "the source really stated a time",
+                # which is too strict for an hour that has only one possible
+                # reading, so both interviews looped until they were parked.
+                # Recovery still reads only source-verified text, so a source
+                # with no clock time at all recovers nothing, and an ambiguous
+                # bare 1-12 is still refused.
+                normalised_time = _recover_unambiguous_24_hour_time(source_texts)
+        if normalised_time:
+            interview["time"] = normalised_time
+            value["interview"] = interview
+        else:
             time_valid = False
         if not str(interview.get("timezone") or "").strip():
             tz_valid = False
@@ -736,6 +1082,125 @@ def validate_result(value: dict[str, Any], message: dict[str, Any] | None = None
             if not tz_valid: missing.append("timezone")
             labels={"date":"ISO date","time":"12-hour time","timezone":"timezone"}
             raise ValueError("interview requires valid " + ", ".join(labels[item] for item in missing))
+
+
+_MONTH_NAMES = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
+    "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+# "20-Jul-2026" / "06th July 2026" / "20 July, 2026"
+_DAY_MONTH_YEAR = re.compile(
+    r"\b(\d{1,2})(?:ST|ND|RD|TH)?[\s\-/,]+([A-Z]{3,9})[\s\-/,]+(\d{4})\b", re.I,
+)
+# "Jul 20, 2026" / "July 20 2026"
+_MONTH_DAY_YEAR = re.compile(
+    r"\b([A-Z]{3,9})[\s\-/,]+(\d{1,2})(?:ST|ND|RD|TH)?[\s\-/,]+(\d{4})\b", re.I,
+)
+
+
+def _normalise_interview_date(raw):
+    """Canonicalise an interview date to ISO, or "" if it is not a real date.
+
+    `date.fromisoformat` alone rejected values that are unambiguous dates in
+    every other respect: ValueMomentum sent "20-Jul-2026" and Cangra sent the
+    full ISO timestamp "2026-07-30T12:00:00+05:30". Both looped on
+    OLLAMA_SCHEMA_VALIDATION_FAILED until they were parked, so the interviews
+    never surfaced.
+
+    Only spellings with a named month or an explicit ISO form are accepted.
+    All-numeric forms like "07/08/2026" stay rejected because day-first and
+    month-first cannot be told apart, and guessing one would book the wrong day.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        pass
+    # A full ISO timestamp carries the date unambiguously in its first token.
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        pass
+    for pattern, order in ((_DAY_MONTH_YEAR, "dmy"), (_MONTH_DAY_YEAR, "mdy")):
+        hit = pattern.search(text)
+        if not hit:
+            continue
+        first, second, year = hit.group(1), hit.group(2), hit.group(3)
+        day_part, month_name = (first, second) if order == "dmy" else (second, first)
+        month = _MONTH_NAMES.get(str(month_name).lower())
+        if not month:
+            continue
+        try:
+            return date(int(year), month, int(day_part)).isoformat()
+        except ValueError:
+            return ""
+    return ""
+
+
+# A 24-hour clock reading of 13:00 or later, or 00:xx, has exactly one meaning.
+# Only a colon separates the parts: "18.30" is far more often money or a version
+# than a time, and a false time is worse than an unread one.
+_TWENTY_FOUR_HOUR = re.compile(r"(?<![:.\d])([01]?\d|2[0-3]):([0-5]\d)(?!:?\d*\s*(?:AM|PM))", re.I)
+
+
+def _recover_unambiguous_24_hour_time(source_texts) -> str:
+    """The stated start time when a source writes it on a 24-hour clock.
+
+    Reads only text already verified to appear verbatim in the source, so this
+    can never invent a time the sender did not write. An hour of 13-23 (or 00)
+    has a single possible reading and is taken as stated. An hour of 1-12 is
+    ambiguous on its own and is only accepted when the same passage also states
+    an hour of 13 or more, which proves the passage is on a 24-hour clock --
+    Accenture's "12:00:00 until 13:00:00" is exactly that shape.
+    """
+    for text in source_texts:
+        found = [
+            (int(hit.group(1)), hit.group(2))
+            for hit in _TWENTY_FOUR_HOUR.finditer(str(text or ""))
+        ]
+        if not found:
+            continue
+        passage_is_24_hour = any(hour >= 13 for hour, _minute in found)
+        for hour, minute in found:
+            if hour >= 13:
+                return "%02d:%s PM" % (hour - 12, minute)
+            if hour == 0:
+                return "12:%s AM" % minute
+            if passage_is_24_hour:
+                # 1-11 are morning on a 24-hour clock; 12 is noon.
+                return "%02d:%s %s" % (hour, minute, "PM" if hour == 12 else "AM")
+    return ""
+
+
+def _normalise_interview_time(raw):
+    """Canonicalise a 12-hour time's formatting, or "" if it is not one.
+
+    The validator demanded exactly "H:MM AM/PM", so a real invite reading
+    "2:00 PM - 3:00 PM IST" failed and raised OLLAMA_SCHEMA_VALIDATION_FAILED
+    on every retry - identical input, identical failure - so the interview
+    never surfaced. A range, an attached zone and spacing are formatting, not
+    evidence, so the first stated 12-hour time is taken as the start.
+
+    A 24-hour time is deliberately NOT accepted: the prompt requires an
+    explicit AM/PM as evidence the source stated the time unambiguously, and
+    an existing test pins that. Forgiving formatting must not forgive
+    missing evidence.
+    """
+    text = str(raw or "").upper()
+    hit = re.search(r"(\d{1,2})[:.]([0-5]\d)\s*(AM|PM)", text)
+    if hit:
+        hour = int(hit.group(1))
+        return "%02d:%s %s" % (hour, hit.group(2), hit.group(3)) if 1 <= hour <= 12 else ""
+    hit = re.search(r"(?<![:.\d])(\d{1,2})\s*(AM|PM)", text)
+    if hit:
+        hour = int(hit.group(1))
+        return "%02d:00 %s" % (hour, hit.group(2)) if 1 <= hour <= 12 else ""
+    return ""
 
 
 def parse_model_json(raw: str) -> dict[str, Any]:
@@ -978,6 +1443,66 @@ def _prompt_json(value: Any) -> str:
     )
 
 
+_SHORTLIST_CANDIDATE_STATUSES = {
+    "interview shortlisted", "shortlisted", "candidate shortlisted",
+    "profile shortlisted",
+}
+# Wording that states the shortlist outcome. A label alone is not enough: the
+# mail itself has to say it, so a generic document request can never be
+# promoted no matter what the model puts in candidate_status.
+_SHORTLIST_EVIDENCE_PHRASES = (
+    "provisionally shortlisted", "profile is shortlisted",
+    "profile has been shortlisted", "profile is provisionally shortlisted",
+    "you have been shortlisted", "you are shortlisted",
+    "we have shortlisted your", "shortlisted for the role",
+    "shortlisted for the position", "candidature has been shortlisted",
+    "candidature has been provisionally shortlisted",
+    "shortlisted for further discussion", "shortlisted for hr discussion",
+)
+# Only these are promotable. A confirmed/cancelled interview, an offer or a
+# rejection already carries a stronger outcome and must never be overwritten.
+_SHORTLIST_PROMOTABLE_STATUSES = {"MANUAL_REVIEW_REQUIRED", "INTERVIEW_UPDATE"}
+
+
+def normalise_shortlist_status(value: dict[str, Any], message: dict[str, Any] | None = None) -> bool:
+    """Map a model result that plainly describes a shortlist onto the canonical status.
+
+    The model reads these mails correctly — it returned candidate_status
+    "Interview Shortlisted", is_selection_or_offer_related true and a reason
+    naming the provisional shortlist — but parked the result at
+    MANUAL_REVIEW_REQUIRED/INTERVIEW_UPDATE because no interview slot was
+    offered. Shortlisting is the outcome; the document list is the next action.
+
+    Runs after the schema guard, on the validated result, so the guard still
+    sees exactly what the model produced. Returns whether it promoted anything.
+    """
+    status = str(value.get("status") or "").upper()
+    if status not in _SHORTLIST_PROMOTABLE_STATUSES:
+        return False
+    if not value.get("is_selection_or_offer_related"):
+        return False
+
+    label = str(value.get("candidate_status") or "").strip().lower()
+    # Evidence must come from the mail itself, never from the model's own prose:
+    # a summary that says "shortlisted" about a bare document request would
+    # otherwise promote it on the strength of the model's wording alone.
+    haystack = " ".join(str(part or "").lower() for part in (
+        (message or {}).get("subject"), (message or {}).get("body"),
+    ))
+    stated = any(phrase in haystack for phrase in _SHORTLIST_EVIDENCE_PHRASES)
+    # Both the model's own label and the wording in the mail must agree, so a
+    # merely ambiguous recruitment update stays in manual review.
+    if label not in _SHORTLIST_CANDIDATE_STATUSES or not stated:
+        return False
+
+    value["status"] = "INTERVIEW_SHORTLISTED"
+    value["is_selection_or_offer_related"] = True
+    value["should_create_review_record"] = True
+    value["requires_manual_review"] = False
+    value["shortlist_normalised_from"] = status
+    return True
+
+
 def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | None = None) -> tuple[dict[str, Any], str, int]:
     payload = _analysis_payload(message, attachment_texts)
     routing_context = routing_decision(
@@ -986,6 +1511,9 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
         attachment_texts, message.get("thread_context"),
     ).get("context") or {}
     models = configured_models()
+    mail_selection = ai_mail_model.selection()
+    if mail_selection["custom"]:
+        models["primary"] = mail_selection["model"]
     deadline = time.monotonic() + max(
         20.0,
         float(os.getenv("AI_JOB_TIMEOUT", os.getenv("AI_RECRUITMENT_JOB_TIMEOUT_SECONDS", "660"))),
@@ -1007,8 +1535,13 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
         workload: str = "recruitment_mail_classification",
     ):
         """Use the lightweight fallback when the configured runner cannot serve."""
+        def send(**kwargs):
+            if mail_selection["custom"] and kwargs["model"] == mail_selection["model"]:
+                return ai_mail_model.request(selected=mail_selection, **kwargs)
+            return chat_structured(**kwargs)
+
         try:
-            return chat_structured(
+            return send(
                 messages=messages, schema=SCHEMA, model=model, max_retries=max_retries,
                 timeout=remaining_timeout(),
                 deadline_monotonic=deadline,
@@ -1026,7 +1559,7 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
                 "Recruitment model failed; retrying fallback primary=%s fallback=%s code=%s",
                 model, fallback, exc.code,
             )
-            return chat_structured(
+            return send(
                 messages=messages, schema=SCHEMA, model=fallback, max_retries=0,
                 timeout=remaining_timeout(),
                 deadline_monotonic=deadline,
@@ -1058,6 +1591,9 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
         logger.info("Ollama response JSON extracted for recruitment classification")
         result = primary
         model_label = primary_response.model
+        ai_mail_model.remember(primary_response)
+        if primary_response.node_id:
+            model_label += f"@{primary_response.node_id}"
         duration = primary_response.duration_ms
         if _requires_independent_validation(primary, routing_context):
             validator_response = request_model(
@@ -1081,13 +1617,16 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
                 except (ValueError, json.JSONDecodeError) as exc:
                     raise AIGatewayError("Ollama validator returned malformed JSON after one repair retry.", code="OLLAMA_INVALID_JSON") from exc
             result = _reconcile_model_results(primary, validator)
-            model_label = f"{primary_response.model}|validator:{validator_response.model}"
+            model_label += f"|validator:{validator_response.model}"
+            if validator_response.node_id:
+                model_label += f"@{validator_response.node_id}"
             duration += validator_response.duration_ms
         try:
             validate_result(result, message, attachment_texts)
         except ValueError as exc:
             raise AIGatewayError(f"Ollama response failed schema validation: {exc}", code="OLLAMA_SCHEMA_VALIDATION_FAILED") from exc
         logger.info("Ollama recruitment response schema validated")
+        normalise_shortlist_status(result, message)
         result["primary_status"] = result["status"]
         result["classification_source"] = "OLLAMA"
         result["ai_validation_status"] = "VALIDATED"
@@ -1097,6 +1636,18 @@ def analyze(message: dict[str, Any], attachment_texts: list[dict[str, str]] | No
     except Exception as exc:
         logger.exception("Recruitment AI analysis failed with unexpected error type=%s message=%s", type(exc).__name__, str(exc))
         raise AIGatewayError("AI semantic analysis failed.", code="OLLAMA_INTERNAL_ERROR") from exc
+
+
+# A refusal by our own schema check is a statement about the model's answer, not
+# about the service being reachable, so it does not belong on the infrastructure
+# retry path. `VALIDATION_FAILED` is the status the outcome audit already reports
+# as a SCHEMA_VALIDATION_FAILED gap; nothing produced it until now.
+_DETERMINISTIC_AI_FAILURES = frozenset({"OLLAMA_SCHEMA_VALIDATION_FAILED"})
+
+# Sampling can turn a rejected answer into a valid one, so a couple of genuine
+# attempts run first. Beyond that the loop is only spending inference to be told
+# the same thing again.
+_VALIDATION_RETRY_ALLOWANCE = 2
 
 
 def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment_texts: list[dict[str, str]] | None = None, *, reprocess: bool = False, defer_ai: bool = False) -> dict[str, Any] | None:
@@ -1132,8 +1683,15 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
     if not created and not reprocess and str(row.get("processing_status") or "").upper() != "FILTERED":
         return None
     previous_status=row.get("processing_status")
-    if not reprocess and store.is_duplicate_content(mailbox["candidate_id"], row["id"], decoded["message_hash"], decoded["body_hash"]):
+    if not reprocess and store.is_duplicate_content(
+        mailbox["candidate_id"], row["id"], decoded["message_hash"], decoded["body_hash"],
+        decoded.get("subject"),
+    ):
         store.mark_message_status(row["id"], "DUPLICATE_CONTENT", reason="DUPLICATE_MESSAGE")
+        # A dropped mail that was carrying an interview must not vanish without
+        # trace. Dedupe runs before the calendar fallback below, so this is the
+        # one place that can see an invite being discarded.
+        _publish_ignored_interview(mailbox, decoded, safe, "DUPLICATE_CONTENT", "DUPLICATE_MESSAGE")
         return None
     for attachment in processed:
         if attachment.get("checksum"):
@@ -1151,6 +1709,7 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
         if reprocess:
             store.archive_event_for_message(row["id"], status="IGNORED_NOT_OFFER_RELATED", reason=route["reason"])
         store.mark_message_status(row["id"], "IGNORED_NOT_OFFER_RELATED", reason=route["reason"])
+        _publish_ignored_interview(mailbox, decoded, safe, "IGNORED_NOT_OFFER_RELATED", route["reason"])
         if reprocess: store.mark_reprocessed(row["id"],previous_status,"IGNORED_NOT_OFFER_RELATED","HISTORICAL_RULE_RESCAN")
         return None
     routed_status = str((route.get("context") or {}).get("status") or "")
@@ -1174,9 +1733,39 @@ def process_message(mailbox: dict[str, Any], decoded: dict[str, Any], attachment
             result = _failure_review_result(decoded, exc)
             model = f"unavailable:{getattr(exc, 'code', type(exc).__name__).lower()}"
             duration = 0
-            logger.warning("Recruitment email queued for semantic retry code=%s", getattr(exc, 'code', type(exc).__name__))
             failure_code = getattr(exc, "code", None) or "OLLAMA_INTERNAL_ERROR"
-            store.mark_message_status(row["id"], "AI_RETRY_PENDING", reason=failure_code)
+            if (
+                failure_code in _DETERMINISTIC_AI_FAILURES
+                and int(row.get("ai_retry_count") or 0) >= _VALIDATION_RETRY_ALLOWANCE
+            ):
+                # The model answered; the answer did not validate. Re-running
+                # identical input mostly reproduces the identical refusal, and
+                # the queue proved it: two mails reached ten attempts on
+                # OLLAMA_SCHEMA_VALIDATION_FAILED and would have been parked as
+                # MAX_ATTEMPTS_EXHAUSTED, which names the wrong cause and hides
+                # a decision an operator can act on. A few attempts still run,
+                # because sampling occasionally produces a valid result; after
+                # that the mail is parked where the audit already looks for it.
+                logger.warning(
+                    "Recruitment email parked after repeated validation failure code=%s attempts=%s",
+                    failure_code, row.get("ai_retry_count"),
+                )
+                store.mark_message_status(
+                    row["id"], "VALIDATION_FAILED", reason=failure_code, error_code=failure_code,
+                )
+                try:
+                    store.record_analysis(
+                        row["id"], mailbox["candidate_id"], result,
+                        model=model, processing_status="VALIDATION_FAILED",
+                        error_code=failure_code, error_message=str(exc),
+                    )
+                except Exception:
+                    logger.debug("Unable to persist validation-failure analysis", exc_info=True)
+                return None
+            logger.warning("Recruitment email queued for semantic retry code=%s", failure_code)
+            store.mark_message_status(
+                row["id"], "AI_RETRY_PENDING", reason=failure_code, error_code=failure_code,
+            )
             if (
                 result.get("primary_status") == "MANUAL_REVIEW_REQUIRED"
                 and not critical_attachment_failure

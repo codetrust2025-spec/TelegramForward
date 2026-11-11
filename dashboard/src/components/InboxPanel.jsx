@@ -17,7 +17,6 @@ import {
   formatUrgentTopBanner,
 } from '../utils/replyAlert.js'
 import { sortConversationsByUrgency } from '../utils/leadUx.js'
-import { syncReplyAlerts, stopReplyBuzzerOnUnmount } from '../utils/replyBuzzerSound.js'
 import {
   buildCallLink,
   buildCallSystemMessage,
@@ -25,11 +24,7 @@ import {
   getScheduledCall,
   scheduleCall,
 } from '../utils/calls.js'
-import {
-  playNewMessageSound,
-  unlockNotificationSound,
-  startIncomingCallRing,
-} from '../utils/notificationSound.js'
+import { unlockNotificationSound } from '../utils/notificationSound.js'
 import {
   LIVE_EVENTS,
   appendMessageDeduped,
@@ -119,7 +114,6 @@ export function InboxPanel({
   const [callScheduling, setCallScheduling] = useState(false)
   const [outcomeCall, setOutcomeCall] = useState(null)
   const [outcomeSaving, setOutcomeSaving] = useState(false)
-  const alertedCallIdsRef = useRef(new Set())
   const skippedOutcomeIdsRef = useRef(new Set())
   const [replyCheckTick, setReplyCheckTick] = useState(0)
   const [toast, setToast] = useState(null)
@@ -290,10 +284,9 @@ export function InboxPanel({
     [inboxState, replyCheckTick],
   )
 
-  useEffect(() => {
-    syncReplyAlerts(inboxState)
-    return () => stopReplyBuzzerOnUnmount()
-  }, [inboxState, alertCounts.total, alertCounts.aggressive, alertCounts.buzzer])
+  // Reply-SLA sound is driven by GlobalNotificationSounds so that a delayed
+  // conversation is heard on any page, not only while this panel is mounted.
+  // The badge counts above stay here because they are this panel's UI.
 
   useEffect(() => {
     const id = window.setInterval(() => setReplyCheckTick(t => t + 1), REPLY_CHECK_INTERVAL_MS)
@@ -1184,16 +1177,8 @@ export function InboxPanel({
     }
   }
 
-  useEffect(() => {
-    const reminders = crmState?.call_reminders || []
-    for (const r of reminders) {
-      const id = r.id || `${r.account_id}:${r.user_id}`
-      if (alertedCallIdsRef.current.has(id)) continue
-      alertedCallIdsRef.current.add(id)
-      unlockNotificationSound()
-      startIncomingCallRing()
-    }
-  }, [crmState?.call_reminders])
+  // Call-reminder ringing moved to GlobalNotificationSounds: a call falling due
+  // must ring wherever the operator is, not only on the Inbox page.
 
   useEffect(() => {
     if (outcomeCall) return

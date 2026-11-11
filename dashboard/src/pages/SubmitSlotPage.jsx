@@ -3,6 +3,7 @@ import { Spinner } from '../Loader.jsx'
 import { SubmitSlotFileDrop } from './SubmitSlotFileDrop.jsx'
 import AiProcessingStatus from '../components/AiProcessingStatus.jsx'
 import { TwelveHourTimePicker } from './TwelveHourTimePicker.jsx'
+import { bookingSourceMeta } from '../utils/bookingSource.js'
 
 const API_BASE = typeof window !== 'undefined' && window.location.port === '3000'
   ? ''
@@ -109,6 +110,20 @@ export function to24h(val) {
   return `${String(h).padStart(2,'0')}:${min}`
 }
 
+export function appendInviteTraceFields(fd, { extraction, displayDate, displayTime }) {
+  if (extraction?.invite_trace_id) fd.append('invite_trace_id', extraction.invite_trace_id)
+  fd.append('invite_display_date', displayDate || '')
+  fd.append('invite_display_time', displayTime || '')
+  fd.append('invite_extracted_start_time', extraction?.start_time || extraction?.time || '')
+}
+
+export function manualSlotFieldsForAiRetry({ manualDate, manualTime, userEditedFields }) {
+  return {
+    date: userEditedFields?.date ? manualDate : '',
+    time: userEditedFields?.time ? manualTime : '',
+  }
+}
+
 function platformLabel(platform) {
   const map = { teams: 'Microsoft Teams', zoom: 'Zoom', gmail: 'Gmail', google_calendar: 'Google Calendar', barraiser: 'BarRaiser' }
   return map[platform] || platform || ''
@@ -143,6 +158,34 @@ function uniqueNonEmptyTags(values) {
     seen.add(key)
     return true
   })
+}
+
+export function compactInviteDetectionLabel(extraction) {
+  const confidence = Number(extraction?.confidence_score || 0)
+  const rawNode = String(
+    extraction?.inference_node_label || extraction?.inference_node_id || '',
+  ).trim()
+  const nodeAliases = {
+    rtx4060: 'RTX',
+    'rtx 4060': 'RTX',
+    jagadeesh: 'Jagadeesh',
+    our_machine: 'Praveen',
+    praveen: 'Praveen',
+  }
+  const node = nodeAliases[rawNode.toLowerCase()] || rawNode
+  const rawModel = String(
+    extraction?.primary_model || extraction?.detected_by || '',
+  ).trim()
+  const model = rawModel
+    .replace(/\s*\([^)]*\)\s*/g, '')
+    .split(/\s+\+\s+|\s+verified\b/i)
+    .pop()
+    .split(':')[0]
+    .trim()
+  const source = node || model || 'AI'
+  const parts = node && model ? [node, model] : [source]
+  if (confidence > 0) parts.push(`${confidence}%`)
+  return parts.join(' · ')
 }
 
 /**
@@ -320,6 +363,7 @@ export function SubmitSlotPage() {
   // until the file is replaced or the booking is confirmed.
   const [aiElapsedMs, setAiElapsedMs] = useState(null)
   const parseStartedAtRef = useRef(null)
+  const submittingRef = useRef(false)
   const [userEditedFields, setUserEditedFields] = useState({})
   const [paymentAiResult, setPaymentAiResult] = useState(null)
   const [paymentAnalysing, setPaymentAnalysing] = useState(false)
@@ -453,13 +497,19 @@ export function SubmitSlotPage() {
     return () => window.clearInterval(timer)
   }, [parsing])
 
-  async function parseScreenshot(file) {
+  async function parseScreenshot(file, { preserveUserEdits = false } = {}) {
     if (!file) { setParsedSlot(null); setAiExtraction(null); setAiBlocked(''); return }
     // Extraction is slow, so a second click (or a rapid re-upload) could
     // previously start a parallel request and let the loser overwrite the
     // winner's result. Ignore re-entry while one is already in flight.
     if (parseInFlightRef.current) return
     parseInFlightRef.current = true
+    const retained = preserveUserEdits
+      ? manualSlotFieldsForAiRetry({ manualDate, manualTime, userEditedFields })
+      : { date: '', time: '' }
+    setManualDate(retained.date)
+    setManualTime(retained.time)
+    setParsedSlot(null)
     parseStartedAtRef.current = Date.now()
     setAiElapsedMs(0)
     setParsing(true); setError(''); setSuccess(''); setAiExtraction(null); setAiBlocked('')
@@ -639,6 +689,10 @@ export function SubmitSlotPage() {
     if (isPastDate) {
       return showValidationError('invite_datetime', 'Interview date is in the past. Select today or a future date.')
     }
+    // `busy` only disables the button after a re-render, so a fast double click
+    // could reach the boundary twice. The ref closes that window synchronously.
+    if (submittingRef.current) return
+    submittingRef.current = true
     setValidationError(null)
     setBusy(true); setError(''); setSuccess('')
     try {
@@ -648,6 +702,11 @@ export function SubmitSlotPage() {
       if (bookingSlot?.date) fd.append('date', bookingSlot.date)
       if (bookingSlot?.time) fd.append('time', bookingSlot.time)
       if (bookingSlot?.time_end) fd.append('time_end', bookingSlot.time_end)
+      appendInviteTraceFields(fd, {
+        extraction: aiExtraction,
+        displayDate: manualDate || parsedSlot?.date || '',
+        displayTime: manualTime || parsedSlot?.time || '',
+      })
       if (bookingSlot?.interview_round) fd.append('interview_round', bookingSlot.interview_round)
       const technology = serviceType === 'round_wise'
         ? roundWiseTechnology
@@ -704,7 +763,7 @@ export function SubmitSlotPage() {
       await refresh()
       setTimeout(() => { setTab('confirmed'); setSuccess('') }, 2000)
     } catch { setError('Network error — try again') }
-    finally { setBusy(false) }
+    finally { submittingRef.current = false; setBusy(false) }
   }
 
   return (
@@ -790,6 +849,17 @@ export function SubmitSlotPage() {
                                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 6L9 17l-5-5"/></svg>
                                 Booked
                               </span>
+                              {(() => {
+                                const meta = bookingSourceMeta(slot.interview_booking_source)
+                                return (
+                                  <span
+                                    className={`sbs-source-badge sbs-source-badge--${meta.tone}`}
+                                    title={meta.title}
+                                  >
+                                    {meta.label}
+                                  </span>
+                                )
+                              })()}
                             </div>
                           </div>
                         ))}
@@ -946,7 +1016,7 @@ export function SubmitSlotPage() {
                     message={aiBlocked}
                     mode={aiExtraction?.processing_mode || null}
                     elapsedMs={aiElapsedMs}
-                    onRetry={slotFile ? () => parseScreenshot(slotFile) : undefined}
+                    onRetry={slotFile ? () => parseScreenshot(slotFile, { preserveUserEdits: true }) : undefined}
                     onCancel={() => onSlotFileChange(null)}
                     retryLabel="Retry"
                     cancelLabel="Remove file"
@@ -956,9 +1026,7 @@ export function SubmitSlotPage() {
               {aiExtraction && !aiBlocked && aiExtraction.confidence_score > 0 && (
                 <div className="sbs-detected">
                   <span className={`sbs-detected__badge ${aiExtraction.confidence_score >= 90 ? 'sbs-detected__badge--green' : aiExtraction.confidence_score >= 70 ? 'sbs-detected__badge--yellow' : 'sbs-detected__badge--red'}`}>
-                    {aiExtraction.detected_by
-                      ? `Detected by ${aiExtraction.detected_by} · ${aiExtraction.confidence_score}%`
-                      : `AI verified · ${aiExtraction.confidence_score}%`}
+                    {compactInviteDetectionLabel(aiExtraction)}
                   </span>
                   <div className="sbs-detected__main">
                     {aiExtraction.interview_date && <span className="sbs-detected__date">{formatFriendlyDate(aiExtraction.interview_date)}</span>}
@@ -1037,7 +1105,12 @@ export function SubmitSlotPage() {
               {success && <div className="sbs-alert sbs-alert--success sbs-success-anim"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{flexShrink:0}}><path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg><span>{success}</span></div>}
 
               <div className="sbs-sticky-action">
-                <button type="submit" className="sbs-cta sbs-cta--ready" disabled={busy || parsing || isPastDate || !!aiBlocked}>
+                {/* Disabled while the success banner is up: the form has just
+                    been cleared, so a ready-looking button there invites a
+                    click against an empty form. It re-enables once the banner
+                    clears, which keeps the per-field validation guidance that
+                    pressing Confirm on an incomplete form is meant to give. */}
+                <button type="submit" className="sbs-cta sbs-cta--ready" disabled={busy || parsing || isPastDate || !!aiBlocked || !!success}>
                   <span>{busy ? <Spinner size={18} /> : parsing ? 'Reading invite...' : 'Confirm booking'}</span>
                 </button>
               </div>

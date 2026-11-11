@@ -10,13 +10,16 @@ impossible bar and a message about a component that was not even allowed to run.
 from __future__ import annotations
 
 import pytest
+from datetime import date, timedelta
 
 from features import ollama_invite_extract as oie
 
 
 VISION_JSON = {
     "candidate_name": "Abilash Perla",
-    "interview_date": "2026-08-10",
+    # This suite tests OCR gating, not past-year correction. Keep its invite
+    # unambiguously in the future so it cannot drift into that separate path.
+    "interview_date": (date.today() + timedelta(days=14)).isoformat(),
     "start_time": "02:30 PM",
     "end_time": "03:30 PM",
     "interview_round": "L2",
@@ -59,9 +62,36 @@ def test_ai_only_success_is_not_blocked_by_missing_ocr(ai_only, ocr_forbidden):
 
     assert result["auto_booking_safe"] is True
     assert result["manual_fields_required"] is False
-    assert result["interview_date"] == "2026-08-10"
+    assert result["interview_date"] == VISION_JSON["interview_date"]
     assert result["start_time"] == "02:30 PM"
     assert not result.get("failure_reason")
+
+
+def test_ai_only_rejects_bare_ambiguous_model_time(ai_only, ocr_forbidden, monkeypatch):
+    raw = {**VISION_JSON, "start_time": "04:00", "end_time": "17:00"}
+    monkeypatch.setattr(oie, "parse_strict_json_response", lambda _r: dict(raw))
+
+    result = oie.extract_interview_invite_with_ollama(b"image-bytes", "image/png")
+
+    assert result["_model_raw_start_time"] == "04:00"
+    assert result["_model_raw_end_time"] == "17:00"
+    assert result["start_time"] == ""
+    assert result["end_time"] == "05:00 PM"
+    assert result["auto_booking_safe"] is False
+    assert result["manual_fields_required"] is True
+    assert "AM or PM" in " ".join(result["warnings"])
+
+
+def test_ai_only_accepts_unambiguous_24_hour_model_time(ai_only, ocr_forbidden, monkeypatch):
+    raw = {**VISION_JSON, "start_time": "16:00", "end_time": "17:00"}
+    monkeypatch.setattr(oie, "parse_strict_json_response", lambda _r: dict(raw))
+
+    result = oie.extract_interview_invite_with_ollama(b"image-bytes", "image/png")
+
+    assert result["_model_raw_start_time"] == "16:00"
+    assert result["start_time"] == "04:00 PM"
+    assert result["time"] == "16:00"
+    assert result["auto_booking_safe"] is True
 
 
 def test_ai_only_never_calls_any_ocr_function(ai_only, ocr_forbidden):
@@ -93,6 +123,22 @@ def test_ai_only_reports_its_mode_and_that_ocr_was_not_used(ai_only, ocr_forbidd
     assert result["extraction_method"] == "ai_only"
 
 
+def test_ai_only_reports_the_laptop_that_returned_the_vision_result(
+    ai_only, ocr_forbidden, monkeypatch
+):
+    response = oie.InferenceResponse(
+        "{}",
+        node_id="jagadeesh",
+        node_label="Jagadeesh",
+    )
+    monkeypatch.setattr(oie, "call_ollama_vision_model", lambda *a, **k: response)
+
+    result = oie.extract_interview_invite_with_ollama(b"image-bytes", "image/png")
+
+    assert result["inference_node_id"] == "jagadeesh"
+    assert result["inference_node_label"] == "Jagadeesh"
+
+
 def test_ai_only_incomplete_data_allows_manual_confirmation(ai_only, ocr_forbidden, monkeypatch):
     partial = {**VISION_JSON, "start_time": ""}
     monkeypatch.setattr(oie, "parse_strict_json_response", lambda _r: dict(partial))
@@ -105,7 +151,7 @@ def test_ai_only_incomplete_data_allows_manual_confirmation(ai_only, ocr_forbidd
     assert "start time" in result["failure_reason"]
     assert "OCR" not in result["failure_reason"]
     # The date the AI did read is still offered, so the operator only fills the gap.
-    assert result["interview_date"] == "2026-08-10"
+    assert result["interview_date"] == VISION_JSON["interview_date"]
 
 
 def test_ai_only_handles_an_unreachable_model_without_mentioning_ocr(

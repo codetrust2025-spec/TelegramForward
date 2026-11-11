@@ -4,6 +4,7 @@ import { API } from '../config.js'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useConfirm } from '../context/ConfirmContext.jsx'
 import { formatClockTime } from '../utils/istTime.js'
+import { bookingSourceMeta as sharedBookingSourceMeta } from '../utils/bookingSource.js'
 
 const ATTENDEES = ['Nikhila', 'Bhavana', 'Tool']
 
@@ -81,19 +82,15 @@ function AttendanceSelect({ value, disabled, onChange, ariaLabel }) {
   )
 }
 
+/**
+ * One mapping for the roster and the confirmed-slots page.
+ *
+ * This used to fall back to "Candidate booked" for anything that was not
+ * ai_auto_booked, which labelled legacy rows with a source they never
+ * recorded. The shared helper reports those as plain "Booked" instead.
+ */
 function bookingSourceMeta(row) {
-  if (row?.interview_booking_source === 'ai_auto_booked') {
-    return {
-      label: 'AI Auto-booked',
-      tone: 'auto',
-      title: 'Booked automatically from a validated interview email.',
-    }
-  }
-  return {
-    label: 'Candidate booked',
-    tone: 'candidate',
-    title: 'Booked through the candidate or manual slot workflow.',
-  }
+  return sharedBookingSourceMeta(row?.interview_booking_source)
 }
 
 function SlotScreenshotModal({ row, onClose }) {

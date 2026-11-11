@@ -133,7 +133,13 @@ class RecruitmentMailWorker:
         if not status.get('endpoint_reachable') or not status.get('model_available'):
             return
         maximum=max(1,min(20,int(os.getenv('AI_MAIL_AI_RETRY_BATCH_SIZE','3'))))
-        lease=max(60,min(900,int(os.getenv('AI_MAIL_AI_LEASE_SECONDS','150'))))
+        # The lease has to outlive a real analysis or the row is reclaimed
+        # mid-flight and recycled forever. Production ran a 150s lease against
+        # a ~154s run (primary plus validator), which recycled 40 of 63 queued
+        # messages and drove retry counts past 100. Floor it at the job budget.
+        job_timeout=int(os.getenv('AI_JOB_TIMEOUT',os.getenv('AI_RECRUITMENT_JOB_TIMEOUT_SECONDS','660')))
+        configured=int(os.getenv('AI_MAIL_AI_LEASE_SECONDS','150'))
+        lease=max(60,min(900,max(configured,job_timeout+60)))
         for _ in range(maximum):
             claimed=store.claim_ai_messages(limit=1,lease_seconds=lease)
             if not claimed:break

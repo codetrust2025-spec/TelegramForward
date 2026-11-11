@@ -34,6 +34,7 @@ INCOMPLETE_EVIDENCE = "INCOMPLETE_EVIDENCE"
 DUPLICATE_INVITE = "DUPLICATE_INVITE"
 PAYMENT_NOT_CLEARED = "PAYMENT_NOT_CLEARED"
 MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED"
+BOOKING_NOT_SAVED = "BOOKING_NOT_SAVED"
 
 REASON_TEXT = {
     DUPLICATE_BOOKING: "Candidate already has a booking for this round",
@@ -47,6 +48,7 @@ REASON_TEXT = {
     DUPLICATE_INVITE: "Duplicate invite detected",
     PAYMENT_NOT_CLEARED: "Payment is not cleared for this interview",
     MANUAL_REVIEW_REQUIRED: "Booking requires manual review",
+    BOOKING_NOT_SAVED: "Booking was not saved — book this slot manually and report it",
 }
 
 # Validator code -> reason code. Anything absent falls back to manual review,
@@ -77,6 +79,10 @@ _INTERNAL_TO_REASON = {
     "AI_REQUIRES_REVIEW": MANUAL_REVIEW_REQUIRED,
     "AUTO_BOOKING_DISABLED": MANUAL_REVIEW_REQUIRED,
     "NOT_ACTIONABLE": MANUAL_REVIEW_REQUIRED,
+    # The store accepted the write and the row does not hold the slot. This is
+    # never the invite's fault, so it must not read as a parsing or duplicate
+    # problem — it is a storage failure an operator has to act on.
+    "BOOKING_NOT_PERSISTED": BOOKING_NOT_SAVED,
 }
 
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",

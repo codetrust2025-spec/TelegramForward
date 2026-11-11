@@ -16,6 +16,20 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 _INTERVIEW_RE = re.compile(r"\b(interview|technical round|managerial round|hr round)\b", re.I)
+
+# Consumer mail providers. An invitation from one of these is somebody's own
+# diary — a friend, a family event, the candidate inviting themselves — not an
+# employer scheduling a round.
+_CONSUMER_MAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.in", "yahoo.co.uk",
+    "outlook.com", "hotmail.com", "live.com", "msn.com", "icloud.com", "me.com",
+    "proton.me", "protonmail.com", "pm.me", "aol.com", "rediffmail.com",
+    "zoho.com", "mail.com", "gmx.com", "yandex.com",
+})
+
+# An interview is a small meeting. A mass invitation — a webinar, a careers
+# open day, a newsletter event — is not one, however well authenticated.
+_MAX_INTERVIEW_ATTENDEES = 5
 _CANCELLED_SUBJECT_RE = re.compile(
     r"^\s*(?:(?:re|fw|fwd)\s*:\s*)*(?:cancelled|canceled)\s*:",
     re.I,
@@ -409,6 +423,55 @@ def _plain_text_interview_result(decoded: dict[str, Any]) -> dict[str, Any] | No
     }
 
 
+def _is_employer_invitation(sender: str, recipient: str, invite: dict[str, Any]) -> bool:
+    """An outside organisation inviting this candidate to a small meeting.
+
+    This is what separates a recruiting invitation from everything else in a
+    jobseeker's calendar once authentication has already been proved. Three
+    things have to hold, and each excludes a specific false positive:
+
+    * the sender is on a different domain from the candidate — an invitation
+      from the candidate's own address is their own diary, not a round;
+    * that domain is not a consumer mail provider — a friend's Gmail invite is
+      not an employer;
+    * the meeting is small — a webinar or careers open day is authenticated and
+      external and still is not an interview.
+    """
+    sender_domain = _domain(sender)
+    recipient_domain = _domain(recipient)
+    if not sender_domain or sender_domain == recipient_domain:
+        return False
+    if sender_domain in _CONSUMER_MAIL_DOMAINS:
+        return False
+    attendees = invite.get("attendees") or []
+    return 0 < len(attendees) <= _MAX_INTERVIEW_ATTENDEES
+
+
+def _accepts_as_interview(
+    decoded: dict[str, Any],
+    invite: dict[str, Any],
+    sender: str,
+    recipient: str,
+    subject: str,
+) -> bool:
+    """Whether a trusted calendar invitation counts as an interview.
+
+    The keyword used to be mandatory, and that veto discarded a real booking:
+    Sourcebae titled the event "Fullstack Ai || Pujitha", which is how
+    recruiters normally title them — by the role, not by the ceremony. Every
+    other signal had already passed, so the invitation was cryptographically
+    authenticated, organizer-aligned, addressed to the monitored candidate and
+    carried a valid start, and it was dropped because the title lacked a word.
+
+    The keyword is still *sufficient* on its own, so nothing that worked before
+    stops working. It is simply no longer *necessary* when the invitation is
+    plainly an employer inviting this candidate.
+    """
+    if _INTERVIEW_RE.search(" ".join((subject, invite["summary"], invite["description"][:500]))):
+        return True
+    return _is_employer_invitation(sender, recipient, invite)
+
+
 def trusted_interview_result(decoded: dict[str, Any], attachments: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Build a validated classifier result only for a trusted calendar invite."""
     cancellation = _plain_text_interview_cancellation_result(decoded)
@@ -453,7 +516,7 @@ def trusted_interview_result(decoded: dict[str, Any], attachments: list[dict[str
     if not _sender_authenticated(decoded, sender):
         return None
     subject = str(decoded.get("subject") or "")
-    if not _INTERVIEW_RE.search(" ".join((subject, invite["summary"], invite["description"][:500]))):
+    if not _accepts_as_interview(decoded, invite, sender, recipient, subject):
         return None
 
     cancelled = invite["method"] == "CANCEL" or invite["status"] == "CANCELLED"
@@ -474,6 +537,13 @@ def trusted_interview_result(decoded: dict[str, Any], attachments: list[dict[str
         "status": status, "primary_status": status, "classification": classification,
         "candidate_status": candidate_status, "confidence": 0.99, "ignore_reason": None,
         "reason": "Authenticated RFC 5545 calendar invitation with matching organizer and candidate attendee.",
+        # The calendar's own identity for this meeting. A recruiter sends the
+        # covering note and the invitation as two separate mails describing one
+        # interview, and Google attaches the invitation twice; the UID is what
+        # ties all of those to a single event, and SEQUENCE is what tells a
+        # reschedule apart from a resend.
+        "calendar_uid": invite["uid"],
+        "calendar_sequence": invite["sequence"],
         "candidate": {"name": None, "email": recipient},
         "company": {"name": None, "domain": _domain(sender)},
         "job": {"title": invite["summary"], "employment_type": None, "location": invite["location"] or None},

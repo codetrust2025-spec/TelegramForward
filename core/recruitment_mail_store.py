@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -596,16 +597,43 @@ def stored_message(mailbox_id: str, provider_message_id: str) -> dict[str, Any] 
     return rows[0] if rows else None
 
 
+def _max_ai_attempts() -> int:
+    """Attempts before a message is parked terminally rather than requeued."""
+    try:
+        return max(3, min(50, int(os.getenv("AI_MAIL_MAX_AI_ATTEMPTS", "12"))))
+    except (TypeError, ValueError):
+        return 12
+
+
 def claim_ai_messages(limit: int = 1, *, lease_seconds: int = 150) -> list[dict[str, Any]]:
     """Lease queued semantic work so crashes/timeouts cannot lose or duplicate it."""
     with get_connection() as conn, conn.cursor() as cur:
+        # A row that has burned through its attempts is parked terminally
+        # rather than returned to the queue: without this a message can be
+        # reclaimed indefinitely (production reached 105 attempts). Terminal
+        # rows are excluded from the claim below, and no backoff can revive
+        # them, so they stop consuming Ollama capacity while staying visible.
+        max_attempts=_max_ai_attempts()
+        cur.execute("""UPDATE mailbox_messages SET processing_status='AI_FAILED_TERMINAL',
+              ai_lease_expires_at=NULL,updated_at=now(),ai_last_error_code='MAX_ATTEMPTS_EXHAUSTED'
+            WHERE processing_status='AI_RUNNING' AND ai_lease_expires_at<now()
+              AND COALESCE(ai_retry_count,0)>=%s""",(max_attempts,))
         cur.execute("""UPDATE mailbox_messages SET processing_status='AI_QUEUED',ai_lease_expires_at=NULL,
               updated_at=now(),ai_last_error_code='LEASE_EXPIRED'
             WHERE processing_status='AI_RUNNING' AND ai_lease_expires_at<now()""")
+        # Rows that exhausted their attempts before the cap existed are already
+        # excluded from the claim below, but would otherwise sit in the queue
+        # forever looking like a live backlog. Park them under the same
+        # terminal state so the queue reflects what is actually claimable.
+        cur.execute("""UPDATE mailbox_messages SET processing_status='AI_FAILED_TERMINAL',
+              ai_lease_expires_at=NULL,updated_at=now(),ai_last_error_code='MAX_ATTEMPTS_EXHAUSTED'
+            WHERE processing_status IN ('AI_QUEUED','AI_RETRY_PENDING')
+              AND COALESCE(ai_retry_count,0)>=%s""",(max_attempts,))
         cur.execute("""SELECT id FROM mailbox_messages
           WHERE processing_status IN ('AI_QUEUED','AI_RETRY_PENDING')
             AND COALESCE(ai_retry_after,now())<=now()
-          ORDER BY sent_at ASC,id FOR UPDATE SKIP LOCKED LIMIT %s""",(max(1,min(limit,20)),))
+            AND COALESCE(ai_retry_count,0)<%s
+          ORDER BY sent_at ASC,id FOR UPDATE SKIP LOCKED LIMIT %s""",(max_attempts,max(1,min(limit,20))))
         ids=[row[0] for row in cur.fetchall()]
         if not ids:return []
         cur.execute("""UPDATE mailbox_messages m SET processing_status='AI_RUNNING',
@@ -644,10 +672,31 @@ def schedule_ai_retry(message_id: str, *, succeeded: bool) -> None:
               updated_at=now() WHERE id=%s""",(message_id,))
 
 
-def is_duplicate_content(candidate_id:str,message_id:str,message_hash:str,body_hash:str)->bool:
+def is_duplicate_content(candidate_id:str,message_id:str,message_hash:str,body_hash:str,subject:str|None=None)->bool:
+    """Has this candidate already had an event from an identical message?
+
+    Two independent tests, and the difference matters:
+
+    ``message_hash`` covers sender + subject + sent_at, so it identifies the
+    same message arriving twice. That test is exact and is left alone.
+
+    ``body_hash`` is the looser one, and on its own it is too loose. A recruiter
+    who books two different interviews from the same template sends two mails
+    whose bodies are byte-identical — the substance lives in the subject and in
+    the invitation, not the covering note. That happened: two Sourcebae invites
+    for the same candidate shared body hash b039d324…, so the second interview
+    was dropped as a resend of the first and never reached booking at all.
+
+    So a body match now also requires the subject to match. A genuine resend
+    still has both; two different interviews do not.
+    """
     with get_connection() as conn,conn.cursor() as cur:
         cur.execute("""SELECT 1 FROM mailbox_messages m JOIN ai_recruitment_events e ON e.mailbox_message_id=m.id
-          WHERE m.candidate_id=%s AND m.id<>%s AND (m.message_hash=%s OR (m.body_hash=%s AND %s<>%s)) LIMIT 1""",(candidate_id,message_id,message_hash,body_hash,body_hash,content_hash_empty()))
+          WHERE m.candidate_id=%s AND m.id<>%s AND (
+                m.message_hash=%s
+                OR (m.body_hash=%s AND %s<>%s
+                    AND COALESCE(m.subject,'')=COALESCE(%s,''))
+          ) LIMIT 1""",(candidate_id,message_id,message_hash,body_hash,body_hash,content_hash_empty(),subject))
         return cur.fetchone() is not None
 
 
@@ -656,13 +705,23 @@ def content_hash_empty()->str:
     return hashlib.sha256(b'').hexdigest()
 
 
-def mark_message_status(message_id:str,status:str,*,reason:str|None=None,cleanup_version:str|None=None)->None:
+def mark_message_status(message_id:str,status:str,*,reason:str|None=None,cleanup_version:str|None=None,
+                        error_code:str|None=None)->None:
+    """Set the message's processing state.
+
+    ``error_code`` also writes ``ai_last_error_code``, which is the field the
+    queue is diagnosed from — ``ignore_reason`` keeps older text and has already
+    misled one investigation. A retry parked without a live code looks like an
+    unexplained backlog: 24 messages sat on OLLAMA_SCHEMA_VALIDATION_FAILED with
+    a null code and nothing said why.
+    """
     with get_connection() as conn,conn.cursor() as cur:
         cur.execute("""UPDATE mailbox_messages SET processing_status=%s,ignore_reason=%s,
           ignored_at=CASE WHEN %s LIKE 'IGNORED%%' THEN now() ELSE ignored_at END,
           cleanup_version=COALESCE(%s,cleanup_version),semantic_classifier_version='v3',
+          ai_last_error_code=COALESCE(%s,ai_last_error_code),
           ai_lease_expires_at=CASE WHEN %s='AI_RUNNING' THEN ai_lease_expires_at ELSE NULL END,updated_at=now() WHERE id=%s""",
-          (status,reason,status,cleanup_version,status,message_id))
+          (status,reason,status,cleanup_version,error_code,status,message_id))
 
 
 # Only genuine offer documents identify a duplicate OFFER. Recurring documents
@@ -730,7 +789,159 @@ def attachments_for_message(message_id: str, *, include_text: bool=False) -> lis
         cur.execute(f"SELECT {fields} FROM mailbox_attachments a LEFT JOIN mailbox_attachment_cache c ON c.checksum=a.checksum WHERE a.mailbox_message_id=%s ORDER BY a.created_at",(message_id,));return _rows(cur)
 
 
+_INTERVIEW_CLASSIFICATIONS = {"interview_confirmed", "interview_cancelled", "interview_rescheduled"}
+
+# One interview is described by several mails, so the lookup has to reach back
+# far enough to find the first of them without trawling a candidate's history.
+_CALENDAR_LOOKBACK_DAYS = 30
+
+
+def _interview_identity(result: dict[str,Any]) -> dict[str,Any]:
+    interview=result.get('interview') or {}; recruiter=result.get('recruiter') or {}; company=result.get('company') or {}
+    return {
+        'interview_date': interview.get('date'), 'interview_time': interview.get('time'),
+        'recruiter_email': recruiter.get('email'), 'company_domain': company.get('domain'),
+        'calendar_uid': result.get('calendar_uid'), 'calendar_sequence': result.get('calendar_sequence'),
+    }
+
+
+def existing_interview_event(candidate_id: str, result: dict[str,Any]) -> dict[str,Any] | None:
+    """The event this interview mail repeats, if one is already recorded.
+
+    Only interviews are considered. An offer letter and its covering note are a
+    different problem with different rules, and collapsing them here would be a
+    silent behaviour change to a path nobody asked about.
+    """
+    from features import interview_event_identity
+
+    if str(result.get('classification') or '').strip().lower() not in _INTERVIEW_CLASSIFICATIONS:
+        return None
+    incoming=_interview_identity(result)
+    # Nothing to match on: no calendar identity and no schedule.
+    if not incoming['calendar_uid'] and not (incoming['interview_date'] and incoming['interview_time']):
+        return None
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""SELECT * FROM ai_recruitment_events
+          WHERE candidate_id=%s AND created_at > now() - (%s || ' days')::interval
+          ORDER BY created_at DESC LIMIT 100""",(candidate_id,str(_CALENDAR_LOOKBACK_DAYS)))
+        rows=_rows(cur)
+    return interview_event_identity.duplicate_of(rows,incoming)
+
+
+def attach_calendar_identity(event_id: str, uid: Any, sequence: Any) -> None:
+    """Record the calendar's identity on an event that was created without it.
+
+    The covering note is classified by AI and has no UID; the invitation that
+    follows does. Writing it onto the existing row is what lets the *next*
+    delivery — a resend, or Google's second copy — be recognised by UID rather
+    than by schedule.
+    """
+    if not uid:
+        return
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("""UPDATE ai_recruitment_events SET calendar_uid=%s,calendar_sequence=%s,updated_at=now()
+          WHERE id=%s AND calendar_uid IS NULL""",(str(uid),sequence,event_id))
+
+
+_CLOCK_IN_TEXT = re.compile(r"(\d{1,2}):([0-5]\d)(?::([0-5]\d))?\s*([AP]M)?", re.I)
+
+
+def typed_or_null(value: Any) -> Any:
+    """Blank -> NULL for a column Postgres types as date, time or number.
+
+    The model expresses "no value" both ways: sometimes ``null``, sometimes an
+    empty string. An empty string reaching a typed column raises
+    InvalidDatetimeFormat and aborts the whole INSERT.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
+def storable_time(value: Any) -> Any:
+    """A value Postgres can store in a `time` column, or NULL.
+
+    Nothing is lost by nulling this: the model's exact answer is kept verbatim
+    in `structured_result`, and this column is only the projection the roster
+    and audit read. What *is* lost by passing a bad value through is the entire
+    event — the INSERT aborts, and because a raw psycopg2 error is not an
+    AIGatewayError it never reaches the semantic retry path, so no code is
+    recorded and the mail fails identically forever.
+
+    Two Production cancellation mails died on `"15:30 - 16:00 IST"`: a range
+    with a zone suffix, which Postgres reads as a timezone displacement. The
+    start of a stated range is the interview time, so it is taken; anything with
+    no readable clock at all becomes NULL.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    hit = _CLOCK_IN_TEXT.search(text)
+    if not hit:
+        return None
+    hour, minute = int(hit.group(1)), hit.group(2)
+    second = hit.group(3) or "00"
+    meridiem = (hit.group(4) or "").upper()
+    if meridiem == "AM" and hour == 12:
+        hour = 0
+    elif meridiem == "PM" and hour != 12:
+        hour += 12
+    if not 0 <= hour <= 23:
+        return None
+    return f"{hour:02d}:{minute}:{second}"
+
+
+def storable_date(value: Any) -> Any:
+    """A value Postgres can store in a `date` column, or NULL.
+
+    Same contract as `storable_time`: the raw answer survives in
+    `structured_result`, so a value this cannot represent is dropped from the
+    projection rather than allowed to abort the event.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10]).isoformat()
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return None
+
+
+def storable_number(value: Any) -> Any:
+    """A value Postgres can store in a `numeric` column, or NULL."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, model: str, duration_ms: int) -> dict[str,Any]:
+    # One interview, one event. The recruiter's covering note and the calendar
+    # invitation arrive a minute apart describing the same meeting, and neither
+    # message_hash nor the subject-scoped body_hash dedupe can relate them —
+    # they differ in both. Returning the event already recorded keeps a single
+    # row, a single notification and a single booking attempt.
+    already=existing_interview_event(candidate_id,result)
+    if already:
+        attach_calendar_identity(already['id'],result.get('calendar_uid'),result.get('calendar_sequence'))
+        return already
     event_id=_id(); interview=result.get('interview') or {}; offer=result.get('offer') or {}; company=result.get('company') or {}; job=result.get('job') or {}; recruiter=result.get('recruiter') or {}
     validation_status=str(result.get('validation_status') or 'NEEDS_REVIEW').upper()
     review_state='AUTO_VALIDATED' if validation_status=='AUTO_VALIDATED' else 'PENDING'
@@ -744,10 +955,10 @@ def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, m
         cur.execute("""INSERT INTO ai_recruitment_events(id,candidate_id,mailbox_message_id,primary_status,confidence,company_name,company_domain,job_title,
           recruiter_name,recruiter_email,interview_date,interview_time,interview_mode,offered_ctc,currency,joining_date,offer_date,offer_expiry_date,
           structured_result,summary,requires_manual_review,review_status,visible_in_offer_review,original_primary_status,ignore_reason,ignored_at,
-          ai_model,prompt_name,prompt_version,schema_version,processing_duration_ms,created_at,updated_at)
+          ai_model,prompt_name,prompt_version,schema_version,processing_duration_ms,calendar_uid,calendar_sequence,created_at,updated_at)
           VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,
-            CASE WHEN %s THEN NULL ELSE now() END,%s,'recruitment_email_status_extraction_v3','v3','selection_offer_event_v1',%s,now(),now()) RETURNING *""",
-          (event_id,candidate_id,message_id,status,result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),interview.get('date'),interview.get('time'),interview.get('mode'),offer.get('offered_ctc'),offer.get('currency'),offer.get('joining_date'),offer.get('offer_date'),offer.get('offer_expiry_date'),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')) if visible else False,review_status,visible,original_status if not visible else None,ignore_reason,visible,model,duration_ms))
+            CASE WHEN %s THEN NULL ELSE now() END,%s,'recruitment_email_status_extraction_v3','v3','selection_offer_event_v1',%s,%s,%s,now(),now()) RETURNING *""",
+          (event_id,candidate_id,message_id,status,result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),storable_date(interview.get('date')),storable_time(interview.get('time')),interview.get('mode'),storable_number(offer.get('offered_ctc')),offer.get('currency'),storable_date(offer.get('joining_date')),storable_date(offer.get('offer_date')),storable_date(offer.get('offer_expiry_date')),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')) if visible else False,review_status,visible,original_status if not visible else None,ignore_reason,visible,model,duration_ms,(str(result.get('calendar_uid')) if result.get('calendar_uid') else None),result.get('calendar_sequence')))
         event=_rows(cur)[0]
         canonical_id=canonical_candidate_id(candidate_id)
         cur.execute("""UPDATE ai_recruitment_events SET canonical_candidate_id=%s,validation_status=%s,
@@ -785,7 +996,7 @@ def create_event(candidate_id: str, message_id: str, result: dict[str,Any], *, m
                 joining_date=COALESCE(EXCLUDED.joining_date,offer_verification_cases.joining_date),
                 offer_expiry_date=COALESCE(EXCLUDED.offer_expiry_date,offer_verification_cases.offer_expiry_date),
                 confidence=GREATEST(offer_verification_cases.confidence,EXCLUDED.confidence),updated_at=now()""",
-              (_id(),candidate_id,event_id,offer_case_key,company.get('name'),job.get('title'),offer.get('offered_ctc'),offer.get('currency'),offer.get('offer_date'),offer.get('joining_date'),offer.get('offer_expiry_date'),result['confidence']))
+              (_id(),candidate_id,event_id,offer_case_key,company.get('name'),job.get('title'),storable_number(offer.get('offered_ctc')),offer.get('currency'),storable_date(offer.get('offer_date')),storable_date(offer.get('joining_date')),storable_date(offer.get('offer_expiry_date')),result['confidence']))
             cur.execute("""INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,new_value,created_at)
               VALUES(%s,'system','system','OFFER_CASE_CREATED',%s,%s,%s::jsonb,now())""",(_id(),candidate_id,event_id,json.dumps({'status':result['primary_status'],'confidence':result['confidence']})))
         cur.execute("SELECT confirmed_status FROM candidate_status_history WHERE candidate_id=%s AND confirmed_status IS NOT NULL ORDER BY reviewed_at DESC LIMIT 1",(candidate_id,));confirmed=cur.fetchone()
@@ -825,14 +1036,14 @@ def create_or_reprocess_event(candidate_id: str, message_id: str, result: dict[s
           canonical_candidate_id=%s,validation_status=%s,ai_status=%s,email_intent=%s,document_type=%s,
           evidence_summary=%s,event_fingerprint=%s,updated_at=now()
           WHERE id=%s RETURNING *""",
-          (result['primary_status'],result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),offer.get('joining_date'),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')),review_state,model,duration_ms,canonical_candidate_id(candidate_id),validation_status,str(result.get('ai_status') or 'ANALYZED'),result.get('email_intent'),result.get('document_type'),result.get('evidence_summary') or result.get('summary'),message_id,previous['id']))
+          (result['primary_status'],result['confidence'],company.get('name'),company.get('domain'),job.get('title'),recruiter.get('name'),recruiter.get('email'),storable_date(offer.get('joining_date')),json.dumps(result),result.get('summary'),bool(result.get('requires_manual_review')),review_state,model,duration_ms,canonical_candidate_id(candidate_id),validation_status,str(result.get('ai_status') or 'ANALYZED'),result.get('email_intent'),result.get('document_type'),result.get('evidence_summary') or result.get('summary'),message_id,previous['id']))
         event=_rows(cur)[0]
         if result['primary_status'] in __import__('services.recruitment_mail_agent',fromlist=['OFFER_CASE_STATUSES']).OFFER_CASE_STATUSES:
             cur.execute("""INSERT INTO offer_verification_cases(id,candidate_id,ai_recruitment_event_id,company_name,job_title,joining_date,verification_status,confidence,created_at,updated_at)
               VALUES(%s,%s,%s,%s,%s,%s,'PENDING_REVIEW',%s,now(),now())
               ON CONFLICT(ai_recruitment_event_id) DO UPDATE SET company_name=EXCLUDED.company_name,job_title=EXCLUDED.job_title,
                 joining_date=EXCLUDED.joining_date,verification_status='PENDING_REVIEW',confidence=EXCLUDED.confidence,updated_at=now()""",
-              (_id(),candidate_id,event['id'],company.get('name'),job.get('title'),offer.get('joining_date'),result['confidence']))
+              (_id(),candidate_id,event['id'],company.get('name'),job.get('title'),storable_date(offer.get('joining_date')),result['confidence']))
         cur.execute("""INSERT INTO recruitment_audit_log(id,actor,role,action,candidate_id,source_id,previous_value,new_value,created_at)
           VALUES(%s,'system','system','HISTORICAL_EMAIL_RECLASSIFIED',%s,%s,%s::jsonb,%s::jsonb,now())""",
           (_id(),candidate_id,event['id'],json.dumps({'classification':previous.get('primary_status'),'prompt_version':previous.get('prompt_version')},default=str),json.dumps({'classification':result['primary_status'],'prompt_version':'v3','reason':reason},default=str)))

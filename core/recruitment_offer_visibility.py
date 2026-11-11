@@ -11,7 +11,7 @@ ALLOWED_STATUSES = (
     "OFFER_LETTER_RECEIVED", "APPOINTMENT_LETTER_RECEIVED",
     "OFFER_ACCEPTED", "JOINING_CONFIRMED",
     "JOINED", "POST_SELECTION_ONBOARDING",
-    "INTERVIEW_CONFIRMED", "INTERVIEW_SHORTLISTED",
+    "INTERVIEW_CONFIRMED", "INTERVIEW_SHORTLISTED", "INTERVIEW_PROPOSED", "OFFER_NEEDS_REVIEW", "JOINING_NEEDS_REVIEW", "SELECTION_NEEDS_REVIEW",
     "MANUAL_REVIEW_REQUIRED",
 )
 IGNORED_STATUSES = {
@@ -81,8 +81,11 @@ def should_show_in_selection_offer_review(event: dict[str, Any]) -> bool:
     if not manual_review_visible and (not evidence or float(event.get("confidence") or 0) < 0.8):
         return False
     
-    # For interview statuses, require explicit date/time details
-    if status in ("INTERVIEW_CONFIRMED", "INTERVIEW_SHORTLISTED"):
+    # A confirmed interview asserts a scheduled meeting, so it must carry a
+    # date or it is a generic "we'll contact you" note. A shortlist asserts no
+    # such thing: being shortlisted is itself the outcome and the interview is
+    # not scheduled yet, so requiring a date here hid every genuine shortlist.
+    if status == "INTERVIEW_CONFIRMED":
         structured = event.get("structured_result") or {}
         interview = structured.get("interview") or {} if isinstance(structured, dict) else {}
         has_date = bool(str(interview.get("date") or "").strip())

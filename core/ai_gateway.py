@@ -32,6 +32,8 @@ class AIResult:
     content: str
     model: str
     duration_ms: int
+    node_id: str = ""
+    node_label: str = ""
 
 
 class AIGatewayError(RuntimeError):
@@ -180,6 +182,7 @@ def chat(
     deadline_monotonic: float | None = None,
     num_predict: int | None = None,
     think: bool | str | None = None,
+    node_id: str | None = None,
 ) -> AIResult:
     """Call Ollama through the single bounded production gateway."""
     chosen = (model or configured_models()["text"]).strip()
@@ -194,7 +197,7 @@ def chat(
         _env_float("OLLAMA_HEALTH_TIMEOUT_SECONDS", 10),
     )
     try:
-        chosen_node = ollama_nodes.select_available_node(
+        chosen_node = {"node_id": node_id} if node_id else ollama_nodes.select_available_node(
             model=chosen, timeout=health_timeout
         )
         selected_node = chosen_node["node_id"]
@@ -290,7 +293,14 @@ def chat(
                     workload, host_id, chosen, attempt + 1, duration_ms,
                 )
                 ollama_status.record_request_success(duration_ms)
-                return AIResult(content=content, model=chosen, duration_ms=duration_ms)
+                selected_node_record = ollama_nodes.node(selected_node)
+                return AIResult(
+                    content=content,
+                    model=chosen,
+                    duration_ms=duration_ms,
+                    node_id=selected_node,
+                    node_label=str(selected_node_record.get("label") or selected_node),
+                )
             except AIGatewayError as exc:
                 last_error = exc
                 ollama_status.record_request_failure(exc.code, str(exc))
@@ -328,6 +338,7 @@ def chat_structured(
     deadline_monotonic: float | None = None,
     num_predict: int | None = None,
     think: bool | str | None = None,
+    node_id: str | None = None,
 ) -> AIResult:
     """Return strictly parsed and JSON-schema-validated model output."""
     return chat(
@@ -335,6 +346,7 @@ def chat_structured(
         temperature=temperature, images=images, max_retries=max_retries,
         workload=workload, deadline_monotonic=deadline_monotonic,
         num_predict=num_predict, think=think,
+        node_id=node_id,
     )
 
 

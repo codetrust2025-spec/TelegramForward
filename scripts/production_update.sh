@@ -109,13 +109,18 @@ pm2 delete telegram-dashboard 2>/dev/null || true
 pm2 delete telegramforward 2>/dev/null || true
 pm2 delete telegram-backend 2>/dev/null || true
 pm2 delete ecosystem.production 2>/dev/null || true
-PYTHON_BIN="$PROJECT_DIR/venv/bin/python"
-if [ ! -x "$PYTHON_BIN" ]; then
-  PYTHON_BIN="$(command -v python3)"
-fi
 cd "$PROJECT_DIR"
-HOST=0.0.0.0 PORT="$PORT" NO_RELOAD=1 PYTHONUNBUFFERED=1 \
-  pm2 start scripts/uvicorn_reload.py --name telegram-backend --interpreter "$PYTHON_BIN"
+# Start from the ecosystem config rather than naming the script directly.
+#
+# Starting the script by hand is how production ended up bound to 0.0.0.0 with
+# the AI mail audit flags missing: this shell prefix was the process's whole
+# environment, so every value that only exists in the ecosystem file was simply
+# absent. The config is the single place those live.
+#
+# The .config.js suffix is load-bearing. PM2 decides between "config file" and
+# "script to execute" by extension; with .cjs it started the file as a script
+# and registered an app literally called "ecosystem.production".
+PORT="$PORT" NO_RELOAD=1 pm2 start ecosystem.production.config.js --only telegram-backend
 pm2 save
 
 # ── 7. Health check ────────────────────────────────────────────

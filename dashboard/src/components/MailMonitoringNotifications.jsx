@@ -1,13 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API } from "../config.js";
-import {
-  SELECTION_CLASSIFICATIONS,
-  isTrackedMailAlert,
-  playMailAlertSound,
-  showMailAlertNotification,
-} from "../utils/mailAlertSound.js";
+import { subscribeMailEvents, subscribeMailStatus } from "../notifications/mailEventStream.js";
 import { useDialogA11y } from "../hooks/useDialogA11y.js";
-import { formatIstDateTime, formatScheduleDateTime } from "../utils/istTime.js";
+import { formatIstDateTime, formatScheduleDateTime, formatScheduleIstDateTime } from "../utils/istTime.js";
 import { useConfirm } from "../context/ConfirmContext.jsx";
 import { MailMonitoringTabs } from "./MailMonitoringTabs.jsx";
 import { InlineLoader, OverlayLoader } from "../Loader.jsx";
@@ -85,74 +80,23 @@ function navigate(view, detail = {}) {
   window.dispatchEvent(new CustomEvent("teleautomation:navigate", { detail: { view, ...detail } }));
 }
 
-// Selections and interview bookings are the mails that must never be missed —
-// sound the klaxon wherever the app is open, not just on the notifications page.
-function alertOnTrackedMail(payload) {
-  if (payload?.event !== "notification_created") return;
-  const classification = payload?.classification;
-  if (!isTrackedMailAlert(classification)) return;
-  playMailAlertSound({
-    eventId: payload.event_id || payload.notification_id,
-    urgent: SELECTION_CLASSIFICATIONS.includes(classification),
-  });
-  showMailAlertNotification(payload);
-}
-
+/**
+ * Live mail events for UI.
+ *
+ * The socket itself now lives in notifications/mailEventStream.js and is shared
+ * by every subscriber, so this page and the header bell no longer open one
+ * each. Sound is not triggered here: GlobalNotificationSounds subscribes to the
+ * same stream and is the only place that makes a noise, which is what stops one
+ * event from being heard twice.
+ */
 function useMailLive(onUpdate) {
   const [status, setStatus] = useState("Offline");
   const callback = useRef(onUpdate);
   callback.current = onUpdate;
-  useEffect(() => {
-    let socket;
-    let stopped = false;
-    let retry = 0;
-    let timer;
-    let heartbeat;
-    const seen = new Set();
-    const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("teleautomation-mail-monitoring") : null;
-    const receive = (payload) => {
-      const id = payload?.event_id;
-      if (id && seen.has(id)) return;
-      if (id) {
-        seen.add(id);
-        if (seen.size > 500) seen.delete(seen.values().next().value);
-        localStorage.setItem("teleautomation-mail-last-event-id", id);
-      }
-      alertOnTrackedMail(payload);
-      callback.current?.(payload);
-      if (["slot_auto_booked", "interview_rescheduled", "interview_cancelled"].includes(payload?.event)) {
-        window.dispatchEvent(new CustomEvent("teleautomation:slot-booking-updated", { detail: payload }));
-      }
-      channel?.postMessage(payload);
-    };
-    if (channel) channel.onmessage = (event) => callback.current?.(event.data);
-    const connect = () => {
-      if (stopped) return;
-      setStatus(retry ? "Reconnecting" : "Offline");
-      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-      const last = localStorage.getItem("teleautomation-mail-last-event-id") || "";
-      socket = new WebSocket(`${scheme}://${window.location.host}/ws/mail-monitoring?last_event_id=${encodeURIComponent(last)}`);
-      socket.onopen = () => {
-        retry = 0; setStatus("Live");
-        heartbeat = window.setInterval(() => socket?.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ type: "ping" })), 20000);
-      };
-      socket.onmessage = (event) => {
-        try { receive(JSON.parse(event.data)); } catch { /* ignore malformed transport frames */ }
-      };
-      socket.onclose = () => {
-        window.clearInterval(heartbeat);
-        if (stopped) return;
-        retry += 1; setStatus(retry > 1 ? "Offline" : "Reconnecting");
-        timer = window.setTimeout(connect, Math.min(30000, 1000 * (2 ** Math.min(retry, 5))) + Math.random() * 500);
-      };
-      socket.onerror = () => socket.close();
-    };
-    request("/api/ai-recruitment/config").then((data) => data.enabled && connect()).catch(() => setStatus("Offline"));
-    return () => {
-      stopped = true; window.clearTimeout(timer); window.clearInterval(heartbeat);
-      channel?.close(); socket?.close();
-    };
-  }, []);
+
+  useEffect(() => subscribeMailEvents((payload) => callback.current?.(payload)), []);
+  useEffect(() => subscribeMailStatus(setStatus), []);
+
   return status;
 }
 
@@ -230,10 +174,17 @@ function NotificationDetail({ item, onClose, onChanged }) {
     window.alert(rows.length ? rows.map((row) => `${when(row.created_at)} — ${row.booking_status}${row.failure_message ? ` — ${row.failure_message}` : ""}`).join("\n") : "No booking audit history found.");
   };
   const originalEmail = item.event_detail?.received_email;
+  // Empty when the invite is already IST, so the extra line appears only when
+  // the reader actually has to convert something.
+  const istInterviewTime = formatScheduleIstDateTime(
+    item.interview_date,
+    item.interview_time,
+    item.interview_timezone,
+  );
   return <div className="mail-detail-backdrop" role="presentation" onClick={(event) => event.target === event.currentTarget && onClose()}>
     <section ref={dialogRef} className="mail-detail" role="dialog" aria-modal="true" aria-label="Mail monitoring notification">
       <header><div><h3>{item.candidate_status || human(item.classification)}</h3><p>{item.candidate_name || "Candidate"} · {item.company_name || "Company unavailable"}</p></div><button type="button" onClick={onClose} aria-label="Close">×</button></header>
-      <dl><div><dt>Email</dt><dd>{item.email_subject || "No subject"}</dd></div><div><dt>From</dt><dd>{item.sender_name || item.sender_email || "Unknown"}</dd></div><div><dt>Mail received</dt><dd>{when(item.email_received_at)}</dd></div><div><dt>Tool detected</dt><dd>{when(item.created_at)}</dd></div><div><dt>AI confidence</dt><dd>{confidence(item.ai_confidence)}</dd></div>{item.booking_status && <div><dt>Booking</dt><dd>{item.booking_status}</dd></div>}{item.interview_date && <div><dt>Interview</dt><dd>{formatScheduleDateTime(item.interview_date, item.interview_time, item.interview_timezone)}</dd></div>}{item.interview_round && <div><dt>Round</dt><dd>{item.interview_round}</dd></div>}{(() => {
+      <dl><div><dt>Email</dt><dd>{item.email_subject || "No subject"}</dd></div><div><dt>From</dt><dd>{item.sender_name || item.sender_email || "Unknown"}</dd></div><div><dt>Mail received</dt><dd>{when(item.email_received_at)}</dd></div><div><dt>Tool detected</dt><dd>{when(item.created_at)}</dd></div><div><dt>AI confidence</dt><dd>{confidence(item.ai_confidence)}</dd></div>{item.booking_status && <div><dt>Booking</dt><dd>{item.booking_status}</dd></div>}{item.interview_date && <div><dt>Interview</dt><dd>{formatScheduleDateTime(item.interview_date, item.interview_time, item.interview_timezone)}</dd></div>}{istInterviewTime && <div><dt>IST Time</dt><dd>{istInterviewTime}</dd></div>}{item.interview_round && <div><dt>Round</dt><dd>{item.interview_round}</dd></div>}{(() => {
         const reason = blockingReason(item);
         if (!reason) return null;
         return <>

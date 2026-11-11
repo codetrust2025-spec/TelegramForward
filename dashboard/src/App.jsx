@@ -75,14 +75,13 @@ import { OutcomeAuditPanel } from './components/OutcomeAuditPanel.jsx'
 import PaymentReconciliationPanel from './components/PaymentReconciliationPanel.jsx'
 import BgvRegisterPanel from './components/BgvRegisterPanel.jsx'
 import { MailMonitoringNotifications } from './components/MailMonitoringNotifications.jsx'
+import { unlockNotificationSound } from './utils/notificationSound.js'
 import {
-  playNewMessageSound,
-  unlockNotificationSound,
-  syncInboxAlertMusic,
-  stopInboxAlertMusicOnUnmount,
-  startIncomingCallRing,
-  stopIncomingCallRing,
-} from './utils/notificationSound.js'
+  notifyCallEnded,
+  notifyIncomingCall,
+  notifyIncomingDm,
+} from './notifications/notificationEvents.js'
+import { GlobalNotificationSounds } from './notifications/GlobalNotificationSounds.jsx'
 import { IncomingCallModal } from './components/crm/IncomingCallModal.jsx'
 import { computeInboxUnreadTotal, formatUnreadBadgeCount } from './utils/inboxUnread.js'
 import { syncTabUnreadBadge, resetTabUnreadBadge } from './utils/tabUnreadBadge.js'
@@ -625,7 +624,7 @@ export default function App() {
           && data.message
           && data.message.direction === 'in'
         ) {
-          playNewMessageSound({
+          notifyIncomingDm({
             slot: data.slot,
             messageId: data.message.id,
           })
@@ -712,7 +711,7 @@ export default function App() {
       if (data.type === 'incoming_call') {
         if (data.event === 'ringing' && data.call && data.slot) {
           unlockNotificationSound()
-          startIncomingCallRing()
+          notifyIncomingCall({ callId: data.call?.call_id })
           const row = { ...data.call, slot: data.slot }
           setIncomingCall(row)
           if (typeof Notification !== 'undefined') {
@@ -725,6 +724,9 @@ export default function App() {
                   body: `Answer in Telegram · ${accountLabel(data.slot)}`,
                   tag: `call-${data.slot}-${row.call_id}`,
                   requireInteraction: true,
+                  // Our own ring cadence is the identity; the OS chime on top
+                  // of a ringing phone is just noise.
+                  silent: true,
                 })
               } catch {
                 /* ignore */
@@ -732,7 +734,7 @@ export default function App() {
             }
           }
         } else if (data.event === 'ended') {
-          stopIncomingCallRing()
+          notifyCallEnded()
           setIncomingCall(prev => {
             if (!prev) return null
             if (data.call?.call_id != null && prev.call_id !== data.call.call_id) return prev
@@ -985,25 +987,13 @@ export default function App() {
   )
   const inboxUnreadBadge = formatUnreadBadgeCount(inboxUnreadTotal)
 
+  // Sound for the unread threshold now lives in GlobalNotificationSounds, which
+  // is mounted for the whole session; this effect keeps only the tab badge.
   useEffect(() => {
-    syncInboxAlertMusic(inboxUnreadTotal, inboxState)
     syncTabUnreadBadge(inboxUnreadTotal)
-    return () => stopInboxAlertMusicOnUnmount()
-  }, [inboxUnreadTotal, inboxState])
+  }, [inboxUnreadTotal])
 
   useEffect(() => () => resetTabUnreadBadge(), [])
-
-  useEffect(() => {
-    const resync = () => syncInboxAlertMusic(inboxUnreadTotal, inboxState)
-    window.addEventListener('sound-quiet-hours-change', resync)
-    window.addEventListener('crm-buzzer-toggle', resync)
-    const tick = window.setInterval(resync, 60000)
-    return () => {
-      window.removeEventListener('sound-quiet-hours-change', resync)
-      window.removeEventListener('crm-buzzer-toggle', resync)
-      clearInterval(tick)
-    }
-  }, [inboxUnreadTotal, inboxState])
   const loggedIn = loggedInSlots.length > 0
   const idleLoggedInSlots = loggedInSlots.filter(
     s => !state.account_states?.[s]?.running
@@ -1608,6 +1598,11 @@ export default function App() {
   if (compactMobileUi) {
     return (
       <PendingWorksProvider mainView={mainView}>
+        <GlobalNotificationSounds
+          inboxState={inboxState}
+          inboxUnreadTotal={inboxUnreadTotal}
+          crmState={crmState}
+        />
         <div
           className={`app-shell app-shell--mobile-ui app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}
         >
@@ -1823,7 +1818,7 @@ export default function App() {
             <IncomingCallModal
               call={incomingCall}
               onDismiss={() => {
-                stopIncomingCallRing()
+                notifyCallEnded()
                 setIncomingCall(null)
               }}
             />
@@ -1837,6 +1832,11 @@ export default function App() {
   if (!compactMobileUi) {
     return (
       <PendingWorksProvider mainView={mainView}>
+        <GlobalNotificationSounds
+          inboxState={inboxState}
+          inboxUnreadTotal={inboxUnreadTotal}
+          crmState={crmState}
+        />
         <div
           className={`app-shell app-shell--desktop-ui app-shell--view-${mainView}${showBootOverlay ? ' app-shell--booting' : ''}`}
         >
@@ -2097,7 +2097,7 @@ export default function App() {
             <IncomingCallModal
               call={incomingCall}
               onDismiss={() => {
-                stopIncomingCallRing()
+                notifyCallEnded()
                 setIncomingCall(null)
               }}
             />
@@ -2606,7 +2606,7 @@ export default function App() {
       <IncomingCallModal
         call={incomingCall}
         onDismiss={() => {
-          stopIncomingCallRing()
+          notifyCallEnded()
           setIncomingCall(null)
         }}
       />
