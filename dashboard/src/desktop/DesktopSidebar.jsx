@@ -9,6 +9,7 @@ export const NAV = [
   { id: "mail-notifications", label: "Mail alerts", icon: "🔔" },
   { id: "payment-reconciliation", label: "Reconciliation", icon: "⚖" },
   { id: "bgv-register", label: "BGV Consultancy", icon: "🛡" },
+  { id: "attendance", label: "Attendance", icon: "🕘" },
   { id: "dashboard", label: "Dashboard", icon: "▣" },
   { id: "accounts", label: "Accounts", icon: "👤" },
   { id: "forwarding", label: "Forwarding", icon: "↻" },
