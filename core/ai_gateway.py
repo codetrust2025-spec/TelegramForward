@@ -182,6 +182,7 @@ def chat(
     deadline_monotonic: float | None = None,
     num_predict: int | None = None,
     think: bool | str | None = None,
+    node_id: str | None = None,
 ) -> AIResult:
     """Call Ollama through the single bounded production gateway."""
     chosen = (model or configured_models()["text"]).strip()
@@ -196,7 +197,7 @@ def chat(
         _env_float("OLLAMA_HEALTH_TIMEOUT_SECONDS", 10),
     )
     try:
-        chosen_node = ollama_nodes.select_available_node(
+        chosen_node = {"node_id": node_id} if node_id else ollama_nodes.select_available_node(
             model=chosen, timeout=health_timeout
         )
         selected_node = chosen_node["node_id"]
@@ -337,6 +338,7 @@ def chat_structured(
     deadline_monotonic: float | None = None,
     num_predict: int | None = None,
     think: bool | str | None = None,
+    node_id: str | None = None,
 ) -> AIResult:
     """Return strictly parsed and JSON-schema-validated model output."""
     return chat(
@@ -344,6 +346,7 @@ def chat_structured(
         temperature=temperature, images=images, max_retries=max_retries,
         workload=workload, deadline_monotonic=deadline_monotonic,
         num_predict=num_predict, think=think,
+        node_id=node_id,
     )
 
 

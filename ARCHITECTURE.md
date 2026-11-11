@@ -310,3 +310,29 @@ PM2 restarts the backend when Python files change (`watch: true`, 1.5s restart d
 | Manual restart needed? | NO |
 | Workers resume after reload? | YES (if they were running) |
 | Restart loop protection? | YES (`--reload-delay 1s`, PM2 `min_uptime`) |
+
+## AI Mail model administration
+
+`core.ai_mail_model` owns the mail-only persisted primary model, validation and
+node failover. Admin routes under `/api/ai-recruitment/mail-model` list installed
+models with byte sizes, test synthetic mail against the real classification JSON
+schema, and save only after two distinct configured nodes pass inference. Save
+revalidates independently of the UI test and uses a revision check, process lock
+and atomic replacement; a failed validation never overwrites the prior model.
+
+The runtime file is `DATA_DIR/ai_mail_model.json` (optional
+`AI_MAIL_MODEL_STATE_FILE` override) and remains outside release source. It holds
+the selection, prior model, validated nodes, actor, revision and last actual
+model/node, with no mailbox or candidate content. Existing releases retain it
+through the normal protected `data` link. No database migration is needed.
+
+`services.recruitment_mail_agent.analyze` reads a selection snapshot per job, so
+interactive and scheduled/background classifications share the same route.
+Custom models fail over among the validated nodes in the existing pool preference
+order; global primary, model preferences and independent validator policy remain
+unchanged. Gateway node pinning is used only for individual requests. Event and
+activity model provenance includes the actual node (`model@node`), including
+validator provenance. Calendar/deterministic detection does not claim AI use.
+Screenshot, document vision, OCR, booking, payment and Daybreak routing do not
+read the mail selection. Rollback can deploy the previous immutable release;
+changing the selected model again requires the same admin validation gate.
