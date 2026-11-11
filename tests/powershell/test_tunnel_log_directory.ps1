@@ -1,4 +1,9 @@
-# Reproduce the Scheduled Task environment: LOCALAPPDATA absent.
+# LOCALAPPDATA absent is a hypothetical, not something seen in production.
+# The incident that prompted this was a misdiagnosis: the Scheduled Task was
+# logging correctly, and the reader sat inside an MSIX container that redirects
+# %LOCALAPPDATA% to a private copy. The failure mode is real if the variable
+# ever does go missing -- Join-Path throws on null and logging dies silently --
+# so the guard stays, on its own merits rather than on that story.
 # Extracts Resolve-LogDirectory from the real script so the test tracks the source.
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
