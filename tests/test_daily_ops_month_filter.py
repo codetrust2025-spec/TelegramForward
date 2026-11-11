@@ -94,11 +94,15 @@ def test_cancelled_and_failed_records_do_not_open_a_month(store):
 
 
 def test_an_unconfirmed_slot_does_not_open_a_month(store):
+    # Current/previous months are always offered, so a hard-coded date stops
+    # proving anything once the calendar reaches it ("2026-11" failed on
+    # 11 Nov 2026). Use a month that can never be one of those reserved slots.
+    year = datetime.now(timezone.utc).year + 2
     seed(store, [
-        {"date": "2026-11-11", "time": "10:00", "slot_confirmed": False},
+        {"date": f"{year}-11-11", "time": "10:00", "slot_confirmed": False},
         {"date": "2026-08-04", "time": "11:30"},
     ])
-    assert "2026-11" not in months(store)
+    assert f"{year}-11" not in months(store)
 
 
 def test_the_current_and_previous_month_are_always_available(store):
